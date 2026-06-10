@@ -1,0 +1,77 @@
+{
+  "name": "ai-sharepoint",
+  "displayName": "AI SharePoint",
+  "description": "Manage SharePoint Online sites with GitHub Copilot as the AI provider.",
+  "version": "0.0.1",
+  "publisher": "alfredsisley10",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alfredsisley10/ai-sharepoint.git"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiSharePoint.listModels",
+        "title": "AI SharePoint: List Copilot Models"
+      },
+      {
+        "command": "aiSharePoint.askCopilot",
+        "title": "AI SharePoint: Ask Copilot (metered)"
+      },
+      {
+        "command": "aiSharePoint.connectSite",
+        "title": "AI SharePoint: Connect SharePoint Site"
+      },
+      {
+        "command": "aiSharePoint.showUsage",
+        "title": "AI SharePoint: Show Copilot Usage"
+      },
+      {
+        "command": "aiSharePoint.resetUsage",
+        "title": "AI SharePoint: Reset Copilot Usage Meter"
+      }
+    ],
+    "configuration": {
+      "title": "AI SharePoint",
+      "properties": {
+        "aiSharePoint.copilot.monthlyPremiumRequestAllowance": {
+          "type": "number",
+          "default": 300,
+          "markdownDescription": "Your monthly Copilot premium-request allowance, used as the denominator of the usage gauge. This is a fallback when the allowance cannot be read automatically. See ADR-0003."
+        },
+        "aiSharePoint.auth.tenantAuthority": {
+          "type": "string",
+          "default": "https://login.microsoftonline.com/common",
+          "markdownDescription": "Microsoft Entra ID authority used for interactive sign-in (MSAL public client)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "vscode:prepublish": "node esbuild.js --production"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.16.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.95.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

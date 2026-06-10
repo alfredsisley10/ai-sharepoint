@@ -517,6 +517,11 @@ export/import with pre-export scan; localization settings. See ADR-0013, ADR-001
   (`mysql2`), MongoDB (`mongodb`); Aternity (REST/OData), SignalFx (`X-SF-Token` REST), AppDynamics
   (Controller REST), Grafana (HTTP API); ServiceNow (Table API), Workday (RaaS/REST/SOAP). All behind
   the §9 adapter framework.
+- **Cross-platform (ADR-0016):** runs on macOS, Windows x64, **Windows ARM**, and Linux from one VSIX —
+  pure-JS deps only (no native binaries), no OS/CPU pinning, no shell-outs. A CI gate verifies the
+  dependency tree stays native-free; the one caveat is future DB drivers like `node-oracledb`.
+- **Build:** TypeScript + esbuild bundle (`vscode` external); `@azure/msal-node` for the MSAL loopback
+  flow.
 - **Quality gates:** gitleaks/secretlint pre-commit; unit + integration tests; a sandbox tenant for
   end-to-end sync/auth tests.
 

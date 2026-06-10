@@ -1,0 +1,18 @@
+{
+  "$comment": "Relative Copilot premium-request multipliers per model. An ESTIMATE maintained by this extension (ADR-0003), NOT a live read of the GitHub bill. 0 = effectively unmetered base model; 1 = one premium request; higher = multiplied. Matched by substring against the model family/id, longest match wins. Update without an extension release.",
+  "default": 1,
+  "multipliers": {
+    "gpt-4o": 0,
+    "gpt-4.1": 0,
+    "gpt-4o-mini": 0,
+    "o3-mini": 1,
+    "o1": 10,
+    "o3": 10,
+    "claude-3.5-sonnet": 1,
+    "claude-3.7-sonnet": 1,
+    "claude-sonnet-4": 1,
+    "claude-opus-4": 10,
+    "gemini-2.0-flash": 0.25,
+    "gemini-2.5-pro": 1
+  }
+}
