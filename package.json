@@ -4,7 +4,6 @@
   "description": "Manage SharePoint Online sites with GitHub Copilot as the AI provider.",
   "version": "0.0.1",
   "publisher": "alfredsisley10",
-  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "https://github.com/alfredsisley10/ai-sharepoint.git"
@@ -63,6 +62,7 @@
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
+    "package": "vsce package --no-dependencies",
     "vscode:prepublish": "node esbuild.js --production"
   },
   "dependencies": {
@@ -71,6 +71,7 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.24.0",
     "typescript": "^5.6.0"
   }
