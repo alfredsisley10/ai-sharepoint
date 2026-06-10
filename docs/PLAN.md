@@ -394,6 +394,13 @@ services, so each new system reuses the same auth, bookmarks, backoff, caching, 
   separate auth domain — see Decision E). So safety runs against the user's real access: a single
   deliberate **verification read** confirms a credential right after entry, and thereafter **every
   failed login during active use is tracked**.
+- **Auth-method discovery** *(ADR-0015 — resolves Decision K).* Each source supports **all** its
+  methods; rather than make the user pick, the framework **probes them and discovers which works for
+  this user**, then **saves the working method** as a non-secret descriptor in the workspace. Discovery
+  is the verify-on-connect probe and uses a **lockout-safe order** — no-password methods (interactive
+  browser / SSO / device-code / token) first, then password-based (Basic) **once, never looped** —
+  bounded by the backoff/caps above. The saved method travels in workspace export/import (§10), so a
+  teammate starts with the known-good method pre-selected and only supplies their own credential.
 - **Lockout-safe auth-failure handling** *(ADR-0009 — security-critical).* Failed authentications are
   tracked per account/credential with **exponential backoff** and a **hard stop below the org lockout
   threshold** (conservative default, e.g. stop after 3 failures). We **never auto-retry a known-bad
@@ -450,8 +457,9 @@ services, so each new system reuses the same auth, bookmarks, backoff, caching, 
 > user has them. Basic and interactive paths are first-class, not deprecated.
 
 **Deliverables:** the `ContextSourceAuthProvider` contract + connection `role` plumbing & sync-engine
-guard; standard-user-first auth (interactive-browser token-capture + Basic) per adapter; verify-on-
-connect; the shared services (auth-failure backoff/lockout protection, bookmarks, TTL cache,
+guard; standard-user-first auth (interactive-browser token-capture + Basic) per adapter;
+**auth-method discovery** (lockout-safe probe → persist working method in the workspace, ADR-0015);
+verify-on-connect; the shared services (auth-failure backoff/lockout protection, bookmarks, TTL cache,
 read-safe query policy, unified view + agent tool); the source adapters in the matrix above with all
 listed auth methods; cross-source alignment objective. See ADR-0006/0007 (Confluence, reference
 SharePoint) and ADR-0008–0012 (framework + adapters, backoff, bookmarks, caching, read-safe queries).
@@ -466,8 +474,8 @@ cleanly and works efficiently in each. Workspaces are **exportable to share with
 **secrets and authentication details never leave the local machine**.
 
 **What a workspace contains (non-secret config only)**
-- Reference-source **descriptors**: source type, base URL/host, chosen auth *method*, scopes, role —
-  but **never credentials**.
+- Reference-source **descriptors**: source type, base URL/host, the **discovered working auth *method***
+  (the descriptor only — e.g. `confluence-dc-basic`, ADR-0015), scopes, role — but **never credentials**.
 - **Bookmarks** (locators, ADR-0010).
 - **Localization**: language/locale, date & number formats, time zone, units.
 - Optional per-workspace settings (active managed-site binding, sync filter profile, cost caps).
@@ -482,17 +490,18 @@ each machine already holds.
 
 **Export / import — secret-free by construction** *(ADR-0013)*
 - Export emits a portable definition (JSON/YAML) drawn **solely from the non-secret config store** —
-  source descriptors, bookmarks, localization. The exporter has **no code path to the keychain**, so no
-  tokens, passwords, MSAL caches, or API keys can be included; a **pre-export scan** asserts the file is
-  secret-free (defense in depth with §6 scanning/redaction).
-- On import, the recipient gets sources/bookmarks/localization pre-populated and is **prompted to supply
-  their own credentials** (stored in their own keychain); a connection test verifies each.
+  source descriptors (incl. the **discovered working auth method**, ADR-0015), bookmarks, localization.
+  The exporter has **no code path to the keychain**, so no tokens, passwords, MSAL caches, or API keys
+  can be included; a **pre-export scan** asserts the file is secret-free (defense in depth with §6).
+- On import, the recipient gets sources/bookmarks/localization pre-populated **with the known-good auth
+  method already selected**, is **prompted to supply their own credentials** (stored in their own
+  keychain), and re-verifies on connect (re-discovering if that method no longer works for them).
 - Because exports are secret-free, they are safe to commit/share even in the public repo — though we
   still recommend treating them as internal config.
 
 **Deliverables:** workspace model + local store; active-workspace switcher; workspace-scoping of
-sources/bookmarks/localization; secret-free export/import with pre-export scan; localization settings.
-See ADR-0013.
+sources/bookmarks/localization; persisted **discovered auth method** per source (ADR-0015); secret-free
+export/import with pre-export scan; localization settings. See ADR-0013, ADR-0015.
 
 ---
 
@@ -538,7 +547,7 @@ docs/           PLAN.md, adr/
 | **1. Foundations** | Secret store, MSAL provider end-to-end, Sites view, Cost Governor (discovery + meter + caps), **workspace model + switcher**. | Auth, secrets, cost visibility, scoping. |
 | **2. Sync core** | Serialize→Git→push; remote delta detection; dry-run + filters + size guard. | "Site as code" round-trips cleanly. |
 | **3. Conflicts** | 3-way merge + merge-editor; direct-in-SharePoint edits handled; revert-to-commit. | Two-way correctness + safe revert. |
-| **4. Agent — QA & cross-source** | `@sharepoint` with read/QA tools; link-check + duplicate-content; context-source **framework** (shared auth-failure backoff, bookmarks, TTL cache, read-safe queries) + first adapters (reference SharePoint, Confluence, Jira) + alignment objective. | Agentic loop + tool safety; read-context + lockout safety. |
+| **4. Agent — QA & cross-source** | `@sharepoint` with read/QA tools; link-check + duplicate-content; context-source **framework** (shared auth-failure backoff, auth-method discovery, bookmarks, TTL cache, read-safe queries) + first adapters (reference SharePoint, Confluence, Jira) + alignment objective. | Agentic loop + tool safety; read-context + lockout safety + auth discovery. |
 | **5. Agent — authoring** | Provisioning tools; flagship product-management-site scenario; maintainability validation. | The headline use case. |
 | **6. Hardening & more sources** | Remaining adapters (Splunk, Intune, Databricks, SQL Server, Aternity, SignalFx, AppDynamics, Grafana) + all auth methods, **workspace export/import (secret-free)**, perf, telemetry/redaction, docs, marketplace packaging. | Breadth, sharing & release. |
 
@@ -567,17 +576,19 @@ docs/           PLAN.md, adr/
 - **J — Standard-user auth first:** adapters default to methods a normal user already has —
   interactive-browser (token-cached) and Basic — not privileged API integrations, which remain optional.
   → ADR-0014.
+- **K — Auth-method discovery + persistence:** ship **all** methods, **probe to discover** which works
+  for the individual user (lockout-safe order), and **save the working method** in the workspace config
+  so it's pre-selected and shareable (descriptor only; credentials stay local). → ADR-0015.
 - **E — No reliance on non-prod test instances:** we **do not assume** users have sandbox instances
   (most won't; where they do it's a separate credential in a separate auth domain). Safety is enforced
   at runtime against real access — verify-on-connect plus active-use failed-login tracking — not via a
   test environment. Multi-instance testing is *supported* but *not required*. (Resolved as a design
   stance; → ADR-0009/0014.)
 
-**Still open:**
-- **K — Per-source standard-user method confirmation:** for each adapter, confirm which standard-user
-  path actually works in the target environment (e.g. does Splunk/AppDynamics/Grafana allow a normal
-  user to mint their own token, or is Basic the only non-admin route?). Validated opportunistically
-  against real access, since no sandbox is assumed.
+**Still open:** none. (The former Decision K — per-source standard-user method confirmation — is
+resolved by **auth-method discovery + persistence**, ADR-0015: the system probes and learns the working
+method instead of requiring it to be confirmed up front. A non-prod environment for end-to-end testing
+remains *nice-to-have*, not required.)
 
 ---
 

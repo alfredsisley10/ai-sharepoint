@@ -39,5 +39,5 @@ are always paired with ADR-0009's verify-on-connect + failed-login tracking + ba
   can differ per source.
 - Token-cache flows depend on the source offering a real interactive flow; where it only offers Basic,
   Basic is the path — making lockout safety (ADR-0009) load-bearing.
-- Which standard-user method actually works per source must be confirmed against real access
-  (Decision K), since no sandbox is assumed (Decision E).
+- Which standard-user method actually works per source is **discovered at runtime** and persisted
+  (ADR-0015), not confirmed up front — since no sandbox is assumed (Decision E).
