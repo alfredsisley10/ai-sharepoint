@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { BookmarksStore } from "../context/bookmarksStore";
 import { ContextSource, ContextBookmark } from "../context/types";
+import { isSrvLocator } from "../context/ldap/srvLocator";
 
 type Node = ContextSource | ContextBookmark;
 
@@ -69,6 +70,9 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
         `|---|---|`,
         `| Type | ${source.type} (${source.deployment}) |`,
         `| URL | ${source.baseUrl} |`,
+        ...(isSrvLocator(source.baseUrl)
+          ? [`| Resolution | DNS SRV on every connection (durable — survives DC changes) |`]
+          : []),
         ...(source.baseDn ? [`| Base DN | ${source.baseDn} |`] : []),
         `| Auth | ${source.authMethod === "pat" ? "Personal access token" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : "Basic (username + token/password)"} |`,
         `| Account | ${source.account ?? "_not verified_"} |`,

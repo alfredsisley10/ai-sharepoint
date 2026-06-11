@@ -55,3 +55,26 @@ but defaults secure.
   validation against a real DC (same posture as the Confluence/Jira adapters).
 - The framework generalizes from "HTTP adapters" to "typed adapters"; future non-HTTP sources
   (databases, etc.) follow this seam.
+
+## Amendment — 2026-06-11 (pilot feedback)
+
+**1. Durable SRV locators instead of pinned servers.** Discovery no longer offers individual
+server names as connection targets: when endpoints come from DNS SRV, the source stores the
+lookup itself as the base URL — `ldaps+srv://_gc._tcp.<domain>` (Global Catalog) or
+`ldaps+srv://_ldap._tcp.dc._msdcs.<domain>` (DCs) — re-resolved on **every connection** with
+priority/weight ranking and bounded failover across the servers DNS returns. Connections stay
+valid as domain controllers are added, renamed, or retired (the Windows DC-locator model).
+Failover applies to **network errors only**: an authentication rejection never retries against
+another DC (it would fail identically and multiply lockout exposure — ADR-0009). Manually
+entered static `ldap(s)://host` URLs remain supported and are labeled as pinned. The durable
+locator also travels in reference-config exports, so shared configs survive infrastructure
+changes too.
+
+**2. OS trust store for LDAPS.** Confirmed in pilot: raw TLS bypasses VS Code's networking and
+fails against internal-CA certificates ("unable to get local issuer certificate"). LDAPS/StartTLS
+contexts now build their CA set as Node's bundled roots **plus**: the OS trust store via
+`tls.getCACertificates("system")` (Node ≥ 22.15, feature-detected), well-known Linux CA bundle
+files, `NODE_EXTRA_CA_CERTS`, and an admin-pinned PEM bundle
+(`aiSharePoint.ldap.caCertificatesFile`, machine-scoped) for runtimes without the OS-store API.
+Certificate-validation failures now classify distinctly with remediation pointing at these
+options. `tlsRejectUnauthorized` remains default-true.

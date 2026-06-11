@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -45,7 +45,8 @@
         "aiSharePoint.auth.tenantAuthority",
         "aiSharePoint.auth.clientId",
         "aiSharePoint.auth.additionalAuthorityHosts",
-        "aiSharePoint.sync.allowedRemoteHosts"
+        "aiSharePoint.sync.allowedRemoteHosts",
+        "aiSharePoint.ldap.caCertificatesFile"
       ]
     }
   },
@@ -953,6 +954,13 @@
           "default": false,
           "order": 15,
           "markdownDescription": "For `ldap://` (port 389) sources, upgrade the connection with StartTLS before binding. Ignored for `ldaps://` (implicit TLS)."
+        },
+        "aiSharePoint.ldap.caCertificatesFile": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "order": 16,
+          "markdownDescription": "Path to a PEM CA bundle trusted for LDAPS/StartTLS connections (e.g. your corporate root + intermediates), **appended** to Node's defaults and the OS trust store. Machine-scoped. Use when the OS-store API is unavailable on your VS Code runtime — see Admin Guide §7."
         }
       }
     }

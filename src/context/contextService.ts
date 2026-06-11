@@ -44,6 +44,7 @@ export class ContextService {
     return {
       rejectUnauthorized: cfg.get<boolean>("ldap.tlsRejectUnauthorized", true),
       useStartTls: cfg.get<boolean>("ldap.useStartTls", false),
+      caBundlePath: cfg.get<string>("ldap.caCertificatesFile", "").trim() || undefined,
     };
   }
 

@@ -190,11 +190,17 @@ user's own git** — the extension holds no Git credentials and never force-push
   enter one manually. The base DN is derived as `DC=…` from the domain.
 - **Transport:** LDAP is raw TCP/TLS to the DC — it does **not** traverse the VS Code/HTTP
   proxy. Ensure workstations can reach your DCs/GC on 636/3269 (preferred) or 389/3268.
-- **TLS / internal CA:** Node validates LDAPS certs against its own bundled CA list, **not** the
-  OS trust store. If your DCs present an internal-CA certificate, either deploy that CA to a
-  location Node trusts (e.g. `NODE_EXTRA_CA_CERTS`) or have users enable StartTLS
-  (`aiSharePoint.ldap.useStartTls`) appropriately. `aiSharePoint.ldap.tlsRejectUnauthorized`
-  defaults to **true**; only disable it for isolated lab testing.
+- **TLS / internal CA:** LDAPS contexts trust, in addition to Node's bundled roots: the **OS
+  trust store** (via Node's system-CA API on current VS Code runtimes), standard Linux CA
+  bundles, `NODE_EXTRA_CA_CERTS`, and an admin-pinned PEM bundle via
+  `aiSharePoint.ldap.caCertificatesFile` (machine-scoped) — point that at your corporate
+  root+intermediate chain for a deterministic result on any runtime. A failure surfaces as
+  "LDAPS certificate not trusted" with these options in the message.
+  `aiSharePoint.ldap.tlsRejectUnauthorized` defaults to **true**; only disable for isolated labs.
+- **Durable endpoints:** DNS-discovered sources store the SRV lookup itself
+  (`ldaps+srv://_gc._tcp.<domain>`), re-resolved per connection with ranked failover — rotating
+  or replacing DCs requires **no client reconfiguration**. Failover never re-sends a rejected
+  credential to another DC (lockout protection). Only manually entered servers are pinned.
 - **Least privilege & read-safety:** simple bind as the user's own account; bind + search only;
   every search carries server-side size and time limits; only non-sensitive attributes are
   requested. Consider a dedicated low-privilege read account if you prefer not to use personal

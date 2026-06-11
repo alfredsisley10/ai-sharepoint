@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.1 — 2026-06-11
+
+LDAP/Active Directory fixes from enterprise pilot feedback (ADR-0020 amendment).
+
+### Changed — durable DNS-based endpoints
+- DNS-discovered AD sources no longer pin the specific server DNS returned at add time.
+  The source now stores the **SRV lookup itself** — `ldaps+srv://_gc._tcp.<domain>` (Global
+  Catalog) or `ldaps+srv://_ldap._tcp.dc._msdcs.<domain>` (Domain Controllers) — and
+  **re-resolves it on every connection** with priority/weight ranking and bounded failover, so
+  connections stay valid as domain controllers are added, renamed, or retired. The add-source
+  picker offers these durable endpoints (individual servers appear only as "currently resolves
+  to" information); manual entry of a specific server remains available and is labeled as
+  pinned. Failover applies to **network errors only** — a rejected credential is never re-sent
+  to another DC (lockout protection, ADR-0009). Durable locators travel in reference-config
+  exports, so shared team configs survive infrastructure changes too.
+- Existing sources pinned to a specific server keep working unchanged; re-add via discovery to
+  switch them to the durable locator.
+
+### Fixed — LDAPS trusts the operating-system trust store
+- Pilot finding: `LDAP error: unable to get local issuer certificate`. LDAP is raw TLS (it
+  bypasses VS Code's patched networking), so internal-CA certificates failed against Node's
+  bundled roots. LDAPS/StartTLS now trusts, in addition to Node's defaults: the **OS trust
+  store** (Node's system-CA API, feature-detected), standard Linux CA bundles,
+  `NODE_EXTRA_CA_CERTS`, and a new machine-scoped admin setting
+  **`aiSharePoint.ldap.caCertificatesFile`** (PEM bundle) for deterministic behavior on any
+  runtime. Certificate failures now classify distinctly with that remediation in the message.
+  `tlsRejectUnauthorized` remains default-true.
+- 11 new unit tests (142 total): locator parsing/ranking/port mapping, per-connection SRV
+  re-resolution, network-only failover boundary, PEM splitting, trust-source layering/dedup.
+
 ## 0.4.0 — 2026-06-11
 
 **SharePoint write-back** lands (ADR-0021) — the repo → site direction of PLAN §7 — plus

@@ -1,4 +1,5 @@
 import { Client } from "ldapts";
+import { promises as dnsPromises } from "node:dns";
 import {
   ContextSource,
   ContextCredential,
@@ -13,13 +14,22 @@ import {
   entryToItem,
   RawEntry,
 } from "./ldapShape";
-import { AppError } from "../../core/errors";
+import { AppError, classifyError } from "../../core/errors";
+import { parseLdapTarget, candidateUrls } from "./srvLocator";
+import { loadTrustedCAs } from "./osTrust";
+import { DnsResolver } from "./discovery";
 
-/** TLS knobs resolved from settings (ADR-0020 §5). */
+/** TLS knobs resolved from settings (ADR-0020 §5 + amendment). */
 export interface LdapTlsOptions {
   rejectUnauthorized: boolean;
   useStartTls: boolean;
+  /** Admin-pinned PEM bundle (aiSharePoint.ldap.caCertificatesFile). */
+  caBundlePath?: string;
 }
+
+const defaultResolver: DnsResolver = {
+  resolveSrv: (name) => dnsPromises.resolveSrv(name),
+};
 
 /** LDAP result code 49 — invalid credentials (feeds the ADR-0009 breaker). */
 const LDAP_INVALID_CREDENTIALS = 49;
@@ -41,6 +51,13 @@ function toAppError(err: unknown): AppError {
       "Active Directory rejected these credentials.",
     );
   }
+  if (/unable to get local issuer|self.signed certificate|unable to verify the first certificate|certificate has expired|ERR_TLS_CERT/i.test(msg)) {
+    return new AppError(
+      `LDAPS certificate validation failed: ${msg}. The server presents an internal-CA certificate not in the trusted set.`,
+      "config",
+      "LDAPS certificate not trusted — ensure the corporate CA is in the OS trust store, or point aiSharePoint.ldap.caCertificatesFile at your CA bundle (Admin Guide §7).",
+    );
+  }
   if (/timeout|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|socket/i.test(msg)) {
     return new AppError(`LDAP connection failed: ${msg}`, "network");
   }
@@ -51,25 +68,109 @@ function toAppError(err: unknown): AppError {
   return new AppError(`LDAP error: ${msg}`, "unknown");
 }
 
+/**
+ * Resolve the source's connect URLs. SRV locators (ldaps+srv://…) re-resolve
+ * on every connection — the durable, server-agnostic path (ADR-0020
+ * amendment); static URLs pass through unchanged.
+ */
+export async function resolveConnectUrls(
+  source: Pick<ContextSource, "baseUrl">,
+  resolver: DnsResolver = defaultResolver,
+): Promise<string[]> {
+  const target = parseLdapTarget(source.baseUrl);
+  if (target.kind === "static") {
+    return [target.url];
+  }
+  let records;
+  try {
+    records = await resolver.resolveSrv(target.srvName);
+  } catch (err) {
+    throw new AppError(
+      `DNS SRV lookup failed for ${target.srvName}: ${err instanceof Error ? err.message : String(err)}`,
+      "network",
+      "Active Directory SRV lookup failed — are you on the corporate network?",
+    );
+  }
+  const urls = candidateUrls(target, records);
+  if (urls.length === 0) {
+    throw new AppError(
+      `DNS returned no servers for ${target.srvName}.`,
+      "network",
+      "No domain controllers resolved via DNS.",
+    );
+  }
+  return urls;
+}
+
+function tlsOptionsFor(tls: LdapTlsOptions): Record<string, unknown> {
+  // Pilot finding: raw TLS bypasses VS Code's networking, so internal-CA
+  // LDAPS fails against Node's bundled roots. Append OS-store / pinned CAs.
+  const ca = loadTrustedCAs(tls.caBundlePath);
+  return {
+    rejectUnauthorized: tls.rejectUnauthorized,
+    ...(ca ? { ca } : {}),
+  };
+}
+
+async function connectAndBind(
+  url: string,
+  credential: ContextCredential,
+  tls: LdapTlsOptions,
+  caps: ReadCaps,
+): Promise<Client> {
+  const secure = url.toLowerCase().startsWith("ldaps://");
+  const client = new Client({
+    url,
+    timeout: caps.timeoutMs,
+    connectTimeout: caps.timeoutMs,
+    tlsOptions: secure ? tlsOptionsFor(tls) : undefined,
+  });
+  try {
+    if (!secure && tls.useStartTls) {
+      await client.startTLS(tlsOptionsFor(tls));
+    }
+    await client.bind(bindDn(credential), credential.secret);
+    return client;
+  } catch (err) {
+    try {
+      await client.unbind();
+    } catch {
+      // best-effort teardown
+    }
+    throw err;
+  }
+}
+
 async function withClient<T>(
   source: ContextSource,
   credential: ContextCredential,
   tls: LdapTlsOptions,
   caps: ReadCaps,
   run: (client: Client) => Promise<T>,
+  resolver?: DnsResolver,
 ): Promise<T> {
-  const secure = source.baseUrl.toLowerCase().startsWith("ldaps://");
-  const client = new Client({
-    url: source.baseUrl,
-    timeout: caps.timeoutMs,
-    connectTimeout: caps.timeoutMs,
-    tlsOptions: secure ? { rejectUnauthorized: tls.rejectUnauthorized } : undefined,
-  });
-  try {
-    if (!secure && tls.useStartTls) {
-      await client.startTLS({ rejectUnauthorized: tls.rejectUnauthorized });
+  const urls = await resolveConnectUrls(source, resolver);
+  let client: Client | undefined;
+  let lastErr: AppError | undefined;
+  for (const url of urls) {
+    try {
+      client = await connectAndBind(url, credential, tls, caps);
+      break;
+    } catch (err) {
+      const mapped = toAppError(err);
+      // Failover is for unreachable servers ONLY. An auth rejection would
+      // fail identically everywhere — retrying other DCs with the same
+      // credential multiplies lockout exposure (ADR-0009). Stop immediately.
+      if (classifyError(mapped) !== "network") {
+        throw mapped;
+      }
+      lastErr = mapped;
     }
-    await client.bind(bindDn(credential), credential.secret);
+  }
+  if (!client) {
+    throw lastErr ?? new AppError("No LDAP server reachable.", "network");
+  }
+  try {
     return await run(client);
   } catch (err) {
     throw toAppError(err);

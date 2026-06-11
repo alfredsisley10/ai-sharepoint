@@ -55,6 +55,7 @@ import { BookmarksStore } from "./context/bookmarksStore";
 import { ContextBookmark } from "./context/types";
 import { discoverActiveDirectory } from "./context/ldap/discoveryHost";
 import { guessBindUpn, domainToBaseDn } from "./context/ldap/discovery";
+import { srvLocatorUrl } from "./context/ldap/srvLocator";
 import { realHostSignals } from "./context/ldap/discoveryHost";
 import { SourcesTreeProvider } from "./ui/sourcesView";
 import { UsageStatusBar } from "./ui/statusBar";
@@ -1392,15 +1393,20 @@ export function activate(context: vscode.ExtensionContext): void {
       `**Domain:** ${result.domain}  _(via ${result.via})_`,
       `**Base DN:** \`${result.baseDn}\``,
       "",
-      `**Discovered endpoints (${result.candidates.length}):**`,
+      `**Durable connection locators** _(re-resolved on every connection — survive DC changes)_:`,
       "",
-      "| Host | Port | Kind | TLS |",
-      "|---|---|---|---|",
+      `- Global Catalog: \`${srvLocatorUrl(result.domain, "gc")}\``,
+      `- Domain Controllers: \`${srvLocatorUrl(result.domain, "dc")}\``,
+      "",
+      `**Servers these currently resolve to (${result.candidates.length}, informational):**`,
+      "",
+      "| Host | Port | Kind |",
+      "|---|---|---|",
       ...result.candidates.map(
-        (c) => `| ${c.host} | ${c.port} | ${c.kind === "gc" ? "Global Catalog" : "Domain Controller"} | ${c.secure ? "LDAPS" : "LDAP"} |`,
+        (c) => `| ${c.host} | ${c.port} | ${c.kind === "gc" ? "Global Catalog" : "Domain Controller"} |`,
       ),
       "",
-      "_Add one as a source with **Add Context Source → LDAP / Active Directory** (this same discovery runs in the wizard)._",
+      "_Add a source with **Add Context Source → LDAP / Active Directory** — it stores the durable locator, never a specific server._",
     ];
     const doc = await vscode.workspace.openTextDocument({
       language: "markdown",
@@ -1632,8 +1638,10 @@ interface LdapEndpoint {
   defaultUpn?: string;
 }
 
-/** Run AD auto-discovery, let the user pick a discovered endpoint, or enter
- *  one manually. Returns the chosen ldap(s):// URL + base DN (ADR-0020). */
+/** Run AD auto-discovery and offer DURABLE endpoints: when servers come from
+ *  DNS SRV, the source stores the lookup itself (ldaps+srv://…) and re-resolves
+ *  on every connection — individual server names are shown only as
+ *  informational "currently resolves to" detail (ADR-0020 amendment). */
 async function resolveLdapEndpoint(): Promise<LdapEndpoint | undefined> {
   type Item = vscode.QuickPickItem & { endpoint?: LdapEndpoint; manual?: boolean };
   const items: Item[] = [];
@@ -1645,16 +1653,36 @@ async function resolveLdapEndpoint(): Promise<LdapEndpoint | undefined> {
       () => discoverActiveDirectory(),
     );
     discoveredUpn = guessBindUpn(realHostSignals(), result.domain);
+    const gcHosts = result.candidates.filter((c) => c.kind === "gc").map((c) => c.host);
+    const dcHosts = result.candidates.filter((c) => c.kind === "dc").map((c) => c.host);
+    const currently = (hosts: string[]) =>
+      hosts.length ? `currently resolves to: ${hosts.slice(0, 3).join(", ")}${hosts.length > 3 ? ", …" : ""}` : "no servers currently resolving";
     items.push({
       label: `$(search) Discovered domain: ${result.domain}`,
       kind: vscode.QuickPickItemKind.Separator,
     } as Item);
-    for (const c of result.candidates) {
+    if (gcHosts.length > 0) {
       items.push({
-        label: `$(${c.kind === "gc" ? "globe" : "server"}) ${c.host}:${c.port}`,
-        description: `${c.kind === "gc" ? "Global Catalog" : "Domain Controller"} · ${c.secure ? "LDAPS" : "LDAP"}`,
-        detail: `${c.url} · base DN ${result.baseDn}`,
-        endpoint: { baseUrl: c.url, baseDn: result.baseDn, defaultUpn: discoveredUpn },
+        label: "$(globe) Global Catalog via DNS (recommended)",
+        description: "forest-wide reads · durable — re-resolved on every connection",
+        detail: `${srvLocatorUrl(result.domain, "gc")} · ${currently(gcHosts)}`,
+        endpoint: {
+          baseUrl: srvLocatorUrl(result.domain, "gc"),
+          baseDn: result.baseDn,
+          defaultUpn: discoveredUpn,
+        },
+      });
+    }
+    if (dcHosts.length > 0) {
+      items.push({
+        label: "$(server) Domain Controllers via DNS",
+        description: "domain-scoped reads · durable — re-resolved on every connection",
+        detail: `${srvLocatorUrl(result.domain, "dc")} · ${currently(dcHosts)}`,
+        endpoint: {
+          baseUrl: srvLocatorUrl(result.domain, "dc"),
+          baseDn: result.baseDn,
+          defaultUpn: discoveredUpn,
+        },
       });
     }
   } catch (err) {
@@ -1663,21 +1691,21 @@ async function resolveLdapEndpoint(): Promise<LdapEndpoint | undefined> {
     );
   }
   items.push({
-    label: "$(edit) Enter a domain controller manually…",
-    description: "ldap(s)://host[:port] + base DN",
+    label: "$(edit) Enter a specific server manually…",
+    description: "pins one host — use only when DNS discovery is unavailable",
     manual: true,
   });
 
   const pick = await vscode.window.showQuickPick(items, {
     title: "Active Directory endpoint",
-    placeHolder: "Pick a discovered server, or enter one manually",
+    placeHolder: "DNS-based endpoints stay valid as domain controllers change over time",
   });
   if (!pick) return undefined;
   if (pick.endpoint) return pick.endpoint;
   if (!pick.manual) return undefined;
 
   const url = await vscode.window.showInputBox({
-    title: "LDAP server URL",
+    title: "LDAP server URL (static — prefer the DNS option when available)",
     placeHolder: "ldaps://dc01.corp.example:636  (or ldap://…:389)",
     validateInput: (v) =>
       /^ldaps?:\/\/[^\s/]+/i.test(v.trim()) ? undefined : "Enter an ldap:// or ldaps:// URL",

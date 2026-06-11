@@ -244,8 +244,11 @@ domain-joined machine.
 - **Add** (Reference Sources → `+` → *LDAP / Active Directory*): the extension reads your
   workstation's domain (from `USERDNSDOMAIN`, the host FQDN, or `/etc/resolv.conf`) and queries
   DNS **SRV** records (`_gc._tcp.<domain>`, `_ldap._tcp.dc._msdcs.<domain>`) to find domain
-  controllers and global-catalog servers. Pick a discovered endpoint (or enter one manually);
-  the base DN is derived for you. Then sign in with **your own AD account** — UPN
+  controllers and global-catalog servers. You connect to the **lookup itself** — e.g.
+  `ldaps+srv://_gc._tcp.corp.example` — which re-resolves on every connection and fails over
+  across servers, so the source keeps working as domain controllers change over time (specific
+  servers are shown only as "currently resolves to" info). The base DN is derived for you;
+  entering one specific server manually remains possible. Then sign in with **your own AD account** — UPN
   (`you@corp.example`), `DOMAIN\you`, or a full DN — and password. Run
   **AI SharePoint: Discover Active Directory (DNS)** any time to just see what DNS returns.
 - **Search**: free text uses AD **ANR**, so `#spSearchContext` with *"Jane Doe"* matches name,
@@ -261,11 +264,12 @@ domain-joined machine.
   descriptors + bookmarks (never credentials or accounts — verified by a leak scan); teammates
   **Import Reference Config…** and sign in with their own credentials, with the working auth
   method pre-selected.
-- **TLS**: LDAPS (port 636/3269) is preferred. If your DCs use an internal CA, see the
-  [Admin Guide](ADMIN_GUIDE.md#7-reference-sources-confluence--jira--ldap--ad) — you may need
-  the CA installed, or (lab only) `aiSharePoint.ldap.tlsRejectUnauthorized: false`. For plain
-  `ldap://` you can enable `aiSharePoint.ldap.useStartTls`. LDAP traffic goes **directly** to
-  the DC (it is not HTTP, so it does not use the VS Code proxy).
+- **TLS**: LDAPS (port 636/3269) is preferred, and internal-CA certificates are trusted via
+  the **operating-system trust store** (plus `NODE_EXTRA_CA_CERTS` and the admin setting
+  `aiSharePoint.ldap.caCertificatesFile` for a pinned corporate CA bundle). If you see "LDAPS
+  certificate not trusted", ask IT to confirm the corporate CA is deployed or set that setting —
+  details in the Admin Guide. For plain `ldap://`, `aiSharePoint.ldap.useStartTls` upgrades the
+  connection. LDAP traffic goes **directly** to the DC (not via the VS Code proxy).
 
 ## Copilot usage, budget, and the dashboard
 
@@ -367,6 +371,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | `aiSharePoint.sync.allowedRemoteHosts` | `["github.com"]` | **Machine-scoped** — Git hosts site repos may push to (add your GHES host) |
 | `aiSharePoint.context.cacheTtlMinutes` | `15` | Reference-source result cache TTL |
 | `aiSharePoint.context.maxResults` | `25` | Reference-source result cap |
+| `aiSharePoint.ldap.caCertificatesFile` | `""` | **Machine-scoped** — PEM bundle appended to OS/default trust for LDAPS |
 
 ## Troubleshooting
 
