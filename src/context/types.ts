@@ -14,7 +14,8 @@ export type ContextSourceType =
   | "mongodb"
   | "vertexai"
   | "powerbi"
-  | "servicenow";
+  | "servicenow"
+  | "splunk";
 export type ContextDeployment = "cloud" | "datacenter";
 
 /** Auth method descriptor persisted per source (ADR-0014/0015).

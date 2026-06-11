@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -133,7 +133,7 @@
       },
       {
         "command": "aiSharePoint.addContextSource",
-        "title": "Add Context Source (Confluence/Jira/LDAP/Databases/Vertex/Power BI/ServiceNow)",
+        "title": "Add Context Source (Confluence/Jira/LDAP/Databases/Vertex/Power BI/ServiceNow/Splunk)",
         "category": "AI SharePoint",
         "icon": "$(add)"
       },
@@ -554,7 +554,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved). Vertex AI Search sources: plain-text queries return enterprise search hits (use the vertex_answer tool for synthesized answers). Power BI sources: JSON {\"dataset\": \"<id or name>\", \"dax\": \"EVALUATE …\"} runs a read-only DAX query (use db_schema-style starter EVALUATE INFO.TABLES() to discover tables). ServiceNow sources: plain text (text-index search of the default table), a native encoded query (\"active=true^priority=1\"), or JSON {\"table\": \"cmdb_ci_appl\", \"query\": \"...\", \"fields\": [...], \"limit\": n}.",
+        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved). Vertex AI Search sources: plain-text queries return enterprise search hits (use the vertex_answer tool for synthesized answers). Power BI sources: JSON {\"dataset\": \"<id or name>\", \"dax\": \"EVALUATE …\"} runs a read-only DAX query (use db_schema-style starter EVALUATE INFO.TABLES() to discover tables). ServiceNow sources: plain text (text-index search of the default table), a native encoded query (\"active=true^priority=1\"), or JSON {\"table\": \"cmdb_ci_appl\", \"query\": \"...\", \"fields\": [...], \"limit\": n}. Splunk sources: plain keywords (default index, last 24h), raw SPL (\"search index=web error | stats count by host\", \"| tstats ...\"), or JSON {\"spl\": \"...\", \"earliest\": \"-7d\", \"latest\": \"now\", \"limit\": n} — write/exfil commands (delete/collect/outputlookup/sendemail/script) are blocked.",
         "inputSchema": {
           "type": "object",
           "properties": {

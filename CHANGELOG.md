@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.10.0 — 2026-06-11
+
+### Added — Splunk connector (read-only SPL, ADR-0029)
+- New reference source: **Splunk** (Enterprise or Cloud, management API) — ask in plain
+  keywords (searched in the default index over the **last 24 h** by default), raw **SPL**
+  (`search index=web error | stats count by host`, `| tstats …`, `| savedsearch "…"`), or JSON
+  `{"spl": "…", "earliest": "-7d", "latest": "now", "limit": n}`. Oneshot execution — no job
+  lifecycle — with server-side row caps; events map with host/source/sourcetype/index/time and
+  optional Splunk Web deep links (`?web=`).
+- **Read-only by barrier**: write/exfiltrate/execute SPL commands (`delete`, `collect`,
+  `outputlookup`, `outputcsv`, `sendemail`, `sendalert`, `script`, …) are rejected before any
+  request — including inside `map`/subsearch bodies. Reads (`inputlookup`, `stats`,
+  `savedsearch`) pass.
+- Auth: **authentication token** (Settings → Tokens; recommended) or Basic with a
+  least-privilege search account — keychain, lockout breaker, caps, caching, and verbose wire
+  logging as standard. Browse & Bookmark lists your **saved searches** and non-internal
+  **indexes** as starter queries.
+
 ## 0.9.0 — 2026-06-11
 
 ### Added — ServiceNow connector (read-only Table API, ADR-0028)

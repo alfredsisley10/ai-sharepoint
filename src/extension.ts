@@ -1322,6 +1322,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
         { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
         { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
+        { label: "$(pulse) Splunk", description: "read-only SPL searches (oneshot, time-bounded)", value: "splunk" as ContextSourceType },
       ],
       { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );
@@ -1444,6 +1445,49 @@ export function activate(context: vscode.ExtensionContext): void {
       if (table.trim()) {
         baseUrl += `?table=${encodeURIComponent(table.trim())}`;
       }
+    } else if (typePick.value === "splunk") {
+      deployment = "datacenter";
+      const url = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Splunk — management API URL (1/3)",
+        placeHolder: "https://splunk.corp.example:8089   (the REST port, usually 8089 — not Splunk Web)",
+        validateInput: (v) => {
+          try {
+            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+          } catch {
+            return "Enter a valid https:// URL";
+          }
+        },
+      });
+      if (!url) return;
+      baseUrl = url.trim().replace(/\/+$/, "");
+      const index = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Splunk — default index (2/3, optional)",
+        placeHolder: "main — free-text chat questions search this index (Enter to skip)",
+        validateInput: (v) =>
+          !v.trim() || /^[A-Za-z0-9_-]+$/.test(v.trim()) ? undefined : "Index names: letters/digits/_/-",
+      });
+      if (index === undefined) return;
+      const web = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Splunk — Splunk Web URL (3/3, optional)",
+        placeHolder: "https://splunk.corp.example:8000 — makes results deep-link into Splunk Web (Enter to skip)",
+        validateInput: (v) => {
+          if (!v.trim()) return undefined;
+          try {
+            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+          } catch {
+            return "Enter a valid https:// URL (or leave empty)";
+          }
+        },
+      });
+      if (web === undefined) return;
+      const params = new URLSearchParams();
+      if (index.trim()) params.set("index", index.trim());
+      if (web.trim()) params.set("web", web.trim().replace(/\/+$/, ""));
+      const qs = params.toString();
+      if (qs) baseUrl += `?${qs}`;
     } else if (typePick.value === "powerbi") {
       deployment = "cloud";
       baseUrl = "https://api.powerbi.com/v1.0/myorg";
@@ -2997,6 +3041,48 @@ async function promptContextCredential(
   defaultUpn?: string,
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
+  if (type === "splunk") {
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(shield) Authentication token (recommended)",
+          description: "Splunk Web → Settings → Tokens — scoped, revocable",
+          value: "pat" as const,
+        },
+        {
+          label: "$(key) Username + password",
+          description: "a least-privilege search-only account is recommended",
+          value: "basic" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Splunk sign-in" },
+    );
+    if (!mode) return undefined;
+    if (mode.value === "pat") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Splunk authentication token",
+        password: true,
+        prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+      });
+      if (!secret) return undefined;
+      return { method: "pat", secret: secret.trim() };
+    }
+    const username = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Splunk user",
+      placeHolder: "search.readonly",
+    });
+    if (!username) return undefined;
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Splunk password",
+      password: true,
+      prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+    });
+    if (!secret) return undefined;
+    return { method: "basic", username: username.trim(), secret };
+  }
   if (type === "servicenow") {
     const mode = await vscode.window.showQuickPick(
       [

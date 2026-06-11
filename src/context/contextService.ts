@@ -38,6 +38,7 @@ import {
   browseServiceNowCandidates,
   defaultSnowTable,
 } from "./adapters/servicenow";
+import { verifySplunk, searchSplunk, browseSplunkCandidates } from "./adapters/splunk";
 import { SchemaCatalog } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
 
@@ -170,6 +171,8 @@ export class ContextService {
           return verifyPowerBi(this.powerBiTokens(credential), caps);
         case "servicenow":
           return verifyServiceNow(source, credential, caps);
+        case "splunk":
+          return verifySplunk(source, credential, caps);
         default:
           return verifyConfluence(source, credential, caps);
       }
@@ -210,6 +213,8 @@ export class ContextService {
               return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
             case "servicenow":
               return searchServiceNow(source, credential, query, caps);
+            case "splunk":
+              return searchSplunk(source, credential, query, caps);
             default:
               return searchConfluence(source, credential, query, caps);
           }
@@ -241,6 +246,12 @@ export class ContextService {
           if (source.type === "powerbi") {
             throw new AppError(
               'Power BI has no item fetch — use search with {"dataset": "...", "dax": "EVALUATE …"}.',
+              "config",
+            );
+          }
+          if (source.type === "splunk") {
+            throw new AppError(
+              "Splunk has no item fetch — use search with SPL (results carry the matching events).",
               "config",
             );
           }
@@ -418,6 +429,9 @@ export class ContextService {
           }
           if (source.type === "servicenow") {
             return browseServiceNowCandidates(defaultSnowTable(source));
+          }
+          if (source.type === "splunk") {
+            return browseSplunkCandidates(source, credential, caps);
           }
           return []; // LDAP: search-then-bookmark is the guided path
         });

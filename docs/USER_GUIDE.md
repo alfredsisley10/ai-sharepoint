@@ -387,6 +387,21 @@ Reference your instance's ITSM and CMDB records **read-only**:
   recently-updated query. Pair it with an alias like `CMDB` and chat reads the way you talk:
   *"find the app records owned by X in CMDB"*.
 
+### Splunk
+
+Search your logs and metrics **read-only** from chat:
+
+- **Add** (Reference Sources → `+` → *Splunk*): the **management API URL** (usually port
+  `8089`, not Splunk Web), an optional **default index**, and an optional Splunk Web URL for
+  deep links. Sign in with an **authentication token** (Splunk Web → Settings → Tokens;
+  recommended) or a least-privilege search account.
+- **Ask naturally**: *"@sharepoint search Splunk for smtp relay timeouts"* (keywords search the
+  default index over the last 24 h), or use raw SPL — `search index=web error | stats count by
+  host`, `| savedsearch "Errors by host"` — or JSON with `earliest`/`latest` to widen the
+  window. Mutating/exfiltrating commands (`delete`, `collect`, `outputlookup`, `sendemail`, …)
+  are blocked before anything is sent.
+- **Browse & Bookmark** lists your saved searches and indexes as ready-made starter queries.
+
 ### Power BI (cloud)
 
 Analyze Power BI data without leaving chat — **read-only, with your existing sign-in**:
