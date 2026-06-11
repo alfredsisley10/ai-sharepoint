@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -257,8 +257,9 @@
       },
       {
         "command": "aiSharePoint.clearErrorReports",
-        "title": "Clear Error Reports",
-        "category": "AI SharePoint"
+        "title": "Delete Error Reports",
+        "category": "AI SharePoint",
+        "icon": "$(trash)"
       },
       {
         "command": "aiSharePoint.rotateAnonymousId",
@@ -755,6 +756,16 @@
           "command": "aiSharePoint.browseSource",
           "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
           "group": "1_actions@2"
+        },
+        {
+          "command": "aiSharePoint.clearErrorReports",
+          "when": "view == aiSharePoint.supportView && viewItem == errorReports",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.clearErrorReports",
+          "when": "view == aiSharePoint.supportView && viewItem == errorReports",
+          "group": "1_actions@1"
         }
       ],
       "commandPalette": [

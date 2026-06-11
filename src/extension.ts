@@ -50,12 +50,7 @@ import {
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
-import {
-  mssqlUrlIssue,
-  mssqlPortAndInstance,
-  parseSsmsServerName,
-  ssmsToUrl,
-} from "./context/db/mssqlAuth";
+import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { ContextBookmark } from "./context/types";
@@ -1173,31 +1168,95 @@ export function activate(context: vscode.ExtensionContext): void {
       baseUrl = endpoint.baseUrl;
       baseDn = endpoint.baseDn;
       defaultUpn = endpoint.defaultUpn;
+    } else if (typePick.value === "mssql") {
+      // Field-by-field wizard (pilot direction): no string parsing — each
+      // element is prompted, the connection URL is built from the parts, and
+      // the add flow verifies it live before anything is saved.
+      const hostRaw = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "SQL Server (1/4) — server FQDN or hostname",
+        placeHolder: "sqlserver.corp.example   (pasting an SSMS name like server\\INSTANCE,port also works)",
+        validateInput: (v) =>
+          v.trim() && !v.includes("://") ? undefined : "Enter the server name only — no scheme",
+      });
+      if (!hostRaw) return;
+      // Convenience: a pasted SSMS server name pre-fills the next steps.
+      const pasted = parseSsmsServerName(hostRaw);
+      const host = (pasted?.host ?? hostRaw).trim();
+
+      const instanceRaw = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "SQL Server (2/4) — instance name",
+        value: pasted?.instance ?? "",
+        placeHolder: "PROD — leave empty for the default instance",
+        prompt: "Only needed when connecting via SQL Browser; ignored for routing when a port is given (SSMS behavior).",
+      });
+      if (instanceRaw === undefined) return;
+      const instance = instanceRaw.trim() || undefined;
+
+      const portRaw = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "SQL Server (3/4) — TCP port",
+        value: pasted?.port !== undefined ? String(pasted.port) : "",
+        placeHolder: instance
+          ? "leave empty to resolve via SQL Browser — or the instance's static port (recommended when Browser is disabled)"
+          : "1433 — or your non-standard port",
+        prompt: "An explicit port connects directly (most reliable in hardened environments).",
+        validateInput: (v) => {
+          if (!v.trim()) return undefined;
+          const n = Number(v.trim());
+          return Number.isInteger(n) && n >= 1 && n <= 65535 ? undefined : "Port must be 1–65535 (or empty)";
+        },
+      });
+      if (portRaw === undefined) return;
+      const portNum = portRaw.trim() ? Number(portRaw.trim()) : undefined;
+      if (portNum === undefined && !instance) {
+        void vscode.window.showInformationMessage("No port or instance given — using the default port 1433.");
+      }
+
+      const database = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "SQL Server (4/4) — database name",
+        placeHolder: "Sales",
+        validateInput: (v) => (v.trim() ? undefined : "Enter the database name"),
+      });
+      if (!database) return;
+
+      const certPick = await vscode.window.showQuickPick(
+        [
+          {
+            label: "$(verified) Validate server certificate (recommended)",
+            description: "requires a trusted cert whose name matches the host",
+            value: false,
+          },
+          {
+            label: "$(unlock) Trust server certificate",
+            description: "skip validation — self-signed certs or FQDN/name mismatches (the SSMS checkbox)",
+            value: true,
+          },
+        ],
+        { ignoreFocusOut: true, title: "SQL Server TLS certificate handling" },
+      );
+      if (!certPick) return;
+
+      baseUrl = buildMssqlUrl({
+        host,
+        instance,
+        port: portNum,
+        database: database.trim(),
+        trustServerCertificate: certPick.value,
+      });
     } else if (DB_TYPES.has(typePick.value)) {
       const placeholders: Record<string, string> = {
-        mssql: "mssql://sqlhost:14330/MyDatabase — or paste the SSMS server name as-is: server.corp.com\\\\INSTANCE,14330",
         postgres: "postgresql://pghost.corp.example:5432/mydb  (?ssl=false to disable TLS)",
         mysql: "mysql://mysqlhost.corp.example:3306/mydb  (?ssl=true to enable TLS)",
         mongodb: "mongodb://mongo.corp.example:27017/mydb  (mongodb+srv:// supported)",
       };
       const url = await vscode.window.showInputBox({
-      ignoreFocusOut: true,
+        ignoreFocusOut: true,
         title: "Database connection URL (read-only reference access)",
         placeHolder: placeholders[typePick.value],
         validateInput: (v) => {
-          if (typePick.value === "mssql") {
-            if (parseSsmsServerName(v)) {
-              return undefined; // SSMS server-name form — database asked next
-            }
-            if (mssqlPortAndInstance(v)) {
-              return {
-                message:
-                  "Port takes precedence; the instance name is ignored for routing (SSMS/SqlClient behavior).",
-                severity: vscode.InputBoxValidationSeverity.Info,
-              };
-            }
-            return mssqlUrlIssue(v);
-          }
           try {
             const u = new URL(v.trim());
             if (!u.pathname.replace(/^\/+/, "")) return "Include the database name: …/dbname";
@@ -1209,46 +1268,6 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (!url) return;
       baseUrl = url.trim();
-      // Accept the native SSMS server name (server\\INSTANCE,port etc.):
-      // ask for the database, then build the URL with SqlClient precedence.
-      const ssms = typePick.value === "mssql" ? parseSsmsServerName(baseUrl) : null;
-      if (ssms) {
-        const database = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          title: `Database on ${ssms.host}${ssms.instance ? `\\${ssms.instance}` : ""}${ssms.port ? `,${ssms.port}` : ""}`,
-          placeHolder: "Sales",
-          validateInput: (v) => (v.trim() ? undefined : "Enter the database name"),
-        });
-        if (!database) return;
-        baseUrl = ssmsToUrl(ssms, database.trim());
-        if (ssms.instance && ssms.port !== undefined) {
-          void vscode.window.showInformationMessage(
-            `Connecting directly to port ${ssms.port} — the instance name "${ssms.instance}" is ignored for routing (SSMS behaves the same when a port is given).`,
-          );
-        }
-      }
-      if (typePick.value === "mssql" && !/[?&]trustServerCertificate=/i.test(baseUrl)) {
-        const certPick = await vscode.window.showQuickPick(
-          [
-            {
-              label: "$(verified) Validate server certificate (recommended)",
-              description: "requires a trusted cert whose name matches the host",
-              value: false,
-            },
-            {
-              label: "$(unlock) Trust server certificate",
-              description:
-                "skip validation — for self-signed certs or FQDN/name mismatches (the SSMS checkbox)",
-              value: true,
-            },
-          ],
-          { ignoreFocusOut: true, title: "SQL Server TLS certificate handling" },
-        );
-        if (!certPick) return;
-        if (certPick.value) {
-          baseUrl += (baseUrl.includes("?") ? "&" : "?") + "trustServerCertificate=true";
-        }
-      }
     } else {
       const depPick = await vscode.window.showQuickPick(
         [
@@ -1763,8 +1782,19 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   register("aiSharePoint.clearErrorReports", async () => {
+    const count = errors.count();
+    if (count === 0) {
+      void vscode.window.showInformationMessage("No error reports to delete.");
+      return;
+    }
+    const confirm = await vscode.window.showWarningMessage(
+      `Delete ${count} locally stored error report${count === 1 ? "" : "s"}? This cannot be undone.`,
+      { modal: true },
+      "Delete Reports",
+    );
+    if (confirm !== "Delete Reports") return;
     await errors.clear();
-    void vscode.window.showInformationMessage("Error reports cleared.");
+    void vscode.window.showInformationMessage("Error reports deleted.");
   });
 
   register("aiSharePoint.rotateAnonymousId", async () => {
@@ -1782,17 +1812,32 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  register("aiSharePoint.openLogs", () => log.show());
+  register("aiSharePoint.openLogs", async () => {
+    log.info("Extension logs opened from Support & Diagnostics.");
+    // OutputChannel.show() alone can fail to reopen a closed Output panel
+    // (microsoft/vscode#40690 family), so force the panel open first, then
+    // select our channel in it — the reliable order.
+    await vscode.commands
+      .executeCommand("workbench.panel.output.focus")
+      .then(undefined, () => undefined);
+    log.show();
+  });
 
   register("aiSharePoint.openUserGuide", () => openBundledDoc(context, "USER_GUIDE.md"));
   register("aiSharePoint.openPrivacyNotice", () => openBundledDoc(context, "PRIVACY.md"));
 
-  register("aiSharePoint.openWalkthrough", () =>
-    vscode.commands.executeCommand(
-      "workbench.action.openWalkthrough",
-      "alfredsisley10.ai-sharepoint#aiSharePoint.gettingStarted",
-    ),
-  );
+  register("aiSharePoint.openWalkthrough", async () => {
+    // Build the category ID from the runtime extension ID so it can never
+    // drift from package.json (publisher.name#walkthroughId).
+    const walkthroughId = `${context.extension.id}#aiSharePoint.gettingStarted`;
+    await vscode.commands.executeCommand("workbench.action.openWalkthrough", walkthroughId, false);
+    // The first invocation can race walkthrough registration and fall back to
+    // the generic Welcome page (microsoft/vscode#187958). Re-issuing against
+    // the now-open page takes the makeCategoryVisibleWhenAvailable path,
+    // which awaits registration — idempotent when the first call succeeded.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await vscode.commands.executeCommand("workbench.action.openWalkthrough", walkthroughId, false);
+  });
 
   log.info(`AI SharePoint v${version} activated.`);
   telemetry.record("activate");

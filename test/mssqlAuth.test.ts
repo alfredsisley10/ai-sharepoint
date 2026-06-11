@@ -9,6 +9,7 @@ import {
   parseSsmsServerName,
   ssmsToUrl,
   resolveMssqlEndpoint,
+  buildMssqlUrl,
 } from "../src/context/db/mssqlAuth";
 import { parseDbUrl } from "../src/context/db/dbAdapters";
 
@@ -101,6 +102,38 @@ test("ssmsToUrl applies SqlClient precedence: port wins, instance only as Browse
     "mssql://server/Sales?instance=PROD",
   );
   assert.equal(ssmsToUrl({ host: "server" }, "Sales"), "mssql://server/Sales");
+});
+
+test("buildMssqlUrl assembles every wizard combination into a valid URL", () => {
+  // Full enterprise shape: FQDN + instance + non-standard port + cert trust.
+  const full = buildMssqlUrl({
+    host: "server.corp.com",
+    instance: "PROD",
+    port: 14330,
+    database: "Sales",
+    trustServerCertificate: true,
+  });
+  assert.equal(full, "mssql://server.corp.com:14330/Sales?instance=PROD&trustServerCertificate=true");
+  assert.equal(mssqlUrlIssue(full), undefined);
+  const parsed = parseDbUrl({ baseUrl: full });
+  assert.equal(parsed.host, "server.corp.com");
+  assert.equal(parsed.port, 14330);
+  assert.equal(parsed.database, "Sales");
+  // Port wins for routing; the instance stays recorded but is ignored.
+  assert.deepEqual(resolveMssqlEndpoint(parsed.port, parseMssqlParams(parsed.params)), { port: 14330 });
+
+  // Instance-only (SQL Browser) and bare default forms.
+  assert.equal(
+    buildMssqlUrl({ host: "server", instance: "PROD", database: "Sales" }),
+    "mssql://server/Sales?instance=PROD",
+  );
+  assert.equal(buildMssqlUrl({ host: "server", database: "Sales" }), "mssql://server/Sales");
+
+  // Inputs are trimmed and the database name is URL-encoded.
+  assert.equal(
+    buildMssqlUrl({ host: " server ", database: " Annual Report " }),
+    "mssql://server/Annual%20Report",
+  );
 });
 
 test("resolveMssqlEndpoint: explicit port beats instance; instance beats default", () => {

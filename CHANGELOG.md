@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.5 — 2026-06-11
+
+### Changed — SQL Server setup is now a fully guided, field-by-field wizard (pilot)
+- No more connection-string guessing: the wizard prompts for **server FQDN → instance name →
+  TCP port → database → certificate handling → sign-in method → username → password**, builds
+  the connection URL from the answers, and **live-verifies it** with a single read before
+  anything is saved. Pasting the SSMS "Server name" (`server.corp.com\INSTANCE,port`) into the
+  first step still pre-fills instance and port. Each step validates inline (port range,
+  hostname-not-URL) and explains the SSMS-equivalent behavior (explicit port wins; empty port
+  + instance resolves via SQL Browser).
+- **Rejections now carry SQL Server's own words**: the TDS `errorMessage` frame (error
+  number/state — e.g. *Login failed for user* vs *Cannot open database*) is appended to the
+  connection error, so "login works in SSMS" cases are diagnosable in one attempt.
+  PostgreSQL/MySQL/MongoDB keep the URL-based entry.
+
+### Fixed — Support & Diagnostics actions (pilot)
+- **Error Reports** can be deleted from the view: right-click → **Delete Error Reports**
+  (also an inline trash icon), with a count-aware confirmation; the palette command was
+  retitled accordingly.
+- **Open Extension Logs** reliably reveals the log channel: the Output panel is forced open
+  first, then the channel selected — `OutputChannel.show()` alone can silently fail to reopen
+  a closed panel (microsoft/vscode#40690 family), which matched the reported "nothing
+  happens".
+- **Getting Started Walkthrough** opens *our* walkthrough instead of the generic VS Code
+  Welcome page: the category ID is built from the runtime extension ID and the open command is
+  re-issued against the opened page — the second invocation takes VS Code's
+  registration-safe path (microsoft/vscode#187958), making the deep link deterministic.
+
+
 ## 0.6.4 — 2026-06-11
 
 ### Added — paste the SSMS "Server name" as-is (pilot)

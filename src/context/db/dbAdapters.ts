@@ -129,9 +129,23 @@ async function mssqlRows(
     },
   });
 
+  // SQL Server sends its real reason (error number/state) in errorMessage
+  // frames during the handshake — capture them so rejections are diagnosable.
+  const serverMessages: string[] = [];
+  connection.on("errorMessage", (m: { message?: string; number?: number; state?: number }) => {
+    serverMessages.push(
+      `${m.message ?? ""}${m.number !== undefined ? ` (error ${m.number}, state ${m.state ?? "?"})` : ""}`.trim(),
+    );
+  });
+  const withServerDetail = (err: unknown): unknown => {
+    if (err instanceof Error && serverMessages.length > 0) {
+      err.message = `${err.message} — server said: ${serverMessages.slice(-2).join(" | ")}`;
+    }
+    return err;
+  };
   try {
     await new Promise<void>((resolve, reject) => {
-      connection.connect((err) => (err ? reject(err) : resolve()));
+      connection.connect((err) => (err ? reject(withServerDetail(err)) : resolve()));
     });
     return await new Promise((resolve, reject) => {
       const rows: Array<Record<string, unknown>> = [];

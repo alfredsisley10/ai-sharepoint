@@ -8,6 +8,7 @@ interface SupportNode {
   icon: vscode.ThemeIcon;
   tooltip?: string;
   command?: vscode.Command;
+  contextValue?: string;
 }
 
 /**
@@ -33,6 +34,7 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
     item.iconPath = node.icon;
     item.tooltip = node.tooltip;
     item.command = node.command;
+    item.contextValue = node.contextValue;
     return item;
   }
 
@@ -57,8 +59,10 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
           errorCount === 0
             ? new vscode.ThemeIcon("pass", new vscode.ThemeColor("charts.green"))
             : new vscode.ThemeIcon("bug", new vscode.ThemeColor("charts.red")),
-        tooltip: "Locally stored, redacted error reports.",
+        tooltip:
+          "Locally stored, redacted error reports. Right-click to delete them.",
         command: { command: "aiSharePoint.showErrorReports", title: "Show" },
+        contextValue: "errorReports",
       },
       {
         id: "logs",

@@ -119,8 +119,9 @@ and the budget editor.
 
 ### Support & Diagnostics
 Everything operational: **Export Diagnostics Bundle**, **Error Reports** (the view badge shows
-the count), extension **logs**, the **walkthrough**, this **user guide**, the **privacy
-notice**, and **Rotate Anonymous Install ID**.
+the count; **right-click → Delete Error Reports** to clear them, with confirmation), extension
+**logs**, the **walkthrough**, this **user guide**, the **privacy notice**, and **Rotate
+Anonymous Install ID**.
 
 ## Chatting with @sharepoint
 
@@ -270,22 +271,31 @@ domain-joined machine.
 Reference **read-only** data from enterprise databases (Oracle is excluded for packaging
 reasons — ADR-0022):
 
-- **Add** (Reference Sources → `+`): pick the engine and enter a connection URL with the
-  database name — e.g. `mssql://sqlhost:1433/Sales`, `postgresql://pghost/reporting`,
+- **Add** (Reference Sources → `+`): pick the engine. PostgreSQL/MySQL/MongoDB take a
+  connection URL with the database name — e.g. `postgresql://pghost/reporting`,
   `mysql://myhost/app`, `mongodb://mongo/ops` (`mongodb+srv://` supported). Sign in with a
   database account — a **least-privilege read-only account is recommended**.
-- **SQL Server specifics**: both **SQL Server Authentication** (database login) and **Windows
-  Authentication** (NTLM — `CORP\user` or `user@corp.example` + password; passwordless SSO is
-  not possible in a portable extension) are supported, chosen in the wizard. **You can paste the
-  SSMS "Server name" exactly as your DBA provides it** — `server.corp.com\INSTANCE,14330`,
-  `server,14330`, or `server\INSTANCE` — and the wizard asks for the database and builds the
-  URL. Precedence matches SSMS/SqlClient: an explicit **port connects directly** (the instance
-  name is ignored for routing); instance-only resolves the port via SQL Browser (UDP 1434).
-  URL forms: `mssql://sqlhost:14330/Sales` (port) or `mssql://sqlhost/Sales?instance=PROD`
-  (Browser). If the server's certificate is
-  self-signed or doesn't match the FQDN you connect with, the wizard's **"Trust server
-  certificate"** option (the SSMS checkbox equivalent, `?trustServerCertificate=true`) skips
-  validation for that source only.
+- **SQL Server is fully guided** — no connection string to get right. The wizard prompts for
+  each element separately and builds (then live-verifies) the connection from your answers:
+  1. **Server FQDN** (hostname only — pasting the SSMS "Server name" like
+     `server.corp.com\INSTANCE,14330` here pre-fills the next steps);
+  2. **Instance name** (empty for the default instance);
+  3. **TCP port** (empty to resolve via SQL Browser when an instance is set; an explicit port
+     connects directly and — exactly like SSMS/SqlClient — wins over the instance name for
+     routing);
+  4. **Database name**;
+  5. **Certificate handling** — choose **"Trust server certificate"** (the SSMS checkbox
+     equivalent) when the server's certificate is self-signed or doesn't match the FQDN you
+     connect with; validation is skipped for that source only;
+  6. **Sign-in method** — **SQL Server Authentication** (database login) or **Windows
+     Authentication** (NTLM — `CORP\user` or `user@corp.example` + password; passwordless SSO
+     is not possible in a portable extension) — then username and password. The connection is
+     verified with a single read before anything is saved, and a rejected login now includes
+     **SQL Server's own error message** (login failed vs. cannot open database vs. wrong
+     instance) so the fix is obvious.
+  The equivalent URL forms, if you script sources via export/import:
+  `mssql://sqlhost:14330/Sales` (direct port) or `mssql://sqlhost/Sales?instance=PROD`
+  (SQL Browser, UDP 1434), plus `?trustServerCertificate=true`.
 - **Query from chat**: ask `@sharepoint` to run a `SELECT` (or provide one) — only single,
   read-only SELECT statements are accepted (write/DDL/EXEC keywords are blocked by a guard,
   on top of server-side read-only sessions where the engine supports them); MongoDB takes a
@@ -405,7 +415,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Set Copilot Budget | Guided allowance / soft % / hard % editor |
 | Reset Copilot Usage Meter | Clear local usage history (confirmed) |
 | Export Diagnostics Bundle | The anonymized support bundle (previewed + scanned) |
-| Show / Clear Error Reports | Browse redacted error reports; open details; clear |
+| Show / Delete Error Reports | Browse redacted error reports; open details; delete (also right-click **Error Reports** in Support & Diagnostics) |
 | Rotate Anonymous Install ID | New random ID + hash salt |
 | Open Extension Logs | The redacted log channel (level set via the gear menu) |
 | Open User Guide / Privacy Notice / Walkthrough | Documentation |
@@ -443,7 +453,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Pages list shows “unavailable” | Some tenants restrict the Graph Pages API → lists still work; this is expected. |
 | 429 / throttled | Microsoft Graph throttling → the extension retries once automatically; wait a moment. |
 | Requests blocked by budget | You passed your hard cap → raise it (`Set Copilot Budget`), switch mode to `warn`, or use the one-time override. |
-| SQL Server "authentication rejected" but the login works in SSMS | Named instance not specified (`?instance=NAME`), wrong auth mode (Windows account needs Windows Authentication), or the URL's database is inaccessible to the login — the error message now distinguishes these. |
+| SQL Server "authentication rejected" but the login works in SSMS | Re-add the source with the guided wizard (it prompts for server, instance, port, database, certificate, and sign-in method separately — answer exactly as in SSMS) and read the appended **“server said: …”** detail: it is SQL Server's own message distinguishing a bad login, an inaccessible database, or a wrong instance. |
 | "Could not initialize a Git repository" / repo not detected | Folder outside the workspace, Restricted Mode, or git missing → accept the wizard's "Add to Workspace" offer (or File → Add Folder to Workspace…), trust the window, and check `git --version`. |
 | Network errors behind a proxy | VS Code's proxy settings apply (`http.proxy`) → see Admin Guide §Proxies. |
 

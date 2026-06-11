@@ -157,3 +157,27 @@ export function resolveMssqlEndpoint(
   if (params.instanceName) return { instanceName: params.instanceName };
   return { port: 1433 };
 }
+
+export interface MssqlParts {
+  host: string;
+  instance?: string;
+  port?: number;
+  database: string;
+  trustServerCertificate?: boolean;
+}
+
+/** Build the stored mssql:// URL from individually-prompted parts. Both
+ *  instance and port are preserved when given (port wins at connect time —
+ *  SqlClient precedence); the URL stays a faithful record of user input. */
+export function buildMssqlUrl(parts: MssqlParts): string {
+  let url = `mssql://${parts.host.trim()}`;
+  if (parts.port !== undefined) {
+    url += `:${parts.port}`;
+  }
+  url += `/${encodeURIComponent(parts.database.trim())}`;
+  const q = new URLSearchParams();
+  if (parts.instance?.trim()) q.set("instance", parts.instance.trim());
+  if (parts.trustServerCertificate) q.set("trustServerCertificate", "true");
+  const qs = q.toString();
+  return qs ? `${url}?${qs}` : url;
+}

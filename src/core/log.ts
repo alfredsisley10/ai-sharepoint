@@ -41,8 +41,8 @@ export class Logger {
     );
   }
 
-  show(): void {
-    this.channel.show(true);
+  show(preserveFocus = false): void {
+    this.channel.show(preserveFocus);
   }
 
   dispose(): void {
