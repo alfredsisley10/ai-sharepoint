@@ -31,6 +31,13 @@ import {
   PowerBiTokenGetter,
   POWERBI_SCOPES,
 } from "./adapters/powerbi";
+import {
+  verifyServiceNow,
+  searchServiceNow,
+  getServiceNowItem,
+  browseServiceNowCandidates,
+  defaultSnowTable,
+} from "./adapters/servicenow";
 import { SchemaCatalog } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
 
@@ -161,6 +168,8 @@ export class ContextService {
           return verifyVertex(source, credential, caps);
         case "powerbi":
           return verifyPowerBi(this.powerBiTokens(credential), caps);
+        case "servicenow":
+          return verifyServiceNow(source, credential, caps);
         default:
           return verifyConfluence(source, credential, caps);
       }
@@ -199,6 +208,8 @@ export class ContextService {
               return searchVertex(source, credential, query, caps);
             case "powerbi":
               return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
+            case "servicenow":
+              return searchServiceNow(source, credential, query, caps);
             default:
               return searchConfluence(source, credential, query, caps);
           }
@@ -234,6 +245,8 @@ export class ContextService {
             );
           }
           switch (source.type) {
+            case "servicenow":
+              return getServiceNowItem(source, credential, id, caps);
             case "ldap":
               return getLdapEntry(source, credential, id, this.ldapTls(), caps);
             case "jira":
@@ -402,6 +415,9 @@ export class ContextService {
           }
           if (source.type === "powerbi") {
             return browsePowerBi(this.powerBiTokens(credential), caps);
+          }
+          if (source.type === "servicenow") {
+            return browseServiceNowCandidates(defaultSnowTable(source));
           }
           return []; // LDAP: search-then-bookmark is the guided path
         });

@@ -1321,6 +1321,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
         { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
         { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
+        { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
       ],
       { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );
@@ -1416,6 +1417,33 @@ export function activate(context: vscode.ExtensionContext): void {
         database: database.trim(),
         trustServerCertificate: certPick.value,
       });
+    } else if (typePick.value === "servicenow") {
+      deployment = "cloud";
+      const url = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "ServiceNow — instance URL",
+        placeHolder: "https://yourorg.service-now.com",
+        validateInput: (v) => {
+          try {
+            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+          } catch {
+            return "Enter a valid https:// URL";
+          }
+        },
+      });
+      if (!url) return;
+      baseUrl = url.trim().replace(/\/+$/, "");
+      const table = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "ServiceNow — default table (optional)",
+        value: "incident",
+        prompt: "Free-text chat queries search this table; JSON specs can target any table. Press Enter to accept.",
+        validateInput: (v) => (!v.trim() || /^[a-z0-9_]+$/.test(v.trim()) ? undefined : "Table names are lowercase_with_underscores"),
+      });
+      if (table === undefined) return;
+      if (table.trim()) {
+        baseUrl += `?table=${encodeURIComponent(table.trim())}`;
+      }
     } else if (typePick.value === "powerbi") {
       deployment = "cloud";
       baseUrl = "https://api.powerbi.com/v1.0/myorg";
@@ -2969,6 +2997,49 @@ async function promptContextCredential(
   defaultUpn?: string,
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
+  if (type === "servicenow") {
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(key) Basic — integration user + password",
+          description: "a least-privilege read-only service account is recommended",
+          value: "basic" as const,
+        },
+        {
+          label: "$(shield) OAuth bearer token",
+          description: "paste an access token from your instance's OAuth provider",
+          value: "pat" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "ServiceNow sign-in" },
+    );
+    if (!mode) return undefined;
+    if (mode.value === "pat") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "ServiceNow OAuth access token",
+        password: true,
+        prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+      });
+      if (!secret) return undefined;
+      return { method: "pat", secret: secret.trim() };
+    }
+    const username = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "ServiceNow user",
+      placeHolder: "integration.readonly",
+      prompt: "Use a least-privilege read account where available.",
+    });
+    if (!username) return undefined;
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "ServiceNow password",
+      password: true,
+      prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+    });
+    if (!secret) return undefined;
+    return { method: "basic", username: username.trim(), secret };
+  }
   if (type === "vertexai") {
     const mode = await vscode.window.showQuickPick(
       [

@@ -65,6 +65,10 @@ accordingly.
 | Reference sources (optional) | Your Atlassian hosts: `*.atlassian.net` (Cloud) and/or internal Confluence/Jira Data Center hosts — read-only REST |
 | Site repository push (optional) | `github.com` and/or your GitHub Enterprise Server host — via the user's own git |
 | Database sources (optional) | Your SQL Server (1433), PostgreSQL (5432), MySQL (3306), MongoDB (27017) hosts — direct TCP, read-only (ADR-0022) |
+| Communications (optional) | `graph.microsoft.com` (same host as site reads) — Teams chats / Outlook mail, send-capable scopes only on first use (ADR-0025) |
+| Vertex AI Search (optional) | `discoveryengine.googleapis.com` (or regional `*-discoveryengine.googleapis.com`); SSO tokens come from the local gcloud CLI — no Google endpoints are contacted for auth by the extension itself (ADR-0026) |
+| Power BI (optional) | `api.powerbi.com` — read-only Table/executeQueries REST (ADR-0027) |
+| ServiceNow (optional) | Your instance host (`*.service-now.com` or custom) — read-only Table API (ADR-0028) |
 
 ### Proxies and TLS inspection (MITM)
 **Every** outbound request the extension makes — Microsoft Graph reads *and* Microsoft Entra
@@ -100,10 +104,17 @@ If your tenant requires admin consent for it, grant consent in Entra admin cente
 2. **Authentication** → *Add a platform* → **Mobile and desktop applications** → add redirect
    URI `http://localhost` and enable **Allow public client flows** (required for device code).
 3. **API permissions** → *Microsoft Graph* → *Delegated* → `Sites.Read.All` (+ `offline_access`
-   is requested automatically by MSAL) → **Grant admin consent**. To enable **write-back**
-   (ADR-0021), also add delegated `Sites.ReadWrite.All` (pages) and `Sites.Manage.All`
-   (lists/columns) — the extension requests these scopes **only** when a user first runs
-   *Apply Repository to SharePoint* (incremental consent), never for reads.
+   is requested automatically by MSAL) → **Grant admin consent**. Optional feature scopes —
+   each requested **only** when a user first uses that feature (incremental consent), never
+   for reads:
+   - **Write-back** (ADR-0021): `Sites.ReadWrite.All` (pages) + `Sites.Manage.All`
+     (lists/columns).
+   - **Communications** (ADR-0025 — Teams/Outlook drafts the user approves per message):
+     `User.ReadBasic.All` (recipient resolution), `Chat.ReadWrite` (create chat + post),
+     `Mail.ReadWrite` (mailbox draft), `Mail.Send` (send on approval). Tenant DLP/compliance
+     applies — messages send as the user.
+   - **Power BI** (ADR-0027): *Power BI Service* API → Delegated → `Workspace.Read.All` +
+     `Dataset.Read.All` (read-only; the user's Power BI licenses/roles/RLS govern access).
 4. Distribute settings (machine scope — see §5):
    - `aiSharePoint.auth.clientId`: your app (client) ID.
    - `aiSharePoint.auth.tenantAuthority`: `https://login.microsoftonline.com/<your-tenant-id>`
@@ -139,7 +150,12 @@ defaults, or imaging):
 
   // Diagnostics capture is local-only; followVSCode defers to your telemetry stance
   "aiSharePoint.diagnostics.usageCapture": "followVSCode",
-  "aiSharePoint.diagnostics.errorCapture": true
+  "aiSharePoint.diagnostics.errorCapture": true,
+
+  // Optional org policies (machine-scoped where marked)
+  "aiSharePoint.context.allowSchemaIndexing": true,   // machine-scoped: Copilot schema indexing (names only)
+  "aiSharePoint.sync.allowedRemoteHosts": ["github.com", "ghes.corp.example"],
+  "aiSharePoint.ldap.caCertificatesFile": "/etc/pki/corp-roots.pem"
 }
 ```
 
@@ -171,7 +187,7 @@ user's own git** — the extension holds no Git credentials and never force-push
 - Git itself must be installed (the built-in VS Code Git extension is used). Credential setup
   (HTTPS credential manager, SSH keys) follows your existing developer onboarding.
 
-## 7. Reference sources (Confluence / Jira / LDAP / AD) — notes for admins
+## 7. Reference sources (Confluence / Jira / LDAP / AD / databases / Vertex / Power BI / ServiceNow) — notes for admins
 
 - Strictly **read-only**: the extension ships no write path to these systems; results are
   size-capped and cached briefly on the client.
@@ -192,6 +208,33 @@ user's own git** — the extension holds no Git credentials and never force-push
 - Auth rejections feed the same lockout breaker as every source; TLS uses the OS trust store
   plus the shared pinned bundle (`aiSharePoint.ldap.caCertificatesFile`).
 - Oracle is excluded (native-binary driver conflicts with the portable-VSIX rule, ADR-0016).
+- **Schema indexing (ADR-0024):** with per-source user consent, table/column **names and types
+  only — never row data** — can be sent to the user's own Copilot to build a semantic index
+  (e.g. `group_cio` → ownership). Disable org-wide with
+  `aiSharePoint.context.allowSchemaIndexing: false` (machine-scoped, workspace-immutable in
+  untrusted workspaces). Catalogs live in VS Code global storage and are wiped with the source.
+
+### Vertex AI Search (ADR-0026), Power BI (ADR-0027), ServiceNow (ADR-0028)
+
+- **Vertex AI Search:** read-only `:search` / `:answer` calls. Default sign-in mode asks the
+  workstation's **gcloud CLI** for a live SSO token per call (nothing stored); the fallback is
+  a pasted OAuth access token in the OS keychain. The extension never holds Google refresh
+  tokens or service-account keys.
+- **Power BI:** reuses the Microsoft 365 sign-in (delegated `Workspace.Read.All` +
+  `Dataset.Read.All`); no separate credential exists. Queries are DAX via `executeQueries` —
+  a read-only API — and the user's licenses, workspace roles, and row-level security are
+  enforced by the service.
+- **ServiceNow:** read-only Table API. Recommend a least-privilege **read-only integration
+  account** (Basic) or an OAuth token; ACLs on the instance govern what is visible. The same
+  lockout breaker protects the account.
+- **Catalog pre-cache:** users may pre-cache Confluence/Jira catalogs (spaces/projects/queues)
+  for fast local browsing. Loading is paged and pauses for a "keep loading?" confirmation every
+  `context.catalogCheckpointSeconds` (default 15 s), so large instances are never hammered;
+  caches expire after `context.catalogTtlHours` (default 24 h).
+- **Verbose wire logging** (`aiSharePoint.logging.verboseWire`, default off): full
+  request/response detail from every integration to the local log for debugging — secrets
+  redacted in layers (auth headers masked, token bodies withheld, credentials structurally
+  absent), result data summarized, never exported in diagnostics bundles (see PRIVACY.md).
 
 ### LDAP / Active Directory (ADR-0020)
 

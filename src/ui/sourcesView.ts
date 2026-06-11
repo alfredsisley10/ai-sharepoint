@@ -70,9 +70,11 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
             ? "search"
             : source.type === "powerbi"
               ? "graph"
-              : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
-                ? "database"
-                : "book";
+              : source.type === "servicenow"
+                ? "tools"
+                : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
+                  ? "database"
+                  : "book";
     item.iconPath = new vscode.ThemeIcon(
       icon,
       locked

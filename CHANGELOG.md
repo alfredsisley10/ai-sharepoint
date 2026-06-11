@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.0 — 2026-06-11
+
+### Added — ServiceNow connector (read-only Table API, ADR-0028)
+- New reference source: **ServiceNow** — incidents, changes, problems, catalog requests,
+  **CMDB CIs**, knowledge, users/groups, and custom tables, via the read-only Table API.
+  Chat queries take **free text** (text-index search of the source's default table), a
+  **native encoded query** (`active=true^priority=1`), or JSON
+  `{"table": "cmdb_ci_appl", "query": "…", "fields": […], "limit": n}`; single records fetch
+  as `table/sys_id` with display values (reference fields read as names). Browse & Bookmark
+  ships a curated ITSM+CMDB starter set — no admin schema access needed.
+- Auth: **Basic (least-privilege integration account)** or an **OAuth bearer token**, with the
+  standard keychain storage, lockout breaker, caps, caching, and verbose wire logging.
+
+### Changed — Admin Guide refreshed for everything this release wave added
+- App-registration scope list now covers **Communications** (`User.ReadBasic.All`,
+  `Chat.ReadWrite`, `Mail.ReadWrite`, `Mail.Send`) and **Power BI** (`Workspace.Read.All`,
+  `Dataset.Read.All`) delegated permissions with their incremental-consent behavior; endpoint
+  allowlist adds `discoveryengine.googleapis.com`, `api.powerbi.com`, and ServiceNow instance
+  hosts; connector-specific admin notes (gcloud SSO token handling, schema-indexing policy
+  switch, catalog pre-cache throttling, verbose wire logging) and an updated central-settings
+  example with the org policy keys.
+
 ## 0.8.1 — 2026-06-11
 
 ### Added — verbose wire logging across every integration (pilot)
