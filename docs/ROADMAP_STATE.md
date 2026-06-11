@@ -34,7 +34,7 @@
       Settings: `aiSharePoint.sync.allowedRemoteHosts` (machine). (defaultReviewGate setting dropped — the gate is chosen per repo in the wizard, PR-first.)
       Sites-view context menu entries. Generated repo hygiene: `.gitattributes` (LF),
       `.gitignore`, README stub in the site repo.
-- [ ] **B5. Docs.** USER_GUIDE sync section (incl. local-Git best practices + PR-gate flow),
+- [x] **B5. Docs.** USER_GUIDE sync section (incl. local-Git best practices + PR-gate flow),
       ADMIN_GUIDE (GHES allowlist, branch-protection guidance), CHANGELOG.
 - Deferred (next sessions): navigation/theme serialization; delta-query change detection;
   3-way merge + merge editor (Phase 3); revert-to-commit (ADR-0005); push-to-SharePoint writes
@@ -62,7 +62,7 @@
 - [x] **A5. Agent tools.** `aisharepoint_list_sources`, `aisharepoint_search_context`,
       `aisharepoint_get_context_item` — read-only, cached, cap-enforced, stored-credential only.
       package.json `languageModelTools` entries.
-- [ ] **A6. Docs.** USER_GUIDE sources section, ADMIN_GUIDE endpoints (Atlassian hosts),
+- [x] **A6. Docs.** USER_GUIDE sources section, ADMIN_GUIDE endpoints (Atlassian hosts),
       CHANGELOG; reference-SharePoint-as-source note (reuses existing reference connections).
 - Deferred: bookmarks UI + bookmark tool (store shape ships in A1); automatic auth-method
   probing (ADR-0015 — manual method choice + single verify ships now); remaining §9.2 adapter
@@ -70,7 +70,7 @@
 
 ## Wrap-up
 
-- [ ] **W1.** Version 0.2.0, CHANGELOG consolidation, VSIX rebuild + CI green, state file final
+- [x] **W1.** Version 0.2.0, CHANGELOG consolidation, VSIX rebuild + CI green, state file final
       pass, deliver VSIX.
 
 ## Resume notes (update each session)
@@ -80,3 +80,4 @@
 - 2026-06-11: B4 done (git layer via VS Code Git API, engine, configure/pull/push commands, allowlist setting, menus). B5 docs pending.
 - 2026-06-11: A1+A3 done (lockout tracker, TTL cache, http wrapper, Confluence+Jira adapters; 86 tests). A2/A4/A5 next.
 - 2026-06-11: A2+A4+A5 done (sources store + keychain creds, Reference Sources view, add/test/remove/reset-lockout/clear-cache commands, 3 context LM tools). Docs (A6+B5) + W1 remain.
+- 2026-06-11: B5+A6+W1 done — docs updated (user/admin guides, changelog), v0.2.0 packaged. **All planned increments for this session complete.** Next session: see the Deferred lists above (Phase 3 merge/revert, write-back, more adapters, bookmarks UI).

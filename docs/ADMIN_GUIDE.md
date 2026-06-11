@@ -1,6 +1,6 @@
 # AI SharePoint — Enterprise Administration Guide
 
-For IT administrators deploying release **0.1.0** into managed environments. Companion
+For IT administrators deploying release **0.2.x** into managed environments. Companion
 documents: [SECURITY.md](SECURITY.md) (threat model / data flows) and [PRIVACY.md](PRIVACY.md)
 (data handling, exports).
 
@@ -18,10 +18,10 @@ explicit, previewed, leak-scanned user export.
 ## 2. Deployment
 
 ### VSIX distribution
-Build (`npm ci && npm run package`) or take the CI artifact `ai-sharepoint-0.1.0.vsix`, then:
+Build (`npm ci && npm run package`) or take the CI artifact (`ai-sharepoint-<version>.vsix`), then:
 
 - **Manual:** Extensions view → `…` → *Install from VSIX…*, or
-  `code --install-extension ai-sharepoint-0.1.0.vsix`.
+  `code --install-extension ai-sharepoint-<version>.vsix`.
 - **Fleet:** distribute via your software-management tooling invoking the `code
   --install-extension` CLI per user, or host in a **private extension gallery** (e.g. an
   internal marketplace) so updates flow normally.
@@ -57,6 +57,12 @@ CDN fetches. The Usage Dashboard webview loads zero external resources (CSP `def
 (`aiSharePoint.auth.tenantAuthority`); Graph calls currently target the commercial
 `graph.microsoft.com` endpoint — full sovereign Graph endpoints are on the roadmap. Pilot
 accordingly.
+
+### Additional endpoints by feature
+| Feature | Endpoints |
+|---|---|
+| Reference sources (optional) | Your Atlassian hosts: `*.atlassian.net` (Cloud) and/or internal Confluence/Jira Data Center hosts — read-only REST |
+| Site repository push (optional) | `github.com` and/or your GitHub Enterprise Server host — via the user's own git |
 
 ### Proxies and TLS inspection (MITM)
 **Every** outbound request the extension makes — Microsoft Graph reads *and* Microsoft Entra
@@ -136,7 +142,35 @@ The authority host is validated against known Microsoft login endpoints; a non-s
 (e.g. ADFS) must be explicitly allowlisted in `aiSharePoint.auth.additionalAuthorityHosts`
 (machine-scoped) or sign-in refuses to start.
 
-## 6. Data, support, and offboarding
+## 6. Site repositories: GitHub.com / GitHub Enterprise Server governance
+
+Site sync (ADR-0019) serializes SharePoint structure into local Git repos and pushes via **the
+user's own git** — the extension holds no Git credentials and never force-pushes.
+
+- **Egress control:** pushes are only possible to hosts in the machine-scoped setting
+  `aiSharePoint.sync.allowedRemoteHosts` (default `["github.com"]`). Add your GHES host to
+  enable internal pushes; remove `github.com` to forbid cloud pushes entirely. Validation runs
+  at configure time and again at every push; workspaces cannot override it.
+- **Recommended server-side setup** for site repos: protect the base branch (require PRs +
+  review, disallow force pushes), and keep the extension's **PR-gated** mode (default) so every
+  site snapshot lands as a reviewable pull request — the compare-URL flow works identically on
+  github.com and GHES.
+- **Content gates:** pulls refuse to write when credential-shaped content is detected inside
+  serialized site data, and enforce GitHub's file-size limits (warn 50 MB / block 100 MB).
+- Git itself must be installed (the built-in VS Code Git extension is used). Credential setup
+  (HTTPS credential manager, SSH keys) follows your existing developer onboarding.
+
+## 7. Reference sources (Confluence / Jira) — notes for admins
+
+- Strictly **read-only**: the extension ships no write path to these systems; results are
+  size-capped and cached briefly on the client.
+- Standard-user credentials (Atlassian API tokens / DC PATs) are stored per machine in the OS
+  keychain and wiped on source removal.
+- **Lockout protection:** rejected credentials are never auto-retried and three consecutive
+  failures freeze the source until an explicit user reset — designed to stay below typical
+  account-lockout thresholds (ADR-0009).
+
+## 8. Data, support, and offboarding
 
 - **What's stored where:** see [PRIVACY.md](PRIVACY.md) — connection descriptors and local
   meters in VS Code extension storage; tokens only in the OS keychain.
@@ -151,7 +185,7 @@ The authority host is validated against known Microsoft login endpoints; a non-s
 - **Audit:** sign-ins appear in Entra sign-in logs (under the chosen app); SharePoint reads are
   delegated Graph calls attributable to the user.
 
-## 7. Verifying a build (supply-chain checks)
+## 9. Verifying a build (supply-chain checks)
 
 From a clean checkout:
 

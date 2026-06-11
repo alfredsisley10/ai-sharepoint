@@ -1,12 +1,13 @@
 # AI SharePoint — User Guide
 
-This guide covers everything in release **0.1.0**. If you only read one section, read
+This guide covers everything in release **0.2.0**. If you only read one section, read
 [Quick start](#quick-start); if something breaks, jump to
 [Troubleshooting](#troubleshooting) and [Getting help](#getting-help-diagnostics-export).
 
-**In this release the assistant is read-only toward SharePoint**: it can sign in, read sites,
-lists, and pages, answer questions, and draft plans — it cannot change anything in SharePoint.
-Two-way sync and AI-driven provisioning are on the roadmap (see `docs/PLAN.md`).
+**The assistant is read-only toward SharePoint**: it can sign in, read sites, lists, and
+pages, answer questions, draft plans — and, since 0.2.0, **pull** a site's structure into a
+local Git repository pushed to GitHub/GHES. It cannot change anything *in SharePoint* yet;
+write-back and AI provisioning are the next roadmap phases (see `docs/PLAN.md`).
 
 ---
 
@@ -19,7 +20,9 @@ Two-way sync and AI-driven provisioning are on the roadmap (see `docs/PLAN.md`).
 5. [The activity-bar views](#the-activity-bar-views)
 6. [Chatting with @sharepoint](#chatting-with-sharepoint)
 7. [Agent-mode tools](#agent-mode-tools)
-8. [Copilot usage, budget, and the dashboard](#copilot-usage-budget-and-the-dashboard)
+8. [Site repositories: SharePoint as code](#site-repositories-sharepoint-as-code-git)
+9. [Reference sources: Confluence & Jira](#reference-sources-confluence--jira)
+10. [Copilot usage, budget, and the dashboard](#copilot-usage-budget-and-the-dashboard)
 9. [Getting help: diagnostics export](#getting-help-diagnostics-export)
 10. [All commands](#all-commands)
 11. [All settings](#all-settings)
@@ -43,9 +46,9 @@ The extension is pure JavaScript — one VSIX runs on macOS, Windows x64, Window
 
 **From a VSIX file** (typical in enterprises):
 
-1. Get `ai-sharepoint-0.1.0.vsix` from your IT portal or the project's releases.
+1. Get the `ai-sharepoint-<version>.vsix` from your IT portal or the project's CI artifacts.
 2. In VS Code: **Extensions** view → `…` menu → **Install from VSIX…** — or run
-   `code --install-extension ai-sharepoint-0.1.0.vsix`.
+   `code --install-extension ai-sharepoint-<version>.vsix`.
 3. Reload when prompted. A new **AI SharePoint** icon appears in the activity bar.
 
 Your administrator may also publish it through a private extension gallery — then it installs
@@ -153,11 +156,72 @@ automatically when relevant, or you can `#`-reference them in any chat prompt:
 | `#spSiteOverview` | Site title/description + lists/libraries + pages |
 | `#spPages` | Modern pages with URLs and last-modified times |
 | `#spUsage` | This extension's metered usage vs. your budget |
+| `#spSources` | Your configured reference sources (Confluence/Jira) |
+| `#spSearchContext` | Search a reference source (text, CQL, or JQL) |
+| `#spContextItem` | One Confluence page (by id) or Jira issue (by key) |
 
 Example: *“Using #spSiteOverview, write a one-paragraph summary of the Marketing site for our
 newsletter.”*
 
 Tools never write to SharePoint and never trigger interactive sign-in.
+
+## Site repositories: SharePoint as code (Git)
+
+Managed connections can mirror their site's structural "code" into a local Git repository and
+push it to **GitHub.com or your corporate GitHub Enterprise Server** (ADR-0019). This release
+ships the **pull direction** (SharePoint → repo); pushing changes back into SharePoint is the
+next roadmap phase.
+
+**1. Configure** — right-click a *managed* site → **Configure Site Repository (Git)…**: pick a
+folder (a Git repo is initialized if needed), optionally a remote (the host must be on your
+admin's allowlist — `github.com` by default), and a review gate:
+
+| Gate | Behavior |
+|---|---|
+| **PR-gated** (recommended) | Pushes go to a `sharepoint-sync/<timestamp>` branch and the pull-request page opens — your branch protections and reviews apply |
+| **Direct push** | Pushes the base branch directly |
+
+The extension also drops best-practice hygiene files into the repo: `.gitattributes` (LF
+normalization keeps snapshots identical across Windows/macOS/Linux), `.gitignore`, and a README
+marking the content as generated.
+
+**2. Pull** — **Pull Site to Repository**: the live site (lists + columns, modern pages +
+web-part canvas) is serialized deterministically into `lists/*.json`, `pages/*.json`, and a
+manifest. You get a **preview** of added/updated/removed files first; nothing is written until
+you confirm, then the change is committed with a structured message. Re-pulling an unchanged
+site produces **no diff** — Git history shows only real site changes. Pulls are blocked if
+credential-shaped content (tokens/keys) is found embedded in site data, or any file exceeds
+GitHub's 100 MB limit.
+
+**3. Push** — **Push Site Repository to GitHub/GHES**: re-validates the remote host against the
+allowlist, then pushes per your review gate. Authentication is your own Git setup (credential
+manager / SSH) — the extension never handles Git credentials and never force-pushes.
+
+> Not yet serialized (roadmap): navigation, theme, list items/documents, permissions — listed in
+> each pull preview. Edit the site in SharePoint and pull; hand-editing repo files becomes
+> useful when two-way push ships.
+
+## Reference sources: Confluence & Jira
+
+Connect **read-only** context the assistant can search alongside SharePoint — Confluence and
+Jira, Cloud or Data Center (more source types are roadmap).
+
+- **Add** (Reference Sources view → `+`): pick type and deployment, enter the base URL, then a
+  credential — Cloud uses your **email + API token** (create one at id.atlassian.com →
+  Security → API tokens); Data Center offers a **personal access token** or username+password.
+  The credential is stored only in your OS keychain and verified with a **single** read.
+- **Use in chat / agent mode**: `#spSources` lists sources, `#spSearchContext` searches (plain
+  text, or raw **CQL**/**JQL** for precision), `#spContextItem` fetches a page (by id) or issue
+  (by key, e.g. `ENG-42`). Example: *“Using #spSearchContext, find Confluence pages about our
+  release process and compare them with my SharePoint site's pages.”*
+- **Read-safety**: results are capped (`context.maxResults`) and cached
+  (`context.cacheTtlMinutes`, default 15 min — clear via the view's title button). Sources are
+  read-only by construction: there is no write path.
+- **Account-lockout protection (important)**: a rejected credential is **never retried
+  automatically**; after 3 consecutive failures the source locks (red icon) to protect your
+  account from org lockout policies. *Test Context Source* re-prompts for a fresh credential;
+  *Reset Source Auth Lockout* (context menu) reopens a locked source — check with your admin
+  first.
 
 ## Copilot usage, budget, and the dashboard
 
@@ -225,6 +289,8 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Open Site in Browser / Copy Site URL | Convenience actions |
 | Change Connection Role | Toggle managed ↔ reference |
 | Sign Out of Site | Wipe the tenant's cached tokens from the keychain |
+| Configure Site Repository (Git)… / Pull Site to Repository / Push Site Repository | Site-as-code sync (managed sites; see the Site repositories section) |
+| Add / Test / Remove Context Source · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only Confluence/Jira sources |
 | Remove Site Connection | Remove descriptor (+ tokens if last connection in tenant) |
 | Ask Copilot (metered) | One-shot prompt; streams into the “AI SharePoint — Copilot” output |
 | List Copilot Models | Models with relative cost; optionally set the preferred default |
@@ -251,6 +317,9 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | `aiSharePoint.auth.additionalAuthorityHosts` | `[]` | **Machine-scoped** authority-host allowlist additions |
 | `aiSharePoint.diagnostics.usageCapture` | `followVSCode` | Local-only counters; `on` / `off` / follow VS Code telemetry |
 | `aiSharePoint.diagnostics.errorCapture` | `true` | Local-only redacted error reports |
+| `aiSharePoint.sync.allowedRemoteHosts` | `["github.com"]` | **Machine-scoped** — Git hosts site repos may push to (add your GHES host) |
+| `aiSharePoint.context.cacheTtlMinutes` | `15` | Reference-source result cache TTL |
+| `aiSharePoint.context.maxResults` | `25` | Reference-source result cap |
 
 ## Troubleshooting
 

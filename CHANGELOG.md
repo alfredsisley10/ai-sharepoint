@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.2.0 — 2026-06-11
+
+Two roadmap pillars land in their first production slices: **SharePoint-as-code (Git pull)**
+and the **read-only context-source framework** with Confluence + Jira. Work was built in
+restartable increments tracked in `docs/ROADMAP_STATE.md`.
+
+### Added — site repositories (Track B, ADR-0019)
+- **Configure Site Repository (Git)…** per managed connection: local repo (auto-init),
+  optional remote on **GitHub.com or GitHub Enterprise Server**, review gate (**PR-gated**
+  default or direct push), and best-practice hygiene files (`.gitattributes` LF normalization,
+  `.gitignore`, generated-content README).
+- **Pull Site to Repository**: deterministic serialization of site structure (lists + columns,
+  modern pages + web-part canvas, manifest) — preview first, apply on confirm, structured
+  commit. Re-pulling an unchanged site produces **no diff**. Pulls refuse to write on embedded
+  credential-shaped content or files past GitHub's 100 MB limit (warn at 50 MB).
+- **Push Site Repository to GitHub/GHES** via the user's own git (VS Code Git extension — the
+  extension holds no Git credentials, never force-pushes). PR-gated pushes create
+  `sharepoint-sync/<timestamp>` branches and open the compare/PR page (works identically on
+  GHES). **Egress control:** remotes restricted to the machine-scoped
+  `aiSharePoint.sync.allowedRemoteHosts` allowlist (default `github.com`), re-validated at
+  every push.
+
+### Added — reference sources (Track A, PLAN §9)
+- **Confluence and Jira adapters** (Cloud + Data Center): API-token/Basic and PAT auth,
+  verify-on-connect with a single deliberate read, CQL/JQL/free-text search, page/issue fetch
+  with plain-text bodies.
+- **Reference Sources view** with add/test/remove, lockout indication, and cache clearing.
+- **Account-lockout protection (ADR-0009)**: rejected credentials are never auto-retried;
+  exponential backoff between user retries; a circuit breaker freezes the source after 3
+  consecutive auth failures until an explicit, warned reset. Network errors never count.
+- **Read-safety (ADR-0011/0012)**: TTL result cache (default 15 min) and result caps,
+  configurable via `aiSharePoint.context.cacheTtlMinutes` / `context.maxResults`.
+- **3 new agent tools**: `#spSources`, `#spSearchContext`, `#spContextItem` — read-only,
+  stored-credential only, cached and capped.
+- 24 new unit tests (86 total), covering the serializer no-diff invariant, remote allowlist,
+  lockout state machine, cache, and adapters.
+
 ## 0.1.1 — 2026-06-11
 
 Fixes from the first round of enterprise pilot feedback.
