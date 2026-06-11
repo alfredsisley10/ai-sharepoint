@@ -133,6 +133,31 @@ export class SharePointClient {
     }));
   }
 
+  /** Visible columns of a list (for the sync serializer). */
+  async getListColumns(siteId: string, listId: string): Promise<unknown[]> {
+    const res = await this.get<{ value: Array<{ hidden?: boolean }> }>(
+      `/sites/${siteId}/lists/${listId}/columns?$top=100`,
+    );
+    return res.value.filter((c) => c.hidden !== true);
+  }
+
+  /** Full page content including the web-part canvas (for the serializer).
+   *  Throws graph.forbidden where the tenant restricts the Pages API. */
+  async getPageContent(
+    siteId: string,
+    pageId: string,
+  ): Promise<{
+    id: string;
+    title?: string;
+    name?: string;
+    pageLayout?: string;
+    canvasLayout?: unknown;
+  }> {
+    return this.get(
+      `/sites/${siteId}/pages/${pageId}/microsoft.graph.sitePage?$expand=canvasLayout`,
+    );
+  }
+
   /** Site + lists (+ pages when permitted) for chat/tools. Lists and pages
    *  are fetched in parallel; a blocked Pages API degrades gracefully. */
   async getSiteOverview(siteUrl: string): Promise<SiteOverview> {

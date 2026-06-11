@@ -13,16 +13,16 @@
 
 ## Track B — Sync core (Git-backed site code)
 
-- [ ] **B1. Serializer (pure).** `src/sync/serializer.ts` + `snapshotSanitize.ts`:
+- [x] **B1. Serializer (pure).** `src/sync/serializer.ts` + `snapshotSanitize.ts`:
       deterministic site snapshot → file map (`.aisharepoint/site.json`, `lists/*.json`,
       `pages/*.json`). Stable key order, sorted collections, volatile fields stripped
       (etags/odata/timestamps/actors), safe slug filenames with collision hashes. Unit tests
       prove byte-identical re-serialization (the PLAN §7 "no diff" invariant).
-- [ ] **B2. Change report + repo guards (pure).** `src/sync/changeReport.ts` (added/updated/
+- [x] **B2. Change report + repo guards (pure).** `src/sync/changeReport.ts` (added/updated/
       removed/unchanged vs on-disk tree), `src/sync/remotePolicy.ts` (remote-host allowlist
       validation for github.com/GHES, https+ssh forms), size guards (warn 50 MB / block 100 MB),
       content secret-scan reusing `scanForLeaks`. Tests.
-- [ ] **B3. Graph page-content read.** Extend `SharePointClient` with
+- [x] **B3. Graph page-content read.** Extend `SharePointClient` with
       `getPageContent(siteId, pageId)` (`?$expand=canvasLayout`) and `getListColumns(siteId,
       listId)` for the serializer. Tolerates tenants that block the Pages API.
 - [ ] **B4. Git layer + engine + commands (vscode).** `src/sync/vscodeGit.ts` (duck-typed VS
@@ -75,4 +75,5 @@
 
 ## Resume notes (update each session)
 
-- 2026-06-11: File created; ADR-0019 authored alongside. Nothing else done yet.
+- 2026-06-11: File created; ADR-0019 authored alongside.
+- 2026-06-11: B1–B3 done (serializer + gates + Graph reads; 12 sync tests, 74 total).
