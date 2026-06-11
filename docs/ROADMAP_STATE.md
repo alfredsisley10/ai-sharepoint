@@ -101,7 +101,7 @@
 
 ## Track E — SharePoint write-back slice 1 (ADR-0021)
 
-- [ ] **E1. Desired state + push plan (pure).** `src/sync/desiredState.ts` (repo files →
+- [x] **E1. Desired state + push plan (pure).** `src/sync/desiredState.ts` (repo files →
       artifacts, tolerant parse w/ warnings), `src/sync/pushPlan.ts` (artifact-level diff →
       ordered ops: createList/updateList/addColumn/updateColumn/createPage/updatePage;
       deletions separated + opt-in; system lists protected; lookup/calculated columns →
