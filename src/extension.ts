@@ -649,16 +649,55 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const remoteUrl = await vscode.window.showInputBox({
       title: "Remote repository (2/3) — GitHub.com or your GitHub Enterprise Server",
-      prompt: `Allowed hosts: ${allowedRemoteHosts().join(", ")} (admins extend via aiSharePoint.sync.allowedRemoteHosts). Leave empty for local-only.`,
+      prompt: `Allowed hosts: ${allowedRemoteHosts().join(", ")}. Leave empty for local-only. An unlisted GHES host can be allowlisted in the next step.`,
       value: existing?.remoteUrl ?? "",
       placeHolder: "https://github.com/org/site-repo or git@github.corp.example:org/site-repo.git",
-      validateInput: (v) => {
-        if (!v.trim()) return undefined; // local-only is allowed
-        const verdict = validateRemote(v, allowedRemoteHosts());
-        return verdict.ok ? undefined : verdict.reason;
-      },
+      validateInput: (v) =>
+        !v.trim() || parseRemoteUrl(v)
+          ? undefined
+          : "Not a recognized git remote URL (https://host/org/repo or git@host:org/repo).",
     });
     if (remoteUrl === undefined) return;
+
+    // Egress allowlist (ADR-0019 §2) with a self-service path: a user editing
+    // their own machine-scoped settings could add the host manually anyway,
+    // so a confirmed one-click add does not weaken the control — it removes
+    // friction for pilots while managed fleets pre-distribute the setting.
+    if (remoteUrl.trim()) {
+      let verdict = validateRemote(remoteUrl, allowedRemoteHosts());
+      if (!verdict.ok && verdict.info) {
+        const host = verdict.info.host;
+        const pick = await vscode.window.showWarningMessage(
+          `"${host}" is not in your allowed Git hosts (${allowedRemoteHosts().join(", ")}). Adding it permits pushing serialized SharePoint site content to that server — only proceed for your organization's own GitHub Enterprise Server.`,
+          { modal: true },
+          `Allow "${host}" and Continue`,
+          "Open Setting",
+        );
+        if (pick === `Allow "${host}" and Continue`) {
+          await vscode.workspace
+            .getConfiguration("aiSharePoint")
+            .update(
+              "sync.allowedRemoteHosts",
+              [...allowedRemoteHosts(), host],
+              vscode.ConfigurationTarget.Global,
+            );
+          telemetry.record("sync.allowHost");
+          verdict = validateRemote(remoteUrl, allowedRemoteHosts());
+        } else {
+          if (pick === "Open Setting") {
+            await vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "aiSharePoint.sync.allowedRemoteHosts",
+            );
+          }
+          return;
+        }
+      }
+      if (!verdict.ok) {
+        throw new AppError(verdict.reason ?? "Remote rejected.", "config",
+          "The remote host could not be allowlisted.");
+      }
+    }
 
     const gate = await vscode.window.showQuickPick(
       [

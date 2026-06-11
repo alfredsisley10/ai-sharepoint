@@ -13,7 +13,20 @@ async function main() {
     platform: "node",
     target: "node20",
     outfile: "dist/extension.js",
-    external: ["vscode"],
+    external: [
+      "vscode",
+      // Optional native/cloud add-ons probed via try/require by pg & mongodb;
+      // never installed (pure-JS posture, ADR-0016) so they must stay external.
+      "pg-native",
+      "kerberos",
+      "@mongodb-js/zstd",
+      "@aws-sdk/credential-providers",
+      "gcp-metadata",
+      "snappy",
+      "socks",
+      "aws4",
+      "mongodb-client-encryption",
+    ],
     sourcemap: !production,
     minify: production,
     logLevel: "info",
