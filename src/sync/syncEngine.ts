@@ -82,7 +82,7 @@ export class SyncEngine {
     const snapshot = await this.gatherSnapshot(conn, progress);
     progress?.("Serializing…");
     const files = serializeSite(snapshot);
-    const existing = await this.readManagedFiles(folder);
+    const existing = await this.readRepoFiles(folder);
     return { files, report: buildChangeReport(files, existing) };
   }
 
@@ -113,8 +113,9 @@ export class SyncEngine {
     return staged;
   }
 
-  /** Current on-disk content of all sync-managed paths under the folder. */
-  private async readManagedFiles(folder: string): Promise<Map<string, string>> {
+  /** Current on-disk content of all sync-managed paths under the folder.
+   *  Public: write-back parses these same files as the desired state. */
+  async readRepoFiles(folder: string): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     const root = vscode.Uri.file(folder);
     const tryRead = async (rel: string) => {

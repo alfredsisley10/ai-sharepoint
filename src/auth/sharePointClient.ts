@@ -177,10 +177,10 @@ export class SharePointClient {
     return { ok: true, site, account, latencyMs: Date.now() - started };
   }
 
-  private async acquire(): Promise<string> {
+  protected async acquire(scopes: string[] = [SITES_READ_SCOPE]): Promise<string> {
     if (this.silentOnly) {
       const silent = this.auth.acquireTokenSilent
-        ? await this.auth.acquireTokenSilent([SITES_READ_SCOPE])
+        ? await this.auth.acquireTokenSilent(scopes)
         : null;
       if (!silent) {
         throw new AppError(
@@ -190,17 +190,34 @@ export class SharePointClient {
       }
       return silent.token;
     }
-    return (await this.auth.acquireToken([SITES_READ_SCOPE])).token;
+    return (await this.auth.acquireToken(scopes)).token;
   }
 
-  private async get<T>(path: string, retried = false): Promise<T> {
-    const token = await this.acquire();
+  private get<T>(path: string): Promise<T> {
+    return this.request<T>("GET", path);
+  }
+
+  /** Shared Graph request machinery: timeout, single 429/503 retry, error
+   *  taxonomy. Write methods (SharePointWriteClient) pass write scopes. */
+  protected async request<T>(
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string,
+    body?: unknown,
+    scopes?: string[],
+    retried = false,
+  ): Promise<T> {
+    const token = await this.acquire(scopes);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     let res: Response;
     try {
       res = await fetch(`${GRAPH_BASE}${path}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
     } catch (err) {
@@ -218,11 +235,11 @@ export class SharePointClient {
         Number(res.headers.get("Retry-After")) || 2,
       );
       await new Promise((r) => setTimeout(r, retryAfter * 1000));
-      return this.get<T>(path, true);
+      return this.request<T>(method, path, body, scopes, true);
     }
 
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
+      const errBody = await res.text().catch(() => "");
       const code =
         res.status === 403 || res.status === 401
           ? "graph.forbidden"
@@ -232,9 +249,12 @@ export class SharePointClient {
               ? "graph.throttled"
               : "graph.error";
       throw new AppError(
-        `Graph request failed (${res.status} ${res.statusText}): ${body.slice(0, 500)}`,
+        `Graph request failed (${res.status} ${res.statusText}): ${errBody.slice(0, 500)}`,
         code,
       );
+    }
+    if (res.status === 204 || method === "DELETE") {
+      return undefined as T;
     }
     return (await res.json()) as T;
   }

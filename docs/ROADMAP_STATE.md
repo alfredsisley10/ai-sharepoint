@@ -106,7 +106,7 @@
       ordered ops: createList/updateList/addColumn/updateColumn/createPage/updatePage;
       deletions separated + opt-in; system lists protected; lookup/calculated columns →
       warnings; markdown preview render). Unit tests.
-- [ ] **E2. Graph write client + push engine.** `src/auth/sharePointWriteClient.ts`
+- [x] **E2. Graph write client + push engine.** `src/auth/sharePointWriteClient.ts`
       (Sites.ReadWrite.All + Sites.Manage.All, POST/PATCH/DELETE w/ timeout+429 retry,
       createList/updateList/createColumn/updateColumn/createPage/updatePage/publishPage/
       deleteList/deletePage), `src/sync/pushEngine.ts` (freshness gate vs plan base → safety
