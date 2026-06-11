@@ -108,6 +108,26 @@ export function registerContextTools(
         },
       ),
     ),
+    vscode.lm.registerTool(
+      "aisharepoint_vertex_answer",
+      guarded<{ source?: string; query: string }>(
+        "aisharepoint_vertex_answer",
+        "Asking Vertex AI Search",
+        async (input) => {
+          const source = resolveOrExplain(input.source);
+          if (source.type !== "vertexai") {
+            throw new Error(
+              `"${source.displayName}" is a ${source.type} source — grounded answers need a Vertex AI Search source.`,
+            );
+          }
+          const result = await service.vertexAnswer(source, input.query);
+          if (!result.answer) {
+            return `Vertex AI Search produced no grounded answer for that query — try the search tool for raw results.`;
+          }
+          return JSON.stringify(result, null, 2);
+        },
+      ),
+    ),
     // In-chat indexing: VS Code's tool-confirmation UI is the consent gate —
     // the user sees exactly what will be sent (names only) and must approve.
     vscode.lm.registerTool<{ source?: string }>("aisharepoint_index_db_schema", {

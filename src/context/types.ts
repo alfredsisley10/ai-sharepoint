@@ -11,12 +11,15 @@ export type ContextSourceType =
   | "mssql"
   | "postgres"
   | "mysql"
-  | "mongodb";
+  | "mongodb"
+  | "vertexai";
 export type ContextDeployment = "cloud" | "datacenter";
 
 /** Auth method descriptor persisted per source (ADR-0014/0015).
- *  ldap-simple = LDAP simple bind; ntlm = Windows Authentication (MSSQL). */
-export type ContextAuthMethod = "basic" | "pat" | "ldap-simple" | "ntlm";
+ *  ldap-simple = LDAP simple bind; ntlm = Windows Authentication (MSSQL);
+ *  gcloud-sso = live token from the gcloud CLI's Google SSO session
+ *  (nothing persisted — the keychain entry is a marker). */
+export type ContextAuthMethod = "basic" | "pat" | "ldap-simple" | "ntlm" | "gcloud-sso";
 
 export interface ContextSource {
   /** Stable random id; also keys the keychain credential entry. */

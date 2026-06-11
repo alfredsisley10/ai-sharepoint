@@ -57,6 +57,11 @@ import { SourceSchema, qualifiedName } from "./context/db/schemaIndex";
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { CatalogStore } from "./context/catalogStore";
 import {
+  buildVertexServingConfig,
+  vertexUrlIssue,
+  VERTEX_DEFAULT_ENDPOINT,
+} from "./context/adapters/vertexSearch";
+import {
   buildCatalog,
   isExpired,
   catalogAge,
@@ -1219,6 +1224,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(database) PostgreSQL", description: "read-only session, capped", value: "postgres" as ContextSourceType },
         { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
         { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
+        { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
       ],
       { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );
@@ -1314,6 +1320,56 @@ export function activate(context: vscode.ExtensionContext): void {
         database: database.trim(),
         trustServerCertificate: certPick.value,
       });
+    } else if (typePick.value === "vertexai") {
+      // Field-by-field like the SQL Server wizard; pasting the full
+      // serving-config URL into the first box short-circuits the rest.
+      const projectRaw = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Vertex AI Search (1/4) — Google Cloud project ID",
+        placeHolder: "my-corp-search-prod   (pasting the full serving-config URL also works)",
+        validateInput: (v) => (v.trim() ? undefined : "Enter the project ID"),
+      });
+      if (!projectRaw) return;
+      deployment = "cloud";
+      if (vertexUrlIssue(projectRaw.trim()) === undefined) {
+        baseUrl = projectRaw.trim();
+      } else {
+        const location = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Vertex AI Search (2/4) — location",
+          value: "global",
+          prompt: "As shown in the app's details (global, us, eu, …).",
+          validateInput: (v) => (v.trim() ? undefined : "Enter the location (e.g. global)"),
+        });
+        if (!location) return;
+        const engineId = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Vertex AI Search (3/4) — app (engine) ID",
+          placeHolder: "enterprise-search_1700000000000",
+          validateInput: (v) => (v.trim() ? undefined : "Enter the app/engine ID"),
+        });
+        if (!engineId) return;
+        const endpoint = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Vertex AI Search (4/4) — API endpoint",
+          value: VERTEX_DEFAULT_ENDPOINT,
+          prompt: "Keep the default unless your app is regional (e.g. https://us-discoveryengine.googleapis.com).",
+          validateInput: (v) => {
+            try {
+              return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+            } catch {
+              return "Enter a valid https:// URL";
+            }
+          },
+        });
+        if (!endpoint) return;
+        baseUrl = buildVertexServingConfig({
+          projectId: projectRaw.trim(),
+          location: location.trim(),
+          engineId: engineId.trim(),
+          endpoint: endpoint.trim(),
+        });
+      }
     } else if (DB_TYPES.has(typePick.value)) {
       const placeholders: Record<string, string> = {
         postgres: "postgresql://pghost.corp.example:5432/mydb  (?ssl=false to disable TLS)",
@@ -2783,6 +2839,36 @@ async function promptContextCredential(
   defaultUpn?: string,
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
+  if (type === "vertexai") {
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(account) Google SSO via the gcloud CLI (recommended)",
+          description: "uses your existing `gcloud auth login` session — tokens are never stored",
+          value: "gcloud-sso" as const,
+        },
+        {
+          label: "$(key) Paste an OAuth access token",
+          description: "expires after ~1 h — for machines without the gcloud CLI",
+          value: "pat" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Vertex AI Search sign-in (Google SSO)" },
+    );
+    if (!mode) return undefined;
+    if (mode.value === "gcloud-sso") {
+      // Marker only — each call asks the CLI for a live SSO token.
+      return { method: "gcloud-sso", secret: "gcloud-cli-session" };
+    }
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Google OAuth access token",
+      password: true,
+      prompt: "From `gcloud auth print-access-token` or your SSO portal. Stored only in your OS keychain.",
+    });
+    if (!secret) return undefined;
+    return { method: "pat", secret: secret.trim() };
+  }
   if (type === "mssql" || type === "postgres" || type === "mysql" || type === "mongodb") {
     let dbMethod: ContextCredential["method"] = "basic";
     let userTitle = "Database user (read-only account recommended)";

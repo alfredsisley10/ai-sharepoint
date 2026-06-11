@@ -23,6 +23,7 @@ import {
 import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
 import { verifyDb, searchDb, browseDb, describeDb, DbTlsOptions } from "./db/dbAdapters";
+import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
 import { SchemaCatalog } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
 
@@ -128,6 +129,8 @@ export class ContextService {
           return verifyLdap(source, credential, this.ldapTls(), caps);
         case "jira":
           return verifyJira(source, credential, caps);
+        case "vertexai":
+          return verifyVertex(source, credential, caps);
         default:
           return verifyConfluence(source, credential, caps);
       }
@@ -162,6 +165,8 @@ export class ContextService {
               return searchLdap(source, credential, query, this.ldapTls(), caps);
             case "jira":
               return searchJira(source, credential, query, caps);
+            case "vertexai":
+              return searchVertex(source, credential, query, caps);
             default:
               return searchConfluence(source, credential, query, caps);
           }
@@ -184,6 +189,12 @@ export class ContextService {
               "config",
             );
           }
+          if (source.type === "vertexai") {
+            throw new AppError(
+              "Vertex AI Search has no item fetch — use search, or the vertex_answer tool for a grounded answer.",
+              "config",
+            );
+          }
           switch (source.type) {
             case "ldap":
               return getLdapEntry(source, credential, id, this.ldapTls(), caps);
@@ -193,6 +204,23 @@ export class ContextService {
               return getConfluencePage(source, credential, id, caps);
           }
         });
+      },
+    );
+  }
+
+  /** Gemini-grounded answer from a Vertex AI Search app (the "analysis"
+   *  surface — ADR-0026). Cached and lockout-gated like search. */
+  async vertexAnswer(source: ContextSource, query: string): Promise<VertexAnswer> {
+    if (source.type !== "vertexai") {
+      throw new AppError("Grounded answers require a Vertex AI Search source.", "config");
+    }
+    const caps = this.caps();
+    return this.cache.getOrLoad(
+      TtlCache.key(source.id, "answer", query),
+      this.ttlMs(),
+      async () => {
+        const credential = await this.storedCredential(source);
+        return this.tracked(source, false, () => answerVertex(source, credential, query, caps));
       },
     );
   }

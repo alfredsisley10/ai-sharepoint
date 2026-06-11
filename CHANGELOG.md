@@ -2,6 +2,47 @@
 
 ## 0.7.0 — 2026-06-11
 
+### Added — database schema preload + Copilot semantic indexing (ADR-0024)
+- Database sources **preload the full schema** the connection can see (INFORMATION_SCHEMA for
+  SQL Server/PostgreSQL/MySQL incl. views; MongoDB field names inferred from a small local
+  sample whose values are discarded), stored locally and wiped with the source.
+- **First use asks the user** to index the schema with Copilot in a generalized format:
+  batched, metered requests send table/column **names only — never data rows** — and return
+  concept tags + synonyms per column. The canonical example works end-to-end: `group_cio`
+  is tagged *ownership*, so *"show me all the records owned by X"* includes that field in an
+  ownership search. Consent via modal or in-chat confirmation; budget caps degrade to a
+  partial index; `context.allowSchemaIndexing` (policy, machine-scoped) disables it org-wide.
+- New tools: `#spDbSchema` (topic → ranked tables/columns with tags/synonyms; built-in
+  hints map *owned/owner/who* → ownership even before indexing) and `#spIndexDbSchema`
+  (user-approved). Commands: Load/Refresh, Index with Copilot, View Schema (markdown);
+  right-click any database source.
+
+### Added — pre-cached Confluence/Jira catalogs with checkpointed loading
+- First browse offers to **pre-cache the global catalog** (all spaces / projects + favourite
+  filters + JSM queues) for instant local search. Loading is paged with a **"Keep loading?"
+  checkpoint every `context.catalogCheckpointSeconds`** (default 15 s) — while the prompt
+  waits, no requests are sent, so the source system is never overtaxed; stopping keeps a
+  usable partial. The cache **expires** (`context.catalogTtlHours`, default 24 h): expired
+  copies offer refresh / use-stale / live-capped. "Pre-cache Source Catalog" re-runs any time.
+
+### Added — Communication Channels: Teams & Outlook with approval-gated sending (ADR-0025)
+- Prepare **Teams chat messages and Outlook emails to individuals** (≤10 recipients) — by
+  command or by asking `@sharepoint` to draft one (`#spDraftComm`, itself
+  confirmation-gated). Drafts wait in the new **Communications** view (badge = pending
+  approvals) and **nothing sends until you approve that draft**: full preview opens in the
+  editor, a modal names every recipient, and recipients are directory-resolved first (a
+  typo aborts with the exact addresses). Outlook also offers **Save to Outlook Drafts**
+  (never sends — finish in Outlook). Send-capable Graph scopes are requested only by this
+  flow (incremental consent, mirrors write-back).
+
+### Added — Vertex AI Search connector (Google enterprise search, ADR-0026)
+- New reference source type for **Vertex AI Search** apps: searches return enterprise hits,
+  and the new `#spVertexAnswer` tool returns a **Gemini-grounded answer with citations**
+  (the analysis surface). **SSO via the gcloud CLI** — every call uses a live token from
+  your existing `gcloud auth login` session, nothing stored; pasted-token fallback for
+  machines without the CLI. Field-by-field setup (project → location → app ID → endpoint,
+  regional endpoints supported) or paste the serving-config URL whole.
+
 ### Added — chat aliases & descriptions for reference sources (ADR-0023)
 - Every reference source can carry a short, **unique chat alias** (e.g. `CMDB`) and a one-line
   **description** of its contents — set during add (optional steps) or any time via
@@ -15,6 +56,21 @@
   right source when none is named.
 - Aliases travel with **Export/Import Reference Config** (allowlisted — still secret-free);
   duplicates in a file or with existing sources are dropped with warnings, never ambiguous.
+
+### Added — editable bookmarks (pilot)
+- **Edit Bookmark** (inline pencil, context menu, or palette): rename and **modify the saved
+  SQL/JQL/CQL/Mongo spec**, validated read-only for database sources. Browse-to-bookmark now
+  lets you tailor the sample SQL before saving; manual adds validate database locators.
+
+### Fixed — pilot reports
+- **Usage & budget tiles "not incrementing"**: the meter was right — the default-model policy
+  picks **included (0×) models**, which cost no premium units. The UI now says so: gauge note
+  + tooltip ("all on included 0× models"), per-model multiplier badges (`0× included`),
+  by-task 0× notes, and a dashboard banner. Pick a premium model to consume allowance.
+- **Jira browse returned nothing despite queue access**: the JSM queue API on Data
+  Center/Server is experimental and 403s without the `X-ExperimentalApi: opt-in` header —
+  now sent. Swallowed denials are also surfaced: an empty catalog reports exactly what was
+  tried (agent license, no starred filters) instead of a silent empty picker.
 
 
 ## 0.6.5 — 2026-06-11

@@ -233,6 +233,13 @@ Jira, Cloud or Data Center (more source types are roadmap).
   text, or raw **CQL**/**JQL** for precision), `#spContextItem` fetches a page (by id) or issue
   (by key, e.g. `ENG-42`). Example: *“Using #spSearchContext, find Confluence pages about our
   release process and compare them with my SharePoint site's pages.”*
+- **Pre-cached catalogs (fast local browsing)**: the first *Browse & Bookmark* on a source
+  offers to **pre-cache the global set** of Confluence spaces / Jira projects + favourite
+  filters + JSM queues. Big instances load page-by-page with a **"Keep loading?" check every
+  `context.catalogCheckpointSeconds`** (15 s default) — loading pauses while the prompt waits,
+  so the source is never overtaxed, and stopping keeps a usable partial. The cache **expires**
+  after `context.catalogTtlHours` (24 h default): you then choose refresh / use the expired
+  copy / live capped browse. Refresh any time: right-click → *Pre-cache Source Catalog*.
 - **Read-safety**: results are capped (`context.maxResults`) and cached
   (`context.cacheTtlMinutes`, default 15 min — clear via the view's title button). Sources are
   read-only by construction: there is no write path.
@@ -317,10 +324,53 @@ reasons — ADR-0022):
   JSON spec `{"collection": "...", "filter": {...}, "limit": n}`. Results are row-capped
   (`context.maxResults`) and time-limited.
 - **Browse & Bookmark** lists the database's tables/collections and saves capped sample-row
-  queries as bookmarks — and the agent can propose query bookmarks after exploring
+  queries as bookmarks — **you can tailor the SQL before saving**, and edit any bookmark's
+  name/query later (inline pencil or right-click → *Edit Bookmark*; database queries stay
+  validated read-only). The agent can propose query bookmarks after exploring
   (`#spSuggestBookmark`, approval required).
+- **Schema understanding (ADR-0024)**: after a database source connects, the extension
+  **preloads the full schema** it can see (table/column names + types only — never rows) and
+  asks once whether to **index it with Copilot**: batched metered requests return concept
+  tags and synonyms per column, so free-form questions work — e.g. a `group_cio` column is
+  tagged *ownership*, and *"show me all records owned by X"* searches it automatically.
+  Decline freely (asked once; re-run any time via right-click → *Index Database Schema with
+  Copilot*); admins can disable org-wide with `aiSharePoint.context.allowSchemaIndexing`.
+  *View Database Schema & Semantic Index* shows exactly what's stored; in chat, `#spDbSchema`
+  with a topic returns the matching tables/columns before the model writes its SELECT.
 - **TLS** trusts the OS store and the shared pinned CA bundle setting
   (`aiSharePoint.ldap.caCertificatesFile` — applies to all non-HTTP sources).
+
+### Vertex AI Search (Google enterprise search)
+
+Connect your organization's **Vertex AI Search** app (the enterprise Gemini search portal):
+
+- **Add** (Reference Sources → `+` → *Vertex AI Search*): enter the Google Cloud **project ID
+  → location → app (engine) ID → endpoint** (regional endpoints supported), or paste the full
+  serving-config URL into the first box.
+- **SSO via the gcloud CLI (recommended)**: each call uses a **live token from your existing
+  `gcloud auth login` session** — your corporate Google SSO — and nothing is ever stored.
+  No CLI? Paste an OAuth access token instead (kept in your OS keychain; ~1 h lifetime, the
+  error message tells you when to refresh it).
+- **Search and analysis in chat**: plain searches return enterprise hits; ask for analysis and
+  the `#spVertexAnswer` tool returns a **Gemini-grounded answer with citations** from your
+  corpus (*"@sharepoint ask Vertex what our data-retention policy says"*).
+
+## Communications: Teams & Outlook drafts you approve
+
+Have findings reach people — **without the assistant ever sending anything itself**:
+
+- **Prepare** a draft: *Draft Teams Message…* / *Draft Outlook Email…* (view title buttons),
+  or ask `@sharepoint` — *"draft a Teams message to jdoe@corp.example summarizing this"* —
+  which queues via a confirmation-gated tool. Individuals only (max 10 recipients).
+- **Approve**: drafts wait in the **Communications** view (the badge counts pending
+  approvals). Reviewing opens the **full text in the editor** plus a modal naming every
+  recipient; recipients are **resolved against your directory first** (a typo aborts with the
+  exact addresses). Only your explicit approval sends — from your account, so tenant
+  compliance/DLP applies as always.
+- **Outlook safety valve**: *Save to Outlook Drafts* puts the draft in your mailbox without
+  sending — finish and send from Outlook itself.
+- Send-capable permissions (`Chat.ReadWrite`, `Mail.Send`, …) are requested **only** by this
+  flow, on first use (ADR-0025).
 
 ### Bookmarks: reusable pointers for your initiatives
 
@@ -422,7 +472,10 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Apply Repository to SharePoint (write-back)… | Write repo changes to the live site — previewed, freshness-checked, snapshot-guarded |
 | Revert Site to Commit… | Make the live site match an earlier snapshot commit (ADR-0005) |
 | Export / Import Reference Config | Share sources + bookmarks with the team, secret-free (ADR-0013) |
-| Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases) |
+| Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases/Vertex AI Search) |
+| Load/Refresh / Index / View Database Schema · Pre-cache Source Catalog | Schema understanding (ADR-0024) and catalog pre-cache per source |
+| Draft Teams Message / Draft Outlook Email · Review & Send / Edit / Discard Communication Draft | Approval-gated communications (ADR-0025) |
+| Edit Bookmark | Rename / modify a bookmark's saved query (SQL validated read-only) |
 | Remove Site Connection | Remove descriptor (+ tokens if last connection in tenant) |
 | Ask Copilot (metered) | One-shot prompt; streams into the “AI SharePoint — Copilot” output |
 | List Copilot Models | Models with relative cost; optionally set the preferred default |

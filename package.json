@@ -548,7 +548,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved).",
+        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved). Vertex AI Search sources: plain-text queries return enterprise search hits (use the vertex_answer tool for synthesized answers).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -702,6 +702,34 @@
               "description": "Concept to find columns for — e.g. 'ownership', 'owned by', 'cost', 'application'. Omit to list tables."
             }
           }
+        }
+      },
+      {
+        "name": "aisharepoint_vertex_answer",
+        "displayName": "Vertex AI Search Answer",
+        "toolReferenceName": "spVertexAnswer",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(search)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Ask a configured Vertex AI Search source (Google enterprise search) for a Gemini-grounded ANSWER with citations over its indexed corpus — use for analytical questions ('summarize our policy on X') where synthesized analysis beats raw hits. For raw result lists use the regular search tool against the same source. Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Vertex AI Search source alias, display name, or type. Optional when exactly one source exists."
+            },
+            "query": {
+              "type": "string",
+              "description": "The question to answer over the enterprise corpus."
+            }
+          },
+          "required": [
+            "query"
+          ]
         }
       },
       {

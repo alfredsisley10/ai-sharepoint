@@ -87,8 +87,8 @@ export interface ParsedImport {
   warnings: string[];
 }
 
-const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb"]);
-const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple", "ntlm"]);
+const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai"]);
+const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple", "ntlm", "gcloud-sso"]);
 const BOOKMARK_KINDS = new Set(["query", "item", "container"]);
 
 /** Parse + validate an export file; ids are regenerated via `newId`. */
