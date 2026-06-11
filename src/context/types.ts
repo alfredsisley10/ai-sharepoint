@@ -4,19 +4,22 @@
  * `context:<sourceId>:credential` and are referenced by id only.
  */
 
-export type ContextSourceType = "confluence" | "jira";
+export type ContextSourceType = "confluence" | "jira" | "ldap";
 export type ContextDeployment = "cloud" | "datacenter";
 
-/** Auth method descriptor persisted per source (ADR-0014/0015). */
-export type ContextAuthMethod = "basic" | "pat";
+/** Auth method descriptor persisted per source (ADR-0014/0015).
+ *  ldap-simple = LDAP simple bind (UPN/DN + password). */
+export type ContextAuthMethod = "basic" | "pat" | "ldap-simple";
 
 export interface ContextSource {
   /** Stable random id; also keys the keychain credential entry. */
   id: string;
   type: ContextSourceType;
   displayName: string;
-  /** e.g. https://x.atlassian.net/wiki (Confluence Cloud) or https://confluence.corp.example */
+  /** HTTP base for Confluence/Jira; ldap(s):// server URL for LDAP. */
   baseUrl: string;
+  /** LDAP search base, e.g. DC=corp,DC=example,DC=com (LDAP sources only). */
+  baseDn?: string;
   deployment: ContextDeployment;
   /** The method that verified successfully on connect (ADR-0015). */
   authMethod: ContextAuthMethod;

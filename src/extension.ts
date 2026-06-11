@@ -42,6 +42,9 @@ import {
   ContextSourceType,
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
+import { discoverActiveDirectory } from "./context/ldap/discoveryHost";
+import { guessBindUpn, domainToBaseDn } from "./context/ldap/discovery";
+import { realHostSignals } from "./context/ldap/discoveryHost";
 import { SourcesTreeProvider } from "./ui/sourcesView";
 import { UsageStatusBar } from "./ui/statusBar";
 import { SitesTreeProvider } from "./ui/sitesView";
@@ -828,42 +831,70 @@ export function activate(context: vscode.ExtensionContext): void {
       [
         { label: "$(book) Confluence", value: "confluence" as ContextSourceType },
         { label: "$(issues) Jira", value: "jira" as ContextSourceType },
+        {
+          label: "$(organization) LDAP / Active Directory",
+          description: "auto-discovers domain controllers via DNS",
+          value: "ldap" as ContextSourceType,
+        },
       ],
-      { title: "Add Context Source (1/4) — type (read-only reference data)" },
+      { title: "Add Context Source — type (read-only reference data)" },
     );
     if (!typePick) return;
-    const depPick = await vscode.window.showQuickPick(
-      [
-        { label: "$(cloud) Cloud", description: "*.atlassian.net", value: "cloud" as ContextDeployment },
-        { label: "$(server) Data Center / Server", description: "self-hosted", value: "datacenter" as ContextDeployment },
-      ],
-      { title: "Add Context Source (2/4) — deployment" },
-    );
-    if (!depPick) return;
-    const baseUrl = await vscode.window.showInputBox({
-      title: "Add Context Source (3/4) — base URL",
-      placeHolder:
-        depPick.value === "cloud"
-          ? typePick.value === "confluence"
-            ? "https://yourorg.atlassian.net/wiki"
-            : "https://yourorg.atlassian.net"
-          : `https://${typePick.value}.corp.example`,
-      validateInput: (v) => {
-        try {
-          return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
-        } catch {
-          return "Enter a valid https:// URL";
-        }
-      },
-    });
-    if (!baseUrl) return;
-    const credential = await promptContextCredential(typePick.value, depPick.value);
+
+    let baseUrl: string;
+    let baseDn: string | undefined;
+    let deployment: ContextDeployment = "datacenter";
+    let defaultUpn: string | undefined;
+
+    if (typePick.value === "ldap") {
+      const endpoint = await resolveLdapEndpoint();
+      if (!endpoint) return;
+      baseUrl = endpoint.baseUrl;
+      baseDn = endpoint.baseDn;
+      defaultUpn = endpoint.defaultUpn;
+    } else {
+      const depPick = await vscode.window.showQuickPick(
+        [
+          { label: "$(cloud) Cloud", description: "*.atlassian.net", value: "cloud" as ContextDeployment },
+          { label: "$(server) Data Center / Server", description: "self-hosted", value: "datacenter" as ContextDeployment },
+        ],
+        { title: "Add Context Source — deployment" },
+      );
+      if (!depPick) return;
+      deployment = depPick.value;
+      const url = await vscode.window.showInputBox({
+        title: "Add Context Source — base URL",
+        placeHolder:
+          depPick.value === "cloud"
+            ? typePick.value === "confluence"
+              ? "https://yourorg.atlassian.net/wiki"
+              : "https://yourorg.atlassian.net"
+            : `https://${typePick.value}.corp.example`,
+        validateInput: (v) => {
+          try {
+            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+          } catch {
+            return "Enter a valid https:// URL";
+          }
+        },
+      });
+      if (!url) return;
+      baseUrl = url.trim().replace(/\/+$/, "");
+    }
+
+    const credential = await promptContextCredential(typePick.value, deployment, defaultUpn);
     if (!credential) return;
-    const trimmedUrl = baseUrl.trim().replace(/\/+$/, "");
+    const hostLabel = (() => {
+      try {
+        return new URL(baseUrl).hostname;
+      } catch {
+        return baseUrl;
+      }
+    })();
     const displayName =
       (await vscode.window.showInputBox({
-        title: "Add Context Source (4/4) — display name",
-        value: `${new URL(trimmedUrl).hostname} (${typePick.value})`,
+        title: "Add Context Source — display name",
+        value: `${hostLabel} (${typePick.value})`,
       })) ?? "";
     if (!displayName) return;
 
@@ -871,8 +902,9 @@ export function activate(context: vscode.ExtensionContext): void {
       id: crypto.randomUUID(),
       type: typePick.value,
       displayName: displayName.trim(),
-      baseUrl: trimmedUrl,
-      deployment: depPick.value,
+      baseUrl,
+      baseDn,
+      deployment,
       authMethod: credential.method,
       addedAt: nowIso(),
     };
@@ -959,6 +991,35 @@ export function activate(context: vscode.ExtensionContext): void {
   register("aiSharePoint.clearContextCache", () => {
     contextCache.clear();
     void vscode.window.showInformationMessage("Cached reference-source results cleared.");
+  });
+
+  register("aiSharePoint.discoverActiveDirectory", async () => {
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Discovering Active Directory via DNS…" },
+      () => discoverActiveDirectory(),
+    );
+    const lines = [
+      `# Active Directory discovery`,
+      "",
+      `**Domain:** ${result.domain}  _(via ${result.via})_`,
+      `**Base DN:** \`${result.baseDn}\``,
+      "",
+      `**Discovered endpoints (${result.candidates.length}):**`,
+      "",
+      "| Host | Port | Kind | TLS |",
+      "|---|---|---|---|",
+      ...result.candidates.map(
+        (c) => `| ${c.host} | ${c.port} | ${c.kind === "gc" ? "Global Catalog" : "Domain Controller"} | ${c.secure ? "LDAPS" : "LDAP"} |`,
+      ),
+      "",
+      "_Add one as a source with **Add Context Source → LDAP / Active Directory** (this same discovery runs in the wizard)._",
+    ];
+    const doc = await vscode.workspace.openTextDocument({
+      language: "markdown",
+      content: lines.join("\n"),
+    });
+    await vscode.window.showTextDocument(doc, { preview: true });
+    telemetry.record("context.adDiscover", { endpoints: result.candidates.length });
   });
 
   // --- Diagnostics & support ------------------------------------------------
@@ -1177,11 +1238,101 @@ async function resolveSourceArg(
   return pick?.source;
 }
 
+interface LdapEndpoint {
+  baseUrl: string;
+  baseDn: string;
+  defaultUpn?: string;
+}
+
+/** Run AD auto-discovery, let the user pick a discovered endpoint, or enter
+ *  one manually. Returns the chosen ldap(s):// URL + base DN (ADR-0020). */
+async function resolveLdapEndpoint(): Promise<LdapEndpoint | undefined> {
+  type Item = vscode.QuickPickItem & { endpoint?: LdapEndpoint; manual?: boolean };
+  const items: Item[] = [];
+  let discoveredUpn: string | undefined;
+
+  try {
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Discovering Active Directory via DNS…" },
+      () => discoverActiveDirectory(),
+    );
+    discoveredUpn = guessBindUpn(realHostSignals(), result.domain);
+    items.push({
+      label: `$(search) Discovered domain: ${result.domain}`,
+      kind: vscode.QuickPickItemKind.Separator,
+    } as Item);
+    for (const c of result.candidates) {
+      items.push({
+        label: `$(${c.kind === "gc" ? "globe" : "server"}) ${c.host}:${c.port}`,
+        description: `${c.kind === "gc" ? "Global Catalog" : "Domain Controller"} · ${c.secure ? "LDAPS" : "LDAP"}`,
+        detail: `${c.url} · base DN ${result.baseDn}`,
+        endpoint: { baseUrl: c.url, baseDn: result.baseDn, defaultUpn: discoveredUpn },
+      });
+    }
+  } catch (err) {
+    void vscode.window.showWarningMessage(
+      `AD auto-discovery: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  items.push({
+    label: "$(edit) Enter a domain controller manually…",
+    description: "ldap(s)://host[:port] + base DN",
+    manual: true,
+  });
+
+  const pick = await vscode.window.showQuickPick(items, {
+    title: "Active Directory endpoint",
+    placeHolder: "Pick a discovered server, or enter one manually",
+  });
+  if (!pick) return undefined;
+  if (pick.endpoint) return pick.endpoint;
+  if (!pick.manual) return undefined;
+
+  const url = await vscode.window.showInputBox({
+    title: "LDAP server URL",
+    placeHolder: "ldaps://dc01.corp.example:636  (or ldap://…:389)",
+    validateInput: (v) =>
+      /^ldaps?:\/\/[^\s/]+/i.test(v.trim()) ? undefined : "Enter an ldap:// or ldaps:// URL",
+  });
+  if (!url) return undefined;
+  let guessedBase = "";
+  const hostMatch = url.match(/\/\/([^:/]+)/);
+  if (hostMatch && hostMatch[1].includes(".")) {
+    guessedBase = domainToBaseDn(hostMatch[1].split(".").slice(1).join("."));
+  }
+  const baseDn = await vscode.window.showInputBox({
+    title: "Base DN (search root)",
+    value: guessedBase,
+    placeHolder: "DC=corp,DC=example,DC=com",
+    validateInput: (v) => (/dc=/i.test(v) ? undefined : "Expected a DN containing DC= components"),
+  });
+  if (!baseDn) return undefined;
+  return { baseUrl: url.trim(), baseDn: baseDn.trim(), defaultUpn: discoveredUpn };
+}
+
 async function promptContextCredential(
   type: ContextSourceType,
   deployment: ContextDeployment,
+  defaultUpn?: string,
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
+  if (type === "ldap") {
+    // LDAP simple bind: UPN / DOMAIN\user / DN + password (ADR-0020).
+    const username = await vscode.window.showInputBox({
+      title: "Active Directory sign-in — bind identity",
+      value: defaultUpn ?? "",
+      placeHolder: "you@corp.example  ·  CORP\\you  ·  CN=You,OU=Users,DC=corp,DC=example",
+      prompt: "Your own AD account (read-only). Lockout-safe: a wrong password is never retried automatically.",
+    });
+    if (!username) return undefined;
+    const secret = await vscode.window.showInputBox({
+      title: "Active Directory password",
+      password: true,
+      prompt: "Stored only in your OS keychain; verified with a single bind.",
+    });
+    if (!secret) return undefined;
+    return { method: "ldap-simple", username: username.trim(), secret };
+  }
   if (deployment === "cloud") {
     method = "basic"; // Atlassian Cloud: email + API token over Basic
   } else {

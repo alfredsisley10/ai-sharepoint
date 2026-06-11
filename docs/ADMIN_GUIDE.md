@@ -160,15 +160,35 @@ user's own git** — the extension holds no Git credentials and never force-push
 - Git itself must be installed (the built-in VS Code Git extension is used). Credential setup
   (HTTPS credential manager, SSH keys) follows your existing developer onboarding.
 
-## 7. Reference sources (Confluence / Jira) — notes for admins
+## 7. Reference sources (Confluence / Jira / LDAP / AD) — notes for admins
 
 - Strictly **read-only**: the extension ships no write path to these systems; results are
   size-capped and cached briefly on the client.
-- Standard-user credentials (Atlassian API tokens / DC PATs) are stored per machine in the OS
-  keychain and wiped on source removal.
+- Standard-user credentials (Atlassian API tokens / DC PATs / AD passwords) are stored per
+  machine in the OS keychain and wiped on source removal.
 - **Lockout protection:** rejected credentials are never auto-retried and three consecutive
   failures freeze the source until an explicit user reset — designed to stay below typical
-  account-lockout thresholds (ADR-0009).
+  account-lockout thresholds (ADR-0009). This matters most for **Active Directory**, where the
+  bind account is a real user account.
+
+### LDAP / Active Directory (ADR-0020)
+
+- **Auto-discovery** uses only the workstation's own configuration: the DNS domain from
+  `USERDNSDOMAIN` / host FQDN / `resolv.conf`, then standard AD **SRV** lookups —
+  `_gc._tcp.<domain>` (global catalog, ports 3268/3269) and `_ldap._tcp.dc._msdcs.<domain>`
+  (domain controllers, ports 389/636). No server addresses are hard-coded; users can always
+  enter one manually. The base DN is derived as `DC=…` from the domain.
+- **Transport:** LDAP is raw TCP/TLS to the DC — it does **not** traverse the VS Code/HTTP
+  proxy. Ensure workstations can reach your DCs/GC on 636/3269 (preferred) or 389/3268.
+- **TLS / internal CA:** Node validates LDAPS certs against its own bundled CA list, **not** the
+  OS trust store. If your DCs present an internal-CA certificate, either deploy that CA to a
+  location Node trusts (e.g. `NODE_EXTRA_CA_CERTS`) or have users enable StartTLS
+  (`aiSharePoint.ldap.useStartTls`) appropriately. `aiSharePoint.ldap.tlsRejectUnauthorized`
+  defaults to **true**; only disable it for isolated lab testing.
+- **Least privilege & read-safety:** simple bind as the user's own account; bind + search only;
+  every search carries server-side size and time limits; only non-sensitive attributes are
+  requested. Consider a dedicated low-privilege read account if you prefer not to use personal
+  credentials, though the standard-user path is the default (ADR-0014).
 
 ## 8. Data, support, and offboarding
 

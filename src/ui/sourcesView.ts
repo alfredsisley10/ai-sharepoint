@@ -20,8 +20,10 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<ContextSourc
     item.id = source.id;
     const locked = this.sources.isLockedOut(source.id);
     item.description = `${source.type} · ${source.deployment}${locked ? " · locked" : ""}`;
+    const icon =
+      source.type === "jira" ? "issues" : source.type === "ldap" ? "organization" : "book";
     item.iconPath = new vscode.ThemeIcon(
-      source.type === "jira" ? "issues" : "book",
+      icon,
       locked
         ? new vscode.ThemeColor("charts.red")
         : source.lastVerifiedAt
@@ -37,7 +39,8 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<ContextSourc
         `|---|---|`,
         `| Type | ${source.type} (${source.deployment}) |`,
         `| URL | ${source.baseUrl} |`,
-        `| Auth | ${source.authMethod === "pat" ? "Personal access token" : "Basic (username + token/password)"} |`,
+        ...(source.baseDn ? [`| Base DN | ${source.baseDn} |`] : []),
+        `| Auth | ${source.authMethod === "pat" ? "Personal access token" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : "Basic (username + token/password)"} |`,
         `| Account | ${source.account ?? "_not verified_"} |`,
         `| Verified | ${source.lastVerifiedAt ?? "_never_"} |`,
         ...(locked

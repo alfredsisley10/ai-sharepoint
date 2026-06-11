@@ -146,6 +146,12 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "aiSharePoint.discoverActiveDirectory",
+        "title": "Discover Active Directory (DNS)",
+        "category": "AI SharePoint",
+        "icon": "$(search)"
+      },
+      {
         "command": "aiSharePoint.installCopilotChat",
         "title": "Install GitHub Copilot Chat",
         "category": "AI SharePoint"
@@ -417,7 +423,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Search a configured read-only reference source. Confluence accepts raw CQL or plain text; Jira accepts raw JQL or plain text. Returns capped, cached results with titles, URLs, and metadata. Pass the source name when several are configured.",
+        "modelDescription": "Search a configured read-only reference source. Confluence accepts raw CQL or plain text; Jira accepts raw JQL or plain text; LDAP/Active Directory accepts a raw LDAP filter (e.g. \"(mail=*@corp.com)\") or plain text (matched against names, login, and email via AD ANR). Returns capped, cached results. Pass the source name when several are configured.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -445,7 +451,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Fetch one item from a reference source with plain-text body: a Confluence page by id, or a Jira issue by key (e.g. ENG-42). Read-only.",
+        "modelDescription": "Fetch one item from a reference source with plain-text body: a Confluence page by id, a Jira issue by key (e.g. ENG-42), or an LDAP/Active Directory entry by distinguished name (DN). Read-only.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -455,7 +461,7 @@
             },
             "id": {
               "type": "string",
-              "description": "Confluence page id or Jira issue key."
+              "description": "Confluence page id, Jira issue key, or LDAP distinguished name (DN)."
             }
           },
           "required": [
@@ -500,6 +506,11 @@
           "command": "aiSharePoint.clearContextCache",
           "when": "view == aiSharePoint.sourcesView",
           "group": "navigation@2"
+        },
+        {
+          "command": "aiSharePoint.discoverActiveDirectory",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -804,6 +815,18 @@
           "minimum": 1,
           "order": 13,
           "markdownDescription": "Maximum results per reference-source query (ADR-0012 read-safety cap)."
+        },
+        "aiSharePoint.ldap.tlsRejectUnauthorized": {
+          "type": "boolean",
+          "default": true,
+          "order": 14,
+          "markdownDescription": "Validate LDAPS/StartTLS server certificates for LDAP/Active Directory sources (ADR-0020). Keep **true** in production. If LDAPS uses an internal CA not in Node's bundle, prefer installing the CA; only disable for isolated lab testing."
+        },
+        "aiSharePoint.ldap.useStartTls": {
+          "type": "boolean",
+          "default": false,
+          "order": 15,
+          "markdownDescription": "For `ldap://` (port 389) sources, upgrade the connection with StartTLS before binding. Ignored for `ldaps://` (implicit TLS)."
         }
       }
     }

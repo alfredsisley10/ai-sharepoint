@@ -70,18 +70,18 @@
 
 ## Track C — LDAP / Active Directory connector (read-only) — ADR-0020
 
-- [ ] **C1. DNS auto-discovery (pure).** `src/context/ldap/discovery.ts`: workstation domain
+- [x] **C1. DNS auto-discovery (pure).** `src/context/ldap/discovery.ts`: workstation domain
       signals (USERDNSDOMAIN/LOGONSERVER/FQDN/resolv.conf), SRV lookups
       (`_ldap._tcp.dc._msdcs`, `_gc._tcp`) via injectable resolver, priority/weight ranking,
       domain→baseDN, candidate endpoints (DC 389/636, GC 3268/3269). Unit tests.
-- [ ] **C2. LDAP adapter (ldapts).** `src/context/ldap/ldapClient.ts`: verify (simple bind,
+- [x] **C2. LDAP adapter (ldapts).** `src/context/ldap/ldapClient.ts`: verify (simple bind,
       classify invalidCredentials→auth.failed for ADR-0009), search (ANR for free text, raw
       filter passthrough, sizeLimit/timeLimit caps, curated attrs), getEntry by DN; pure
       entry→hit/item mappers unit-tested. TLS/StartTLS options.
-- [ ] **C3. Framework integration.** ContextService dispatch for `type==="ldap"`; sourcesStore
+- [x] **C3. Framework integration.** ContextService dispatch for `type==="ldap"`; sourcesStore
       `baseDn` field; add-source flow runs discovery; credential prompt (UPN+password); view
       icon; settings (`ldap.tlsRejectUnauthorized`, `ldap.useStartTls`); "Discover AD" surfaced.
-- [ ] **C4. Docs.** USER_GUIDE LDAP section, ADMIN_GUIDE (SRV records, ports, TLS/internal-CA,
+- [x] **C4. Docs.** USER_GUIDE LDAP section, ADMIN_GUIDE (SRV records, ports, TLS/internal-CA,
       lockout), CHANGELOG.
 
 ## Track D — Remaining scheduled features (enterprise test candidate)
@@ -108,3 +108,4 @@
 - 2026-06-11: A1+A3 done (lockout tracker, TTL cache, http wrapper, Confluence+Jira adapters; 86 tests). A2/A4/A5 next.
 - 2026-06-11: A2+A4+A5 done (sources store + keychain creds, Reference Sources view, add/test/remove/reset-lockout/clear-cache commands, 3 context LM tools). Docs (A6+B5) + W1 remain.
 - 2026-06-11: B5+A6+W1 done — docs updated (user/admin guides, changelog), v0.2.0 packaged. **All planned increments for this session complete.** Next session: see the Deferred lists above (Phase 3 merge/revert, write-back, more adapters, bookmarks UI).
+- 2026-06-11: Track C done — LDAP/AD connector with DNS SRV auto-discovery (ldapts, pure-JS), framework dispatch, discovery + add/test flow, 19 LDAP tests (101 total). Track D (bookmarks, nav/theme) next.

@@ -223,6 +223,33 @@ Jira, Cloud or Data Center (more source types are roadmap).
   *Reset Source Auth Lockout* (context menu) reopens a locked source — check with your admin
   first.
 
+### LDAP / Active Directory (with DNS auto-discovery)
+
+Reference AD users, groups, and OUs read-only — with **no server address to type** on a
+domain-joined machine.
+
+- **Add** (Reference Sources → `+` → *LDAP / Active Directory*): the extension reads your
+  workstation's domain (from `USERDNSDOMAIN`, the host FQDN, or `/etc/resolv.conf`) and queries
+  DNS **SRV** records (`_gc._tcp.<domain>`, `_ldap._tcp.dc._msdcs.<domain>`) to find domain
+  controllers and global-catalog servers. Pick a discovered endpoint (or enter one manually);
+  the base DN is derived for you. Then sign in with **your own AD account** — UPN
+  (`you@corp.example`), `DOMAIN\you`, or a full DN — and password. Run
+  **AI SharePoint: Discover Active Directory (DNS)** any time to just see what DNS returns.
+- **Search**: free text uses AD **ANR**, so `#spSearchContext` with *"Jane Doe"* matches name,
+  login, and email at once; or pass a raw LDAP filter like `(&(objectClass=user)(department=R&D))`.
+  `#spContextItem` fetches one entry by its distinguished name (DN).
+- **Read-safety**: searches carry a server-side size limit (the result cap) and time limit;
+  only a curated, non-sensitive attribute set is requested (name, mail, title, department,
+  group membership…) — never password attributes. It is bind + search only; there is no write
+  path.
+- **Lockout protection is critical here** — a wrong AD password is the fastest way to lock a
+  real account, so the breaker (3 strikes, no auto-retry) applies exactly as above.
+- **TLS**: LDAPS (port 636/3269) is preferred. If your DCs use an internal CA, see the
+  [Admin Guide](ADMIN_GUIDE.md#7-reference-sources-confluence--jira--ldap--ad) — you may need
+  the CA installed, or (lab only) `aiSharePoint.ldap.tlsRejectUnauthorized: false`. For plain
+  `ldap://` you can enable `aiSharePoint.ldap.useStartTls`. LDAP traffic goes **directly** to
+  the DC (it is not HTTP, so it does not use the VS Code proxy).
+
 ## Copilot usage, budget, and the dashboard
 
 **How metering works.** The extension records every request it makes (model, input/output

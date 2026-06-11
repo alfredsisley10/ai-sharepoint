@@ -11,6 +11,7 @@ import {
 } from "./types";
 import { verifyConfluence, searchConfluence, getConfluencePage } from "./adapters/confluence";
 import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
+import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
 import { AppError, classifyError } from "../core/errors";
 
 /**
@@ -36,6 +37,14 @@ export class ContextService {
     return (
       Math.max(0, vscode.workspace.getConfiguration("aiSharePoint").get<number>("context.cacheTtlMinutes", 15)) * 60_000
     );
+  }
+
+  private ldapTls(): LdapTlsOptions {
+    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    return {
+      rejectUnauthorized: cfg.get<boolean>("ldap.tlsRejectUnauthorized", true),
+      useStartTls: cfg.get<boolean>("ldap.useStartTls", false),
+    };
   }
 
   private gate(source: ContextSource, fresh: boolean): void {
@@ -90,11 +99,16 @@ export class ContextService {
     fresh: boolean,
   ): Promise<{ account: string }> {
     const caps = this.caps();
-    return this.tracked(source, fresh, () =>
-      source.type === "jira"
-        ? verifyJira(source, credential, caps)
-        : verifyConfluence(source, credential, caps),
-    );
+    return this.tracked(source, fresh, () => {
+      switch (source.type) {
+        case "ldap":
+          return verifyLdap(source, credential, this.ldapTls(), caps);
+        case "jira":
+          return verifyJira(source, credential, caps);
+        default:
+          return verifyConfluence(source, credential, caps);
+      }
+    });
   }
 
   private async storedCredential(source: ContextSource): Promise<ContextCredential> {
@@ -116,11 +130,16 @@ export class ContextService {
       this.ttlMs(),
       async () => {
         const credential = await this.storedCredential(source);
-        return this.tracked(source, false, () =>
-          source.type === "jira"
-            ? searchJira(source, credential, query, caps)
-            : searchConfluence(source, credential, query, caps),
-        );
+        return this.tracked(source, false, () => {
+          switch (source.type) {
+            case "ldap":
+              return searchLdap(source, credential, query, this.ldapTls(), caps);
+            case "jira":
+              return searchJira(source, credential, query, caps);
+            default:
+              return searchConfluence(source, credential, query, caps);
+          }
+        });
       },
     );
   }
@@ -132,11 +151,16 @@ export class ContextService {
       this.ttlMs(),
       async () => {
         const credential = await this.storedCredential(source);
-        return this.tracked(source, false, () =>
-          source.type === "jira"
-            ? getJiraIssue(source, credential, id, caps)
-            : getConfluencePage(source, credential, id, caps),
-        );
+        return this.tracked(source, false, () => {
+          switch (source.type) {
+            case "ldap":
+              return getLdapEntry(source, credential, id, this.ldapTls(), caps);
+            case "jira":
+              return getJiraIssue(source, credential, id, caps);
+            default:
+              return getConfluencePage(source, credential, id, caps);
+          }
+        });
       },
     );
   }
