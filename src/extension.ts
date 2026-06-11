@@ -65,6 +65,20 @@ import {
   CatalogEntry,
   LoadCheckpoint,
 } from "./context/catalogCache";
+import { OutboxStore } from "./comms/outboxStore";
+import { CommsClient } from "./comms/commsClient";
+import {
+  CommDraft,
+  CommChannel,
+  parseRecipients,
+  recipientIssue,
+  draftIssue,
+  draftLabel,
+  MAX_BODY_CHARS,
+  MAX_SUBJECT_CHARS,
+} from "./comms/outbox";
+import { CommsTreeProvider } from "./ui/commsView";
+import { registerCommsTools } from "./chat/commsTools";
 import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
@@ -161,7 +175,29 @@ export function activate(context: vscode.ExtensionContext): void {
   const supportView = vscode.window.createTreeView("aiSharePoint.supportView", {
     treeDataProvider: supportProvider,
   });
-  context.subscriptions.push(sitesView, usageView, supportView, supportProvider);
+  const outbox = new OutboxStore(context.globalState);
+  const commsProvider = new CommsTreeProvider(outbox);
+  const commsView = vscode.window.createTreeView("aiSharePoint.commsView", {
+    treeDataProvider: commsProvider,
+  });
+  const syncCommsBadge = () => {
+    commsView.badge =
+      outbox.count() > 0
+        ? { value: outbox.count(), tooltip: `${outbox.count()} draft(s) awaiting your approval` }
+        : undefined;
+  };
+  syncCommsBadge();
+  context.subscriptions.push(
+    sitesView,
+    usageView,
+    supportView,
+    supportProvider,
+    outbox,
+    commsProvider,
+    commsView,
+    outbox.onDidChange(syncCommsBadge),
+    ...registerCommsTools(outbox, telemetry, errors, nowIso),
+  );
 
   const syncContext = () => {
     void vscode.commands.executeCommand(
@@ -2088,6 +2124,257 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     await vscode.window.showTextDocument(doc, { preview: true });
     telemetry.record("context.adDiscover", { endpoints: result.candidates.length });
+  });
+
+  // --- Communication Channels (ADR-0025) -----------------------------------
+  // Drafts are prepared into the outbox; sending happens ONLY in
+  // reviewCommDraft after a modal approval that names every recipient.
+
+  const COMMS_CONN_KEY = "aiSharePoint.commsConnection";
+  const commsClientFor = async (): Promise<CommsClient | undefined> => {
+    const all = sites.list();
+    if (all.length === 0) {
+      const add = await vscode.window.showInformationMessage(
+        "Communications use your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
+        "Connect Site",
+      );
+      if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
+      return undefined;
+    }
+    let conn = all.length === 1 ? all[0] : undefined;
+    if (!conn) {
+      const remembered = context.globalState.get<string>(COMMS_CONN_KEY);
+      conn = all.find((c) => c.cacheHandle === remembered);
+    }
+    if (!conn) {
+      const pick = await vscode.window.showQuickPick(
+        all.map((c) => ({
+          label: c.displayName,
+          description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
+          conn: c,
+        })),
+        { ignoreFocusOut: true, title: "Send using which Microsoft 365 sign-in?" },
+      );
+      if (!pick) return undefined;
+      conn = pick.conn;
+      await context.globalState.update(COMMS_CONN_KEY, conn.cacheHandle);
+    }
+    const provider = registry.create(conn.authProviderId, conn.cacheHandle);
+    return new CommsClient(provider, false);
+  };
+
+  const promptCommDraft = async (
+    channel: CommChannel,
+    current?: CommDraft,
+  ): Promise<CommDraft | undefined> => {
+    const toRaw = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: `${channel === "teams" ? "Teams message" : "Email"} — recipients`,
+      value: current?.to.join(", ") ?? "",
+      placeHolder: "jdoe@corp.example, asmith@corp.example  (individuals, max 10)",
+      validateInput: (v) => recipientIssue(parseRecipients(v)),
+    });
+    if (!toRaw) return undefined;
+    let subject = current?.subject;
+    if (channel === "outlook") {
+      subject = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Email — subject",
+        value: current?.subject ?? "",
+        validateInput: (v) =>
+          !v.trim()
+            ? "Email drafts need a subject."
+            : v.length > MAX_SUBJECT_CHARS
+              ? `Max ${MAX_SUBJECT_CHARS} characters.`
+              : undefined,
+      });
+      if (!subject) return undefined;
+    }
+    const body = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: `${channel === "teams" ? "Teams message" : "Email"} — body`,
+      value: current?.body ?? "",
+      placeHolder: "Plain text. Tip: ask @sharepoint to draft longer messages — they land here for approval too.",
+      validateInput: (v) =>
+        !v.trim() ? "The message body is empty." : v.length > MAX_BODY_CHARS ? "Too long." : undefined,
+    });
+    if (!body) return undefined;
+    const draft: CommDraft = {
+      id: current?.id ?? crypto.randomUUID(),
+      channel,
+      to: parseRecipients(toRaw),
+      ...(subject?.trim() ? { subject: subject.trim() } : {}),
+      body,
+      createdAt: current?.createdAt ?? nowIso(),
+      origin: current?.origin ?? "user",
+      ...(current?.reason ? { reason: current.reason } : {}),
+    };
+    const issue = draftIssue(draft);
+    if (issue) {
+      void vscode.window.showErrorMessage(`Draft not saved: ${issue}`);
+      return undefined;
+    }
+    return draft;
+  };
+
+  register("aiSharePoint.draftTeamsMessage", async () => {
+    const draft = await promptCommDraft("teams");
+    if (!draft) return;
+    await outbox.add(draft);
+    telemetry.record("comms.draft", { channel: "teams", via: "user" });
+    const review = await vscode.window.showInformationMessage(
+      "Draft added to Communications — nothing sends until you approve it there.",
+      "Review & Send Now",
+    );
+    if (review) await vscode.commands.executeCommand("aiSharePoint.reviewCommDraft", draft);
+  });
+
+  register("aiSharePoint.draftOutlookEmail", async () => {
+    const draft = await promptCommDraft("outlook");
+    if (!draft) return;
+    await outbox.add(draft);
+    telemetry.record("comms.draft", { channel: "outlook", via: "user" });
+    const review = await vscode.window.showInformationMessage(
+      "Draft added to Communications — nothing sends until you approve it there.",
+      "Review & Send Now",
+    );
+    if (review) await vscode.commands.executeCommand("aiSharePoint.reviewCommDraft", draft);
+  });
+
+  register("aiSharePoint.editCommDraft", async (arg) => {
+    const existing = (arg as CommDraft)?.id ? outbox.get((arg as CommDraft).id) : undefined;
+    if (!existing) return;
+    const edited = await promptCommDraft(existing.channel, existing);
+    if (!edited) return;
+    await outbox.update(edited);
+    void vscode.window.showInformationMessage("Draft updated (still pending your approval).");
+  });
+
+  register("aiSharePoint.discardCommDraft", async (arg) => {
+    const draft = (arg as CommDraft)?.id ? outbox.get((arg as CommDraft).id) : undefined;
+    if (!draft) return;
+    const confirm = await vscode.window.showWarningMessage(
+      `Discard the ${draft.channel} draft to ${draft.to.join(", ")}? Nothing was ever sent.`,
+      { modal: true },
+      "Discard Draft",
+    );
+    if (confirm !== "Discard Draft") return;
+    await outbox.remove(draft.id);
+    telemetry.record("comms.discard", { channel: draft.channel, origin: draft.origin });
+  });
+
+  register("aiSharePoint.reviewCommDraft", async (arg) => {
+    let draft = (arg as CommDraft)?.id ? outbox.get((arg as CommDraft).id) : undefined;
+    if (!draft) {
+      const all = outbox.list();
+      if (all.length === 0) {
+        void vscode.window.showInformationMessage(
+          "No communication drafts pending. Create one with “Draft Teams Message” / “Draft Outlook Email”, or ask @sharepoint to prepare one.",
+        );
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        all.map((d) => ({
+          label: draftLabel(d),
+          description: `${d.channel} → ${d.to.join(", ")}`,
+          d,
+        })),
+        { ignoreFocusOut: true, title: "Review which draft?" },
+      );
+      if (!pick) return;
+      draft = pick.d;
+    }
+
+    // Full-fidelity preview first — approval must never rely on a truncated
+    // toast (ADR-0025: the user sees exactly what would be sent).
+    const previewDoc = await vscode.workspace.openTextDocument({
+      language: "markdown",
+      content: [
+        `# ${draft.channel === "teams" ? "Teams message" : "Outlook email"} — pending approval`,
+        "",
+        `**To:** ${draft.to.join(", ")}`,
+        ...(draft.subject ? [`**Subject:** ${draft.subject}`] : []),
+        `**Prepared by:** ${draft.origin === "agent" ? "@sharepoint (assistant)" : "you"} at ${draft.createdAt}`,
+        ...(draft.reason ? [`**Why:** ${draft.reason}`] : []),
+        "",
+        "---",
+        "",
+        draft.body,
+        "",
+        "---",
+        "_Nothing has been sent. Approve or discard in the dialog._",
+      ].join("\n"),
+    });
+    await vscode.window.showTextDocument(previewDoc, { preview: true });
+
+    const sendLabel = draft.channel === "teams" ? "Send via Teams" : "Send Email";
+    const buttons =
+      draft.channel === "outlook"
+        ? [sendLabel, "Save to Outlook Drafts", "Discard Draft"]
+        : [sendLabel, "Discard Draft"];
+    const choice = await vscode.window.showWarningMessage(
+      `Approve this ${draft.channel === "teams" ? "Teams message" : "email"}?`,
+      {
+        modal: true,
+        detail: `To: ${draft.to.join(", ")}${draft.subject ? `\nSubject: ${draft.subject}` : ""}\n\nIt is sent from YOUR account${draft.origin === "agent" ? " (content was prepared by the assistant — review it)" : ""}. The full text is open in the editor behind this dialog.`,
+      },
+      ...buttons,
+    );
+    if (!choice) return; // stays pending
+    if (choice === "Discard Draft") {
+      await outbox.remove(draft.id);
+      telemetry.record("comms.discard", { channel: draft.channel, origin: draft.origin });
+      return;
+    }
+    const client = await commsClientFor();
+    if (!client) return;
+
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Resolving recipients…" },
+      async (progress) => {
+        const resolved = [];
+        const failures: string[] = [];
+        for (const r of draft!.to) {
+          try {
+            resolved.push(await client.resolveRecipient(r));
+          } catch {
+            failures.push(r);
+          }
+        }
+        if (failures.length > 0) {
+          throw new AppError(
+            `Not sent — ${failures.length} recipient(s) could not be found in the directory: ${failures.join(", ")}. Edit the draft and retry.`,
+            "config",
+          );
+        }
+        if (choice === "Save to Outlook Drafts") {
+          progress.report({ message: "Creating the draft in your mailbox…" });
+          const created = await client.createMailDraft(resolved, draft!.subject ?? "", draft!.body);
+          await outbox.remove(draft!.id);
+          telemetry.record("comms.saveDraft", { channel: "outlook", origin: draft!.origin });
+          const open = await vscode.window.showInformationMessage(
+            "Saved to your Outlook Drafts — finish and send it from Outlook.",
+            ...(created.webLink ? ["Open in Outlook"] : []),
+          );
+          if (open && created.webLink) {
+            await vscode.env.openExternal(vscode.Uri.parse(created.webLink));
+          }
+          return;
+        }
+        progress.report({ message: `Sending to ${resolved.map((r) => r.displayName).join(", ")}…` });
+        if (draft!.channel === "teams") {
+          await client.sendTeamsMessage(resolved, draft!.body);
+        } else {
+          const created = await client.createMailDraft(resolved, draft!.subject ?? "", draft!.body);
+          await client.sendMailDraft(created.id);
+        }
+        await outbox.remove(draft!.id);
+        telemetry.record("comms.send", { channel: draft!.channel, origin: draft!.origin });
+        void vscode.window.showInformationMessage(
+          `Sent to ${resolved.map((r) => r.displayName).join(", ")} via ${draft!.channel === "teams" ? "Teams" : "Outlook"}.`,
+        );
+      },
+    );
   });
 
   // --- Diagnostics & support ------------------------------------------------
