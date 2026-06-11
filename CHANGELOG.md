@@ -18,6 +18,10 @@ LDAP/Active Directory fixes from enterprise pilot feedback (ADR-0020 amendment).
 - Existing sources pinned to a specific server keep working unchanged; re-add via discovery to
   switch them to the durable locator.
 
+### Changed — UI clarity
+- The activity-bar **"Sites"** view is renamed **"SharePoint Sites"** — with Confluence, Jira,
+  and LDAP/AD reference sources in the same container, the unqualified name was ambiguous.
+
 ### Fixed — LDAPS trusts the operating-system trust store
 - Pilot finding: `LDAP error: unable to get local issuer certificate`. LDAP is raw TLS (it
   bypasses VS Code's patched networking), so internal-CA certificates failed against Node's

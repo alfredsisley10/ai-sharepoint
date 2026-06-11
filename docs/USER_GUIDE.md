@@ -84,7 +84,7 @@ steps with illustrations.
 | **reference** | Read-only forever — chat/tool context only; sync and write-back refuse it |
 
 Pick *reference* for sites you only want the assistant to read. Roles can be changed any time
-from the Sites view context menu.
+from the SharePoint Sites view context menu.
 
 **3 — Sign-in method.**
 
@@ -103,7 +103,7 @@ shared.
 
 ## The activity-bar views
 
-### Sites
+### SharePoint Sites
 One row per connection — icon shows the role (cloud = managed, eye = reference) and color shows
 verification state (green = verified, yellow = not yet signed in / signed out). Hover for URL,
 account, and last-verified time. Click a row to open the site in your browser.

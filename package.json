@@ -294,7 +294,7 @@
       "aiSharePoint": [
         {
           "id": "aiSharePoint.sitesView",
-          "name": "Sites",
+          "name": "SharePoint Sites",
           "icon": "media/activity-icon.svg",
           "contextualTitle": "SharePoint Sites"
         },

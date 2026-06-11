@@ -68,7 +68,7 @@ Confluence and Jira (Cloud/Data Center) plus **LDAP/Active Directory with DNS au
 auto-retried; 3 strikes freezes the source), cached, result-capped, and shareable with the team
 via secret-free config export/import.
 
-### 🗂 Sites, Sources, Usage, and Support views
+### 🗂 SharePoint Sites, Reference Sources, Usage, and Support views
 A dedicated activity-bar container with connection management (test, role change, sign-out,
 remove), reference sources + bookmarks, live usage/budget breakdowns, and one-click access to
 logs, error reports, the user guide, and the privacy notice.
@@ -80,7 +80,7 @@ logs, error reports, the user guide, and the privacy notice.
 1. Install **GitHub Copilot** (and sign in) — AI features run through your own entitlement via
    the official VS Code Language Model API.
 2. Install this extension's VSIX (`Extensions: Install from VSIX…`) or from your private gallery.
-3. Run **AI SharePoint: Connect SharePoint Site** (or use the Sites view) — pick a role
+3. Run **AI SharePoint: Connect SharePoint Site** (or use the SharePoint Sites view) — pick a role
    (*managed* or read-only *reference*) and a sign-in method.
 4. Open Chat and ask `@sharepoint /site` — or just ask a question about your site.
 5. Run **AI SharePoint: Set Copilot Budget** to fit the gauge to your plan.
