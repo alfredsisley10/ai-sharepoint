@@ -70,7 +70,7 @@ export function adviceFor(code: ErrorCode): string | undefined {
     case "budget.blocked":
       return "Your configured Copilot budget cap was reached. Adjust it in Settings → AI SharePoint.";
     case "network":
-      return "Network request failed. Check connectivity/proxy and your enterprise allowlist (see the admin guide).";
+      return "Network request failed. Behind a corporate proxy or TLS-inspection appliance, check VS Code's proxy settings (http.proxy) and that login.microsoftonline.com / graph.microsoft.com are allowlisted — see the Admin Guide §3.";
     default:
       return undefined;
   }

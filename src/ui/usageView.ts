@@ -25,6 +25,8 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
     private readonly meter: UsageMeter,
     private readonly budget: BudgetGuard,
     private readonly now: () => string,
+    /** False until Copilot Chat is installed AND signed in (models exist). */
+    private readonly copilotAvailable: () => boolean = () => true,
   ) {
     meter.onDidChange(() => this.emitter.fire());
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -58,6 +60,11 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
       return node.children ?? [];
     }
     const nowIso = this.now();
+    // No Copilot and nothing ever metered → empty tree, so the viewsWelcome
+    // guidance (install Copilot Chat / sign in) shows instead of zeros.
+    if (!this.copilotAvailable() && this.meter.requestsThisMonth(nowIso) === 0) {
+      return [];
+    }
     const verdict = this.budget.evaluate(0, nowIso);
     const used = this.meter.premiumUnitsThisMonth(nowIso);
     const pct = Math.round(verdict.usedPct);

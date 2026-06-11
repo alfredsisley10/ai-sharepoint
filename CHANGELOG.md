@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.1 — 2026-06-11
+
+Fixes from the first round of enterprise pilot feedback.
+
+### Fixed
+- **Sign-in behind corporate proxies / TLS inspection.** MSAL's default HTTP client bypassed VS
+  Code's networking, so token requests failed with `ClientAuthError: network_error` wherever a
+  proxy or TLS-inspection appliance sat in the path. Both sign-in providers now route through a
+  fetch-based network client, so *all* extension traffic (sign-in and Graph alike) honors VS
+  Code's proxy settings (`http.proxy` / system proxy) and the operating-system trust store
+  (`http.systemCertificates`). Network errors now include proxy-specific remediation advice, and
+  the Admin Guide §3 documents the full proxy/TLS-inspection posture.
+- **Walkthrough "Install GitHub Copilot" link.** The link now reliably opens the **GitHub
+  Copilot Chat** extension page (with a marketplace search for "github copilot chat" as
+  fallback), names the correct extension, and the step **auto-completes** when Copilot Chat is
+  already installed or a sign-in is detected.
+
+### Added
+- **Copilot status detection.** The extension tracks whether Copilot Chat is installed and
+  whether Copilot models are available (signed in + entitled), exposed as context keys. The
+  Usage & Budget view now shows guided setup states ("install Copilot Chat" / "sign in to
+  GitHub") instead of zeroed counters when Copilot isn't ready.
+- New commands: **AI SharePoint: Install GitHub Copilot Chat** and **AI SharePoint: Check
+  Copilot Status** (guided verification of install + sign-in + model availability).
+
 ## 0.1.0 — 2026-06-11
 
 First deployable release: the governed foundation (auth, chat/agent surface, cost governance,

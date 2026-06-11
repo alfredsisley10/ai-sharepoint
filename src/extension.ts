@@ -67,8 +67,17 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // --- Views -----------------------------------------------------------
+  // "Signed in" is inferred from entitled chat models being available — the
+  // only signal vscode.lm exposes. Kept current by refreshCopilotState below.
+  const copilotState = { chatInstalled: false, signedIn: false };
+
   const sitesProvider = new SitesTreeProvider(sites);
-  const usageProvider = new UsageTreeProvider(meter, budget, nowIso);
+  const usageProvider = new UsageTreeProvider(
+    meter,
+    budget,
+    nowIso,
+    () => copilotState.signedIn,
+  );
   const supportProvider = new SupportTreeProvider(errors, version);
   const sitesView = vscode.window.createTreeView("aiSharePoint.sitesView", {
     treeDataProvider: sitesProvider,
@@ -96,6 +105,37 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     sites.onDidChange(syncContext),
     errors.onDidChange(syncContext),
+  );
+
+  // --- Copilot Chat presence/sign-in detection -----------------------------
+  // Drives walkthrough auto-completion (onContext) and the Usage view's
+  // guided empty state.
+  const refreshCopilotState = async (): Promise<void> => {
+    copilotState.chatInstalled = Boolean(
+      vscode.extensions.getExtension("GitHub.copilot-chat"),
+    );
+    try {
+      copilotState.signedIn =
+        (await vscode.lm.selectChatModels({ vendor: "copilot" })).length > 0;
+    } catch {
+      copilotState.signedIn = false;
+    }
+    void vscode.commands.executeCommand(
+      "setContext",
+      "aiSharePoint.copilotChatInstalled",
+      copilotState.chatInstalled,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "aiSharePoint.copilotSignedIn",
+      copilotState.signedIn,
+    );
+    usageProvider.refresh();
+  };
+  void refreshCopilotState();
+  context.subscriptions.push(
+    vscode.extensions.onDidChange(() => void refreshCopilotState()),
+    vscode.lm.onDidChangeChatModels(() => void refreshCopilotState()),
   );
 
   // --- Chat + tools ------------------------------------------------------
@@ -160,6 +200,43 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   // --- Copilot commands ---------------------------------------------------
+  register("aiSharePoint.installCopilotChat", async () => {
+    // Open the extension's details page (reliable across VS Code versions);
+    // fall back to the marketplace search the page is found under.
+    try {
+      await vscode.commands.executeCommand("extension.open", "GitHub.copilot-chat");
+    } catch {
+      await vscode.commands.executeCommand(
+        "workbench.extensions.search",
+        "github copilot chat",
+      );
+    }
+  });
+
+  register("aiSharePoint.checkCopilotStatus", async () => {
+    await refreshCopilotState();
+    if (!copilotState.chatInstalled) {
+      const pick = await vscode.window.showWarningMessage(
+        "GitHub Copilot Chat is not installed. AI SharePoint uses it (your own Copilot entitlement) for all AI features.",
+        "Install GitHub Copilot Chat",
+      );
+      if (pick) {
+        await vscode.commands.executeCommand("aiSharePoint.installCopilotChat");
+      }
+      return;
+    }
+    if (!copilotState.signedIn) {
+      void vscode.window.showWarningMessage(
+        "GitHub Copilot Chat is installed, but no Copilot models are available yet. Sign in to GitHub in VS Code (Accounts menu, bottom-left) and ensure your account has a Copilot subscription or seat.",
+      );
+      return;
+    }
+    const models = await copilot.listModels();
+    void vscode.window.showInformationMessage(
+      `Copilot is ready: ${models.length} model(s) available (default: ${models[0]?.name ?? "n/a"}).`,
+    );
+  });
+
   register("aiSharePoint.listModels", async () => {
     const models = await copilot.listModels();
     if (models.length === 0) {

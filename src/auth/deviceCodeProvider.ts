@@ -6,6 +6,7 @@ import {
 import { SecretStore } from "../secrets/secretStore";
 import { AccessToken, SharePointAuthProvider } from "./types";
 import { KeychainCachePlugin } from "./msalCache";
+import { FetchNetworkClient } from "./msalNetwork";
 import { AppError } from "../core/errors";
 
 /** What the UI needs to show the user during device-code sign-in. */
@@ -43,6 +44,8 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
     const config: Configuration = {
       auth: { clientId, authority },
       cache: { cachePlugin: new KeychainCachePlugin(secrets, cacheHandle) },
+      // VS Code-aware networking: corporate proxy + OS truststore support.
+      system: { networkClient: new FetchNetworkClient() },
     };
     this.pca = new PublicClientApplication(config);
   }

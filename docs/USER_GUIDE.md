@@ -33,7 +33,7 @@ Two-way sync and AI-driven provisioning are on the roadmap (see `docs/PLAN.md`).
 | Requirement | Why |
 |---|---|
 | VS Code **1.95+** | Language Model & Chat APIs |
-| **GitHub Copilot** extension, signed in | All AI features run through *your* Copilot entitlement — the extension has no AI keys of its own |
+| **GitHub Copilot Chat** extension (marketplace search: “github copilot chat”), signed in | All AI features run through *your* Copilot entitlement — the extension has no AI keys of its own. Run **AI SharePoint: Check Copilot Status** to verify install + sign-in |
 | A Microsoft 365 account with SharePoint access | Site features; read permission on the sites you connect |
 | Network access to Microsoft endpoints | See the [Admin Guide](ADMIN_GUIDE.md#3-network-endpoints) for the exact allowlist |
 
@@ -256,8 +256,9 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 
 | Symptom | Likely cause → fix |
 |---|---|
-| “No Copilot models available” | Copilot extension missing or signed out → install/sign in, then retry. Organization may need to enable Copilot. |
+| “No Copilot models available” | Copilot Chat missing or signed out → run **Check Copilot Status** for guided fixes. Organization may need to enable Copilot. |
 | Browser sign-in never completes | Pop-up/redirect blocked or no default browser (common in VDI) → reconnect using **device code**. |
+| Sign-in fails with `network_error` | Corporate proxy / TLS inspection in the path → ensure VS Code sees your proxy (`http.proxy` or system proxy) and the corporate root CA is in the OS trust store. All extension traffic (including sign-in) uses VS Code's networking, so if Graph works, sign-in should too. Admin Guide §3. |
 | `AADSTS…` error during sign-in | Tenant policy rejected the app → see Admin Guide (allow the first-party app or configure a custom `clientId`); check conditional-access requirements. |
 | “Sign-in required for this site” in chat | Cached token expired and chat never prompts → run **Test Site Connection** once, then ask again. |
 | “authority host … is not trusted” | A non-Microsoft authority was configured → fix `tenantAuthority`, or (if legitimate, e.g. ADFS) have IT add it to `additionalAuthorityHosts`. |

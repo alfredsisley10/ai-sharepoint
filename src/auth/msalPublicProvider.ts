@@ -9,6 +9,7 @@ import {
 import { SecretStore } from "../secrets/secretStore";
 import { AccessToken, SharePointAuthProvider } from "./types";
 import { KeychainCachePlugin } from "./msalCache";
+import { FetchNetworkClient } from "./msalNetwork";
 import { AppError } from "../core/errors";
 
 /** Static, parameter-free response pages (REVIEW S5 — never reflect query
@@ -48,6 +49,8 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
     const config: Configuration = {
       auth: { clientId, authority },
       cache: { cachePlugin: new KeychainCachePlugin(secrets, cacheHandle) },
+      // VS Code-aware networking: corporate proxy + OS truststore support.
+      system: { networkClient: new FetchNetworkClient() },
     };
     this.pca = new PublicClientApplication(config);
   }

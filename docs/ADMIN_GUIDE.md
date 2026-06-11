@@ -58,9 +58,22 @@ CDN fetches. The Usage Dashboard webview loads zero external resources (CSP `def
 `graph.microsoft.com` endpoint — full sovereign Graph endpoints are on the roadmap. Pilot
 accordingly.
 
-### Proxies
-All HTTP from the extension uses the extension host's `fetch`, which honors VS Code's proxy
-settings (`http.proxy`, system proxy) in current VS Code versions. PAC-file edge cases follow VS
+### Proxies and TLS inspection (MITM)
+**Every** outbound request the extension makes — Microsoft Graph reads *and* Microsoft Entra
+sign-in/token traffic (MSAL is wired to a custom network client) — travels through the extension
+host's `fetch`, i.e. VS Code's networking layer. That means it follows:
+
+- **Proxy settings**: `http.proxy` if set, otherwise the OS/system proxy, per VS Code's
+  `http.proxySupport` behavior (default `override`). Authenticated proxies are handled by VS
+  Code's proxy support.
+- **Trust store**: VS Code loads operating-system certificates by default
+  (`http.systemCertificates`: `true`), so TLS-inspecting proxies work as long as your corporate
+  root CA is deployed to the OS trust store (standard in managed fleets).
+
+If sign-in fails with `network_error` while normal browsing works, verify in order: (1) the
+machine's OS trust store contains the inspection CA, (2) `http.proxy`/system proxy is visible to
+VS Code (`Developer: Show Logs… → Network`), (3) `login.microsoftonline.com` (or your sovereign
+authority) and `graph.microsoft.com` are allowlisted on the proxy. PAC-file edge cases follow VS
 Code's own behavior — test one machine before fleet rollout.
 
 ## 4. Entra ID options

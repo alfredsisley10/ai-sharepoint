@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -97,6 +97,17 @@
         "title": "Refresh Sites View",
         "category": "AI SharePoint",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "aiSharePoint.installCopilotChat",
+        "title": "Install GitHub Copilot Chat",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.checkCopilotStatus",
+        "title": "Check Copilot Status",
+        "category": "AI SharePoint",
+        "icon": "$(pulse)"
       },
       {
         "command": "aiSharePoint.listModels",
@@ -212,6 +223,16 @@
         "view": "aiSharePoint.sitesView",
         "contents": "No SharePoint sites connected yet.\n[Connect a Site](command:aiSharePoint.connectSite)\nSign in with your Microsoft account — browser or device-code. Commercial, GCC High (.us) and 21Vianet (.cn) clouds are supported.\nCredentials are stored only in your OS keychain. [Privacy & data notice](command:aiSharePoint.openPrivacyNotice)",
         "when": "!aiSharePoint.hasSites"
+      },
+      {
+        "view": "aiSharePoint.usageView",
+        "contents": "GitHub Copilot Chat is not installed. AI SharePoint runs all AI features through your own Copilot entitlement — no extra keys.\n[Install GitHub Copilot Chat](command:aiSharePoint.installCopilotChat)\nAfter installing, sign in to GitHub when prompted.",
+        "when": "!aiSharePoint.copilotChatInstalled"
+      },
+      {
+        "view": "aiSharePoint.usageView",
+        "contents": "Copilot Chat is installed, but no Copilot models are available yet — sign in to GitHub (Accounts menu, bottom-left) with an account that has a Copilot subscription or seat.\n[Check Copilot Status](command:aiSharePoint.checkCopilotStatus)",
+        "when": "aiSharePoint.copilotChatInstalled && !aiSharePoint.copilotSignedIn"
       }
     ],
     "chatParticipants": [
@@ -418,14 +439,15 @@
         "steps": [
           {
             "id": "installCopilot",
-            "title": "Install GitHub Copilot",
-            "description": "AI features run through your own Copilot entitlement via the VS Code Language Model API — no extra keys, nothing routed through third parties.\n[Install GitHub Copilot](command:workbench.extensions.search?%22GitHub.copilot%22)",
+            "title": "Install GitHub Copilot Chat",
+            "description": "AI features run through your own Copilot entitlement via the VS Code Language Model API — provided by the **GitHub Copilot Chat** extension (marketplace search: “github copilot chat”). No extra keys, nothing routed through third parties.\nThis step completes automatically when Copilot Chat is installed and you are signed in.\n[Install GitHub Copilot Chat](command:aiSharePoint.installCopilotChat)\n[Check Copilot Status](command:aiSharePoint.checkCopilotStatus)",
             "media": {
               "image": "media/walkthrough/copilot.svg",
               "altText": "Copilot powers AI SharePoint through your own entitlement"
             },
             "completionEvents": [
-              "extensionInstalled:GitHub.copilot"
+              "extensionInstalled:GitHub.copilot-chat",
+              "onContext:aiSharePoint.copilotSignedIn"
             ]
           },
           {
