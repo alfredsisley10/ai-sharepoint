@@ -58,6 +58,7 @@ export class DiagnosticsExportService {
         },
       ],
       {
+        ignoreFocusOut: true,
         title: "Export diagnostics — choose what to include",
         placeHolder: "All data is anonymized and previewed before anything is saved",
       },

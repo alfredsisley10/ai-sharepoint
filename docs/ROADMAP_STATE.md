@@ -169,3 +169,4 @@
 - 2026-06-11: 0.5.0 (cont.) — @sharepoint participant gained a real tool-calling loop (was agent-mode-only): reference-source search/aggregation + in-chat bookmark confirmations now work from the participant. 146 tests.
 - 2026-06-11: 0.6.0 — database wave shipped (mssql/postgres/mysql/mongodb, ADR-0022: layered read-only guard, browse-to-bookmark, OS-trust TLS) + self-service GHES allowlisting fix. 154 tests.
 - 2026-06-11: 0.6.1 — git init hardening (trust guard, post-init retry discovery, .git-exists remediation, add-to-workspace offer in the wizard).
+- 2026-06-11: 0.6.2 — MSSQL SSMS parity (dual auth incl. NTLM, named instances, trustServerCertificate opt-in, ELOGIN triage) + ignoreFocusOut across all wizards. 160 tests.

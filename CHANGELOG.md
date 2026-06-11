@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.2 — 2026-06-11
+
+SQL Server SSMS-parity + wizard usability (pilot feedback).
+
+### Fixed/Added — SQL Server connections match what works in SSMS
+- **Both authentication modes**: SQL Server Authentication (database logins) and **Windows
+  Authentication** via pure-JS NTLM (`CORP\\user` or `user@corp.example` + password) — chosen
+  explicitly in the wizard; Windows-shaped accounts entered under SQL auth are safely inferred
+  to NTLM (SQL logins cannot contain `\\`). Passwordless integrated SSO is not possible in a
+  portable extension and is documented as such.
+- **Named instances**: `?instance=PROD` (SSMS `host\\PROD`) — the port is resolved via SQL
+  Browser; a verified-in-SSMS login that "fails" here was often hitting the wrong instance on
+  1433.
+- **Certificate trust option**: a wizard step (and `?trustServerCertificate=true`) skips TLS
+  validation per source — the SSMS "Trust server certificate" equivalent for self-signed
+  certificates **and certificates that don't match the FQDN** used to connect. Default remains
+  full validation.
+- **Diagnosable rejections**: ELOGIN now carries the server's own reason; "cannot open
+  database" is distinguished (config guidance, not a lockout-counting credential failure); the
+  advice walks the SSMS-works-but-connector-fails triage (instance → auth mode → database).
+
+### Fixed — wizards survive switching apps to copy values
+- Every multi-step dialog (connect site, add context source, credentials, repo configure,
+  budget, bookmarks, diagnostics export) now sets `ignoreFocusOut` — changing focus to another
+  application to copy the next value no longer dismisses the flow and loses progress.
+
+
 ## 0.6.1 — 2026-06-11
 
 ### Fixed — "Could not initialize a Git repository" (pilot)

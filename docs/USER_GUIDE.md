@@ -274,6 +274,14 @@ reasons — ADR-0022):
   database name — e.g. `mssql://sqlhost:1433/Sales`, `postgresql://pghost/reporting`,
   `mysql://myhost/app`, `mongodb://mongo/ops` (`mongodb+srv://` supported). Sign in with a
   database account — a **least-privilege read-only account is recommended**.
+- **SQL Server specifics**: both **SQL Server Authentication** (database login) and **Windows
+  Authentication** (NTLM — `CORP\user` or `user@corp.example` + password; passwordless SSO is
+  not possible in a portable extension) are supported, chosen in the wizard. **Named
+  instances** (SSMS `host\PROD`) use `?instance=PROD` in the URL — the port is then resolved
+  via SQL Browser, and the login must exist on *that* instance. If the server's certificate is
+  self-signed or doesn't match the FQDN you connect with, the wizard's **"Trust server
+  certificate"** option (the SSMS checkbox equivalent, `?trustServerCertificate=true`) skips
+  validation for that source only.
 - **Query from chat**: ask `@sharepoint` to run a `SELECT` (or provide one) — only single,
   read-only SELECT statements are accepted (write/DDL/EXEC keywords are blocked by a guard,
   on top of server-side read-only sessions where the engine supports them); MongoDB takes a
@@ -431,6 +439,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Pages list shows “unavailable” | Some tenants restrict the Graph Pages API → lists still work; this is expected. |
 | 429 / throttled | Microsoft Graph throttling → the extension retries once automatically; wait a moment. |
 | Requests blocked by budget | You passed your hard cap → raise it (`Set Copilot Budget`), switch mode to `warn`, or use the one-time override. |
+| SQL Server "authentication rejected" but the login works in SSMS | Named instance not specified (`?instance=NAME`), wrong auth mode (Windows account needs Windows Authentication), or the URL's database is inaccessible to the login — the error message now distinguishes these. |
 | "Could not initialize a Git repository" / repo not detected | Folder outside the workspace, Restricted Mode, or git missing → accept the wizard's "Add to Workspace" offer (or File → Add Folder to Workspace…), trust the window, and check `git --version`. |
 | Network errors behind a proxy | VS Code's proxy settings apply (`http.proxy`) → see Admin Guide §Proxies. |
 

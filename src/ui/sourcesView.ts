@@ -80,7 +80,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
           ? [`| Resolution | DNS SRV on every connection (durable — survives DC changes) |`]
           : []),
         ...(source.baseDn ? [`| Base DN | ${source.baseDn} |`] : []),
-        `| Auth | ${source.authMethod === "pat" ? "Personal access token" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : "Basic (username + token/password)"} |`,
+        `| Auth | ${source.authMethod === "pat" ? "Personal access token" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : source.authMethod === "ntlm" ? "Windows Authentication (NTLM)" : "Basic (username + token/password)"} |`,
         `| Account | ${source.account ?? "_not verified_"} |`,
         `| Verified | ${source.lastVerifiedAt ?? "_never_"} |`,
         ...(bookmarkCount > 0 ? [`| Bookmarks | ${bookmarkCount} |`] : []),

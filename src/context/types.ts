@@ -15,8 +15,8 @@ export type ContextSourceType =
 export type ContextDeployment = "cloud" | "datacenter";
 
 /** Auth method descriptor persisted per source (ADR-0014/0015).
- *  ldap-simple = LDAP simple bind (UPN/DN + password). */
-export type ContextAuthMethod = "basic" | "pat" | "ldap-simple";
+ *  ldap-simple = LDAP simple bind; ntlm = Windows Authentication (MSSQL). */
+export type ContextAuthMethod = "basic" | "pat" | "ldap-simple" | "ntlm";
 
 export interface ContextSource {
   /** Stable random id; also keys the keychain credential entry. */

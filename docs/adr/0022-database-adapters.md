@@ -57,3 +57,16 @@ their optional native probes are esbuild-externalized and never installed):
   proc) is rejected — accepted trade-off; the error explains the policy.
 - Live validation against real engines remains a pilot task (same posture as every adapter);
   the guard, mappers, and spec parser are fully unit-tested.
+
+## Amendment — 2026-06-11 (pilot feedback)
+SQL Server connections gained SSMS parity: **dual authentication** — SQL Server Authentication
+and Windows Authentication via tedious's pure-JS **NTLM** (`DOMAIN\\user`/UPN + password;
+Windows-shaped accounts under SQL auth are safely inferred to NTLM since SQL logins cannot
+contain `\\`; passwordless SSPI/Kerberos stays excluded per ADR-0016) — **named instances**
+(`?instance=NAME`, port resolved via SQL Browser, mutually exclusive with an explicit port),
+and an explicit per-source **`?trustServerCertificate=true`** opt-in (the SSMS checkbox) for
+self-signed or FQDN-mismatched certificates, surfaced as a wizard step. ELOGIN mapping now
+preserves the server's reason and distinguishes "cannot open database" (config) from credential
+rejection (lockout-counting), with SSMS-versus-connector triage in the advice. Separately, all
+wizard dialogs set `ignoreFocusOut` so copy/paste from other applications no longer dismisses
+the flow.

@@ -311,6 +311,7 @@ export function activate(context: vscode.ExtensionContext): void {
         family: m.family,
       })),
       {
+        ignoreFocusOut: true,
         title: "Copilot models — relative premium-request cost (estimate)",
         placeHolder: "Pick a model to set it as this extension's default (Esc to just browse)",
       },
@@ -327,6 +328,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   register("aiSharePoint.askCopilot", async () => {
     const prompt = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: "Ask Copilot (metered)",
       prompt: "Usage is metered against your premium-request allowance — watch the status-bar gauge.",
       placeHolder: "e.g. Draft an outline for our team's SharePoint landing page",
@@ -446,6 +448,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // --- Site commands -------------------------------------------------------
   register("aiSharePoint.connectSite", async () => {
     const siteUrl = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: "Connect SharePoint Site (1/3) — site URL",
       prompt: "Commercial, GCC High (.us) and 21Vianet (.cn) clouds are supported.",
       placeHolder: "https://contoso.sharepoint.com/sites/Marketing",
@@ -470,7 +473,7 @@ export function activate(context: vscode.ExtensionContext): void {
           value: "reference" as const,
         },
       ],
-      { title: "Connect SharePoint Site (2/3) — connection role" },
+      { ignoreFocusOut: true, title: "Connect SharePoint Site (2/3) — connection role" },
     );
     if (!role) return;
 
@@ -480,7 +483,7 @@ export function activate(context: vscode.ExtensionContext): void {
         detail: p.detail,
         id: p.id,
       })),
-      { title: "Connect SharePoint Site (3/3) — sign-in method" },
+      { ignoreFocusOut: true, title: "Connect SharePoint Site (3/3) — sign-in method" },
     );
     if (!method) return;
 
@@ -675,6 +678,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     const remoteUrl = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: "Remote repository (2/3) — GitHub.com or your GitHub Enterprise Server",
       prompt: `Allowed hosts: ${allowedRemoteHosts().join(", ")}. Leave empty for local-only. An unlisted GHES host can be allowlisted in the next step.`,
       value: existing?.remoteUrl ?? "",
@@ -739,7 +743,7 @@ export function activate(context: vscode.ExtensionContext): void {
           value: "direct" as const,
         },
       ],
-      { title: "Review gate (3/3) — how pushes reach the remote (ADR-0004)" },
+      { ignoreFocusOut: true, title: "Review gate (3/3) — how pushes reach the remote (ADR-0004)" },
     );
     if (!gate) return;
 
@@ -951,7 +955,7 @@ export function activate(context: vscode.ExtensionContext): void {
             value: true,
           },
         ],
-        { title: `${headline} — ${plan.deletions.length} deletion(s) detected` },
+        { ignoreFocusOut: true, title: `${headline} — ${plan.deletions.length} deletion(s) detected` },
       );
       if (!delPick) return;
       includeDeletions = delPick.value;
@@ -1089,6 +1093,7 @@ export function activate(context: vscode.ExtensionContext): void {
         hash: c.hash,
       })),
       {
+        ignoreFocusOut: true,
         title: "Revert site to which commit? (ADR-0005 — a safety snapshot is taken first)",
         matchOnDetail: true,
       },
@@ -1146,7 +1151,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
         { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
       ],
-      { title: "Add Context Source — type (read-only reference data)" },
+      { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );
     if (!typePick) return;
 
@@ -1164,12 +1169,13 @@ export function activate(context: vscode.ExtensionContext): void {
       defaultUpn = endpoint.defaultUpn;
     } else if (DB_TYPES.has(typePick.value)) {
       const placeholders: Record<string, string> = {
-        mssql: "mssql://sqlhost.corp.example:1433/MyDatabase  (append ?encrypt=false for legacy plaintext)",
+        mssql: "mssql://sqlhost.corp.example:1433/MyDatabase — named instance (SSMS host\\\\PROD): mssql://sqlhost/MyDatabase?instance=PROD; self-signed cert: &trustServerCertificate=true",
         postgres: "postgresql://pghost.corp.example:5432/mydb  (?ssl=false to disable TLS)",
         mysql: "mysql://mysqlhost.corp.example:3306/mydb  (?ssl=true to enable TLS)",
         mongodb: "mongodb://mongo.corp.example:27017/mydb  (mongodb+srv:// supported)",
       };
       const url = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
         title: "Database connection URL (read-only reference access)",
         placeHolder: placeholders[typePick.value],
         validateInput: (v) => {
@@ -1184,17 +1190,40 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (!url) return;
       baseUrl = url.trim();
+      if (typePick.value === "mssql" && !/[?&]trustServerCertificate=/i.test(baseUrl)) {
+        const certPick = await vscode.window.showQuickPick(
+          [
+            {
+              label: "$(verified) Validate server certificate (recommended)",
+              description: "requires a trusted cert whose name matches the host",
+              value: false,
+            },
+            {
+              label: "$(unlock) Trust server certificate",
+              description:
+                "skip validation — for self-signed certs or FQDN/name mismatches (the SSMS checkbox)",
+              value: true,
+            },
+          ],
+          { ignoreFocusOut: true, title: "SQL Server TLS certificate handling" },
+        );
+        if (!certPick) return;
+        if (certPick.value) {
+          baseUrl += (baseUrl.includes("?") ? "&" : "?") + "trustServerCertificate=true";
+        }
+      }
     } else {
       const depPick = await vscode.window.showQuickPick(
         [
           { label: "$(cloud) Cloud", description: "*.atlassian.net", value: "cloud" as ContextDeployment },
           { label: "$(server) Data Center / Server", description: "self-hosted", value: "datacenter" as ContextDeployment },
         ],
-        { title: "Add Context Source — deployment" },
+        { ignoreFocusOut: true, title: "Add Context Source — deployment" },
       );
       if (!depPick) return;
       deployment = depPick.value;
       const url = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
         title: "Add Context Source — base URL",
         placeHolder:
           depPick.value === "cloud"
@@ -1225,6 +1254,7 @@ export function activate(context: vscode.ExtensionContext): void {
     })();
     const displayName =
       (await vscode.window.showInputBox({
+      ignoreFocusOut: true,
         title: "Add Context Source — display name",
         value: `${hostLabel} (${typePick.value})`,
       })) ?? "";
@@ -1331,7 +1361,7 @@ export function activate(context: vscode.ExtensionContext): void {
           value: "search" as const,
         },
       ],
-      { title: `Browse & Bookmark — ${source.displayName}` },
+      { ignoreFocusOut: true, title: `Browse & Bookmark — ${source.displayName}` },
     );
     if (!mode) return;
 
@@ -1353,12 +1383,13 @@ export function activate(context: vscode.ExtensionContext): void {
           detail: c.locator,
           cand: c as Cand,
         })),
-        { title: `Bookmark what from ${source.displayName}?`, matchOnDetail: true },
+        { ignoreFocusOut: true, title: `Bookmark what from ${source.displayName}?`, matchOnDetail: true },
       );
       if (!pick) return;
       candidate = pick.cand;
     } else {
       const query = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
         title: `Search ${source.displayName}`,
         placeHolder:
           source.type === "ldap" ? "name / login / raw LDAP filter" : "free text, or raw CQL/JQL",
@@ -1392,13 +1423,14 @@ export function activate(context: vscode.ExtensionContext): void {
             } as Cand,
           })),
         ].filter((i) => i.cand.locator),
-        { title: "Bookmark the query, or one specific result?", matchOnDetail: true },
+        { ignoreFocusOut: true, title: "Bookmark the query, or one specific result?", matchOnDetail: true },
       );
       if (!pick) return;
       candidate = pick.cand;
     }
 
     const name = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: "Bookmark name",
       value: candidate.name,
       prompt: "Shown in the Reference Sources tree and usable by name in chat (#spRunBookmark).",
@@ -1427,6 +1459,7 @@ export function activate(context: vscode.ExtensionContext): void {
           ? "JQL / issue key"
           : "CQL / page id";
     const locator = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: `Bookmark for "${source.displayName}" — locator`,
       placeHolder: kindHint,
       prompt: "A reusable query or a specific item locator (no credentials).",
@@ -1437,10 +1470,11 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(search) Query", description: "a saved search to run", value: "query" as const },
         { label: "$(bookmark) Item", description: "a specific page/issue/entry by id/key/DN", value: "item" as const },
       ],
-      { title: "Bookmark kind" },
+      { ignoreFocusOut: true, title: "Bookmark kind" },
     );
     if (!kindPick) return;
     const name = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: "Bookmark name",
       placeHolder: "e.g. Open R&D incidents",
       value: locator.slice(0, 40),
@@ -1656,7 +1690,7 @@ export function activate(context: vscode.ExtensionContext): void {
           action: "clear",
         },
       ],
-      { title: `Error reports (${reports.length})`, matchOnDetail: true },
+      { ignoreFocusOut: true, title: `Error reports (${reports.length})`, matchOnDetail: true },
     );
     if (!pick) return;
     if (pick.action === "export") {
@@ -1797,6 +1831,7 @@ async function promptNumber(
   min: number,
 ): Promise<number | undefined> {
   const raw = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
     title,
     value: String(current),
     validateInput: (v) => {
@@ -1834,7 +1869,7 @@ async function resolveSourceArg(
       description: `${s.type} · ${s.deployment}`,
       source: s,
     })),
-    { title: "Which source?" },
+    { ignoreFocusOut: true, title: "Which source?" },
   );
   return pick?.source;
 }
@@ -1904,6 +1939,7 @@ async function resolveLdapEndpoint(): Promise<LdapEndpoint | undefined> {
   });
 
   const pick = await vscode.window.showQuickPick(items, {
+    ignoreFocusOut: true,
     title: "Active Directory endpoint",
     placeHolder: "DNS-based endpoints stay valid as domain controllers change over time",
   });
@@ -1912,6 +1948,7 @@ async function resolveLdapEndpoint(): Promise<LdapEndpoint | undefined> {
   if (!pick.manual) return undefined;
 
   const url = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
     title: "LDAP server URL (static — prefer the DNS option when available)",
     placeHolder: "ldaps://dc01.corp.example:636  (or ldap://…:389)",
     validateInput: (v) =>
@@ -1924,6 +1961,7 @@ async function resolveLdapEndpoint(): Promise<LdapEndpoint | undefined> {
     guessedBase = domainToBaseDn(hostMatch[1].split(".").slice(1).join("."));
   }
   const baseDn = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
     title: "Base DN (search root)",
     value: guessedBase,
     placeHolder: "DC=corp,DC=example,DC=com",
@@ -1940,23 +1978,52 @@ async function promptContextCredential(
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
   if (type === "mssql" || type === "postgres" || type === "mysql" || type === "mongodb") {
+    let dbMethod: ContextCredential["method"] = "basic";
+    let userTitle = "Database user (read-only account recommended)";
+    let userPlaceholder = "report_reader";
+    if (type === "mssql") {
+      const mode = await vscode.window.showQuickPick(
+        [
+          {
+            label: "$(key) SQL Server Authentication",
+            description: "database login + password",
+            value: "basic" as const,
+          },
+          {
+            label: "$(account) Windows Authentication (NTLM)",
+            description: "DOMAIN\\user or user@domain + password — no passwordless SSO (pure-JS NTLM)",
+            value: "ntlm" as const,
+          },
+        ],
+        { ignoreFocusOut: true, title: "SQL Server sign-in method" },
+      );
+      if (!mode) return undefined;
+      dbMethod = mode.value;
+      if (dbMethod === "ntlm") {
+        userTitle = "Windows account";
+        userPlaceholder = "CORP\\jdoe  or  jdoe@corp.example";
+      }
+    }
     const username = await vscode.window.showInputBox({
-      title: "Database user (read-only account recommended)",
-      placeHolder: "report_reader",
+      ignoreFocusOut: true,
+      title: userTitle,
+      placeHolder: userPlaceholder,
       prompt: "Use a least-privilege read account where available (ADR-0022).",
     });
     if (!username) return undefined;
     const secret = await vscode.window.showInputBox({
-      title: "Database password",
+      ignoreFocusOut: true,
+      title: dbMethod === "ntlm" ? "Windows account password" : "Database password",
       password: true,
       prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
     });
     if (!secret) return undefined;
-    return { method: "basic", username: username.trim(), secret };
+    return { method: dbMethod, username: username.trim(), secret };
   }
   if (type === "ldap") {
     // LDAP simple bind: UPN / DOMAIN\user / DN + password (ADR-0020).
     const username = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: "Active Directory sign-in — bind identity",
       value: defaultUpn ?? "",
       placeHolder: "you@corp.example  ·  CORP\\you  ·  CN=You,OU=Users,DC=corp,DC=example",
@@ -1964,6 +2031,7 @@ async function promptContextCredential(
     });
     if (!username) return undefined;
     const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: "Active Directory password",
       password: true,
       prompt: "Stored only in your OS keychain; verified with a single bind.",
@@ -1987,7 +2055,7 @@ async function promptContextCredential(
           value: "basic" as const,
         },
       ],
-      { title: "Sign-in method" },
+      { ignoreFocusOut: true, title: "Sign-in method" },
     );
     if (!pick) return undefined;
     method = pick.value;
@@ -1996,12 +2064,14 @@ async function promptContextCredential(
   let username: string | undefined;
   if (method === "basic") {
     username = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
       title: deployment === "cloud" ? "Atlassian account email" : "Username",
       placeHolder: deployment === "cloud" ? "you@yourorg.com" : "jdoe",
     });
     if (!username) return undefined;
   }
   const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
     title:
       method === "pat"
         ? "Personal access token"

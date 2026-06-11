@@ -13,6 +13,7 @@ import * as mysql2 from "mysql2/promise";
 import { MongoClient } from "mongodb";
 import { ContextSource, ContextCredential, ContextSearchHit, ReadCaps } from "../types";
 import { assertReadOnlySql, rowsToHits, parseMongoSpec } from "./readSafe";
+import { buildMssqlAuthentication, parseMssqlParams } from "./mssqlAuth";
 import { loadTrustedCAs } from "../ldap/osTrust";
 import { AppError } from "../../core/errors";
 
@@ -68,17 +69,26 @@ function mapDbError(err: unknown, engine: string): AppError {
   const authPatterns =
     /ELOGIN|28P01|28000|ER_ACCESS_DENIED|1045|Authentication ?failed|auth failed|SCRAM/i;
   if (authPatterns.test(code) || authPatterns.test(msg) || e?.errno === 1045 || e?.code === 18) {
+    if (engine === "SQL Server" && /cannot open database/i.test(msg)) {
+      return new AppError(
+        `SQL Server login succeeded but the database is inaccessible: ${msg}`,
+        "config",
+        "The login cannot open the database named in the connection URL — check the …/dbname segment and the login's database access.",
+      );
+    }
     return new AppError(
-      `${engine} authentication rejected.`,
+      `${engine} authentication rejected: ${msg}`,
       "auth.failed",
-      "The database rejected these credentials.",
+      engine === "SQL Server"
+        ? "SQL Server rejected the sign-in. If this login works in SSMS, check: (1) named instance — SSMS \"host\\INSTANCE\" needs ?instance=INSTANCE in the connection URL (the login may not exist on the default instance at 1433); (2) authentication mode — Windows accounts (DOMAIN\\user) need Windows Authentication; (3) the database name in the URL."
+        : "The database rejected these credentials.",
     );
   }
   if (/unable to get local issuer|self.signed|certificate/i.test(msg)) {
     return new AppError(
       `${engine} TLS certificate validation failed: ${msg}`,
       "config",
-      "Database TLS certificate not trusted — deploy the corporate CA to the OS store or set aiSharePoint.ldap.caCertificatesFile (shared pinned bundle).",
+      "Database TLS certificate not trusted — deploy the corporate CA to the OS store, set aiSharePoint.ldap.caCertificatesFile (shared pinned bundle), or for SQL Server with a self-signed certificate append ?trustServerCertificate=true to the connection URL (the SSMS checkbox equivalent).",
     );
   }
   if (/timeout|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|socket|getaddrinfo/i.test(msg)) {
@@ -98,17 +108,19 @@ async function mssqlRows(
 ): Promise<Array<Record<string, unknown>>> {
   const { host, port, database, params } = parseDbUrl(source);
   const ca = loadTrustedCAs(tls.caBundlePath);
+  const mp = parseMssqlParams(params);
   const connection = new TdsConnection({
     server: host,
-    authentication: {
-      type: "default",
-      options: { userName: credential.username ?? "", password: credential.secret },
-    },
+    // SQL Server Authentication or Windows Authentication (NTLM) — selected
+    // by the stored method, with safe inference for DOMAIN\user accounts.
+    authentication: buildMssqlAuthentication(credential),
     options: {
       database,
-      port: port ?? 1433,
-      encrypt: params.get("encrypt") !== "false",
-      trustServerCertificate: false,
+      // Named instances (SSMS host\INSTANCE) resolve their port via SQL
+      // Browser; instanceName and port are mutually exclusive in TDS.
+      ...(mp.instanceName ? { instanceName: mp.instanceName } : { port: port ?? 1433 }),
+      encrypt: mp.encrypt,
+      trustServerCertificate: mp.trustServerCertificate,
       readOnlyIntent: true, // routes to readable replicas in AG setups
       connectTimeout: caps.timeoutMs,
       requestTimeout: caps.timeoutMs,
