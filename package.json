@@ -118,6 +118,34 @@
         "icon": "$(repo-push)"
       },
       {
+        "command": "aiSharePoint.addContextSource",
+        "title": "Add Context Source (Confluence/Jira)",
+        "category": "AI SharePoint",
+        "icon": "$(add)"
+      },
+      {
+        "command": "aiSharePoint.testContextSource",
+        "title": "Test Context Source",
+        "category": "AI SharePoint",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "aiSharePoint.removeContextSource",
+        "title": "Remove Context Source",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.resetSourceLockout",
+        "title": "Reset Source Auth Lockout",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.clearContextCache",
+        "title": "Clear Reference-Source Cache",
+        "category": "AI SharePoint",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "aiSharePoint.installCopilotChat",
         "title": "Install GitHub Copilot Chat",
         "category": "AI SharePoint"
@@ -224,6 +252,12 @@
           "contextualTitle": "SharePoint Sites"
         },
         {
+          "id": "aiSharePoint.sourcesView",
+          "name": "Reference Sources",
+          "icon": "media/activity-icon.svg",
+          "contextualTitle": "Reference Sources (read-only)"
+        },
+        {
           "id": "aiSharePoint.usageView",
           "name": "Usage & Budget",
           "icon": "media/activity-icon.svg",
@@ -252,6 +286,10 @@
         "view": "aiSharePoint.usageView",
         "contents": "Copilot Chat is installed, but no Copilot models are available yet — sign in to GitHub (Accounts menu, bottom-left) with an account that has a Copilot subscription or seat.\n[Check Copilot Status](command:aiSharePoint.checkCopilotStatus)",
         "when": "aiSharePoint.copilotChatInstalled && !aiSharePoint.copilotSignedIn"
+      },
+      {
+        "view": "aiSharePoint.sourcesView",
+        "contents": "No reference sources yet. Connect read-only context the assistant can search — Confluence and Jira (Cloud or Data Center) to start; more source types are on the roadmap.\n[Add Context Source](command:aiSharePoint.addContextSource)\nCredentials stay in your OS keychain; every source is strictly read-only with account-lockout protection."
       }
     ],
     "chatParticipants": [
@@ -352,6 +390,78 @@
           "type": "object",
           "properties": {}
         }
+      },
+      {
+        "name": "aisharepoint_list_sources",
+        "displayName": "List Reference Sources",
+        "toolReferenceName": "spSources",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(library)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "List the user's configured read-only reference sources (Confluence, Jira) with type, deployment, and verification state. Use before searching to discover what is available.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "aisharepoint_search_context",
+        "displayName": "Search Reference Sources",
+        "toolReferenceName": "spSearchContext",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(search)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Search a configured read-only reference source. Confluence accepts raw CQL or plain text; Jira accepts raw JQL or plain text. Returns capped, cached results with titles, URLs, and metadata. Pass the source name when several are configured.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Source display name or type. Optional when exactly one source exists."
+            },
+            "query": {
+              "type": "string",
+              "description": "CQL/JQL or free text."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_get_context_item",
+        "displayName": "Get Reference Item",
+        "toolReferenceName": "spContextItem",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(file)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Fetch one item from a reference source with plain-text body: a Confluence page by id, or a Jira issue by key (e.g. ENG-42). Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Source display name or type. Optional when exactly one source exists."
+            },
+            "id": {
+              "type": "string",
+              "description": "Confluence page id or Jira issue key."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
       }
     ],
     "menus": {
@@ -380,6 +490,16 @@
           "command": "aiSharePoint.exportDiagnostics",
           "when": "view == aiSharePoint.supportView",
           "group": "navigation@1"
+        },
+        {
+          "command": "aiSharePoint.addContextSource",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiSharePoint.clearContextCache",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
@@ -432,6 +552,26 @@
           "command": "aiSharePoint.removeSite",
           "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
           "group": "3_manage@3"
+        },
+        {
+          "command": "aiSharePoint.testContextSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.testContextSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.resetSourceLockout",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-locked",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "aiSharePoint.removeContextSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "2_manage@1"
         }
       ],
       "commandPalette": [
@@ -650,6 +790,20 @@
           "scope": "machine",
           "order": 11,
           "markdownDescription": "Git hosts that site repositories may push to (ADR-0019). Add your GitHub Enterprise Server host, e.g. `github.corp.example`. Machine-scoped: workspaces cannot override it."
+        },
+        "aiSharePoint.context.cacheTtlMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 0,
+          "order": 12,
+          "markdownDescription": "How long reference-source results are cached locally (ADR-0011). 0 disables caching."
+        },
+        "aiSharePoint.context.maxResults": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "order": 13,
+          "markdownDescription": "Maximum results per reference-source query (ADR-0012 read-safety cap)."
         }
       }
     }

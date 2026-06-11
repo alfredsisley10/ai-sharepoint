@@ -47,7 +47,7 @@
       secret, circuit-break at 3 consecutive failures, network≠auth), `src/context/cache.ts`
       (ADR-0011 TTL read-through, default 15 min, invalidate), caps policy (ADR-0012: max
       results/bytes/timeout). Unit tests for all three.
-- [ ] **A2. Stores + credentials (vscode).** `src/context/sourcesStore.ts` (non-secret
+- [x] **A2. Stores + credentials (vscode).** `src/context/sourcesStore.ts` (non-secret
       descriptors incl. chosen auth method per ADR-0015, globalState, events; credential wipe
       on remove). Credential JSON in keychain under `context:<id>:credential`.
 - [x] **A3. Adapters: Confluence + Jira (Cloud & Data Center).** `src/context/http.ts` (shared
@@ -55,11 +55,11 @@
       (verify, CQL/text search, get page w/ HTML-stripped excerpt, list spaces),
       `adapters/jira.ts` (verify via /myself, JQL/text search, get issue). Basic (user+token/
       password) + PAT Bearer per ADR-0014. Tests with stubbed fetch.
-- [ ] **A4. Reference Sources view + commands (vscode).** `aiSharePoint.sourcesView` in the
+- [x] **A4. Reference Sources view + commands (vscode).** `aiSharePoint.sourcesView` in the
       container; add/test/remove source commands (verify-on-connect, single attempt —
       lockout-safe; failures recorded through the ADR-0009 tracker). Welcome content.
       Settings: `context.cacheTtlMinutes`, `context.maxResults`.
-- [ ] **A5. Agent tools.** `aisharepoint_list_sources`, `aisharepoint_search_context`,
+- [x] **A5. Agent tools.** `aisharepoint_list_sources`, `aisharepoint_search_context`,
       `aisharepoint_get_context_item` — read-only, cached, cap-enforced, stored-credential only.
       package.json `languageModelTools` entries.
 - [ ] **A6. Docs.** USER_GUIDE sources section, ADMIN_GUIDE endpoints (Atlassian hosts),
@@ -79,3 +79,4 @@
 - 2026-06-11: B1–B3 done (serializer + gates + Graph reads; 12 sync tests, 74 total).
 - 2026-06-11: B4 done (git layer via VS Code Git API, engine, configure/pull/push commands, allowlist setting, menus). B5 docs pending.
 - 2026-06-11: A1+A3 done (lockout tracker, TTL cache, http wrapper, Confluence+Jira adapters; 86 tests). A2/A4/A5 next.
+- 2026-06-11: A2+A4+A5 done (sources store + keychain creds, Reference Sources view, add/test/remove/reset-lockout/clear-cache commands, 3 context LM tools). Docs (A6+B5) + W1 remain.

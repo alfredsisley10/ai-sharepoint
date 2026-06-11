@@ -32,6 +32,17 @@ import {
   commitMessageFor,
   ChangeReport,
 } from "./sync/changeReport";
+import { ContextSourcesStore } from "./context/sourcesStore";
+import { ContextService } from "./context/contextService";
+import { TtlCache } from "./context/cache";
+import {
+  ContextSource,
+  ContextCredential,
+  ContextDeployment,
+  ContextSourceType,
+} from "./context/types";
+import { registerContextTools } from "./chat/contextTools";
+import { SourcesTreeProvider } from "./ui/sourcesView";
 import { UsageStatusBar } from "./ui/statusBar";
 import { SitesTreeProvider } from "./ui/sitesView";
 import { UsageTreeProvider } from "./ui/usageView";
@@ -87,7 +98,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // only signal vscode.lm exposes. Kept current by refreshCopilotState below.
   const copilotState = { chatInstalled: false, signedIn: false };
 
+  const contextSources = new ContextSourcesStore(context.globalState, secrets, nowIso);
+  const contextCache = new TtlCache();
+  const contextService = new ContextService(contextSources, contextCache);
+
   const sitesProvider = new SitesTreeProvider(sites);
+  const sourcesProvider = new SourcesTreeProvider(contextSources);
   const usageProvider = new UsageTreeProvider(
     meter,
     budget,
@@ -98,6 +114,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const sitesView = vscode.window.createTreeView("aiSharePoint.sitesView", {
     treeDataProvider: sitesProvider,
   });
+  const sourcesView = vscode.window.createTreeView("aiSharePoint.sourcesView", {
+    treeDataProvider: sourcesProvider,
+  });
+  context.subscriptions.push(sourcesView, contextSources);
   const usageView = vscode.window.createTreeView("aiSharePoint.usageView", {
     treeDataProvider: usageProvider,
   });
@@ -177,6 +197,7 @@ export function activate(context: vscode.ExtensionContext): void {
       errors,
       nowIso,
     ),
+    ...registerContextTools(contextSources, contextService, telemetry, errors),
   );
 
   // --- Command wrapper: telemetry + central error UX ---------------------
@@ -801,6 +822,145 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   });
 
+  // --- Reference context sources (Track A — PLAN §9) -------------------------
+  register("aiSharePoint.addContextSource", async () => {
+    const typePick = await vscode.window.showQuickPick(
+      [
+        { label: "$(book) Confluence", value: "confluence" as ContextSourceType },
+        { label: "$(issues) Jira", value: "jira" as ContextSourceType },
+      ],
+      { title: "Add Context Source (1/4) — type (read-only reference data)" },
+    );
+    if (!typePick) return;
+    const depPick = await vscode.window.showQuickPick(
+      [
+        { label: "$(cloud) Cloud", description: "*.atlassian.net", value: "cloud" as ContextDeployment },
+        { label: "$(server) Data Center / Server", description: "self-hosted", value: "datacenter" as ContextDeployment },
+      ],
+      { title: "Add Context Source (2/4) — deployment" },
+    );
+    if (!depPick) return;
+    const baseUrl = await vscode.window.showInputBox({
+      title: "Add Context Source (3/4) — base URL",
+      placeHolder:
+        depPick.value === "cloud"
+          ? typePick.value === "confluence"
+            ? "https://yourorg.atlassian.net/wiki"
+            : "https://yourorg.atlassian.net"
+          : `https://${typePick.value}.corp.example`,
+      validateInput: (v) => {
+        try {
+          return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+        } catch {
+          return "Enter a valid https:// URL";
+        }
+      },
+    });
+    if (!baseUrl) return;
+    const credential = await promptContextCredential(typePick.value, depPick.value);
+    if (!credential) return;
+    const trimmedUrl = baseUrl.trim().replace(/\/+$/, "");
+    const displayName =
+      (await vscode.window.showInputBox({
+        title: "Add Context Source (4/4) — display name",
+        value: `${new URL(trimmedUrl).hostname} (${typePick.value})`,
+      })) ?? "";
+    if (!displayName) return;
+
+    const source: ContextSource = {
+      id: crypto.randomUUID(),
+      type: typePick.value,
+      displayName: displayName.trim(),
+      baseUrl: trimmedUrl,
+      deployment: depPick.value,
+      authMethod: credential.method,
+      addedAt: nowIso(),
+    };
+    try {
+      const { account } = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Verifying source…" },
+        () => contextService.verify(source, credential, true),
+      );
+      await contextSources.upsert({ ...source, account, lastVerifiedAt: nowIso() });
+      await contextSources.setCredential(source.id, credential);
+      telemetry.record("context.add", { type: source.type, deployment: source.deployment, method: credential.method });
+      void vscode.window.showInformationMessage(
+        `Connected "${source.displayName}" as ${account} (read-only).`,
+      );
+    } catch (err) {
+      // Nothing was saved — discard the unsaved source's failure record too.
+      await contextSources.resetLockout(source.id);
+      throw err;
+    }
+  });
+
+  register("aiSharePoint.testContextSource", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    const gateNow = contextSources.attemptAllowed(source.id, false);
+    if (!gateNow.allowed && gateNow.reason === "circuit-open") {
+      void vscode.window.showErrorMessage(
+        `"${source.displayName}" is locked out after repeated auth failures (lockout protection). Verify the credential with your administrator, then run "Reset Source Auth Lockout".`,
+      );
+      return;
+    }
+    let credential = await contextSources.getCredential(source.id);
+    let fresh = false;
+    if (!credential || (!gateNow.allowed && gateNow.reason === "credential-bad")) {
+      credential = await promptContextCredential(source.type, source.deployment);
+      if (!credential) return;
+      fresh = true;
+    }
+    const { account } = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Testing ${source.displayName}…` },
+      () => contextService.verify(source, credential!, fresh),
+    );
+    if (fresh) {
+      await contextSources.setCredential(source.id, credential);
+      await contextSources.upsert({ ...contextSources.get(source.id)!, authMethod: credential.method, account });
+    }
+    telemetry.record("context.test");
+    void vscode.window.showInformationMessage(
+      `✓ "${source.displayName}" reachable as ${account}.`,
+    );
+  });
+
+  register("aiSharePoint.removeContextSource", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    const confirm = await vscode.window.showWarningMessage(
+      `Remove "${source.displayName}"? Its stored credential is wiped from the OS keychain and cached results are discarded.`,
+      { modal: true },
+      "Remove Source",
+    );
+    if (confirm === "Remove Source") {
+      await contextSources.remove(source.id);
+      contextCache.invalidateSource(source.id);
+      telemetry.record("context.remove");
+    }
+  });
+
+  register("aiSharePoint.resetSourceLockout", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    const confirm = await vscode.window.showWarningMessage(
+      `Reset the auth-failure lockout for "${source.displayName}"? Only do this after confirming with your administrator that the account is not about to lock — the breaker exists to protect it (ADR-0009).`,
+      { modal: true },
+      "Reset Lockout",
+    );
+    if (confirm === "Reset Lockout") {
+      await contextSources.resetLockout(source.id);
+      void vscode.window.showInformationMessage(
+        "Lockout reset. Run “Test Context Source” to enter a fresh credential.",
+      );
+    }
+  });
+
+  register("aiSharePoint.clearContextCache", () => {
+    contextCache.clear();
+    void vscode.window.showInformationMessage("Cached reference-source results cleared.");
+  });
+
   // --- Diagnostics & support ------------------------------------------------
   register("aiSharePoint.exportDiagnostics", () => exporter.run());
 
@@ -985,6 +1145,85 @@ async function promptNumber(
     },
   });
   return raw === undefined ? undefined : Number(raw);
+}
+
+async function resolveSourceArg(
+  arg: unknown,
+  store: ContextSourcesStore,
+): Promise<ContextSource | undefined> {
+  if (arg && typeof arg === "object" && "id" in arg && "baseUrl" in arg) {
+    return store.get((arg as ContextSource).id) ?? (arg as ContextSource);
+  }
+  const all = store.list();
+  if (all.length === 0) {
+    const add = await vscode.window.showInformationMessage(
+      "No reference sources configured yet.",
+      "Add Context Source",
+    );
+    if (add) {
+      await vscode.commands.executeCommand("aiSharePoint.addContextSource");
+    }
+    return undefined;
+  }
+  if (all.length === 1) return all[0];
+  const pick = await vscode.window.showQuickPick(
+    all.map((s) => ({
+      label: s.displayName,
+      description: `${s.type} · ${s.deployment}`,
+      source: s,
+    })),
+    { title: "Which source?" },
+  );
+  return pick?.source;
+}
+
+async function promptContextCredential(
+  type: ContextSourceType,
+  deployment: ContextDeployment,
+): Promise<ContextCredential | undefined> {
+  let method: ContextCredential["method"];
+  if (deployment === "cloud") {
+    method = "basic"; // Atlassian Cloud: email + API token over Basic
+  } else {
+    const pick = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(key) Personal access token",
+          description: "Recommended for Data Center",
+          value: "pat" as const,
+        },
+        {
+          label: "$(account) Username + password/token (Basic)",
+          description: "Standard-user path (ADR-0014)",
+          value: "basic" as const,
+        },
+      ],
+      { title: "Sign-in method" },
+    );
+    if (!pick) return undefined;
+    method = pick.value;
+  }
+
+  let username: string | undefined;
+  if (method === "basic") {
+    username = await vscode.window.showInputBox({
+      title: deployment === "cloud" ? "Atlassian account email" : "Username",
+      placeHolder: deployment === "cloud" ? "you@yourorg.com" : "jdoe",
+    });
+    if (!username) return undefined;
+  }
+  const secret = await vscode.window.showInputBox({
+    title:
+      method === "pat"
+        ? "Personal access token"
+        : deployment === "cloud"
+          ? `${type === "jira" ? "Jira" : "Confluence"} API token (id.atlassian.com → Security → API tokens)`
+          : "Password or token",
+    password: true,
+    prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+  });
+  if (!secret) return undefined;
+  return { method, username, secret };
 }
 
 function renderPullPreview(
