@@ -80,7 +80,7 @@ export interface ParsedImport {
   warnings: string[];
 }
 
-const SOURCE_TYPES = new Set(["confluence", "jira", "ldap"]);
+const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb"]);
 const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple"]);
 const BOOKMARK_KINDS = new Set(["query", "item", "container"]);
 

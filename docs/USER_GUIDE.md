@@ -265,6 +265,26 @@ domain-joined machine.
   path.
 - **Lockout protection is critical here** — a wrong AD password is the fastest way to lock a
   real account, so the breaker (3 strikes, no auto-retry) applies exactly as above.
+### Databases (SQL Server, PostgreSQL, MySQL, MongoDB)
+
+Reference **read-only** data from enterprise databases (Oracle is excluded for packaging
+reasons — ADR-0022):
+
+- **Add** (Reference Sources → `+`): pick the engine and enter a connection URL with the
+  database name — e.g. `mssql://sqlhost:1433/Sales`, `postgresql://pghost/reporting`,
+  `mysql://myhost/app`, `mongodb://mongo/ops` (`mongodb+srv://` supported). Sign in with a
+  database account — a **least-privilege read-only account is recommended**.
+- **Query from chat**: ask `@sharepoint` to run a `SELECT` (or provide one) — only single,
+  read-only SELECT statements are accepted (write/DDL/EXEC keywords are blocked by a guard,
+  on top of server-side read-only sessions where the engine supports them); MongoDB takes a
+  JSON spec `{"collection": "...", "filter": {...}, "limit": n}`. Results are row-capped
+  (`context.maxResults`) and time-limited.
+- **Browse & Bookmark** lists the database's tables/collections and saves capped sample-row
+  queries as bookmarks — and the agent can propose query bookmarks after exploring
+  (`#spSuggestBookmark`, approval required).
+- **TLS** trusts the OS store and the shared pinned CA bundle setting
+  (`aiSharePoint.ldap.caCertificatesFile` — applies to all non-HTTP sources).
+
 ### Bookmarks: reusable pointers for your initiatives
 
 Save the queues, spaces, filters, and entries you use repeatedly — per source, by name:

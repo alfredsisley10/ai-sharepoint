@@ -4,7 +4,14 @@
  * `context:<sourceId>:credential` and are referenced by id only.
  */
 
-export type ContextSourceType = "confluence" | "jira" | "ldap";
+export type ContextSourceType =
+  | "confluence"
+  | "jira"
+  | "ldap"
+  | "mssql"
+  | "postgres"
+  | "mysql"
+  | "mongodb";
 export type ContextDeployment = "cloud" | "datacenter";
 
 /** Auth method descriptor persisted per source (ADR-0014/0015).

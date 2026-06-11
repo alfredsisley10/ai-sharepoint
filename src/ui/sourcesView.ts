@@ -52,7 +52,13 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     const locked = this.sources.isLockedOut(source.id);
     item.description = `${source.type} · ${source.deployment}${locked ? " · locked" : ""}`;
     const icon =
-      source.type === "jira" ? "issues" : source.type === "ldap" ? "organization" : "book";
+      source.type === "jira"
+        ? "issues"
+        : source.type === "ldap"
+          ? "organization"
+          : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
+            ? "database"
+            : "book";
     item.iconPath = new vscode.ThemeIcon(
       icon,
       locked

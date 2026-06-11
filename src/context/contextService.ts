@@ -15,6 +15,7 @@ import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/lda
 import { listConfluenceSpaces } from "./adapters/confluence";
 import { listJiraProjects, listJiraFavouriteFilters, listJsmQueues } from "./adapters/jira";
 import { ContextBookmark } from "./types";
+import { verifyDb, searchDb, browseDb, DbTlsOptions } from "./db/dbAdapters";
 import { AppError, classifyError } from "../core/errors";
 
 /**
@@ -41,6 +42,13 @@ export class ContextService {
       Math.max(0, vscode.workspace.getConfiguration("aiSharePoint").get<number>("context.cacheTtlMinutes", 15)) * 60_000
     );
   }
+
+  private dbTls(): DbTlsOptions {
+    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    return { caBundlePath: cfg.get<string>("ldap.caCertificatesFile", "").trim() || undefined };
+  }
+
+  private static readonly DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
   private ldapTls(): LdapTlsOptions {
     const cfg = vscode.workspace.getConfiguration("aiSharePoint");
@@ -104,6 +112,9 @@ export class ContextService {
   ): Promise<{ account: string }> {
     const caps = this.caps();
     return this.tracked(source, fresh, () => {
+      if (ContextService.DB_TYPES.has(source.type)) {
+        return verifyDb(source, credential, this.dbTls(), caps);
+      }
       switch (source.type) {
         case "ldap":
           return verifyLdap(source, credential, this.ldapTls(), caps);
@@ -135,6 +146,9 @@ export class ContextService {
       async () => {
         const credential = await this.storedCredential(source);
         return this.tracked(source, false, () => {
+          if (ContextService.DB_TYPES.has(source.type)) {
+            return searchDb(source, credential, query, this.dbTls(), caps);
+          }
           switch (source.type) {
             case "ldap":
               return searchLdap(source, credential, query, this.ldapTls(), caps);
@@ -156,6 +170,12 @@ export class ContextService {
       async () => {
         const credential = await this.storedCredential(source);
         return this.tracked(source, false, () => {
+          if (ContextService.DB_TYPES.has(source.type)) {
+            throw new AppError(
+              "Database sources have no item fetch — use search with a read-only SELECT statement (or a MongoDB JSON spec).",
+              "config",
+            );
+          }
           switch (source.type) {
             case "ldap":
               return getLdapEntry(source, credential, id, this.ldapTls(), caps);
@@ -215,6 +235,9 @@ export class ContextService {
               });
             }
             return out.slice(0, caps.maxResults * 2);
+          }
+          if (ContextService.DB_TYPES.has(source.type)) {
+            return browseDb(source, credential, this.dbTls(), caps);
           }
           return []; // LDAP: search-then-bookmark is the guided path
         });

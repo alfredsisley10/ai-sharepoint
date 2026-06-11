@@ -148,7 +148,7 @@
 | Navigation/theme serialization (D2) | SharePoint REST, different token audience, version-dependent — needs live tenant |
 | 3-way merge editor (Phase 3 remainder) | Needs base-snapshot tracking + merge UX; current preview-gated pull + Git history covers the pilot |
 | Agent-initiated mutations (§8 full) | Deliberate product gate: human-approved commands first; agent drafts, human applies |
-| Remaining §9.2 adapters (Splunk, Intune, Databricks, SQL Server, …) | Each needs live-instance validation; framework seam proven by 4 adapters |
+| Remaining §9.2 adapters (Splunk, Intune, Databricks, Aternity, SignalFx, AppDynamics, Grafana, Azure/O365 consoles, ServiceNow, Workday; Oracle excluded per ADR-0022) | Each needs live-instance validation; framework seam proven by 8 adapters |
 | Multi-workspace switcher (Pillar 7 remainder) | Sharing slice shipped (ADR-0013); switching is UX-heavy, low pilot demand |
 | Local MCP server (ADR-0017 surface 2) | Needs engine floor bump (1.101+) and a child-process secret-handling design; VS Code Copilot already served by LM tools |
 | Auto auth-method probing (ADR-0015 full) | Manual method choice + single lockout-safe verify ships; probing is an optimization |
@@ -167,3 +167,4 @@
 - 2026-06-11: 0.4.1 — LDAP pilot fixes: durable SRV locators (ldaps+srv://, per-connection re-resolution, network-only failover) + OS trust store for LDAPS (system-CA API, Linux bundles, NODE_EXTRA_CA_CERTS, pinned caCertificatesFile setting). ADR-0020 amended. 142 tests.
 - 2026-06-11: 0.5.0 — bookmark discoverability (guided Browse & Bookmark: JSM queues/filters/projects/spaces, search-then-bookmark, inline button) + #spSuggestBookmark agent tool with confirmation-gated persistence. 146 tests.
 - 2026-06-11: 0.5.0 (cont.) — @sharepoint participant gained a real tool-calling loop (was agent-mode-only): reference-source search/aggregation + in-chat bookmark confirmations now work from the participant. 146 tests.
+- 2026-06-11: 0.6.0 — database wave shipped (mssql/postgres/mysql/mongodb, ADR-0022: layered read-only guard, browse-to-bookmark, OS-trust TLS) + self-service GHES allowlisting fix. 154 tests.

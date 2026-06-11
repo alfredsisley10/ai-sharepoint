@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -132,7 +132,7 @@
       },
       {
         "command": "aiSharePoint.addContextSource",
-        "title": "Add Context Source (Confluence/Jira)",
+        "title": "Add Context Source (Confluence/Jira/LDAP/Databases)",
         "category": "AI SharePoint",
         "icon": "$(add)"
       },
@@ -470,7 +470,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Search a configured read-only reference source. Confluence accepts raw CQL or plain text; Jira accepts raw JQL or plain text; LDAP/Active Directory accepts a raw LDAP filter (e.g. \"(mail=*@corp.com)\") or plain text (matched against names, login, and email via AD ANR). Returns capped, cached results. Pass the source name when several are configured. If a query or result proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved).",
+        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -498,7 +498,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Fetch one item from a reference source with plain-text body: a Confluence page by id, a Jira issue by key (e.g. ENG-42), or an LDAP/Active Directory entry by distinguished name (DN). Read-only.",
+        "modelDescription": "Fetch one item from a reference source with plain-text body: a Confluence page by id, a Jira issue by key (e.g. ENG-42), or an LDAP/Active Directory entry by distinguished name (DN). Databases have no item fetch — use search with a SELECT statement instead. Read-only.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1047,6 +1047,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/pg": "^8.20.0",
     "@types/vscode": "^1.95.0",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.24.0",

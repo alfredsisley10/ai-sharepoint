@@ -1114,6 +1114,10 @@ export function activate(context: vscode.ExtensionContext): void {
           description: "auto-discovers domain controllers via DNS",
           value: "ldap" as ContextSourceType,
         },
+        { label: "$(database) SQL Server", description: "read-only SELECT (READ UNCOMMITTED, capped)", value: "mssql" as ContextSourceType },
+        { label: "$(database) PostgreSQL", description: "read-only session, capped", value: "postgres" as ContextSourceType },
+        { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
+        { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
       ],
       { title: "Add Context Source — type (read-only reference data)" },
     );
@@ -1124,12 +1128,35 @@ export function activate(context: vscode.ExtensionContext): void {
     let deployment: ContextDeployment = "datacenter";
     let defaultUpn: string | undefined;
 
+    const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
     if (typePick.value === "ldap") {
       const endpoint = await resolveLdapEndpoint();
       if (!endpoint) return;
       baseUrl = endpoint.baseUrl;
       baseDn = endpoint.baseDn;
       defaultUpn = endpoint.defaultUpn;
+    } else if (DB_TYPES.has(typePick.value)) {
+      const placeholders: Record<string, string> = {
+        mssql: "mssql://sqlhost.corp.example:1433/MyDatabase  (append ?encrypt=false for legacy plaintext)",
+        postgres: "postgresql://pghost.corp.example:5432/mydb  (?ssl=false to disable TLS)",
+        mysql: "mysql://mysqlhost.corp.example:3306/mydb  (?ssl=true to enable TLS)",
+        mongodb: "mongodb://mongo.corp.example:27017/mydb  (mongodb+srv:// supported)",
+      };
+      const url = await vscode.window.showInputBox({
+        title: "Database connection URL (read-only reference access)",
+        placeHolder: placeholders[typePick.value],
+        validateInput: (v) => {
+          try {
+            const u = new URL(v.trim());
+            if (!u.pathname.replace(/^\/+/, "")) return "Include the database name: …/dbname";
+            return undefined;
+          } catch {
+            return "Enter a valid connection URL";
+          }
+        },
+      });
+      if (!url) return;
+      baseUrl = url.trim();
     } else {
       const depPick = await vscode.window.showQuickPick(
         [
@@ -1263,7 +1290,9 @@ export function activate(context: vscode.ExtensionContext): void {
         ? "$(library) Browse spaces"
         : source.type === "jira"
           ? "$(library) Browse queues, favourite filters & projects"
-          : undefined;
+          : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
+            ? "$(database) Browse tables / collections"
+            : undefined;
     const mode = await vscode.window.showQuickPick(
       [
         ...(catalogLabel
@@ -1883,6 +1912,21 @@ async function promptContextCredential(
   defaultUpn?: string,
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
+  if (type === "mssql" || type === "postgres" || type === "mysql" || type === "mongodb") {
+    const username = await vscode.window.showInputBox({
+      title: "Database user (read-only account recommended)",
+      placeHolder: "report_reader",
+      prompt: "Use a least-privilege read account where available (ADR-0022).",
+    });
+    if (!username) return undefined;
+    const secret = await vscode.window.showInputBox({
+      title: "Database password",
+      password: true,
+      prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+    });
+    if (!secret) return undefined;
+    return { method: "basic", username: username.trim(), secret };
+  }
   if (type === "ldap") {
     // LDAP simple bind: UPN / DOMAIN\user / DN + password (ADR-0020).
     const username = await vscode.window.showInputBox({

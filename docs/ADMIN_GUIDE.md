@@ -64,6 +64,7 @@ accordingly.
 |---|---|
 | Reference sources (optional) | Your Atlassian hosts: `*.atlassian.net` (Cloud) and/or internal Confluence/Jira Data Center hosts — read-only REST |
 | Site repository push (optional) | `github.com` and/or your GitHub Enterprise Server host — via the user's own git |
+| Database sources (optional) | Your SQL Server (1433), PostgreSQL (5432), MySQL (3306), MongoDB (27017) hosts — direct TCP, read-only (ADR-0022) |
 
 ### Proxies and TLS inspection (MITM)
 **Every** outbound request the extension makes — Microsoft Graph reads *and* Microsoft Entra
@@ -180,6 +181,17 @@ user's own git** — the extension holds no Git credentials and never force-push
   failures freeze the source until an explicit user reset — designed to stay below typical
   account-lockout thresholds (ADR-0009). This matters most for **Active Directory**, where the
   bind account is a real user account.
+
+### Databases (ADR-0022)
+
+- **Read-only by layered construction**: a strict SQL guard (single SELECT/WITH statement;
+  DML/DDL/EXEC/SELECT-INTO blocked — for SQL Server this guard is the write-barrier since
+  T-SQL has no read-only session), plus server-side read-only sessions (PostgreSQL/MySQL),
+  `READ UNCOMMITTED` + `readOnlyIntent` on MSSQL, `secondaryPreferred` on MongoDB, and row
+  caps/timeouts everywhere. Recommend provisioning **read-only accounts** for users.
+- Auth rejections feed the same lockout breaker as every source; TLS uses the OS trust store
+  plus the shared pinned bundle (`aiSharePoint.ldap.caCertificatesFile`).
+- Oracle is excluded (native-binary driver conflicts with the portable-VSIX rule, ADR-0016).
 
 ### LDAP / Active Directory (ADR-0020)
 

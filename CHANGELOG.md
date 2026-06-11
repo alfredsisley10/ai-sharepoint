@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 — 2026-06-11
+
+The **database wave** of the reference-source matrix (ADR-0022), chosen by the pilot, plus a
+pilot-blocking sync UX fix.
+
+### Added — database context sources (read-only)
+- **SQL Server, PostgreSQL, MySQL, MongoDB** adapters (Oracle excluded: native-binary driver vs
+  the portable-VSIX rule). Connection URLs are non-secret descriptors; credentials live in the
+  keychain; auth rejections feed the lockout breaker.
+- **Read-only by layered construction**: an adversarially-tested SQL guard (single
+  SELECT/WITH; DML/DDL/EXEC/SELECT-INTO/WAITFOR/multi-statement blocked — the write-barrier on
+  SQL Server, which has no read-only session), server-side read-only sessions on
+  PostgreSQL/MySQL, READ UNCOMMITTED + readOnlyIntent on MSSQL, secondaryPreferred + maxTimeMS
+  on MongoDB, row caps and timeouts everywhere. MongoDB reads take a JSON find spec.
+- **Browse & Bookmark for databases**: tables (INFORMATION_SCHEMA) / collections become capped
+  sample-row query bookmarks; `@sharepoint`/agent can query engines via the same search tool
+  and propose bookmarks (approval-gated).
+- TLS for database sockets trusts the OS store + the shared pinned CA bundle; `mongodb+srv://`
+  gives Mongo the durable DNS-locator behavior. Drivers verified pure-JS (native gate: 101
+  packages); optional native probes externalized from the bundle. 8 new tests (154 total).
+
+### Fixed — GHES allowlisting dead-end at configure time
+- Pilot blocker: entering `github.corp.com` failed with "ask your administrator". The egress
+  control is unchanged, but configure-time validation now offers a confirmed one-click
+  **"Allow <host> and Continue"** (updates the machine-scoped allowlist — the same privilege as
+  editing settings manually) plus an **Open Setting** path. Push-time re-validation stays strict.
+
+
 ## 0.5.0 — 2026-06-11
 
 Bookmark discoverability + agent-proposed bookmarks (pilot feedback).
