@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in the extension misbehaves
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! The fastest way to get a fix is to attach an **anonymized
+        diagnostics bundle** — it carries redacted error reports and usage aggregates and is
+        designed to be safe to share publicly (you preview every byte before it's saved, and a
+        leak scan blocks anything secret-shaped).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: Steps to reproduce, expected vs. actual…
+    validations:
+      required: true
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Diagnostics bundle
+      description: |
+        In VS Code run **AI SharePoint: Export Diagnostics Bundle** (scope: *Full* or *Errors
+        only*), review the preview, save, and drag the `.json` file here. If your policy
+        forbids attachments, paste the relevant error entries from the `.md` companion.
+      placeholder: Drag the exported .json here…
+  - type: input
+    id: version
+    attributes:
+      label: Extension / VS Code / OS versions
+      description: Skip if a bundle is attached (it includes them).
+      placeholder: "ai-sharepoint 0.1.0 · VS Code 1.100 · Windows 11 ARM"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Sign-in / authentication
+        - Site connections / Graph reads
+        - Chat (@sharepoint) / agent tools
+        - Usage metering / budget / dashboard
+        - Diagnostics export
+        - Packaging / installation
+        - Other
+    validations:
+      required: true

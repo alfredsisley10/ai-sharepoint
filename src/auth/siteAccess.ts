@@ -1,6 +1,11 @@
-import { SitesStore, SiteConnection } from "./sitesStore";
-import { AuthProviderRegistry } from "./providerRegistry";
+import type { SitesStore, SiteConnection } from "./sitesStore";
+import type { AuthProviderRegistry } from "./providerRegistry";
 import { SharePointClient } from "./sharePointClient";
+
+/** The slices of the store/registry this layer actually uses — keeps the
+ *  module vscode-free at runtime (type-only imports) and unit-testable. */
+type ConnectionSource = Pick<SitesStore, "list">;
+type ProviderFactory = Pick<AuthProviderRegistry, "create">;
 
 /**
  * Shared resolution layer used by commands, chat, and agent tools: turns a
@@ -9,8 +14,8 @@ import { SharePointClient } from "./sharePointClient";
  */
 export class SiteAccess {
   constructor(
-    private readonly sites: SitesStore,
-    private readonly registry: AuthProviderRegistry,
+    private readonly sites: ConnectionSource,
+    private readonly registry: ProviderFactory,
   ) {}
 
   clientFor(conn: SiteConnection, opts?: { silent?: boolean }): SharePointClient {
@@ -43,6 +48,7 @@ export class SiteAccess {
     const m = text.match(
       /https:\/\/[a-z0-9-]+\.sharepoint(?:-df)?\.(?:com|us|cn|de)[^\s"'<>)\]]*/i,
     );
-    return m?.[0];
+    // Trailing sentence punctuation is almost never part of the URL.
+    return m?.[0].replace(/[.,;:!?]+$/, "");
   }
 }

@@ -4,9 +4,14 @@ A Visual Studio Code extension that uses **GitHub Copilot as the AI provider** t
 **SharePoint Online** site development and maintenance, with **Git/GitHub** as the system of
 record for the site's "code."
 
-> Status: **Draft for review.** Sections marked **[Decision]** call out forks that change the
-> architecture and want your input before build. See [`docs/adr/`](./adr) for the long-form
-> rationale behind the load-bearing choices.
+> Status: **Decisions resolved; release 0.1.0 shipped.** 0.1.0 delivers Phases 0–1 plus the
+> first slice of Phases 4/6: cost governor with budget enforcement (§4), MSAL interactive +
+> device-code auth with the Sites view (§5), secret storage incl. log redaction (§6), the
+> `@sharepoint` chat participant + read-only LM tools (§8 surface, read-only), and the
+> diagnostics/telemetry export pipeline (ADR-0018). Sync (§7), provisioning/write tools (§8),
+> the context-source framework (§9), and workspaces (§10) remain roadmap. See
+> [`docs/REVIEW.md`](./REVIEW.md) for the 0.1.0 readiness review and [`docs/adr/`](./adr) for
+> the long-form rationale behind the load-bearing choices.
 
 ---
 

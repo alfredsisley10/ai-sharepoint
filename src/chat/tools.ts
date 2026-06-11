@@ -37,8 +37,12 @@ export function registerLanguageModelTools(
 ): vscode.Disposable[] {
   const guarded = <T>(
     name: string,
+    invocationMessage: string,
     run: (input: T, token: vscode.CancellationToken) => Promise<string>,
   ): vscode.LanguageModelTool<T> => ({
+    prepareInvocation() {
+      return { invocationMessage };
+    },
     async invoke(options, token) {
       telemetry.record("tool.invoke", { tool: name });
       try {
@@ -74,7 +78,7 @@ export function registerLanguageModelTools(
   return [
     vscode.lm.registerTool(
       "aisharepoint_list_connections",
-      guarded<Record<string, never>>("aisharepoint_list_connections", async () => {
+      guarded<Record<string, never>>("aisharepoint_list_connections", "Listing SharePoint connections", async () => {
         const all = sites.list();
         if (all.length === 0) {
           return 'No SharePoint connections configured. The user can add one with "AI SharePoint: Connect SharePoint Site".';
@@ -94,7 +98,7 @@ export function registerLanguageModelTools(
 
     vscode.lm.registerTool(
       "aisharepoint_site_overview",
-      guarded<SiteToolInput>("aisharepoint_site_overview", async (input) => {
+      guarded<SiteToolInput>("aisharepoint_site_overview", "Reading SharePoint site overview", async (input) => {
         const conn = resolveOrExplain(input.site);
         const client = access.clientFor(conn, { silent: true });
         const overview = await client.getSiteOverview(conn.siteUrl);
@@ -126,7 +130,7 @@ export function registerLanguageModelTools(
 
     vscode.lm.registerTool(
       "aisharepoint_list_pages",
-      guarded<SiteToolInput>("aisharepoint_list_pages", async (input) => {
+      guarded<SiteToolInput>("aisharepoint_list_pages", "Listing SharePoint pages", async (input) => {
         const conn = resolveOrExplain(input.site);
         const client = access.clientFor(conn, { silent: true });
         const site = await client.getSite(conn.siteUrl);
@@ -148,7 +152,7 @@ export function registerLanguageModelTools(
 
     vscode.lm.registerTool(
       "aisharepoint_copilot_usage",
-      guarded<Record<string, never>>("aisharepoint_copilot_usage", async () => {
+      guarded<Record<string, never>>("aisharepoint_copilot_usage", "Checking Copilot usage and budget", async () => {
         const verdict = budget.evaluate(0, now());
         return JSON.stringify(
           {

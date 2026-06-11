@@ -5,6 +5,7 @@ import { AppError, adviceFor } from "./core/errors";
 import { redactError } from "./core/redaction";
 import { UsageMeter } from "./copilot/meter";
 import { BudgetGuard, BudgetBlockedError } from "./copilot/budget";
+import { readBudgetConfigFromSettings } from "./copilot/vscodeBudgetConfig";
 import { CopilotService } from "./copilot/copilotService";
 import { AuthProviderRegistry, AUTH_PROVIDERS } from "./auth/providerRegistry";
 import { tenantCacheHandle } from "./auth/msalCache";
@@ -34,7 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const telemetry = new TelemetryService(context.globalState, nowIso);
   const errors = new ErrorReportStore(context.globalState, nowIso);
   const meter = new UsageMeter(context.globalState);
-  const budget = new BudgetGuard(meter);
+  const budget = new BudgetGuard(meter, readBudgetConfigFromSettings);
   const copilot = new CopilotService(meter, budget);
   const sites = new SitesStore(context.globalState, context.workspaceState);
   const registry = new AuthProviderRegistry(secrets, (info) => {

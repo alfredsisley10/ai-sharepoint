@@ -35,7 +35,7 @@ Two-way sync and AI-driven provisioning are on the roadmap (see `docs/PLAN.md`).
 | VS Code **1.95+** | Language Model & Chat APIs |
 | **GitHub Copilot** extension, signed in | All AI features run through *your* Copilot entitlement — the extension has no AI keys of its own |
 | A Microsoft 365 account with SharePoint access | Site features; read permission on the sites you connect |
-| Network access to Microsoft endpoints | See the [Admin Guide](ADMIN_GUIDE.md#network-endpoints) for the exact allowlist |
+| Network access to Microsoft endpoints | See the [Admin Guide](ADMIN_GUIDE.md#3-network-endpoints) for the exact allowlist |
 
 The extension is pure JavaScript — one VSIX runs on macOS, Windows x64, Windows ARM, and Linux.
 
@@ -95,7 +95,7 @@ shared.
 
 > **Tenant blocks the sign-in app?** Some organizations disable the Microsoft first-party app
 > this extension uses by default. Your admin can allow it, or register a custom app and set
-> `aiSharePoint.auth.clientId` — see the [Admin Guide](ADMIN_GUIDE.md#entra-id-options).
+> `aiSharePoint.auth.clientId` — see the [Admin Guide](ADMIN_GUIDE.md#4-entra-id-options).
 
 ## The activity-bar views
 

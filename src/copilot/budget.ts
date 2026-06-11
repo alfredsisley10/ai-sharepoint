@@ -1,8 +1,20 @@
-import * as vscode from "vscode";
-import { UsageMeter } from "./meter";
 import { AppError } from "../core/errors";
 
 export type BudgetMode = "off" | "warn" | "block";
+
+/** Resolved budget configuration (see vscodeBudgetConfig.ts for the
+ *  settings-backed reader; tests inject plain objects). */
+export interface BudgetConfig {
+  allowance: number;
+  mode: BudgetMode;
+  softPct: number;
+  hardPct: number;
+}
+
+/** The slice of the usage meter the guard needs (keeps this module pure). */
+export interface UsageSource {
+  premiumUnitsThisMonth(nowIso: string): number;
+}
 
 export interface BudgetVerdict {
   state: "ok" | "soft" | "hard";
@@ -34,21 +46,17 @@ export class BudgetBlockedError extends AppError {
  * verdicts (notification, chat message, modal override).
  */
 export class BudgetGuard {
-  constructor(private readonly meter: UsageMeter) {}
+  constructor(
+    private readonly usage: UsageSource,
+    private readonly readConfig: () => BudgetConfig,
+  ) {}
 
-  private config() {
-    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
-    const allowance = Math.max(
-      1,
-      cfg.get<number>("copilot.monthlyPremiumRequestAllowance", 300),
-    );
-    const mode = cfg.get<BudgetMode>("budget.mode", "block");
-    const softPct = Math.max(0, cfg.get<number>("budget.softLimitPercent", 80));
-    const hardPct = Math.max(
-      softPct,
-      cfg.get<number>("budget.hardLimitPercent", 100),
-    );
-    return { allowance, mode, softPct, hardPct };
+  private config(): BudgetConfig {
+    const raw = this.readConfig();
+    const allowance = Math.max(1, raw.allowance);
+    const softPct = Math.max(0, raw.softPct);
+    const hardPct = Math.max(softPct, raw.hardPct);
+    return { allowance, mode: raw.mode, softPct, hardPct };
   }
 
   /**
@@ -57,7 +65,7 @@ export class BudgetGuard {
    */
   evaluate(nextUnits: number, nowIso: string): BudgetVerdict {
     const { allowance, mode, softPct, hardPct } = this.config();
-    const usedUnits = this.meter.premiumUnitsThisMonth(nowIso);
+    const usedUnits = this.usage.premiumUnitsThisMonth(nowIso);
     const usedPct = (usedUnits / allowance) * 100;
     const projectedPct = ((usedUnits + nextUnits) / allowance) * 100;
 
