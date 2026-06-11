@@ -99,6 +99,25 @@
   SharePoint write-back via PnPjs (Phase 4/5), 3-way merge + revert (Phase 3), local MCP server
   (engine bump), automatic auth-method probing, remaining §9.2 adapters, workspace scoping.
 
+## Track E — SharePoint write-back slice 1 (ADR-0021)
+
+- [ ] **E1. Desired state + push plan (pure).** `src/sync/desiredState.ts` (repo files →
+      artifacts, tolerant parse w/ warnings), `src/sync/pushPlan.ts` (artifact-level diff →
+      ordered ops: createList/updateList/addColumn/updateColumn/createPage/updatePage;
+      deletions separated + opt-in; system lists protected; lookup/calculated columns →
+      warnings; markdown preview render). Unit tests.
+- [ ] **E2. Graph write client + push engine.** `src/auth/sharePointWriteClient.ts`
+      (Sites.ReadWrite.All + Sites.Manage.All, POST/PATCH/DELETE w/ timeout+429 retry,
+      createList/updateList/createColumn/updateColumn/createPage/updatePage/publishPage/
+      deleteList/deletePage), `src/sync/pushEngine.ts` (freshness gate vs plan base → safety
+      snapshot via pull+commit → sequential apply stop-on-error → re-pull+commit → summary).
+- [ ] **E3. Command + UX.** `aiSharePoint.applyRepoToSharePoint`: managed+repo guards, preview
+      doc, modal confirm, separate deletions opt-in, progress with per-op messages, partial-
+      failure report; manifest (command/menus/palette); chat INSTRUCTIONS updated (write-back
+      exists via explicit command; chat/tools stay read-only).
+- [ ] **E4. Docs + 0.4.0.** USER_GUIDE write-back section, ADMIN_GUIDE consent (Sites.Manage.All)
+      + custom-app permissions, CHANGELOG, version bump, VSIX, CI green.
+
 ## Wrap-up
 
 - [x] **W1.** Version 0.2.0, CHANGELOG consolidation, VSIX rebuild + CI green, state file final
