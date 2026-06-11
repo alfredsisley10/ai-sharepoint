@@ -68,9 +68,11 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
           ? "organization"
           : source.type === "vertexai"
             ? "search"
-            : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
-              ? "database"
-              : "book";
+            : source.type === "powerbi"
+              ? "graph"
+              : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
+                ? "database"
+                : "book";
     item.iconPath = new vscode.ThemeIcon(
       icon,
       locked
@@ -103,7 +105,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
           ? [`| Resolution | DNS SRV on every connection (durable — survives DC changes) |`]
           : []),
         ...(source.baseDn ? [`| Base DN | ${source.baseDn} |`] : []),
-        `| Auth | ${source.authMethod === "pat" ? (source.type === "vertexai" ? "OAuth access token" : "Personal access token") : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : source.authMethod === "ntlm" ? "Windows Authentication (NTLM)" : source.authMethod === "gcloud-sso" ? "Google SSO (live token from the gcloud CLI — never stored)" : "Basic (username + token/password)"} |`,
+        `| Auth | ${source.authMethod === "pat" ? (source.type === "vertexai" ? "OAuth access token" : "Personal access token") : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : source.authMethod === "ntlm" ? "Windows Authentication (NTLM)" : source.authMethod === "gcloud-sso" ? "Google SSO (live token from the gcloud CLI — never stored)" : source.authMethod === "aad-sso" ? "Microsoft 365 SSO (shared with your site sign-in)" : "Basic (username + token/password)"} |`,
         `| Account | ${source.account ?? "_not verified_"} |`,
         `| Verified | ${source.lastVerifiedAt ?? "_never_"} |`,
         ...(bookmarkCount > 0 ? [`| Bookmarks | ${bookmarkCount} |`] : []),

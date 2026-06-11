@@ -150,7 +150,41 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const contextSources = new ContextSourcesStore(context.globalState, secrets, nowIso);
   const contextCache = new TtlCache();
-  const contextService = new ContextService(contextSources, contextCache);
+  // AAD broker for "aad-sso" sources (Power BI): reuses a connected site's
+  // MSAL provider; the stored "secret" is only the provider/cache handles.
+  const aadBroker = async (
+    credential: ContextCredential,
+    interactive: boolean,
+    scopes: string[],
+  ): Promise<string> => {
+    let handles: { providerId?: string; cacheHandle?: string } = {};
+    try {
+      handles = JSON.parse(credential.secret) as typeof handles;
+    } catch {
+      // fall through to the guard below
+    }
+    if (!handles.providerId || !handles.cacheHandle) {
+      throw new AppError(
+        "This source's Microsoft 365 link is incomplete — remove and re-add it.",
+        "auth.failed",
+      );
+    }
+    const provider = registry.create(handles.providerId, handles.cacheHandle);
+    if (!interactive) {
+      const silent = provider.acquireTokenSilent
+        ? await provider.acquireTokenSilent(scopes)
+        : null;
+      if (!silent) {
+        throw new AppError(
+          "Sign-in required for Power BI — run “Test Context Source” on it to sign in.",
+          "auth.failed",
+        );
+      }
+      return silent.token;
+    }
+    return (await provider.acquireToken(scopes)).token;
+  };
+  const contextService = new ContextService(contextSources, contextCache, aadBroker);
   const bookmarks = new BookmarksStore(context.globalState);
   const schemas = new SchemaStore(context.globalStorageUri);
   const schemaIndexer = new SchemaIndexer(copilot, schemas, telemetry, log, nowIso);
@@ -1210,6 +1244,37 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // --- Reference context sources (Track A — PLAN §9) -------------------------
+  /** Power BI credential = pointer to a connected site's Microsoft 365
+   *  sign-in (no secret of its own — ADR-0027). */
+  const pickAadCredential = async (): Promise<ContextCredential | undefined> => {
+    const all = sites.list();
+    if (all.length === 0) {
+      const add = await vscode.window.showInformationMessage(
+        "Power BI uses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
+        "Connect Site",
+      );
+      if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
+      return undefined;
+    }
+    let conn = all.length === 1 ? all[0] : undefined;
+    if (!conn) {
+      const pick = await vscode.window.showQuickPick(
+        all.map((c) => ({
+          label: c.displayName,
+          description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
+          conn: c,
+        })),
+        { ignoreFocusOut: true, title: "Use which Microsoft 365 sign-in for Power BI?" },
+      );
+      if (!pick) return undefined;
+      conn = pick.conn;
+    }
+    return {
+      method: "aad-sso",
+      secret: JSON.stringify({ providerId: conn.authProviderId, cacheHandle: conn.cacheHandle }),
+    };
+  };
+
   register("aiSharePoint.addContextSource", async () => {
     const typePick = await vscode.window.showQuickPick(
       [
@@ -1225,6 +1290,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
         { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
         { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
+        { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
       ],
       { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );
@@ -1320,6 +1386,19 @@ export function activate(context: vscode.ExtensionContext): void {
         database: database.trim(),
         trustServerCertificate: certPick.value,
       });
+    } else if (typePick.value === "powerbi") {
+      deployment = "cloud";
+      baseUrl = "https://api.powerbi.com/v1.0/myorg";
+      const defaultDataset = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Power BI — default dataset (optional)",
+        placeHolder: "dataset name or GUID — lets chat run bare DAX without a JSON spec (Enter to skip)",
+        prompt: "Browse & Bookmark lists every visible dataset either way.",
+      });
+      if (defaultDataset === undefined) return;
+      if (defaultDataset.trim()) {
+        baseUrl += `?dataset=${encodeURIComponent(defaultDataset.trim())}`;
+      }
     } else if (typePick.value === "vertexai") {
       // Field-by-field like the SQL Server wizard; pasting the full
       // serving-config URL into the first box short-circuits the rest.
@@ -1423,7 +1502,10 @@ export function activate(context: vscode.ExtensionContext): void {
       baseUrl = url.trim().replace(/\/+$/, "");
     }
 
-    const credential = await promptContextCredential(typePick.value, deployment, defaultUpn);
+    const credential =
+      typePick.value === "powerbi"
+        ? await pickAadCredential()
+        : await promptContextCredential(typePick.value, deployment, defaultUpn);
     if (!credential) return;
     const hostLabel = (() => {
       try {
@@ -1492,7 +1574,10 @@ export function activate(context: vscode.ExtensionContext): void {
     let credential = await contextSources.getCredential(source.id);
     let fresh = false;
     if (!credential || (!gateNow.allowed && gateNow.reason === "credential-bad")) {
-      credential = await promptContextCredential(source.type, source.deployment);
+      credential =
+        source.type === "powerbi"
+          ? await pickAadCredential()
+          : await promptContextCredential(source.type, source.deployment);
       if (!credential) return;
       fresh = true;
     }

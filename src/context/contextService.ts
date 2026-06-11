@@ -24,8 +24,24 @@ import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
 import { verifyDb, searchDb, browseDb, describeDb, DbTlsOptions } from "./db/dbAdapters";
 import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
+import {
+  verifyPowerBi,
+  searchPowerBi,
+  browsePowerBi,
+  PowerBiTokenGetter,
+  POWERBI_SCOPES,
+} from "./adapters/powerbi";
 import { SchemaCatalog } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
+
+/** AAD token acquisition for sources that reuse the extension's Microsoft
+ *  365 sign-in (method "aad-sso") — implemented by the extension layer,
+ *  which owns the MSAL provider registry. */
+export type AadTokenBroker = (
+  credential: ContextCredential,
+  interactive: boolean,
+  scopes: string[],
+) => Promise<string>;
 
 /**
  * One façade over all adapters: lockout gating (ADR-0009) before every
@@ -36,7 +52,19 @@ export class ContextService {
   constructor(
     private readonly store: ContextSourcesStore,
     private readonly cache: TtlCache,
+    private readonly aadBroker?: AadTokenBroker,
   ) {}
+
+  private powerBiTokens(credential: ContextCredential): PowerBiTokenGetter {
+    const broker = this.aadBroker;
+    if (!broker) {
+      throw new AppError(
+        "Power BI sources need the extension's Microsoft 365 sign-in (unavailable in this context).",
+        "config",
+      );
+    }
+    return (interactive) => broker(credential, interactive, POWERBI_SCOPES);
+  }
 
   caps(): ReadCaps {
     const cfg = vscode.workspace.getConfiguration("aiSharePoint");
@@ -131,6 +159,8 @@ export class ContextService {
           return verifyJira(source, credential, caps);
         case "vertexai":
           return verifyVertex(source, credential, caps);
+        case "powerbi":
+          return verifyPowerBi(this.powerBiTokens(credential), caps);
         default:
           return verifyConfluence(source, credential, caps);
       }
@@ -167,6 +197,8 @@ export class ContextService {
               return searchJira(source, credential, query, caps);
             case "vertexai":
               return searchVertex(source, credential, query, caps);
+            case "powerbi":
+              return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
             default:
               return searchConfluence(source, credential, query, caps);
           }
@@ -192,6 +224,12 @@ export class ContextService {
           if (source.type === "vertexai") {
             throw new AppError(
               "Vertex AI Search has no item fetch — use search, or the vertex_answer tool for a grounded answer.",
+              "config",
+            );
+          }
+          if (source.type === "powerbi") {
+            throw new AppError(
+              'Power BI has no item fetch — use search with {"dataset": "...", "dax": "EVALUATE …"}.',
               "config",
             );
           }
@@ -361,6 +399,9 @@ export class ContextService {
           }
           if (ContextService.DB_TYPES.has(source.type)) {
             return browseDb(source, credential, this.dbTls(), caps);
+          }
+          if (source.type === "powerbi") {
+            return browsePowerBi(this.powerBiTokens(credential), caps);
           }
           return []; // LDAP: search-then-bookmark is the guided path
         });

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0 — 2026-06-11
+
+### Added — Power BI (cloud) connector (ADR-0027)
+- New reference source: **Power BI** workspaces & datasets with **read-only DAX analysis**
+  (`executeQueries`). Chat/bookmark queries take `{"dataset": "<id or name>", "dax":
+  "EVALUATE …"}` — datasets resolve by **name** against what your account can see (a typo
+  lists the visible inventory); with a default dataset configured, bare DAX works too.
+- **No new credential**: Power BI reuses your **Microsoft 365 sign-in** from a connected
+  SharePoint site (`aad-sso` — the keychain holds only provider handles, no secret).
+  Delegated read-only scopes (`Workspace.Read.All`, `Dataset.Read.All`); your Power BI
+  licenses/roles/RLS apply server-side as always.
+- **Browse & Bookmark** lists every visible dataset (My workspace + group workspaces) with a
+  starter `EVALUATE INFO.TABLES()` bookmark — the discovery step before real DAX. DAX is
+  gated (`EVALUATE`/`DEFINE` only, size-bounded) and results are row-capped like every source.
+
+
 ## 0.7.0 — 2026-06-11
 
 ### Added — database schema preload + Copilot semantic indexing (ADR-0024)

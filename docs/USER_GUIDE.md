@@ -355,6 +355,20 @@ Connect your organization's **Vertex AI Search** app (the enterprise Gemini sear
   the `#spVertexAnswer` tool returns a **Gemini-grounded answer with citations** from your
   corpus (*"@sharepoint ask Vertex what our data-retention policy says"*).
 
+### Power BI (cloud)
+
+Analyze Power BI data without leaving chat — **read-only, with your existing sign-in**:
+
+- **Add** (Reference Sources → `+` → *Power BI (cloud)*): no URL and **no new credential** —
+  it reuses the Microsoft 365 sign-in of a connected SharePoint site (pick which, if you have
+  several). Optionally set a **default dataset** so chat can run bare DAX.
+- **Browse & Bookmark** lists every dataset you can see (My workspace + group workspaces),
+  each with a starter `EVALUATE INFO.TABLES()` bookmark that reveals the model's tables.
+- **Analyze in chat**: *"@sharepoint run EVALUATE TOPN(20, 'Sales') against the Sales Model
+  dataset"* — queries are `{"dataset": "<name or id>", "dax": "EVALUATE …"}` under the hood,
+  DAX-only (read-only by API design), row-capped, and your Power BI licenses, workspace roles,
+  and row-level security apply exactly as in the service.
+
 ## Communications: Teams & Outlook drafts you approve
 
 Have findings reach people — **without the assistant ever sending anything itself**:

@@ -12,14 +12,17 @@ export type ContextSourceType =
   | "postgres"
   | "mysql"
   | "mongodb"
-  | "vertexai";
+  | "vertexai"
+  | "powerbi";
 export type ContextDeployment = "cloud" | "datacenter";
 
 /** Auth method descriptor persisted per source (ADR-0014/0015).
  *  ldap-simple = LDAP simple bind; ntlm = Windows Authentication (MSSQL);
  *  gcloud-sso = live token from the gcloud CLI's Google SSO session
- *  (nothing persisted — the keychain entry is a marker). */
-export type ContextAuthMethod = "basic" | "pat" | "ldap-simple" | "ntlm" | "gcloud-sso";
+ *  (nothing persisted — the keychain entry is a marker);
+ *  aad-sso = Microsoft 365 sign-in reused from a connected site (the
+ *  keychain entry stores only the provider/cache handles, no secret). */
+export type ContextAuthMethod = "basic" | "pat" | "ldap-simple" | "ntlm" | "gcloud-sso" | "aad-sso";
 
 export interface ContextSource {
   /** Stable random id; also keys the keychain credential entry. */
