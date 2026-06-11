@@ -5,6 +5,11 @@ on:
     branches: ["main", "claude/**"]
   pull_request:
 
+# upload-artifact still declares a Node 20 runtime; opt all JS actions into
+# Node 24 ahead of GitHub's 2026-06-16 default flip so breakage surfaces now.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     runs-on: ubuntu-latest
