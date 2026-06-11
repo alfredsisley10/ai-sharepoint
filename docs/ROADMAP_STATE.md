@@ -126,6 +126,14 @@
       "undo the undo", reconcile). Write-back flow extracted to one pipeline used by both
       Apply Repository and Revert (writeBackPreflight + runWriteBackFlow).
 
+## Track G — Reference-config sharing (ADR-0013 slice) — DONE
+
+- [x] **G1.** Secret-free export/import of sources + bookmarks: explicit field allowlist
+      (no ids/accounts/credentials — no keychain code path by construction), leak-scan before
+      write, preview + confirm, JSON schema-validated import with id regeneration, bookmark
+      remap by source name, name-collision skip, re-verify-with-own-credentials guidance.
+      5 unit tests incl. forbidden-key and leak-scan assertions.
+
 ## Wrap-up
 
 - [x] **W1.** Version 0.2.0, CHANGELOG consolidation, VSIX rebuild + CI green, state file final

@@ -164,6 +164,18 @@
         "icon": "$(search)"
       },
       {
+        "command": "aiSharePoint.exportReferenceConfig",
+        "title": "Export Reference Config (secret-free)…",
+        "category": "AI SharePoint",
+        "icon": "$(export)"
+      },
+      {
+        "command": "aiSharePoint.importReferenceConfig",
+        "title": "Import Reference Config…",
+        "category": "AI SharePoint",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "aiSharePoint.addBookmark",
         "title": "Add Bookmark",
         "category": "AI SharePoint",
@@ -579,6 +591,16 @@
           "command": "aiSharePoint.discoverActiveDirectory",
           "when": "view == aiSharePoint.sourcesView",
           "group": "navigation@3"
+        },
+        {
+          "command": "aiSharePoint.exportReferenceConfig",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "1_share@1"
+        },
+        {
+          "command": "aiSharePoint.importReferenceConfig",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "1_share@2"
         }
       ],
       "view/item/context": [

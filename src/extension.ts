@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import * as os from "node:os";
+import * as path from "node:path";
 import { SecretStore } from "./secrets/secretStore";
 import { Logger } from "./core/log";
 import { AppError, adviceFor } from "./core/errors";
@@ -47,6 +49,8 @@ import {
   ContextSourceType,
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
+import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
+import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { ContextBookmark } from "./context/types";
 import { discoverActiveDirectory } from "./context/ldap/discoveryHost";
@@ -1298,6 +1302,83 @@ export function activate(context: vscode.ExtensionContext): void {
   register("aiSharePoint.clearContextCache", () => {
     contextCache.clear();
     void vscode.window.showInformationMessage("Cached reference-source results cleared.");
+  });
+
+  register("aiSharePoint.exportReferenceConfig", async () => {
+    const all = contextSources.list();
+    if (all.length === 0 && bookmarks.list().length === 0) {
+      void vscode.window.showInformationMessage("No reference sources or bookmarks to export.");
+      return;
+    }
+    const exportDoc = buildReferenceExport(all, bookmarks.list(), nowIso());
+    const json = JSON.stringify(exportDoc, null, 2);
+    // Defense in depth (ADR-0013): the builder is secret-free by construction;
+    // the scan refuses to write if anything credential-shaped slipped through.
+    const blockers = scanForLeaks(json).filter((f) => f.severity === "block");
+    if (blockers.length > 0) {
+      void vscode.window.showErrorMessage(
+        `Export blocked by the safety scan (${blockers.map((f) => f.pattern).join(", ")}). Nothing was written.`,
+      );
+      return;
+    }
+    const preview = await vscode.workspace.openTextDocument({ language: "json", content: json });
+    await vscode.window.showTextDocument(preview, { preview: true });
+    const confirm = await vscode.window.showInformationMessage(
+      `Export ${exportDoc.sources.length} source(s) and ${exportDoc.bookmarks.length} bookmark(s)? The file contains descriptors and bookmarks only — no credentials or accounts; recipients sign in with their own.`,
+      { modal: true },
+      "Save Reference Config…",
+    );
+    if (!confirm) return;
+    const stamp = nowIso().replace(/[-:]/g, "").slice(0, 13);
+    const target = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(
+        path.join(os.homedir(), `ai-sharepoint-reference-config-${stamp}.json`),
+      ),
+      filters: { "Reference config (JSON)": ["json"] },
+    });
+    if (!target) return;
+    await vscode.workspace.fs.writeFile(target, Buffer.from(json, "utf8"));
+    telemetry.record("context.exportConfig", { sources: exportDoc.sources.length });
+    void vscode.window.showInformationMessage("Reference config exported (secret-free).");
+  });
+
+  register("aiSharePoint.importReferenceConfig", async () => {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      filters: { "Reference config (JSON)": ["json"] },
+      title: "Import reference config (sources + bookmarks, no credentials)",
+    });
+    if (!picked?.[0]) return;
+    const json = Buffer.from(await vscode.workspace.fs.readFile(picked[0])).toString("utf8");
+    const parsed = parseReferenceImport(json, nowIso(), () => crypto.randomUUID());
+
+    const existingNames = new Set(contextSources.list().map((s) => s.displayName.toLowerCase()));
+    const fresh = parsed.sources.filter((s) => !existingNames.has(s.displayName.toLowerCase()));
+    const skipped = parsed.sources.length - fresh.length;
+    if (fresh.length === 0 && parsed.bookmarks.length === 0) {
+      void vscode.window.showWarningMessage(
+        `Nothing to import${skipped ? ` (${skipped} source(s) already exist by name)` : ""}.`,
+      );
+      return;
+    }
+    const freshIds = new Set(fresh.map((s) => s.id));
+    const freshBookmarks = parsed.bookmarks.filter((b) => freshIds.has(b.sourceId));
+    const confirm = await vscode.window.showInformationMessage(
+      `Import ${fresh.length} source(s) and ${freshBookmarks.length} bookmark(s)?${skipped ? ` ${skipped} source(s) skipped (same name already configured).` : ""} Credentials are NOT included — verify each source with your own sign-in afterwards.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) were skipped as malformed.` : ""}`,
+      { modal: true },
+      "Import",
+    );
+    if (!confirm) return;
+    for (const s of fresh) {
+      await contextSources.upsert(s);
+    }
+    for (const b of freshBookmarks) {
+      await bookmarks.add(b);
+    }
+    telemetry.record("context.importConfig", { sources: fresh.length, bookmarks: freshBookmarks.length });
+    void vscode.window.showInformationMessage(
+      `Imported ${fresh.length} source(s) and ${freshBookmarks.length} bookmark(s). Run “Test Context Source” on each to sign in (lockout-safe single verify).`,
+    );
   });
 
   register("aiSharePoint.discoverActiveDirectory", async () => {
