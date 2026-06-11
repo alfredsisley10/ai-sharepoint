@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e3a8a"/>
+      <stop offset="1" stop-color="#0891b2"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="400" rx="16" fill="#111827"/>
+  <!-- Copilot node -->
+  <rect x="56" y="150" width="150" height="100" rx="14" fill="#1f2937" stroke="#374151"/>
+  <path d="M131 168 Q134.5 184 150 187.5 Q134.5 191 131 207 Q127.5 191 112 187.5 Q127.5 184 131 168 Z" fill="#e5e7eb"/>
+  <text x="131" y="232" font-family="system-ui,sans-serif" font-size="15" fill="#9ca3af" text-anchor="middle">GitHub Copilot</text>
+  <!-- arrow -->
+  <path d="M214 200 H266" stroke="#4b5563" stroke-width="3" stroke-linecap="round"/>
+  <path d="M260 192 L272 200 L260 208" fill="none" stroke="#4b5563" stroke-width="3" stroke-linecap="round"/>
+  <!-- LM API node -->
+  <rect x="280" y="150" width="150" height="100" rx="14" fill="#1f2937" stroke="#374151"/>
+  <text x="355" y="195" font-family="ui-monospace,monospace" font-size="15" fill="#93c5fd" text-anchor="middle">vscode.lm</text>
+  <text x="355" y="218" font-family="system-ui,sans-serif" font-size="13" fill="#9ca3af" text-anchor="middle">your entitlement</text>
+  <!-- arrow -->
+  <path d="M438 200 H490" stroke="#4b5563" stroke-width="3" stroke-linecap="round"/>
+  <path d="M484 192 L496 200 L484 208" fill="none" stroke="#4b5563" stroke-width="3" stroke-linecap="round"/>
+  <!-- AI SharePoint node -->
+  <rect x="504" y="150" width="92" height="100" rx="14" fill="url(#bg)"/>
+  <rect x="522" y="186" width="20" height="20" rx="5" fill="#f3f4f6"/>
+  <rect x="548" y="186" width="20" height="20" rx="5" fill="#cbd5e1"/>
+  <rect x="522" y="212" width="20" height="20" rx="5" fill="#e2e8f0"/>
+  <rect x="548" y="212" width="20" height="20" rx="5" fill="#f3f4f6"/>
+  <path d="M558 162 Q559.8 170.2 568 172 Q559.8 173.8 558 182 Q556.2 173.8 548 172 Q556.2 170.2 558 162 Z" fill="#fff"/>
+  <!-- caption -->
+  <text x="320" y="80" font-family="system-ui,sans-serif" font-size="22" font-weight="600" fill="#f9fafb" text-anchor="middle">Your Copilot. Your entitlement. No extra keys.</text>
+  <text x="320" y="108" font-family="system-ui,sans-serif" font-size="14" fill="#9ca3af" text-anchor="middle">Every request is routed through the official VS Code Language Model API</text>
+  <!-- meter chip -->
+  <rect x="232" y="300" width="176" height="40" rx="20" fill="#1f2937" stroke="#374151"/>
+  <circle cx="258" cy="320" r="8" fill="none" stroke="#22d3ee" stroke-width="3"/>
+  <text x="276" y="325" font-family="system-ui,sans-serif" font-size="14" fill="#e5e7eb">metered &amp; budgeted</text>
+</svg>

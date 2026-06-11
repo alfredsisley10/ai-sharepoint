@@ -1,20 +1,53 @@
 {
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
-  "description": "Manage SharePoint Online sites with GitHub Copilot as the AI provider.",
-  "version": "0.0.1",
+  "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
+  "version": "0.1.0",
   "publisher": "alfredsisley10",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#16243a",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/alfredsisley10/ai-sharepoint.git"
+  },
+  "bugs": {
+    "url": "https://github.com/alfredsisley10/ai-sharepoint/issues"
   },
   "engines": {
     "vscode": "^1.95.0"
   },
   "categories": [
-    "Other",
-    "AI"
+    "AI",
+    "Chat",
+    "Other"
   ],
+  "keywords": [
+    "sharepoint",
+    "copilot",
+    "microsoft 365",
+    "governance",
+    "enterprise",
+    "graph"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Authentication settings (authority, client ID, authority allowlist) are machine-scoped and cannot be overridden by workspace settings in untrusted workspaces.",
+      "restrictedConfigurations": [
+        "aiSharePoint.auth.tenantAuthority",
+        "aiSharePoint.auth.clientId",
+        "aiSharePoint.auth.additionalAuthorityHosts"
+      ]
+    }
+  },
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished"
@@ -22,24 +55,428 @@
   "contributes": {
     "commands": [
       {
+        "command": "aiSharePoint.connectSite",
+        "title": "Connect SharePoint Site",
+        "category": "AI SharePoint",
+        "icon": "$(add)"
+      },
+      {
+        "command": "aiSharePoint.testConnection",
+        "title": "Test Site Connection",
+        "category": "AI SharePoint",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "aiSharePoint.openSiteInBrowser",
+        "title": "Open Site in Browser",
+        "category": "AI SharePoint",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "aiSharePoint.copySiteUrl",
+        "title": "Copy Site URL",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.changeSiteRole",
+        "title": "Change Connection Role (managed/reference)",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.signOutSite",
+        "title": "Sign Out of Site (wipe cached credentials)",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.removeSite",
+        "title": "Remove Site Connection",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.refreshSites",
+        "title": "Refresh Sites View",
+        "category": "AI SharePoint",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "aiSharePoint.listModels",
-        "title": "AI SharePoint: List Copilot Models"
+        "title": "List Copilot Models (relative cost)",
+        "category": "AI SharePoint",
+        "icon": "$(circuit-board)"
       },
       {
         "command": "aiSharePoint.askCopilot",
-        "title": "AI SharePoint: Ask Copilot (metered)"
-      },
-      {
-        "command": "aiSharePoint.connectSite",
-        "title": "AI SharePoint: Connect SharePoint Site"
+        "title": "Ask Copilot (metered)",
+        "category": "AI SharePoint",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "aiSharePoint.showUsage",
-        "title": "AI SharePoint: Show Copilot Usage"
+        "title": "Show Usage Dashboard",
+        "category": "AI SharePoint",
+        "icon": "$(dashboard)"
       },
       {
         "command": "aiSharePoint.resetUsage",
-        "title": "AI SharePoint: Reset Copilot Usage Meter"
+        "title": "Reset Copilot Usage Meter",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.setBudget",
+        "title": "Set Copilot Budget",
+        "category": "AI SharePoint",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "aiSharePoint.openBudgetSettings",
+        "title": "Open Budget Settings",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.exportDiagnostics",
+        "title": "Export Diagnostics Bundle (anonymized)",
+        "category": "AI SharePoint",
+        "icon": "$(export)"
+      },
+      {
+        "command": "aiSharePoint.showErrorReports",
+        "title": "Show Error Reports",
+        "category": "AI SharePoint",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "aiSharePoint.clearErrorReports",
+        "title": "Clear Error Reports",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.rotateAnonymousId",
+        "title": "Rotate Anonymous Install ID",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.openLogs",
+        "title": "Open Extension Logs",
+        "category": "AI SharePoint",
+        "icon": "$(output)"
+      },
+      {
+        "command": "aiSharePoint.openUserGuide",
+        "title": "Open User Guide",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.openPrivacyNotice",
+        "title": "Open Privacy & Data Notice",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.openWalkthrough",
+        "title": "Open Getting Started Walkthrough",
+        "category": "AI SharePoint"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiSharePoint",
+          "title": "AI SharePoint",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "aiSharePoint": [
+        {
+          "id": "aiSharePoint.sitesView",
+          "name": "Sites",
+          "icon": "media/activity-icon.svg",
+          "contextualTitle": "SharePoint Sites"
+        },
+        {
+          "id": "aiSharePoint.usageView",
+          "name": "Usage & Budget",
+          "icon": "media/activity-icon.svg",
+          "contextualTitle": "Copilot Usage & Budget"
+        },
+        {
+          "id": "aiSharePoint.supportView",
+          "name": "Support & Diagnostics",
+          "icon": "media/activity-icon.svg",
+          "contextualTitle": "Support & Diagnostics"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "aiSharePoint.sitesView",
+        "contents": "No SharePoint sites connected yet.\n[Connect a Site](command:aiSharePoint.connectSite)\nSign in with your Microsoft account — browser or device-code. Commercial, GCC High (.us) and 21Vianet (.cn) clouds are supported.\nCredentials are stored only in your OS keychain. [Privacy & data notice](command:aiSharePoint.openPrivacyNotice)",
+        "when": "!aiSharePoint.hasSites"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "aiSharePoint.sharepoint",
+        "name": "sharepoint",
+        "fullName": "SharePoint",
+        "description": "Ask about your SharePoint sites, plans, and Copilot usage",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "site",
+            "description": "Live overview of a connected site (lists, pages)"
+          },
+          {
+            "name": "sites",
+            "description": "List your configured site connections"
+          },
+          {
+            "name": "usage",
+            "description": "This extension's Copilot usage vs. your budget"
+          },
+          {
+            "name": "help",
+            "description": "How to use @sharepoint"
+          }
+        ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "aisharepoint_list_connections",
+        "displayName": "List SharePoint Connections",
+        "toolReferenceName": "spConnections",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(plug)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "List the user's configured SharePoint site connections (name, URL, role, verified). Read-only. Use it to discover which sites are available before other SharePoint tools.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "aisharepoint_site_overview",
+        "displayName": "SharePoint Site Overview",
+        "toolReferenceName": "spSiteOverview",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(cloud)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Get a live, read-only overview of a connected SharePoint site: title, description, lists/libraries, and modern pages. Pass the site URL or display name; omit it if only one connection exists.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Site URL or display name of a configured connection. Optional when exactly one connection exists."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_list_pages",
+        "displayName": "List SharePoint Pages",
+        "toolReferenceName": "spPages",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(files)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "List the modern pages of a connected SharePoint site (title, URL, last modified). Read-only. Pass the site URL or display name; omit it if only one connection exists.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Site URL or display name of a configured connection. Optional when exactly one connection exists."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_copilot_usage",
+        "displayName": "Copilot Usage & Budget",
+        "toolReferenceName": "spUsage",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(graph-line)",
+        "tags": [
+          "sharepoint",
+          "usage"
+        ],
+        "modelDescription": "Report this extension's metered Copilot usage versus the user's configured monthly allowance and budget caps. Values are local estimates, not the GitHub bill.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "aiSharePoint.connectSite",
+          "when": "view == aiSharePoint.sitesView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiSharePoint.refreshSites",
+          "when": "view == aiSharePoint.sitesView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aiSharePoint.showUsage",
+          "when": "view == aiSharePoint.usageView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiSharePoint.setBudget",
+          "when": "view == aiSharePoint.usageView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aiSharePoint.exportDiagnostics",
+          "when": "view == aiSharePoint.supportView",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "aiSharePoint.testConnection",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.openSiteInBrowser",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
+          "group": "inline@2"
+        },
+        {
+          "command": "aiSharePoint.testConnection",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.copySiteUrl",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "aiSharePoint.changeSiteRole",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
+          "group": "2_manage@1"
+        },
+        {
+          "command": "aiSharePoint.signOutSite",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
+          "group": "2_manage@2"
+        },
+        {
+          "command": "aiSharePoint.removeSite",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
+          "group": "2_manage@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "aiSharePoint.refreshSites",
+          "when": "false"
+        },
+        {
+          "command": "aiSharePoint.openSiteInBrowser",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.copySiteUrl",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.changeSiteRole",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.signOutSite",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.removeSite",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.testConnection",
+          "when": "aiSharePoint.hasSites"
+        }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "aiSharePoint.gettingStarted",
+        "title": "Get started with AI SharePoint",
+        "description": "Connect a site, chat with @sharepoint, stay in control of Copilot spend, and know exactly what leaves your machine (nothing, unless you export it).",
+        "steps": [
+          {
+            "id": "installCopilot",
+            "title": "Install GitHub Copilot",
+            "description": "AI features run through your own Copilot entitlement via the VS Code Language Model API — no extra keys, nothing routed through third parties.\n[Install GitHub Copilot](command:workbench.extensions.search?%22GitHub.copilot%22)",
+            "media": {
+              "image": "media/walkthrough/copilot.svg",
+              "altText": "Copilot powers AI SharePoint through your own entitlement"
+            },
+            "completionEvents": [
+              "extensionInstalled:GitHub.copilot"
+            ]
+          },
+          {
+            "id": "connectSite",
+            "title": "Connect a SharePoint site",
+            "description": "Sign in with your Microsoft account (browser or device-code) and connect a site as **managed** or read-only **reference**. Credentials are cached only in your OS keychain.\n[Connect a Site](command:aiSharePoint.connectSite)",
+            "media": {
+              "image": "media/walkthrough/connect.svg",
+              "altText": "Connect a SharePoint site"
+            },
+            "completionEvents": [
+              "onCommand:aiSharePoint.connectSite"
+            ]
+          },
+          {
+            "id": "chat",
+            "title": "Chat with @sharepoint",
+            "description": "Ask **@sharepoint** about your sites in the Chat view — try `/site` for a live overview. In agent mode, Copilot can call the read-only `#spSiteOverview`, `#spPages`, `#spConnections` and `#spUsage` tools itself.\n[Open Chat](command:workbench.action.chat.open?%22%40sharepoint%20%2Fhelp%22)",
+            "media": {
+              "image": "media/walkthrough/chat.svg",
+              "altText": "Chat with @sharepoint"
+            },
+            "completionEvents": [
+              "onCommand:workbench.action.chat.open"
+            ]
+          },
+          {
+            "id": "budget",
+            "title": "Stay in control of Copilot spend",
+            "description": "Every request is metered against your monthly premium-request allowance. The status-bar gauge turns yellow at the soft cap and red at the hard cap, which blocks further requests until you override or raise it.\n[Set Your Budget](command:aiSharePoint.setBudget)\n[Open Usage Dashboard](command:aiSharePoint.showUsage)",
+            "media": {
+              "image": "media/walkthrough/budget.svg",
+              "altText": "Budget gauge and caps"
+            },
+            "completionEvents": [
+              "onCommand:aiSharePoint.setBudget"
+            ]
+          },
+          {
+            "id": "diagnostics",
+            "title": "Diagnostics that respect your enterprise",
+            "description": "Usage counters and redacted error reports are stored **locally only**. When you need support, export an **anonymized bundle** — previewed and leak-scanned before a single byte is written.\n[Export Diagnostics Bundle](command:aiSharePoint.exportDiagnostics)\n[Privacy & Data Notice](command:aiSharePoint.openPrivacyNotice)",
+            "media": {
+              "image": "media/walkthrough/diagnostics.svg",
+              "altText": "Anonymized diagnostics export"
+            },
+            "completionEvents": [
+              "onCommand:aiSharePoint.exportDiagnostics"
+            ]
+          }
+        ]
       }
     ],
     "configuration": {
@@ -48,12 +485,91 @@
         "aiSharePoint.copilot.monthlyPremiumRequestAllowance": {
           "type": "number",
           "default": 300,
-          "markdownDescription": "Your monthly Copilot premium-request allowance, used as the denominator of the usage gauge. This is a fallback when the allowance cannot be read automatically. See ADR-0003."
+          "minimum": 1,
+          "order": 1,
+          "markdownDescription": "Your monthly Copilot premium-request allowance — the denominator of the usage gauge. A fallback for when the allowance cannot be read automatically (ADR-0003)."
+        },
+        "aiSharePoint.copilot.preferredModelFamily": {
+          "type": "string",
+          "default": "",
+          "order": 2,
+          "markdownDescription": "Model family this extension uses by default (set via **AI SharePoint: List Copilot Models**). Empty = cheapest entitled model (economy-first policy)."
+        },
+        "aiSharePoint.budget.mode": {
+          "type": "string",
+          "enum": [
+            "block",
+            "warn",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Warn at the soft cap; block at the hard cap (per-request override available).",
+            "Warn at both caps; never block.",
+            "No budget enforcement (the meter still records usage)."
+          ],
+          "default": "block",
+          "order": 3,
+          "markdownDescription": "How budget caps are enforced (PLAN §4 guardrails)."
+        },
+        "aiSharePoint.budget.softLimitPercent": {
+          "type": "number",
+          "default": 80,
+          "minimum": 0,
+          "order": 4,
+          "markdownDescription": "Warn when projected usage passes this percentage of the monthly allowance."
+        },
+        "aiSharePoint.budget.hardLimitPercent": {
+          "type": "number",
+          "default": 100,
+          "minimum": 0,
+          "order": 5,
+          "markdownDescription": "Block requests past this percentage of the monthly allowance (individual requests can be explicitly overridden)."
         },
         "aiSharePoint.auth.tenantAuthority": {
           "type": "string",
           "default": "https://login.microsoftonline.com/common",
-          "markdownDescription": "Microsoft Entra ID authority used for interactive sign-in (MSAL public client)."
+          "scope": "machine",
+          "order": 6,
+          "markdownDescription": "Microsoft Entra ID authority for sign-in (MSAL public client). Machine-scoped: workspaces cannot override it. The host must be a known Microsoft login endpoint or listed in `#aiSharePoint.auth.additionalAuthorityHosts#`."
+        },
+        "aiSharePoint.auth.clientId": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "order": 7,
+          "markdownDescription": "Optional custom Entra application (client) ID for tenants that block the default Microsoft Graph PowerShell first-party app. Requires a public-client app registration with `http://localhost` redirect and delegated `Sites.Read.All` — see the Admin Guide."
+        },
+        "aiSharePoint.auth.additionalAuthorityHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "order": 8,
+          "markdownDescription": "Extra allowed sign-in authority hosts (beyond the built-in Microsoft login endpoints). Machine-scoped."
+        },
+        "aiSharePoint.diagnostics.usageCapture": {
+          "type": "string",
+          "enum": [
+            "followVSCode",
+            "on",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Capture local usage counters only while VS Code telemetry is enabled (defers to your org's telemetry stance).",
+            "Always capture locally.",
+            "Never capture."
+          ],
+          "default": "followVSCode",
+          "order": 9,
+          "markdownDescription": "Local feature-usage counters for the diagnostics bundle. **Nothing is ever transmitted by the extension** — data leaves the machine only via your explicit export."
+        },
+        "aiSharePoint.diagnostics.errorCapture": {
+          "type": "boolean",
+          "default": true,
+          "order": 10,
+          "markdownDescription": "Store redacted error reports locally for the diagnostics bundle. Disable to keep no error history at all."
         }
       }
     }
@@ -62,6 +578,10 @@
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test \"out-test/test/*.test.js\"",
+    "check:native": "node scripts/check-native-deps.js",
+    "scan:secrets": "node scripts/scan-secrets.js",
+    "build:samples": "tsc -p tsconfig.test.json && node scripts/render-dashboard-sample.js",
     "package": "vsce package --no-dependencies",
     "vscode:prepublish": "node esbuild.js --production"
   },

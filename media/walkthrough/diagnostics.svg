@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <rect width="640" height="400" rx="16" fill="#111827"/>
+  <text x="320" y="56" font-family="system-ui,sans-serif" font-size="22" font-weight="600" fill="#f9fafb" text-anchor="middle">Diagnostics without data leaks</text>
+  <!-- document -->
+  <rect x="120" y="96" width="220" height="250" rx="12" fill="#1f2937" stroke="#374151"/>
+  <rect x="142" y="120" width="120" height="11" rx="5" fill="#4b5563"/>
+  <rect x="142" y="146" width="176" height="8" rx="4" fill="#374151"/>
+  <rect x="142" y="162" width="150" height="8" rx="4" fill="#374151"/>
+  <rect x="142" y="186" width="176" height="22" rx="6" fill="#111827"/>
+  <text x="150" y="201" font-family="ui-monospace,monospace" font-size="11" fill="#22d3ee">anon-3fa9c41d2b.sharepoint.com</text>
+  <rect x="142" y="216" width="176" height="22" rx="6" fill="#111827"/>
+  <text x="150" y="231" font-family="ui-monospace,monospace" font-size="11" fill="#22d3ee">[redacted:email]</text>
+  <rect x="142" y="246" width="176" height="22" rx="6" fill="#111827"/>
+  <text x="150" y="261" font-family="ui-monospace,monospace" font-size="11" fill="#22d3ee">[redacted:jwt]</text>
+  <rect x="142" y="282" width="120" height="8" rx="4" fill="#374151"/>
+  <rect x="142" y="298" width="156" height="8" rx="4" fill="#374151"/>
+  <!-- shield -->
+  <path d="M430 110 L500 134 V210 Q500 268 430 300 Q360 268 360 210 V134 Z" fill="#1f2937" stroke="#22d3ee" stroke-width="4"/>
+  <path d="M400 208 L424 232 L468 180" fill="none" stroke="#22d3ee" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="430" y="330" font-family="system-ui,sans-serif" font-size="14" fill="#9ca3af" text-anchor="middle">previewed + leak-scanned</text>
+  <text x="320" y="372" font-family="system-ui,sans-serif" font-size="14" fill="#9ca3af" text-anchor="middle">Local-only capture · salted pseudonyms · you choose if and where the bundle goes</text>
+</svg>

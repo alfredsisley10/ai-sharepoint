@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <rect width="640" height="400" rx="16" fill="#111827"/>
+  <text x="320" y="64" font-family="system-ui,sans-serif" font-size="22" font-weight="600" fill="#f9fafb" text-anchor="middle">Sign in your way — browser or device code</text>
+  <!-- browser window -->
+  <rect x="70" y="100" width="310" height="200" rx="12" fill="#1f2937" stroke="#374151"/>
+  <rect x="70" y="100" width="310" height="38" rx="12" fill="#27303f"/>
+  <circle cx="92" cy="119" r="5" fill="#f87171"/>
+  <circle cx="110" cy="119" r="5" fill="#fbbf24"/>
+  <circle cx="128" cy="119" r="5" fill="#34d399"/>
+  <rect x="146" y="108" width="216" height="22" rx="11" fill="#111827"/>
+  <text x="158" y="123" font-family="ui-monospace,monospace" font-size="11" fill="#93c5fd">https://login.microsoftonline.com</text>
+  <!-- sign-in card -->
+  <rect x="120" y="160" width="210" height="110" rx="10" fill="#111827" stroke="#374151"/>
+  <rect x="138" y="180" width="120" height="10" rx="5" fill="#374151"/>
+  <rect x="138" y="200" width="174" height="10" rx="5" fill="#27303f"/>
+  <rect x="138" y="232" width="86" height="24" rx="6" fill="#2563eb"/>
+  <text x="181" y="248" font-family="system-ui,sans-serif" font-size="12" fill="#fff" text-anchor="middle">Sign in</text>
+  <!-- arrow to keychain -->
+  <path d="M396 200 H438" stroke="#4b5563" stroke-width="3" stroke-linecap="round"/>
+  <path d="M432 192 L444 200 L432 208" fill="none" stroke="#4b5563" stroke-width="3" stroke-linecap="round"/>
+  <!-- keychain -->
+  <rect x="456" y="140" width="120" height="120" rx="14" fill="#1f2937" stroke="#374151"/>
+  <circle cx="516" cy="184" r="20" fill="none" stroke="#22d3ee" stroke-width="5"/>
+  <rect x="511" y="200" width="10" height="34" rx="4" fill="#22d3ee"/>
+  <rect x="521" y="214" width="12" height="8" rx="3" fill="#22d3ee"/>
+  <rect x="521" y="226" width="9" height="8" rx="3" fill="#22d3ee"/>
+  <text x="516" y="286" font-family="system-ui,sans-serif" font-size="13" fill="#9ca3af" text-anchor="middle">OS keychain only</text>
+  <text x="320" y="348" font-family="system-ui,sans-serif" font-size="14" fill="#9ca3af" text-anchor="middle">Tokens are cached per tenant in your operating system's secure store —</text>
+  <text x="320" y="368" font-family="system-ui,sans-serif" font-size="14" fill="#9ca3af" text-anchor="middle">never in files, settings, or the repository.</text>
+</svg>

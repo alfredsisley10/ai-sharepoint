@@ -5,51 +5,35 @@ import {
   PublicClientApplication,
   CryptoProvider,
   Configuration,
-  ICachePlugin,
-  TokenCacheContext,
 } from "@azure/msal-node";
 import { SecretStore } from "../secrets/secretStore";
 import { AccessToken, SharePointAuthProvider } from "./types";
+import { KeychainCachePlugin } from "./msalCache";
+import { AppError } from "../core/errors";
 
-/** Microsoft Graph PowerShell first-party app — public client, broad pre-consented
- *  delegated scopes, no app registration required (PLAN §5, ADR validated). */
-const GRAPH_POWERSHELL_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
+/** Static, parameter-free response pages (REVIEW S5 — never reflect query
+ *  values into HTML). Styling is inline; no external resources are loaded. */
+const PAGE_STYLE =
+  "<style>body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#1f2933;color:#e4e7eb}main{text-align:center;max-width:28rem;padding:2rem}h1{font-size:1.25rem;font-weight:600}p{color:#9aa5b1}</style>";
 
-/**
- * Persists the MSAL token cache into the OS keychain via SecretStore (§6).
- * The cache blob is secret material and never touches disk or the repo.
- */
-class KeychainCachePlugin implements ICachePlugin {
-  constructor(
-    private readonly secrets: SecretStore,
-    private readonly handle: string,
-  ) {}
+const SUCCESS_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Signed in</title>${PAGE_STYLE}</head><body><main><h1>✓ Signed in</h1><p>You can close this tab and return to Visual Studio Code.</p></main></body></html>`;
 
-  async beforeCacheAccess(ctx: TokenCacheContext): Promise<void> {
-    const cached = await this.secrets.get(this.handle);
-    if (cached) {
-      ctx.tokenCache.deserialize(cached);
-    }
-  }
+const FAILURE_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Sign-in failed</title>${PAGE_STYLE}</head><body><main><h1>Sign-in did not complete</h1><p>Return to Visual Studio Code for details, then try again.</p></main></body></html>`;
 
-  async afterCacheAccess(ctx: TokenCacheContext): Promise<void> {
-    if (ctx.cacheHasChanged) {
-      await this.secrets.set(this.handle, ctx.tokenCache.serialize());
-    }
-  }
-}
+const PENDING_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Waiting</title>${PAGE_STYLE}</head><body><main><h1>Waiting for sign-in…</h1><p>Complete the Microsoft sign-in in this browser.</p></main></body></html>`;
 
 /**
  * MSAL public-client interactive provider (PLAN §5 default).
  *
- * Uses the authorization-code + PKCE flow with a loopback redirect: the system
- * browser is opened via VS Code, and a short-lived localhost server captures the
- * authorization code. Tokens are cached in the keychain and refreshed silently
- * when possible. Cross-platform — no native modules, no shell calls.
+ * Authorization-code + PKCE with a loopback redirect: the system browser is
+ * opened via VS Code, and a short-lived 127.0.0.1 server captures the
+ * authorization code. Tokens are cached in the OS keychain (per tenant) and
+ * refreshed silently when possible. Cross-platform — no native modules, no
+ * shell calls (ADR-0016).
  */
 export class MsalPublicClientProvider implements SharePointAuthProvider {
   readonly id = "msal-public-interactive";
-  readonly displayName = "Microsoft sign-in (interactive browser)";
+  readonly displayName = "Microsoft sign-in (system browser)";
   readonly supportsSilentRefresh = true;
 
   private readonly pca: PublicClientApplication;
@@ -59,15 +43,11 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
     secrets: SecretStore,
     cacheHandle: string,
     authority: string,
+    clientId: string,
   ) {
     const config: Configuration = {
-      auth: {
-        clientId: GRAPH_POWERSHELL_CLIENT_ID,
-        authority,
-      },
-      cache: {
-        cachePlugin: new KeychainCachePlugin(secrets, cacheHandle),
-      },
+      auth: { clientId, authority },
+      cache: { cachePlugin: new KeychainCachePlugin(secrets, cacheHandle) },
     };
     this.pca = new PublicClientApplication(config);
   }
@@ -78,6 +58,11 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
       return silent;
     }
     return this.interactive(scopes);
+  }
+
+  /** Cache-only acquisition for background reads (chat/tool context). */
+  acquireTokenSilent(scopes: string[]): Promise<AccessToken | null> {
+    return this.trySilent(scopes);
   }
 
   private async trySilent(scopes: string[]): Promise<AccessToken | null> {
@@ -107,14 +92,18 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
           const code = url.searchParams.get("code");
           const error = url.searchParams.get("error");
           if (error) {
-            res.end(`Sign-in failed: ${error}. You can close this tab.`);
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(FAILURE_PAGE);
             cleanup();
-            reject(new Error(`Authorization failed: ${error}`));
+            reject(
+              new AppError(`Authorization failed: ${error}`, "auth.failed"),
+            );
             return;
           }
           if (!code) {
             // Ignore favicon and other stray requests.
-            res.end("Waiting for sign-in...");
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(PENDING_PAGE);
             return;
           }
 
@@ -125,14 +114,23 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
             redirectUri,
             codeVerifier: verifier,
           });
-          res.end("Signed in. You can close this tab and return to VS Code.");
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(SUCCESS_PAGE);
           cleanup();
           if (result) {
             resolve(this.toAccessToken(result));
           } else {
-            reject(new Error("No token returned from authorization code."));
+            reject(
+              new AppError("No token returned from authorization code.", "auth.failed"),
+            );
           }
         } catch (err) {
+          try {
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(FAILURE_PAGE);
+          } catch {
+            // Response may already be closed; the rejection below carries the error.
+          }
           cleanup();
           reject(err instanceof Error ? err : new Error(String(err)));
         }
@@ -141,7 +139,9 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
       let port = 0;
       const timeout = setTimeout(() => {
         cleanup();
-        reject(new Error("Sign-in timed out after 5 minutes."));
+        reject(
+          new AppError("Sign-in timed out after 5 minutes.", "auth.timeout"),
+        );
       }, 5 * 60 * 1000);
 
       const cleanup = () => {
