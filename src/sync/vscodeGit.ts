@@ -14,6 +14,13 @@ export interface GitRemote {
   pushUrl?: string;
 }
 
+export interface GitCommit {
+  hash: string;
+  message: string;
+  authorDate?: Date;
+  commitDate?: Date;
+}
+
 export interface GitRepository {
   rootUri: vscode.Uri;
   state: {
@@ -29,6 +36,10 @@ export interface GitRepository {
   addRemote(name: string, url: string): Promise<void>;
   createBranch(name: string, checkout: boolean): Promise<void>;
   checkout(treeish: string): Promise<void>;
+  /** Commit history (newest first). */
+  log(options?: { maxEntries?: number }): Promise<GitCommit[]>;
+  /** File content at a ref, e.g. show("abc123", "lists/x.json"). */
+  show(ref: string, path: string): Promise<string>;
 }
 
 interface GitApi {

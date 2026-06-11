@@ -118,6 +118,14 @@
 - [ ] **E4. Docs + 0.4.0.** USER_GUIDE write-back section, ADMIN_GUIDE consent (Sites.Manage.All)
       + custom-app permissions, CHANGELOG, version bump, VSIX, CI green.
 
+## Track F — Revert-to-commit (ADR-0005 core) — DONE
+
+- [x] **F1.** `aiSharePoint.revertSiteToCommit`: pick from repo history (git API log), file
+      inventory read from the committed manifest via show(ref, path), then the shared
+      write-back pipeline (preview, deletions opt-in, freshness gate, safety snapshot =
+      "undo the undo", reconcile). Write-back flow extracted to one pipeline used by both
+      Apply Repository and Revert (writeBackPreflight + runWriteBackFlow).
+
 ## Wrap-up
 
 - [x] **W1.** Version 0.2.0, CHANGELOG consolidation, VSIX rebuild + CI green, state file final

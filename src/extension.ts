@@ -833,53 +833,32 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   });
 
-  register("aiSharePoint.applyRepoToSharePoint", async (arg) => {
-    const conn = await resolveConnArg(arg, sites, "Apply which site repository to SharePoint?");
-    if (!conn) return;
-    requireManaged(conn);
-    const config = syncConfigs.get(conn.siteUrl);
-    if (!config) {
-      void vscode.window.showWarningMessage(
-        "No repository configured for this site — run “Configure Site Repository…”, pull, edit, then apply.",
-      );
-      return;
-    }
-
-    // Clean-tree guard: every desired edit must be committed before write-back,
-    // so the closing reconcile pull can never destroy unsaved work (ADR-0021).
-    const repo = await openOrInitRepository(vscode.Uri.file(config.folder));
-    const dirty =
-      (repo.state.workingTreeChanges?.length ?? 0) + (repo.state.indexChanges?.length ?? 0);
-    if (dirty > 0) {
-      void vscode.window.showWarningMessage(
-        `The site repository has ${dirty} uncommitted change(s). Commit them first — write-back reconciles the working tree with live SharePoint afterwards.`,
-      );
-      return;
-    }
-
-    const repoFiles = await syncEngine.readRepoFiles(config.folder);
-    if (repoFiles.size === 0) {
-      void vscode.window.showWarningMessage(
-        "The repository has no site files yet — run “Pull Site to Repository” first.",
-      );
-      return;
-    }
-
+  /** Shared write-back pipeline (ADR-0021 §5): plan from `desiredFiles` →
+   *  deletions opt-in → preview → confirm → freshness gate → safety snapshot
+   *  (side path) → sequential apply → reconcile pull + commit. Used by both
+   *  Apply Repository (working tree) and Revert to Commit (files at a ref). */
+  const runWriteBackFlow = async (
+    conn: SiteConnection,
+    config: SiteSyncConfig,
+    repo: Awaited<ReturnType<typeof openOrInitRepository>>,
+    desiredFiles: Map<string, string>,
+    headline: string,
+  ): Promise<void> => {
     const { snapshot, planBase, plan } = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Planning write-back for ${conn.displayName}…` },
+      { location: vscode.ProgressLocation.Notification, title: `Planning ${headline} for ${conn.displayName}…` },
       async (p) => {
         const snap = await syncEngine.gatherSnapshot(conn, (m) => p.report({ message: m }));
         return {
           snapshot: snap,
           planBase: serializeSite(snap),
-          plan: buildPushPlan(parseDesiredState(repoFiles), snap),
+          plan: buildPushPlan(parseDesiredState(desiredFiles), snap),
         };
       },
     );
 
     if (!hasWork(plan, true)) {
       void vscode.window.showInformationMessage(
-        `SharePoint already matches the repository for "${conn.displayName}"${plan.warnings.length ? ` (${plan.warnings.length} warning(s) — see preview)` : ""}.`,
+        `SharePoint already matches the target state for "${conn.displayName}"${plan.warnings.length ? ` (${plan.warnings.length} warning(s))` : ""}.`,
       );
       return;
     }
@@ -890,16 +869,16 @@ export function activate(context: vscode.ExtensionContext): void {
         [
           {
             label: "$(shield) Skip deletions",
-            description: `${plan.deletions.length} artifact(s) missing from the repo are left untouched (recommended)`,
+            description: `${plan.deletions.length} artifact(s) not in the target state are left untouched (recommended)`,
             value: false,
           },
           {
             label: "$(trash) Include deletions",
-            description: "DELETE artifacts from SharePoint that are not in the repository",
+            description: "DELETE artifacts from SharePoint that are absent from the target state",
             value: true,
           },
         ],
-        { title: `Write-back — ${plan.deletions.length} deletion(s) detected` },
+        { title: `${headline} — ${plan.deletions.length} deletion(s) detected` },
       );
       if (!delPick) return;
       includeDeletions = delPick.value;
@@ -907,12 +886,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const previewDoc = await vscode.workspace.openTextDocument({
       language: "markdown",
-      content: renderPushPlan(conn.displayName, plan, includeDeletions),
+      content: renderPushPlan(`${conn.displayName} — ${headline}`, plan, includeDeletions),
     });
     await vscode.window.showTextDocument(previewDoc, { preview: true });
     const opCount = plan.ops.length + (includeDeletions ? plan.deletions.length : 0);
     const confirm = await vscode.window.showWarningMessage(
-      `Write ${opCount} operation(s) to "${conn.displayName}" in SharePoint?${includeDeletions ? ` This INCLUDES ${plan.deletions.length} deletion(s).` : ""} A safety snapshot is committed first; the site is re-checked for drift.`,
+      `${headline}: write ${opCount} operation(s) to "${conn.displayName}" in SharePoint?${includeDeletions ? ` This INCLUDES ${plan.deletions.length} deletion(s).` : ""} A safety snapshot is committed first; the site is re-checked for drift.`,
       { modal: true },
       includeDeletions ? "Apply Including Deletions" : "Apply to SharePoint",
     );
@@ -942,7 +921,7 @@ export function activate(context: vscode.ExtensionContext): void {
           snapPaths.push(target.fsPath);
         }
         await repo.add(snapPaths);
-        await repo.commit(`Safety snapshot before write-back (${stamp})`);
+        await repo.commit(`Safety snapshot before ${headline.toLowerCase()} (${stamp})`);
 
         return applyPushPlan(writer, snapshot.site.id, plan, includeDeletions, {
           progress: (m) => p.report({ message: m }),
@@ -962,20 +941,120 @@ export function activate(context: vscode.ExtensionContext): void {
       const staged = await syncEngine.apply(config.folder, reconcile.files, reconcile.report);
       await repo.add(staged);
       await repo.commit(
-        `Write-back applied: ${outcome.applied.length} op(s)${outcome.failedAt ? " (stopped early)" : ""}`,
+        `${headline} applied: ${outcome.applied.length} op(s)${outcome.failedAt ? " (stopped early)" : ""}`,
       );
     }
     await sites.markVerified(conn.siteUrl, nowIso());
 
     if (outcome.failedAt) {
       void vscode.window.showErrorMessage(
-        `Write-back stopped after ${outcome.applied.length} op(s) at "${outcome.failedAt.op}": ${outcome.failedAt.error.slice(0, 160)} — the repository now reflects the actual live state; your intended state is preserved in commit history. Fix and re-run.`,
+        `${headline} stopped after ${outcome.applied.length} op(s) at "${outcome.failedAt.op}": ${outcome.failedAt.error.slice(0, 160)} — the repository now reflects the actual live state; the intended state is preserved in commit history. Fix and re-run.`,
       );
     } else {
       void vscode.window.showInformationMessage(
-        `✓ Write-back complete: ${outcome.applied.length} operation(s) applied to "${conn.displayName}". Repository reconciled with live state.`,
+        `✓ ${headline} complete: ${outcome.applied.length} operation(s) applied to "${conn.displayName}". Repository reconciled with live state.`,
       );
     }
+  };
+
+  /** Guards shared by the write-back entry points. Returns null when blocked. */
+  const writeBackPreflight = async (
+    arg: unknown,
+    title: string,
+  ): Promise<{ conn: SiteConnection; config: SiteSyncConfig; repo: Awaited<ReturnType<typeof openOrInitRepository>> } | null> => {
+    const conn = await resolveConnArg(arg, sites, title);
+    if (!conn) return null;
+    requireManaged(conn);
+    const config = syncConfigs.get(conn.siteUrl);
+    if (!config) {
+      void vscode.window.showWarningMessage(
+        "No repository configured for this site — run “Configure Site Repository…”, pull, then retry.",
+      );
+      return null;
+    }
+    // Clean-tree guard: every desired edit must be committed before write-back,
+    // so the closing reconcile pull can never destroy unsaved work (ADR-0021).
+    const repo = await openOrInitRepository(vscode.Uri.file(config.folder));
+    const dirty =
+      (repo.state.workingTreeChanges?.length ?? 0) + (repo.state.indexChanges?.length ?? 0);
+    if (dirty > 0) {
+      void vscode.window.showWarningMessage(
+        `The site repository has ${dirty} uncommitted change(s). Commit them first — write-back reconciles the working tree with live SharePoint afterwards.`,
+      );
+      return null;
+    }
+    return { conn, config, repo };
+  };
+
+  register("aiSharePoint.applyRepoToSharePoint", async (arg) => {
+    const pre = await writeBackPreflight(arg, "Apply which site repository to SharePoint?");
+    if (!pre) return;
+    const repoFiles = await syncEngine.readRepoFiles(pre.config.folder);
+    if (repoFiles.size === 0) {
+      void vscode.window.showWarningMessage(
+        "The repository has no site files yet — run “Pull Site to Repository” first.",
+      );
+      return;
+    }
+    await runWriteBackFlow(pre.conn, pre.config, pre.repo, repoFiles, "Write-back");
+  });
+
+  register("aiSharePoint.revertSiteToCommit", async (arg) => {
+    const pre = await writeBackPreflight(arg, "Revert which site to an earlier commit?");
+    if (!pre) return;
+
+    const commits = await pre.repo.log({ maxEntries: 30 });
+    if (commits.length === 0) {
+      void vscode.window.showWarningMessage("The site repository has no commits yet.");
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(
+      commits.map((c) => ({
+        label: `$(git-commit) ${c.hash.slice(0, 7)}`,
+        description: (c.authorDate ?? c.commitDate)?.toISOString().slice(0, 16) ?? "",
+        detail: c.message.split("\n")[0].slice(0, 100),
+        hash: c.hash,
+      })),
+      {
+        title: "Revert site to which commit? (ADR-0005 — a safety snapshot is taken first)",
+        matchOnDetail: true,
+      },
+    );
+    if (!pick) return;
+    const short = pick.hash.slice(0, 7);
+
+    // The committed manifest is the file inventory at that ref.
+    let manifestRaw: string;
+    try {
+      manifestRaw = await pre.repo.show(pick.hash, ".aisharepoint/site.json");
+    } catch {
+      void vscode.window.showErrorMessage(
+        `Commit ${short} contains no site snapshot (.aisharepoint/site.json) — pick a commit created by a pull or write-back.`,
+      );
+      return;
+    }
+    const filesAtRef = new Map<string, string>([[".aisharepoint/site.json", manifestRaw]]);
+    try {
+      const manifest = JSON.parse(manifestRaw) as {
+        contents?: { lists?: Array<{ file: string }>; pages?: Array<{ file: string }> };
+      };
+      const inventory = [
+        ...(manifest.contents?.lists ?? []),
+        ...(manifest.contents?.pages ?? []),
+      ].map((e) => e.file);
+      for (const rel of inventory) {
+        try {
+          filesAtRef.set(rel, await pre.repo.show(pick.hash, rel));
+        } catch {
+          log.warn(`revert: ${rel} missing at ${short} — skipped.`);
+        }
+      }
+    } catch {
+      void vscode.window.showErrorMessage(`The snapshot manifest at ${short} is unreadable.`);
+      return;
+    }
+    telemetry.record("sync.revertPlanned");
+    await runWriteBackFlow(pre.conn, pre.config, pre.repo, filesAtRef, `Revert to ${short}`);
   });
 
   // --- Reference context sources (Track A — PLAN §9) -------------------------

@@ -124,6 +124,12 @@
         "icon": "$(cloud-upload)"
       },
       {
+        "command": "aiSharePoint.revertSiteToCommit",
+        "title": "Revert Site to Commit…",
+        "category": "AI SharePoint",
+        "icon": "$(history)"
+      },
+      {
         "command": "aiSharePoint.addContextSource",
         "title": "Add Context Source (Confluence/Jira)",
         "category": "AI SharePoint",
@@ -660,6 +666,11 @@
           "command": "aiSharePoint.applyRepoToSharePoint",
           "when": "view == aiSharePoint.sitesView && viewItem == site-managed",
           "group": "2_sync@4"
+        },
+        {
+          "command": "aiSharePoint.revertSiteToCommit",
+          "when": "view == aiSharePoint.sitesView && viewItem == site-managed",
+          "group": "2_sync@5"
         }
       ],
       "commandPalette": [
@@ -713,6 +724,10 @@
         },
         {
           "command": "aiSharePoint.applyRepoToSharePoint",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.revertSiteToCommit",
           "when": "aiSharePoint.hasSites"
         }
       ]
