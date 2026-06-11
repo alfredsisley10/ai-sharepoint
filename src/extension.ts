@@ -50,6 +50,7 @@ import {
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
+import { mssqlUrlIssue } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { ContextBookmark } from "./context/types";
@@ -1179,6 +1180,9 @@ export function activate(context: vscode.ExtensionContext): void {
         title: "Database connection URL (read-only reference access)",
         placeHolder: placeholders[typePick.value],
         validateInput: (v) => {
+          if (typePick.value === "mssql") {
+            return mssqlUrlIssue(v);
+          }
           try {
             const u = new URL(v.trim());
             if (!u.pathname.replace(/^\/+/, "")) return "Include the database name: …/dbname";

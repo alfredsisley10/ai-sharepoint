@@ -81,3 +81,25 @@ export function parseMssqlParams(params: URLSearchParams): MssqlConnectParams {
     trustServerCertificate: params.get("trustServerCertificate") === "true",
   };
 }
+
+/**
+ * Wizard-time validation for mssql:// URLs. Alternate ports are fully
+ * supported (mssql://host:14330/db); a port combined with ?instance= is
+ * rejected because TDS treats them as mutually exclusive — the named
+ * instance's port is resolved via SQL Browser.
+ */
+export function mssqlUrlIssue(url: string): string | undefined {
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return "Enter a valid connection URL (mssql://host[:port]/database)";
+  }
+  if (!u.pathname.replace(/^\/+/, "")) {
+    return "Include the database name: …/dbname";
+  }
+  if (u.port && u.searchParams.get("instance")) {
+    return "Use either :port or ?instance=NAME, not both — a named instance resolves its own port via SQL Browser";
+  }
+  return undefined;
+}

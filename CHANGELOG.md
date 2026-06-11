@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.3 — 2026-06-11
+
+### Verified/Hardened — SQL Server on non-standard ports
+- Alternate ports were already supported (`mssql://host:14330/Sales`) — now empirically
+  verified and **locked with tests** end-to-end (URL → tedious `options.port`; default 1433
+  only when no port is given). The sharp edge is handled explicitly: `:port` combined with
+  `?instance=` is **rejected at entry** with a clear message (TDS treats them as mutually
+  exclusive — a named instance resolves its own port via SQL Browser/UDP 1434) instead of
+  silently ignoring the port. User guide documents both forms.
+
+
 ## 0.6.2 — 2026-06-11
 
 SQL Server SSMS-parity + wizard usability (pilot feedback).

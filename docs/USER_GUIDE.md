@@ -276,9 +276,11 @@ reasons — ADR-0022):
   database account — a **least-privilege read-only account is recommended**.
 - **SQL Server specifics**: both **SQL Server Authentication** (database login) and **Windows
   Authentication** (NTLM — `CORP\user` or `user@corp.example` + password; passwordless SSO is
-  not possible in a portable extension) are supported, chosen in the wizard. **Named
-  instances** (SSMS `host\PROD`) use `?instance=PROD` in the URL — the port is then resolved
-  via SQL Browser, and the login must exist on *that* instance. If the server's certificate is
+  not possible in a portable extension) are supported, chosen in the wizard. **Non-standard
+  ports** go in the URL as usual — `mssql://sqlhost:14330/Sales`. **Named instances** (SSMS
+  `host\PROD`) use `?instance=PROD` instead — the instance's port is resolved via SQL Browser
+  (UDP 1434), so use *either* `:port` *or* `?instance=`, never both (the wizard enforces this),
+  and the login must exist on *that* instance. If the server's certificate is
   self-signed or doesn't match the FQDN you connect with, the wizard's **"Trust server
   certificate"** option (the SSMS checkbox equivalent, `?trustServerCertificate=true`) skips
   validation for that source only.

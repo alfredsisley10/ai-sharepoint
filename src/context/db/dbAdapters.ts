@@ -28,7 +28,7 @@ export interface BrowseCandidate {
   detail: string;
 }
 
-function parseDbUrl(source: ContextSource): {
+export function parseDbUrl(source: Pick<ContextSource, "baseUrl">): {
   host: string;
   port?: number;
   database: string;

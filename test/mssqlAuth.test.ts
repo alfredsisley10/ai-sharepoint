@@ -4,7 +4,9 @@ import {
   parseWindowsAccount,
   buildMssqlAuthentication,
   parseMssqlParams,
+  mssqlUrlIssue,
 } from "../src/context/db/mssqlAuth";
+import { parseDbUrl } from "../src/context/db/dbAdapters";
 
 test("parseWindowsAccount handles DOMAIN\\user, UPN, and plain logins", () => {
   assert.deepEqual(parseWindowsAccount("CORP\\jdoe"), { domain: "CORP", user: "jdoe" });
@@ -49,4 +51,21 @@ test("parseMssqlParams: named instance, encryption, certificate trust", () => {
   const defaults = parseMssqlParams(new URLSearchParams(""));
   assert.deepEqual(defaults, { encrypt: true, trustServerCertificate: false });
   assert.equal(parseMssqlParams(new URLSearchParams("encrypt=false")).encrypt, false);
+});
+
+test("alternate ports flow through the connection URL (enterprise non-1433 instances)", () => {
+  const alt = parseDbUrl({ baseUrl: "mssql://sqlhost.corp.example:14330/Sales" });
+  assert.equal(alt.port, 14330);
+  assert.equal(alt.host, "sqlhost.corp.example");
+  assert.equal(alt.database, "Sales");
+  // No port → adapter defaults to 1433 (port stays undefined here).
+  assert.equal(parseDbUrl({ baseUrl: "mssql://sqlhost/Sales" }).port, undefined);
+});
+
+test("mssqlUrlIssue: valid forms pass; port+instance conflict and missing db are rejected", () => {
+  assert.equal(mssqlUrlIssue("mssql://host:14330/Sales"), undefined);
+  assert.equal(mssqlUrlIssue("mssql://host/Sales?instance=PROD"), undefined);
+  assert.match(mssqlUrlIssue("mssql://host:1433/Sales?instance=PROD") ?? "", /not both/);
+  assert.match(mssqlUrlIssue("mssql://host:14330") ?? "", /database name/);
+  assert.match(mssqlUrlIssue("not a url") ?? "", /valid connection URL/);
 });
