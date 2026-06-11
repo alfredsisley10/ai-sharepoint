@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1 — 2026-06-11
+
+### Fixed — "Could not initialize a Git repository" (pilot)
+- Root-cause class: VS Code's Git extension can create a repo on disk yet decline or delay
+  opening it — Restricted Mode, a target folder **outside the current workspace**, or the
+  extension's asynchronous repository scan. The flow is now hardened end-to-end:
+  **workspace-trust guard** with explicit remediation; **retry-with-backoff discovery** after
+  `init` (plus a repository-map scan by path); and when `.git` exists but VS Code won't open
+  it, a targeted message ("add the folder to your workspace") instead of a bare failure. The
+  configure wizard now also detects an out-of-workspace folder up front and offers
+  **"Add to Workspace and Continue"**, which makes Git detection deterministic. Failure
+  messages now include the underlying git error and a PATH/`git.enabled` checklist.
+
+
 ## 0.6.0 — 2026-06-11
 
 The **database wave** of the reference-source matrix (ADR-0022), chosen by the pilot, plus a

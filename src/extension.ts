@@ -647,6 +647,33 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!folderPick?.[0]) return;
     const folder = folderPick[0];
 
+    // The Git extension reliably detects repositories inside the workspace;
+    // out-of-workspace folders are a known init/open failure class (0.6.1
+    // pilot fix). Offer to add the folder so detection is deterministic.
+    const inWorkspace = vscode.workspace.workspaceFolders?.some(
+      (wf) =>
+        folder.fsPath === wf.uri.fsPath ||
+        folder.fsPath.startsWith(wf.uri.fsPath + path.sep),
+    );
+    if (!inWorkspace) {
+      const pick = await vscode.window.showInformationMessage(
+        `"${path.basename(folder.fsPath)}" is outside your current VS Code workspace. Adding it as a workspace folder makes Git detection and Source Control integration reliable.`,
+        { modal: true },
+        "Add to Workspace and Continue",
+        "Continue Without Adding",
+      );
+      if (!pick) return;
+      if (pick === "Add to Workspace and Continue") {
+        vscode.workspace.updateWorkspaceFolders(
+          vscode.workspace.workspaceFolders?.length ?? 0,
+          0,
+          { uri: folder },
+        );
+        // Give the Git extension a moment to pick up the new root.
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+
     const remoteUrl = await vscode.window.showInputBox({
       title: "Remote repository (2/3) — GitHub.com or your GitHub Enterprise Server",
       prompt: `Allowed hosts: ${allowedRemoteHosts().join(", ")}. Leave empty for local-only. An unlisted GHES host can be allowlisted in the next step.`,

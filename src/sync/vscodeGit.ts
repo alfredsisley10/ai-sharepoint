@@ -63,19 +63,72 @@ export async function getGitApi(): Promise<GitApi> {
   return exports.getAPI(1);
 }
 
-/** Open the repo at `folder`, initializing one when none exists. */
+function findByRoot(api: GitApi, folder: vscode.Uri): GitRepository | undefined {
+  const want = folder.fsPath.replace(/[\\/]+$/, "");
+  return api.repositories.find(
+    (r) => r.rootUri.fsPath.replace(/[\\/]+$/, "") === want,
+  );
+}
+
+/**
+ * Open the repo at `folder`, initializing one when none exists. Hardened for
+ * the pilot failure "Could not initialize a Git repository": the Git
+ * extension can create the repo on disk yet decline/delay opening it
+ * (Restricted Mode, folder outside the workspace, async repository scan), so
+ * this guards trust up front, retries discovery with backoff after init, and
+ * fails with concrete remediation instead of a bare error.
+ */
 export async function openOrInitRepository(
   folder: vscode.Uri,
 ): Promise<GitRepository> {
-  const api = await getGitApi();
-  const existing = await api.openRepository(folder);
-  if (existing) return existing;
-  const created = await api.init(folder);
-  if (!created) {
+  if (vscode.workspace.isTrusted === false) {
     throw new AppError(
-      `Could not initialize a Git repository in ${folder.fsPath}.`,
-      "unknown",
+      "Git operations are disabled in Restricted Mode.",
+      "config",
+      "This window is in Restricted Mode — choose “Trust” (Manage Workspace Trust) and retry.",
     );
   }
-  return created;
+  const api = await getGitApi();
+
+  const existing = (await api.openRepository(folder)) ?? findByRoot(api, folder);
+  if (existing) return existing;
+
+  let initError: string | undefined;
+  try {
+    const created = await api.init(folder);
+    if (created) return created;
+  } catch (err) {
+    initError = err instanceof Error ? err.message : String(err);
+  }
+
+  // init() returning null/throwing does not always mean failure on disk —
+  // the extension may simply not have opened the new repo yet. Retry
+  // discovery briefly before giving up.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await new Promise((r) => setTimeout(r, 350));
+    const found = (await api.openRepository(folder)) ?? findByRoot(api, folder);
+    if (found) return found;
+  }
+
+  // Distinguish "git init never happened" from "repo exists but VS Code
+  // won't open it" — the remediation differs.
+  let gitDirExists = false;
+  try {
+    await vscode.workspace.fs.stat(vscode.Uri.joinPath(folder, ".git"));
+    gitDirExists = true;
+  } catch {
+    // no .git — init genuinely failed
+  }
+  if (gitDirExists) {
+    throw new AppError(
+      `The repository at ${folder.fsPath} was initialized but VS Code's Git extension did not open it (folders outside the current workspace are not always auto-detected).`,
+      "config",
+      "Add the site repository folder to your workspace (File → Add Folder to Workspace…) or open it as the workspace folder, then retry.",
+    );
+  }
+  throw new AppError(
+    `Could not initialize a Git repository in ${folder.fsPath}${initError ? `: ${initError}` : ""}.`,
+    "config",
+    "Check that git is installed and on PATH (run “git --version” in a terminal), that the folder is writable, and that VS Code's Git extension is enabled (setting git.enabled).",
+  );
 }
