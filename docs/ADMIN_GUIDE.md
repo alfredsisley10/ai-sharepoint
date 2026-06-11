@@ -1,6 +1,6 @@
 # AI SharePoint — Enterprise Administration Guide
 
-For IT administrators deploying release **0.2.x** into managed environments. Companion
+For IT administrators deploying release **0.4.x** into managed environments. Companion
 documents: [SECURITY.md](SECURITY.md) (threat model / data flows) and [PRIVACY.md](PRIVACY.md)
 (data handling, exports).
 
@@ -9,8 +9,9 @@ documents: [SECURITY.md](SECURITY.md) (threat model / data flows) and [PRIVACY.m
 ## 1. What this extension is (one paragraph for the review board)
 
 A VS Code extension that lets users connect to SharePoint Online sites they already have access
-to (delegated, read-only in this release) and ask a GitHub-Copilot-backed assistant about them,
-with local metering and budget caps on Copilot consumption. It runs entirely client-side: **no
+to (delegated — their own permissions, never more) and ask a GitHub-Copilot-backed assistant
+about them, with local metering and budget caps on Copilot consumption. Site changes are
+human-approved commands only (previewed, drift-checked, snapshot-guarded); the AI cannot write. It runs entirely client-side: **no
 vendor service, no telemetry transmission, no stored server-side state**. Credentials live in
 the OS keychain via VS Code SecretStorage; diagnostics never leave the machine except by
 explicit, previewed, leak-scanned user export.
@@ -45,7 +46,7 @@ Allow these HTTPS (443) endpoints from developer machines:
 | Endpoint | Purpose | When |
 |---|---|---|
 | `login.microsoftonline.com` (or sovereign: `login.microsoftonline.us`, `login.partner.microsoftonline.cn`) | Microsoft Entra sign-in (MSAL public client) | Sign-in / token refresh |
-| `graph.microsoft.com` | Site/list/page reads (delegated `Sites.Read.All`) | Site features |
+| `graph.microsoft.com` | Site/list/page reads (`Sites.Read.All`); write-back adds `Sites.ReadWrite.All` + `Sites.Manage.All` (delegated, consent at first write) | Site features |
 | `microsoft.com/devicelogin` (user's browser, any device) | Device-code completion page | Device-code sign-in only |
 | GitHub Copilot service endpoints | AI requests — made by the **GitHub Copilot extension**, not by this extension directly | Chat / Ask Copilot |
 
@@ -98,7 +99,10 @@ If your tenant requires admin consent for it, grant consent in Entra admin cente
 2. **Authentication** → *Add a platform* → **Mobile and desktop applications** → add redirect
    URI `http://localhost` and enable **Allow public client flows** (required for device code).
 3. **API permissions** → *Microsoft Graph* → *Delegated* → `Sites.Read.All` (+ `offline_access`
-   is requested automatically by MSAL) → **Grant admin consent**.
+   is requested automatically by MSAL) → **Grant admin consent**. To enable **write-back**
+   (ADR-0021), also add delegated `Sites.ReadWrite.All` (pages) and `Sites.Manage.All`
+   (lists/columns) — the extension requests these scopes **only** when a user first runs
+   *Apply Repository to SharePoint* (incremental consent), never for reads.
 4. Distribute settings (machine scope — see §5):
    - `aiSharePoint.auth.clientId`: your app (client) ID.
    - `aiSharePoint.auth.tenantAuthority`: `https://login.microsoftonline.com/<your-tenant-id>`
@@ -157,6 +161,12 @@ user's own git** — the extension holds no Git credentials and never force-push
   github.com and GHES.
 - **Content gates:** pulls refuse to write when credential-shaped content is detected inside
   serialized site data, and enforce GitHub's file-size limits (warn 50 MB / block 100 MB).
+- **Write-back governance (ADR-0021):** writes to SharePoint are command-driven and
+  human-approved only (the AI cannot apply changes); every push shows an operation-level
+  preview, re-checks the live site for drift, commits a pre-push safety snapshot, applies
+  sequentially with stop-on-first-error, and reconciles the repo afterwards. Deletions require
+  a per-push opt-in; system libraries are never deleted; *Revert Site to Commit* uses the same
+  pipeline. Writes are attributable to the user in SharePoint audit logs (delegated auth).
 - Git itself must be installed (the built-in VS Code Git extension is used). Credential setup
   (HTTPS credential manager, SSH keys) follows your existing developer onboarding.
 

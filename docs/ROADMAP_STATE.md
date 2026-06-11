@@ -115,7 +115,7 @@
       doc, modal confirm, separate deletions opt-in, progress with per-op messages, partial-
       failure report; manifest (command/menus/palette); chat INSTRUCTIONS updated (write-back
       exists via explicit command; chat/tools stay read-only).
-- [ ] **E4. Docs + 0.4.0.** USER_GUIDE write-back section, ADMIN_GUIDE consent (Sites.Manage.All)
+- [x] **E4. Docs + 0.4.0.** USER_GUIDE write-back section, ADMIN_GUIDE consent (Sites.Manage.All)
       + custom-app permissions, CHANGELOG, version bump, VSIX, CI green.
 
 ## Track F — Revert-to-commit (ADR-0005 core) — DONE
@@ -140,6 +140,19 @@
       pass, deliver VSIX.
 - [x] **W2.** Version 0.3.0 (LDAP + bookmarks + nav/theme), CHANGELOG, VSIX, CI green, deliver.
 
+## Final deferral register (the only remaining planned items — all require what this
+## environment cannot provide, or a deliberate product gate)
+
+| Item | Why deferred |
+|---|---|
+| Navigation/theme serialization (D2) | SharePoint REST, different token audience, version-dependent — needs live tenant |
+| 3-way merge editor (Phase 3 remainder) | Needs base-snapshot tracking + merge UX; current preview-gated pull + Git history covers the pilot |
+| Agent-initiated mutations (§8 full) | Deliberate product gate: human-approved commands first; agent drafts, human applies |
+| Remaining §9.2 adapters (Splunk, Intune, Databricks, SQL Server, …) | Each needs live-instance validation; framework seam proven by 4 adapters |
+| Multi-workspace switcher (Pillar 7 remainder) | Sharing slice shipped (ADR-0013); switching is UX-heavy, low pilot demand |
+| Local MCP server (ADR-0017 surface 2) | Needs engine floor bump (1.101+) and a child-process secret-handling design; VS Code Copilot already served by LM tools |
+| Auto auth-method probing (ADR-0015 full) | Manual method choice + single lockout-safe verify ships; probing is an optimization |
+
 ## Resume notes (update each session)
 
 - 2026-06-11: File created; ADR-0019 authored alongside.
@@ -150,3 +163,4 @@
 - 2026-06-11: B5+A6+W1 done — docs updated (user/admin guides, changelog), v0.2.0 packaged. **All planned increments for this session complete.** Next session: see the Deferred lists above (Phase 3 merge/revert, write-back, more adapters, bookmarks UI).
 - 2026-06-11: Track C done — LDAP/AD connector with DNS SRV auto-discovery (ldapts, pure-JS), framework dispatch, discovery + add/test flow, 19 LDAP tests (101 total). Track D (bookmarks, nav/theme) next.
 - 2026-06-11: D1 done (bookmarks ADR-0010: store, two-level Reference Sources tree, add/run/remove, #spBookmarks/#spRunBookmark tools, 5 pure tests, 106 total). D2 deferred (SP-REST/different-audience, untestable here). Wrapping 0.3.0.
+- 2026-06-11: Tracks E (write-back), F (revert), G (config sharing) done; 0.4.0 wrapped. **Every completable planned feature has shipped**; see the deferral register above.

@@ -10,10 +10,12 @@ Copilot entitlement** and capped by **your budget**, and while every credential 
 OS keychain**. Nothing this extension collects ever leaves your machine unless you explicitly
 export it.
 
-> **Release 0.1.0 — governed foundation.** This release ships the connection, chat/agent,
-> cost-governance, and operability layers. Two-way site sync with Git and AI-driven provisioning
-> (the [project plan](docs/PLAN.md)'s later phases) build on top of this foundation and are not
-> yet included — the assistant is **read-only** toward SharePoint today.
+> **Release 0.4.x.** Shipped: governed Copilot chat/agent surface, enterprise auth
+> (browser + device-code, custom Entra app, sovereign clouds), site-as-code **pull / write-back /
+> revert** with Git + GitHub/GHES governance (ADR-0019/0021/0005), read-only reference sources
+> (Confluence, Jira, **LDAP/Active Directory with DNS auto-discovery**), bookmarks, secret-free
+> team config sharing, budget guardrails, and the anonymized diagnostics pipeline. The AI itself
+> remains read-only — every SharePoint write is a previewed, snapshot-guarded human command.
 
 ---
 

@@ -4,14 +4,16 @@ A Visual Studio Code extension that uses **GitHub Copilot as the AI provider** t
 **SharePoint Online** site development and maintenance, with **Git/GitHub** as the system of
 record for the site's "code."
 
-> Status: **Decisions resolved; release 0.1.0 shipped.** 0.1.0 delivers Phases 0–1 plus the
-> first slice of Phases 4/6: cost governor with budget enforcement (§4), MSAL interactive +
-> device-code auth with the Sites view (§5), secret storage incl. log redaction (§6), the
-> `@sharepoint` chat participant + read-only LM tools (§8 surface, read-only), and the
-> diagnostics/telemetry export pipeline (ADR-0018). Sync (§7), provisioning/write tools (§8),
-> the context-source framework (§9), and workspaces (§10) remain roadmap. See
-> [`docs/REVIEW.md`](./REVIEW.md) for the 0.1.0 readiness review and [`docs/adr/`](./adr) for
-> the long-form rationale behind the load-bearing choices.
+> Status: **Releases 0.1–0.4 shipped.** Delivered: Phases 0–1 (§4 cost governor with
+> enforcement, §5 auth incl. device-code, §6 secrets/redaction, ADR-0018 diagnostics export);
+> §7 sync core — pull, **write-back** (ADR-0021, Graph-based slice), **revert-to-commit**
+> (ADR-0005 core) with Git/GitHub-GHES governance (ADR-0019); §8 read-only agent surface (LM
+> tools; mutations remain human-approved commands); §9 framework + Confluence/Jira/**LDAP-AD**
+> adapters (ADR-0020) with bookmarks (ADR-0010); §10 secret-free config sharing (ADR-0013
+> slice). Remaining: nav/theme serialization (live-tenant SP REST), 3-way merge editor,
+> agent-initiated mutations, the further §9.2 adapter matrix, multi-workspace switching, the
+> local MCP server (ADR-0017). See [`docs/ROADMAP_STATE.md`](./ROADMAP_STATE.md) for live
+> state and [`docs/adr/`](./adr) for rationale.
 
 ---
 

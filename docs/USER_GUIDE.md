@@ -1,13 +1,14 @@
 # AI SharePoint — User Guide
 
-This guide covers everything in release **0.2.0**. If you only read one section, read
+This guide covers everything in release **0.4.0**. If you only read one section, read
 [Quick start](#quick-start); if something breaks, jump to
 [Troubleshooting](#troubleshooting) and [Getting help](#getting-help-diagnostics-export).
 
-**The assistant is read-only toward SharePoint**: it can sign in, read sites, lists, and
-pages, answer questions, draft plans — and, since 0.2.0, **pull** a site's structure into a
-local Git repository pushed to GitHub/GHES. It cannot change anything *in SharePoint* yet;
-write-back and AI provisioning are the next roadmap phases (see `docs/PLAN.md`).
+**Changes to SharePoint are always human-approved.** The assistant itself is read-only — it
+reads sites, answers questions, and drafts changes as repo file edits. Since 0.4.0 you can
+**apply** a site repository back to SharePoint (lists, columns, modern pages) and **revert** a
+site to any earlier commit — every write is previewed, freshness-checked, and snapshot-guarded.
+Navigation/theme and AI-autonomous provisioning remain on the roadmap (see `docs/PLAN.md`).
 
 ---
 
@@ -20,14 +21,14 @@ write-back and AI provisioning are the next roadmap phases (see `docs/PLAN.md`).
 5. [The activity-bar views](#the-activity-bar-views)
 6. [Chatting with @sharepoint](#chatting-with-sharepoint)
 7. [Agent-mode tools](#agent-mode-tools)
-8. [Site repositories: SharePoint as code](#site-repositories-sharepoint-as-code-git)
-9. [Reference sources: Confluence & Jira](#reference-sources-confluence--jira)
+8. [Site repositories: SharePoint as code](#site-repositories-sharepoint-as-code-git) — pull, write-back, revert
+9. [Reference sources](#reference-sources-confluence--jira) — Confluence, Jira, LDAP/AD, sharing
 10. [Copilot usage, budget, and the dashboard](#copilot-usage-budget-and-the-dashboard)
-9. [Getting help: diagnostics export](#getting-help-diagnostics-export)
-10. [All commands](#all-commands)
-11. [All settings](#all-settings)
-12. [Troubleshooting](#troubleshooting)
-13. [FAQ](#faq)
+11. [Getting help: diagnostics export](#getting-help-diagnostics-export)
+12. [All commands](#all-commands)
+13. [All settings](#all-settings)
+14. [Troubleshooting](#troubleshooting)
+15. [FAQ](#faq)
 
 ---
 
@@ -77,10 +78,10 @@ steps with illustrations.
 
 **2 — Connection role.**
 
-| Role | Meaning today | Meaning later |
-|---|---|---|
-| **managed** | Read access for chat/tools | Full lifecycle: sync to Git, AI provisioning, revert (roadmap) |
-| **reference** | Read access for chat/tools | Stays read-only forever — context source only |
+| Role | What it enables |
+|---|---|
+| **managed** | Chat/tools reads **plus** the full site-as-code lifecycle: pull to Git, write-back, revert |
+| **reference** | Read-only forever — chat/tool context only; sync and write-back refuse it |
 
 Pick *reference* for sites you only want the assistant to read. Roles can be changed any time
 from the Sites view context menu.
@@ -197,9 +198,21 @@ GitHub's 100 MB limit.
 allowlist, then pushes per your review gate. Authentication is your own Git setup (credential
 manager / SSH) — the extension never handles Git credentials and never force-pushes.
 
-> Not yet serialized (roadmap): navigation, theme, list items/documents, permissions — listed in
-> each pull preview. Edit the site in SharePoint and pull; hand-editing repo files becomes
-> useful when two-way push ships.
+**4. Write back** — edit the repo files (or have `@sharepoint` draft the edits), **commit**,
+then run **Apply Repository to SharePoint (write-back)…**. You get an operation-level preview
+(create/update lists, columns, pages); deletions are a separate, explicit opt-in and system
+libraries are never deleted. Before writing, the live site is **re-checked for drift** (if
+someone changed it since your preview, the push aborts) and a **safety snapshot** of the
+pre-push state is committed to `.aisharepoint/snapshots/`. Operations apply in order and stop
+at the first error; afterwards the repo is reconciled with the live state. First write asks for
+consent to the write scopes (see Admin Guide).
+
+**5. Revert** — **Revert Site to Commit…** picks any earlier snapshot commit and runs the same
+pipeline to make the live site match it (ADR-0005): same preview, same deletions opt-in, and the
+safety snapshot makes the revert itself revertible.
+
+> Not serialized (roadmap): navigation, theme, list items/documents, permissions — listed in
+> every preview. Renames and column deletion/retyping are out of scope (flagged, manual).
 
 ## Reference sources: Confluence & Jira
 
@@ -244,6 +257,10 @@ domain-joined machine.
   path.
 - **Lockout protection is critical here** — a wrong AD password is the fastest way to lock a
   real account, so the breaker (3 strikes, no auto-retry) applies exactly as above.
+- **Share with your team**: **Export Reference Config (secret-free)…** writes a JSON of source
+  descriptors + bookmarks (never credentials or accounts — verified by a leak scan); teammates
+  **Import Reference Config…** and sign in with their own credentials, with the working auth
+  method pre-selected.
 - **TLS**: LDAPS (port 636/3269) is preferred. If your DCs use an internal CA, see the
   [Admin Guide](ADMIN_GUIDE.md#7-reference-sources-confluence--jira--ldap--ad) — you may need
   the CA installed, or (lab only) `aiSharePoint.ldap.tlsRejectUnauthorized: false`. For plain
@@ -317,6 +334,9 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Change Connection Role | Toggle managed ↔ reference |
 | Sign Out of Site | Wipe the tenant's cached tokens from the keychain |
 | Configure Site Repository (Git)… / Pull Site to Repository / Push Site Repository | Site-as-code sync (managed sites; see the Site repositories section) |
+| Apply Repository to SharePoint (write-back)… | Write repo changes to the live site — previewed, freshness-checked, snapshot-guarded |
+| Revert Site to Commit… | Make the live site match an earlier snapshot commit (ADR-0005) |
+| Export / Import Reference Config | Share sources + bookmarks with the team, secret-free (ADR-0013) |
 | Add / Test / Remove Context Source · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only Confluence/Jira sources |
 | Remove Site Connection | Remove descriptor (+ tokens if last connection in tenant) |
 | Ask Copilot (metered) | One-shot prompt; streams into the “AI SharePoint — Copilot” output |
@@ -380,8 +400,9 @@ GitHub Copilot policies.
 **Are the cost numbers my real bill?** No — they're this extension's own metered estimate (see
 ADR-0003). They exist so you're never surprised, not to replace GitHub's billing page.
 
-**Can it modify my SharePoint sites?** Not in this release. All write capabilities (sync,
-provisioning, revert) are roadmap items and will arrive behind preview-and-approve gates.
+**Can it modify my SharePoint sites?** Only when *you* run the write-back or revert commands —
+every write is previewed, drift-checked, snapshot-guarded, and applied under your own account.
+The AI assistant and agent tools can never write; they draft repo file edits for you to apply.
 
 **Where are my credentials?** In your OS keychain, keyed per tenant, removable via Sign Out /
 Remove Connection. Never in settings, files, logs, or exports.

@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.4.0 — 2026-06-11
+
+**SharePoint write-back** lands (ADR-0021) — the repo → site direction of PLAN §7 — plus
+**revert-to-commit** (ADR-0005) and **secret-free reference-config sharing** (ADR-0013). With
+this release every roadmap pillar that can be built and verified without a live tenant ships.
+
+### Added — write-back (ADR-0021)
+- **Apply Repository to SharePoint (write-back)…** on managed connections: edits to
+  `lists/*.json` / `pages/*.json` (hand-written or assistant-drafted), once committed, are
+  planned as artifact-level operations — create/update lists, add/update columns, create/update
+  modern pages incl. web-part canvas, publish — previewed in full and applied only on explicit
+  confirmation. Conservative semantics: **deletions are a separate per-push opt-in**, system
+  libraries are never deleted, renames and column deletion/retyping are out of scope (flagged),
+  lookup/calculated columns are warnings (manual setup).
+- **Safety pipeline on every push**: clean-tree guard (uncommitted edits refuse write-back) →
+  **freshness gate** (live site re-serialized and compared byte-identically to the plan's base —
+  any drift aborts) → **safety snapshot** of the pre-push live state committed to
+  `.aisharepoint/snapshots/<stamp>/` → sequential apply with stop-on-first-error → **reconcile
+  pull + commit** so the repo always ends equal to the live state. Partial failures preserve
+  intent in commit history.
+- **Write scopes only at write time**: reads keep `Sites.Read.All`; the first write requests
+  delegated `Sites.ReadWrite.All` + `Sites.Manage.All` (incremental consent; admin guide
+  documents pre-consent). Engine is Microsoft Graph v1.0 — no new dependencies (ADR-0021 amends
+  the PnPjs plan; PnPjs re-scoped to nav/theme later).
+- **The AI stays read-only**: chat/tools draft repo edits and point to the human-approved flow;
+  they cannot apply changes.
+
+### Added — revert to commit (ADR-0005)
+- **Revert Site to Commit…**: pick any snapshot commit from the repo history; the file inventory
+  at that ref is read from the committed manifest and run through the same write-back pipeline —
+  preview, deletions opt-in, freshness gate, and a fresh safety snapshot that makes the revert
+  itself revertible ("undo the undo").
+
+### Added — reference-config sharing (ADR-0013)
+- **Export Reference Config (secret-free)…** / **Import Reference Config…**: share Confluence/
+  Jira/LDAP source descriptors (including the working auth method, ADR-0015) and bookmarks with
+  the team. Secret-free **by construction** (explicit field allowlist, no keychain code path, no
+  accounts/ids) plus a leak scan before write; import regenerates ids, skips name collisions,
+  and prompts recipients to verify with their own credentials.
+
+### Notes
+- 12 new unit tests (131 total): push planner round-trip (serialize → parse → empty plan),
+  placeholder-id resolution, stop-on-first-error, deletions opt-in, freshness gate, export
+  forbidden-key/leak-scan assertions, import validation.
+- Live-tenant pilot validation required for the Graph write endpoints (canvas PATCH behavior
+  varies by tenant ring) — same posture as all adapters; diagnostics export is the channel.
+
 ## 0.3.0 — 2026-06-11
 
 Enterprise test candidate: a read-only **LDAP / Active Directory** connector with DNS
