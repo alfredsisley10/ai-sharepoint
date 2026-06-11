@@ -70,6 +70,7 @@ import {
   CatalogEntry,
   LoadCheckpoint,
 } from "./context/catalogCache";
+import { setWireSink } from "./core/wireLog";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
 import {
@@ -200,7 +201,36 @@ export function activate(context: vscode.ExtensionContext): void {
     nowIso,
     () => copilotState.signedIn,
   );
-  const supportProvider = new SupportTreeProvider(errors, version);
+  const verboseWireOn = () =>
+    vscode.workspace.getConfiguration("aiSharePoint").get<boolean>("logging.verboseWire", false);
+  const supportProvider = new SupportTreeProvider(errors, version, verboseWireOn);
+
+  // --- Verbose wire logging (pilot): full request/response detail from
+  // every integration. Redaction is layered: structural at each tap (auth
+  // headers masked, token bodies withheld, passwords never emitted),
+  // key-masking in wireLog.safeJson, and the Logger's redactText pass on
+  // every line. Local only — never part of diagnostics exports.
+  const applyWireLogging = () => {
+    setWireSink(
+      verboseWireOn()
+        ? (e) =>
+            log.info(
+              `[wire:${e.integration}] ${e.direction} ${e.summary}${e.detail ? `\n${e.detail}` : ""}`,
+            )
+        : undefined,
+    );
+  };
+  applyWireLogging();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("aiSharePoint.logging.verboseWire")) {
+        applyWireLogging();
+        log.info(`Verbose wire logging ${verboseWireOn() ? "ENABLED" : "disabled"}.`);
+        supportProvider.refresh();
+      }
+    }),
+    { dispose: () => setWireSink(undefined) },
+  );
   const sitesView = vscode.window.createTreeView("aiSharePoint.sitesView", {
     treeDataProvider: sitesProvider,
   });
@@ -2614,6 +2644,21 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage(
         `New anonymous install ID: ${fresh.id}`,
       );
+    }
+  });
+
+  register("aiSharePoint.toggleVerboseLogging", async () => {
+    const next = !verboseWireOn();
+    await vscode.workspace
+      .getConfiguration("aiSharePoint")
+      .update("logging.verboseWire", next, vscode.ConfigurationTarget.Global);
+    if (next) {
+      log.show();
+      void vscode.window.showInformationMessage(
+        "Verbose wire logging is ON — every integration request/response is written to the AI SharePoint log. Secrets are redacted (auth headers masked, token bodies withheld, credentials never logged), but the output is detailed: turn it off after debugging.",
+      );
+    } else {
+      void vscode.window.showInformationMessage("Verbose wire logging is off.");
     }
   });
 

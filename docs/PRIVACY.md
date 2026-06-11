@@ -24,6 +24,16 @@ finds anything secret-shaped.
 What is **never stored, anywhere**: your prompts, AI responses, SharePoint content (list items,
 page bodies, documents), passwords, or raw tokens outside the keychain.
 
+### Verbose wire logging (opt-in)
+
+`aiSharePoint.logging.verboseWire` writes the full request/response detail of every integration
+to the local **AI SharePoint output channel** for debugging. Redaction is layered and
+fail-closed: authorization headers are reduced to their scheme (`Bearer ***`), sign-in/token
+endpoint bodies are **withheld entirely**, credential-shaped fields are masked, database/LDAP
+**result data is summarized (counts and column names), never dumped**, and every line passes the
+same redaction filter that guards diagnostics exports. Wire logs live only in the VS Code log
+folder on your machine and are **not** part of the diagnostics bundle.
+
 ## What the extension sends, and to whom
 
 | Destination | What | When |

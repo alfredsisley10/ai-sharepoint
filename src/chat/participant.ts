@@ -13,6 +13,7 @@ import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { adviceFor } from "../core/errors";
 import { Logger } from "../core/log";
+import { wireEnabled, emitWire, capDetail, safeJson } from "../core/wireLog";
 
 export const PARTICIPANT_ID = "aiSharePoint.sharepoint";
 
@@ -371,14 +372,24 @@ async function answerWithModel(
     for (const call of toolCalls) {
       stream.progress(`Running ${call.name.replace("aisharepoint_", "").replace(/_/g, " ")}…`);
       deps.telemetry.record("chat.toolCall", { tool: call.name });
+      if (wireEnabled()) {
+        emitWire("tool", "→", `${call.name} (round ${round + 1})`, safeJson(call.input));
+      }
       try {
         const result = await vscode.lm.invokeTool(
           call.name,
           { input: call.input, toolInvocationToken: request.toolInvocationToken },
           token,
         );
+        if (wireEnabled()) {
+          const rendered = result.content
+            .map((p) => (p instanceof vscode.LanguageModelTextPart ? p.value : "[non-text part]"))
+            .join("\n");
+          emitWire("tool", "←", `${call.name} — ${rendered.length} chars`, capDetail(rendered));
+        }
         resultParts.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
       } catch (err) {
+        emitWire("tool", "✗", `${call.name} — ${redactError(err).message}`);
         // Tool denied (user rejected a confirmation) or failed — tell the
         // model so it can continue gracefully instead of dying mid-turn.
         resultParts.push(

@@ -15,6 +15,7 @@ import {
   RawEntry,
 } from "./ldapShape";
 import { AppError, classifyError } from "../../core/errors";
+import { wireEnabled, emitWire } from "../../core/wireLog";
 import { parseLdapTarget, candidateUrls } from "./srvLocator";
 import { loadTrustedCAs } from "./osTrust";
 import { DnsResolver } from "./discovery";
@@ -129,9 +130,14 @@ async function connectAndBind(
     if (!secure && tls.useStartTls) {
       await client.startTLS(tlsOptionsFor(tls));
     }
+    // Wire log: bind identity + transport only — the password never leaves
+    // this call.
+    emitWire("ldap", "→", `bind ${bindDn(credential)} @ ${url}${!secure && tls.useStartTls ? " (StartTLS)" : ""}`);
     await client.bind(bindDn(credential), credential.secret);
+    emitWire("ldap", "←", `bind OK @ ${url}`);
     return client;
   } catch (err) {
+    emitWire("ldap", "✗", `bind ${bindDn(credential)} @ ${url} — ${err instanceof Error ? err.message : String(err)}`);
     try {
       await client.unbind();
     } catch {
@@ -219,16 +225,27 @@ export async function searchLdap(
   }
   return withClient(source, credential, tls, caps, async (client) => {
     let entries: RawEntry[];
+    const filter = buildFilter(query);
+    const started = Date.now();
+    if (wireEnabled()) {
+      emitWire(
+        "ldap",
+        "→",
+        `search base="${source.baseDn}" scope=sub sizeLimit=${caps.maxResults}`,
+        `filter: ${filter}\nattributes: ${DEFAULT_ATTRIBUTES.join(", ")}`,
+      );
+    }
     try {
       const res = await client.search(source.baseDn!, {
         scope: "sub",
-        filter: buildFilter(query),
+        filter,
         attributes: DEFAULT_ATTRIBUTES,
         sizeLimit: caps.maxResults,
         timeLimit: Math.ceil(caps.timeoutMs / 1000),
         paged: false,
       });
       entries = res.searchEntries as unknown as RawEntry[];
+      emitWire("ldap", "←", `search — ${entries.length} entr(ies) (${Date.now() - started}ms) — attribute values withheld (directory data)`);
     } catch (err) {
       // sizeLimitExceeded: return whatever ldapts surfaced rather than failing.
       const e = err as { code?: number; searchEntries?: RawEntry[] };

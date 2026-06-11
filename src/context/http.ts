@@ -1,5 +1,6 @@
 import { AppError } from "../core/errors";
 import { ContextCredential } from "./types";
+import { wireEnabled, emitWire, capDetail, safeHeaders, safeUrl } from "../core/wireLog";
 
 /** Shared fetch wrapper for context adapters: auth header construction,
  *  timeouts, response-size caps, status→ErrorCode mapping. Pure. */
@@ -20,6 +21,19 @@ export async function fetchJson<T>(
   timeoutMs: number,
   extraHeaders?: Record<string, string>,
 ): Promise<T> {
+  const started = Date.now();
+  if (wireEnabled()) {
+    emitWire(
+      "http",
+      "→",
+      `GET ${safeUrl(url)}`,
+      safeHeaders({
+        Authorization: authHeader(credential),
+        Accept: "application/json",
+        ...extraHeaders,
+      }),
+    );
+  }
   let res: Response;
   try {
     res = await fetch(url, {
@@ -31,10 +45,14 @@ export async function fetchJson<T>(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
+    emitWire("http", "✗", `GET ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
     throw new AppError(
       `Context request failed: ${err instanceof Error ? err.message : String(err)}`,
       "network",
     );
+  }
+  if (!res.ok && wireEnabled()) {
+    emitWire("http", "✗", `GET ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
   }
   if (res.status === 401 || res.status === 403) {
     throw new AppError(
@@ -57,6 +75,14 @@ export async function fetchJson<T>(
     );
   }
   const text = await res.text();
+  if (wireEnabled()) {
+    emitWire(
+      "http",
+      "←",
+      `GET ${safeUrl(url)} ${res.status} · ${text.length} bytes (${Date.now() - started}ms)`,
+      capDetail(text),
+    );
+  }
   if (text.length > MAX_RESPONSE_BYTES) {
     throw new AppError(
       `Source response exceeded the ${MAX_RESPONSE_BYTES / 1024 / 1024} MB read cap (ADR-0012).`,

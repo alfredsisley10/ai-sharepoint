@@ -5,6 +5,7 @@ import {
 } from "../types";
 import { rowsToHits } from "../db/readSafe";
 import { AppError } from "../../core/errors";
+import { wireEnabled, emitWire, safeJson, safeUrl } from "../../core/wireLog";
 
 /**
  * Power BI (cloud) connector (ADR-0027): list workspaces/datasets and run
@@ -78,10 +79,20 @@ async function pbiFetch<T>(
   timeoutMs: number,
   init?: { method?: "GET" | "POST"; body?: unknown },
 ): Promise<T> {
+  const method = init?.method ?? "GET";
+  const started = Date.now();
+  if (wireEnabled()) {
+    emitWire(
+      "powerbi",
+      "→",
+      `${method} ${safeUrl(path)}`,
+      `Authorization: Bearer ***${init?.body !== undefined ? `\n${safeJson(init.body)}` : ""}`,
+    );
+  }
   let res: Response;
   try {
     res = await fetch(`${POWERBI_BASE}${path}`, {
-      method: init?.method ?? "GET",
+      method,
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
@@ -91,10 +102,18 @@ async function pbiFetch<T>(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
+    emitWire(
+      "powerbi",
+      "✗",
+      `${method} ${safeUrl(path)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`,
+    );
     throw new AppError(
       `Power BI request failed: ${err instanceof Error ? err.message : String(err)}`,
       "network",
     );
+  }
+  if (!res.ok) {
+    emitWire("powerbi", "✗", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
   }
   if (res.status === 401 || res.status === 403) {
     throw new AppError(
@@ -113,7 +132,11 @@ async function pbiFetch<T>(
     const text = await res.text().catch(() => "");
     throw new AppError(`Power BI request failed (${res.status}): ${text.slice(0, 300)}`, "unknown");
   }
-  return (await res.json()) as T;
+  const parsed = (await res.json()) as T;
+  if (wireEnabled()) {
+    emitWire("powerbi", "←", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`, safeJson(parsed));
+  }
+  return parsed;
 }
 
 interface PbiDataset {

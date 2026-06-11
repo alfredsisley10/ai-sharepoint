@@ -6,6 +6,7 @@ import {
   ReadCaps,
 } from "../types";
 import { AppError } from "../../core/errors";
+import { wireEnabled, emitWire, safeJson, safeUrl } from "../../core/wireLog";
 
 /**
  * Vertex AI Search connector (ADR-0026): read-only enterprise search +
@@ -109,6 +110,10 @@ async function postVertex<T>(
   body: unknown,
   timeoutMs: number,
 ): Promise<T> {
+  const started = Date.now();
+  if (wireEnabled()) {
+    emitWire("vertex", "→", `POST ${safeUrl(url)}`, `Authorization: Bearer ***\n${safeJson(body)}`);
+  }
   let res: Response;
   try {
     res = await fetch(url, {
@@ -122,10 +127,18 @@ async function postVertex<T>(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
+    emitWire(
+      "vertex",
+      "✗",
+      `POST ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`,
+    );
     throw new AppError(
       `Vertex AI Search request failed: ${err instanceof Error ? err.message : String(err)}`,
       "network",
     );
+  }
+  if (!res.ok) {
+    emitWire("vertex", "✗", `POST ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
   }
   if (res.status === 401 || res.status === 403) {
     throw new AppError(
@@ -150,7 +163,11 @@ async function postVertex<T>(
       "unknown",
     );
   }
-  return (await res.json()) as T;
+  const parsed = (await res.json()) as T;
+  if (wireEnabled()) {
+    emitWire("vertex", "←", `POST ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`, safeJson(parsed));
+  }
+  return parsed;
 }
 
 // --- API surface ----------------------------------------------------------------

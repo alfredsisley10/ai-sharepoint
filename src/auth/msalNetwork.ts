@@ -3,6 +3,7 @@ import {
   NetworkRequestOptions,
   NetworkResponse,
 } from "@azure/msal-node";
+import { emitWire, safeUrl } from "../core/wireLog";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -39,12 +40,28 @@ export class FetchNetworkClient implements INetworkModule {
     url: string,
     options?: NetworkRequestOptions,
   ): Promise<NetworkResponse<T>> {
-    const res = await fetch(url, {
-      method,
-      headers: options?.headers,
-      body: options?.body,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    const started = Date.now();
+    // Token traffic: URL + status only, EVER — request bodies carry auth
+    // codes/refresh tokens and responses carry access tokens, so the wire
+    // log structurally withholds both rather than trusting redaction.
+    emitWire("msal", "→", `${method} ${safeUrl(url)} (request/response bodies withheld — token material)`);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: options?.headers,
+        body: options?.body,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      emitWire(
+        "msal",
+        "✗",
+        `${method} ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`,
+      );
+      throw err;
+    }
+    emitWire("msal", "←", `${method} ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
     const headers: Record<string, string> = {};
     res.headers.forEach((value, key) => {
       headers[key] = value;

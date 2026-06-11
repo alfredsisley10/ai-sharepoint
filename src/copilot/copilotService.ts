@@ -3,6 +3,7 @@ import { ModelCostTable } from "./modelCosts";
 import { UsageMeter } from "./meter";
 import { BudgetGuard, BudgetVerdict } from "./budget";
 import { AppError } from "../core/errors";
+import { wireEnabled, emitWire, capDetail } from "../core/wireLog";
 
 export interface ModelInfo {
   id: string;
@@ -123,6 +124,15 @@ export class CopilotService {
       // Token counting is best-effort; metering falls back to 0 input tokens.
     }
 
+    const started = Date.now();
+    if (wireEnabled()) {
+      emitWire(
+        "copilot",
+        "→",
+        `${model.id} (task: ${opts.label}, ~${inputTokens} input tokens)`,
+        capDetail(opts.prompt),
+      );
+    }
     let text = "";
     let ok = false;
     let outputTokens = 0;
@@ -138,6 +148,14 @@ export class CopilotService {
       }
       ok = true;
     } finally {
+      if (wireEnabled()) {
+        emitWire(
+          ok ? "copilot" : "copilot",
+          ok ? "←" : "✗",
+          `${model.id} — ${text.length} chars (${Date.now() - started}ms)${ok ? "" : " — failed/cancelled (still metered)"}`,
+          text ? capDetail(text) : undefined,
+        );
+      }
       if (text) {
         try {
           outputTokens = await model.countTokens(text);

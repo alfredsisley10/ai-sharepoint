@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.8.1 — 2026-06-11
+
+### Added — verbose wire logging across every integration (pilot)
+- One switch — **Support & Diagnostics → Verbose Wire Logging** (or
+  `aiSharePoint.logging.verboseWire` / *Toggle Verbose Wire Logging*) — writes the **full
+  request/response detail of every point of integration** to the AI SharePoint output channel:
+  Microsoft **Graph** (SharePoint reads, write-back, Teams/Outlook sends — method, path,
+  scopes, bodies, status, timing), **Confluence/Jira** HTTP (URL, headers, response bodies),
+  **MSAL sign-in** traffic (URL + status), **LDAP** (bind identity, server, filter, attribute
+  list, entry counts), **SQL Server/PostgreSQL/MySQL** (the exact SQL incl. session prefixes,
+  row counts, server error frames), **MongoDB** (query spec, document counts), **Vertex AI
+  Search** and **Power BI** (request/response payloads), **Copilot** (model, prompt, response,
+  token estimates), and every **chat tool call** (name, input, result).
+- **Secrets are redacted in layers, fail-closed**: authorization headers reduced to their
+  scheme (`Bearer ***`), token-endpoint bodies **withheld entirely** (never logged, never
+  trusted to regex), passwords structurally absent (bind/TDS credentials never reach the
+  logger), secret-shaped JSON keys masked (`password`/`token`/`secret`/`client_secret`/…),
+  credentials and token parameters stripped from URLs, and every line passes the global
+  redaction filter that also guards diagnostics exports. Database/LDAP **result data is
+  summarized (counts + column names), not dumped**. Payloads are capped at 4 kB per event.
+- Local only: wire logs stay in your VS Code log folder and are **never** included in
+  diagnostics bundles. Locked with tests that assert credentials cannot reach the log sink.
+
+
 ## 0.8.0 — 2026-06-11
 
 ### Added — Power BI (cloud) connector (ADR-0027)

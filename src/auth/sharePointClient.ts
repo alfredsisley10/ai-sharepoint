@@ -1,5 +1,6 @@
 import { SharePointAuthProvider } from "./types";
 import { AppError } from "../core/errors";
+import { wireEnabled, emitWire, capDetail, safeJson, safeUrl } from "../core/wireLog";
 
 /** Microsoft Graph delegated scope to read sites. */
 const SITES_READ_SCOPE = "https://graph.microsoft.com/Sites.Read.All";
@@ -207,6 +208,20 @@ export class SharePointClient {
     retried = false,
   ): Promise<T> {
     const token = await this.acquire(scopes);
+    const started = Date.now();
+    if (wireEnabled() && !retried) {
+      // The token itself never reaches the wire log — scheme only.
+      emitWire(
+        "graph",
+        "→",
+        `${method} ${safeUrl(path)}`,
+        [
+          "Authorization: Bearer ***",
+          ...(scopes ? [`(scopes: ${scopes.join(" ")})`] : []),
+          ...(body !== undefined ? [safeJson(body)] : []),
+        ].join("\n"),
+      );
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     let res: Response;
@@ -221,6 +236,11 @@ export class SharePointClient {
         signal: controller.signal,
       });
     } catch (err) {
+      emitWire(
+        "graph",
+        "✗",
+        `${method} ${safeUrl(path)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`,
+      );
       throw new AppError(
         `Graph request failed: ${err instanceof Error ? err.message : String(err)}`,
         "network",
@@ -240,6 +260,12 @@ export class SharePointClient {
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => "");
+      emitWire(
+        "graph",
+        "✗",
+        `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`,
+        wireEnabled() ? capDetail(errBody) : undefined,
+      );
       const code =
         res.status === 403 || res.status === 401
           ? "graph.forbidden"
@@ -254,8 +280,18 @@ export class SharePointClient {
       );
     }
     if (res.status === 204 || method === "DELETE") {
+      emitWire("graph", "←", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
       return undefined as T;
     }
-    return (await res.json()) as T;
+    const parsed = (await res.json()) as T;
+    if (wireEnabled()) {
+      emitWire(
+        "graph",
+        "←",
+        `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`,
+        safeJson(parsed),
+      );
+    }
+    return parsed;
   }
 }

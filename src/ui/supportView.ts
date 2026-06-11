@@ -23,8 +23,13 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
   constructor(
     private readonly errors: ErrorReportStore,
     private readonly version: string,
+    private readonly verboseWireOn: () => boolean = () => false,
   ) {
     errors.onDidChange(() => this.emitter.fire());
+  }
+
+  refresh(): void {
+    this.emitter.fire();
   }
 
   getTreeItem(node: SupportNode): vscode.TreeItem {
@@ -69,6 +74,17 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
         label: "Open Extension Logs",
         icon: new vscode.ThemeIcon("output"),
         command: { command: "aiSharePoint.openLogs", title: "Open Logs" },
+      },
+      {
+        id: "verboseWire",
+        label: "Verbose Wire Logging",
+        description: this.verboseWireOn() ? "on" : "off",
+        icon: this.verboseWireOn()
+          ? new vscode.ThemeIcon("eye", new vscode.ThemeColor("charts.yellow"))
+          : new vscode.ThemeIcon("eye-closed"),
+        tooltip:
+          "Log the full request/response detail of every integration — Graph (SharePoint/Teams/Outlook), Confluence/Jira, LDAP, databases, Vertex AI Search, Power BI, MSAL sign-in, and Copilot prompts. Secrets are redacted in layers (auth headers masked, token bodies withheld, credential-shaped values scrubbed). Local only; never included in diagnostics exports. Click to toggle.",
+        command: { command: "aiSharePoint.toggleVerboseLogging", title: "Toggle" },
       },
       {
         id: "walkthrough",

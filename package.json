@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -353,6 +353,12 @@
         "command": "aiSharePoint.openWalkthrough",
         "title": "Open Getting Started Walkthrough",
         "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.toggleVerboseLogging",
+        "title": "Toggle Verbose Wire Logging",
+        "category": "AI SharePoint",
+        "icon": "$(eye)"
       }
     ],
     "viewsContainers": {
@@ -1320,6 +1326,12 @@
           "scope": "machine",
           "order": 16,
           "markdownDescription": "Path to a PEM CA bundle trusted for LDAPS/StartTLS connections (e.g. your corporate root + intermediates), **appended** to Node's defaults and the OS trust store. Machine-scoped. Use when the OS-store API is unavailable on your VS Code runtime — see Admin Guide §7."
+        },
+        "aiSharePoint.logging.verboseWire": {
+          "type": "boolean",
+          "default": false,
+          "order": 30,
+          "markdownDescription": "Log the **full request/response detail of every integration** — Microsoft Graph (SharePoint, Teams, Outlook), Confluence/Jira, LDAP/Active Directory, SQL Server/PostgreSQL/MySQL/MongoDB, Vertex AI Search, Power BI, MSAL sign-in traffic, and Copilot prompts/responses — to the *AI SharePoint* output channel. **Secrets are redacted in layers**: authorization headers are reduced to their scheme, token-endpoint bodies are withheld entirely, credential-shaped fields are masked, and every line passes the global redaction filter. Database/LDAP **result data is summarized (counts/columns), not dumped**. Local only; never included in diagnostics exports. Expect large output — enable only while debugging."
         }
       }
     }

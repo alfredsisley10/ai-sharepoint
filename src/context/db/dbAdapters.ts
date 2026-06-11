@@ -25,6 +25,28 @@ import {
 } from "./schemaIndex";
 import { loadTrustedCAs } from "../ldap/osTrust";
 import { AppError } from "../../core/errors";
+import { wireEnabled, emitWire, capDetail, safeJson } from "../../core/wireLog";
+
+/** Wire-log helper shared by the SQL runners: the statement is logged in
+ *  full (it IS what was sent); returned row VALUES are withheld — counts
+ *  and column names only, since result data is the user's enterprise data
+ *  and already visible where it was requested. */
+function wireSqlResult(
+  engine: string,
+  target: string,
+  rows: Array<Record<string, unknown>>,
+  startedMs: number,
+): void {
+  if (!wireEnabled()) return;
+  emitWire(
+    engine,
+    "←",
+    `${target} — ${rows.length} row(s) (${Date.now() - startedMs}ms)`,
+    rows.length > 0
+      ? `columns: ${Object.keys(rows[0]).join(", ")} — row values withheld (data)`
+      : undefined,
+  );
+}
 
 export interface DbTlsOptions {
   caBundlePath?: string;
@@ -152,11 +174,16 @@ async function mssqlRows(
     }
     return err;
   };
+  const target = `${host}${port ? `:${port}` : mp.instanceName ? `\\${mp.instanceName}` : ""}/${database}`;
+  const started = Date.now();
+  if (wireEnabled()) {
+    emitWire("mssql", "→", target, capDetail(`SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;\n${sql}`));
+  }
   try {
     await new Promise<void>((resolve, reject) => {
       connection.connect((err) => (err ? reject(withServerDetail(err)) : resolve()));
     });
-    return await new Promise((resolve, reject) => {
+    const result = await new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
       const rows: Array<Record<string, unknown>> = [];
       // READ UNCOMMITTED (NOLOCK semantics) so reads never block writers.
       const request = new TdsRequest(
@@ -173,7 +200,10 @@ async function mssqlRows(
       });
       connection.execSql(request);
     });
+    wireSqlResult("mssql", target, result, started);
+    return result;
   } catch (err) {
+    emitWire("mssql", "✗", `${target} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
     throw mapDbError(err, "SQL Server");
   } finally {
     connection.close();
@@ -202,14 +232,20 @@ async function pgRows(
     query_timeout: caps.timeoutMs,
     ...(wantSsl ? { ssl: { rejectUnauthorized: true, ...(ca ? { ca } : {}) } } : {}),
   });
+  const target = `${host}:${port ?? 5432}/${database}`;
+  const started = Date.now();
+  if (wireEnabled()) emitWire("postgres", "→", target, capDetail(sql));
   try {
     await client.connect();
     // Server-side read-only + statement timeout (ADR-0012).
     await client.query("SET default_transaction_read_only = on");
     await client.query(`SET statement_timeout = ${Math.floor(caps.timeoutMs)}`);
     const res = await client.query(sql);
-    return (res.rows as Array<Record<string, unknown>>).slice(0, caps.maxResults);
+    const rows = (res.rows as Array<Record<string, unknown>>).slice(0, caps.maxResults);
+    wireSqlResult("postgres", target, rows, started);
+    return rows;
   } catch (err) {
+    emitWire("postgres", "✗", `${target} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
     throw mapDbError(err, "PostgreSQL");
   } finally {
     await client.end().catch(() => undefined);
@@ -242,9 +278,14 @@ async function mysqlRows(
     });
     await connection.query("SET SESSION TRANSACTION READ ONLY");
     await connection.query(`SET SESSION max_execution_time = ${Math.floor(caps.timeoutMs)}`);
+    if (wireEnabled()) emitWire("mysql", "→", `${host}:${port ?? 3306}/${database}`, capDetail(sql));
+    const startedQuery = Date.now();
     const [rows] = await connection.query({ sql, timeout: caps.timeoutMs });
-    return (rows as Array<Record<string, unknown>>).slice(0, caps.maxResults);
+    const capped = (rows as Array<Record<string, unknown>>).slice(0, caps.maxResults);
+    wireSqlResult("mysql", `${host}:${port ?? 3306}/${database}`, capped, startedQuery);
+    return capped;
   } catch (err) {
+    emitWire("mysql", "✗", `${host}:${port ?? 3306}/${database} — ${err instanceof Error ? err.message : String(err)}`);
     throw mapDbError(err, "MySQL");
   } finally {
     await connection?.end().catch(() => undefined);
@@ -320,6 +361,10 @@ export async function searchDb(
   const label = `${source.type}:${source.displayName}`;
   if (source.type === "mongodb") {
     const spec = parseMongoSpec(query);
+    const started = Date.now();
+    if (wireEnabled()) {
+      emitWire("mongodb", "→", `${parseDbUrl(source).host}/${parseDbUrl(source).database}`, safeJson(spec));
+    }
     const docs = await withMongo(source, credential, tls, caps, (client, dbName) =>
       client
         .db(dbName)
@@ -330,6 +375,11 @@ export async function searchDb(
           maxTimeMS: caps.timeoutMs,
         })
         .toArray(),
+    );
+    emitWire(
+      "mongodb",
+      "←",
+      `${spec.collection} — ${docs.length} document(s) (${Date.now() - started}ms) — values withheld (data)`,
     );
     return rowsToHits(docs as Array<Record<string, unknown>>, caps.maxResults, label);
   }

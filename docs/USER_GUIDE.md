@@ -120,8 +120,21 @@ and the budget editor.
 ### Support & Diagnostics
 Everything operational: **Export Diagnostics Bundle**, **Error Reports** (the view badge shows
 the count; **right-click → Delete Error Reports** to clear them, with confirmation), extension
-**logs**, the **walkthrough**, this **user guide**, the **privacy notice**, and **Rotate
-Anonymous Install ID**.
+**logs**, **Verbose Wire Logging** (below), the **walkthrough**, this **user guide**, the
+**privacy notice**, and **Rotate Anonymous Install ID**.
+
+#### Verbose wire logging — see exactly what crossed each integration
+
+Click **Verbose Wire Logging** in the Support view (or run *Toggle Verbose Wire Logging*) and
+the AI SharePoint log shows every integration's traffic as `[wire:…]` lines — request (`→`),
+response (`←`), failure (`✗`) — with method/target, status, timing, and capped payload detail:
+Graph (SharePoint/Teams/Outlook), Confluence/Jira, MSAL sign-in, LDAP binds & searches, the
+exact SQL sent to databases (with the server's error frames), MongoDB specs, Vertex AI Search,
+Power BI, Copilot prompts/responses, and each chat tool call. **Secrets never appear**: auth
+headers are masked to their scheme, sign-in/token bodies are withheld entirely, passwords are
+structurally never logged, secret-shaped fields are scrubbed, and database/directory **result
+data is summarized (counts + columns), not dumped**. It's local-only, excluded from diagnostics
+bundles, and intentionally noisy — turn it off after debugging.
 
 ## Chatting with @sharepoint
 
@@ -520,6 +533,10 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | `aiSharePoint.context.cacheTtlMinutes` | `15` | Reference-source result cache TTL |
 | `aiSharePoint.context.maxResults` | `25` | Reference-source result cap |
 | `aiSharePoint.ldap.caCertificatesFile` | `""` | **Machine-scoped** — PEM bundle appended to OS/default trust for LDAPS |
+| `aiSharePoint.context.catalogTtlHours` | `24` | Pre-cached catalog freshness window |
+| `aiSharePoint.context.catalogCheckpointSeconds` | `15` | "Keep loading?" interval during catalog pre-cache |
+| `aiSharePoint.context.allowSchemaIndexing` | `true` | **Machine-scoped** — allow Copilot schema indexing (names only) |
+| `aiSharePoint.logging.verboseWire` | `false` | Full redacted request/response detail from every integration in the log |
 
 ## Troubleshooting
 
