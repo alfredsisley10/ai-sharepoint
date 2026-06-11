@@ -103,7 +103,7 @@
 
 - [x] **W1.** Version 0.2.0, CHANGELOG consolidation, VSIX rebuild + CI green, state file final
       pass, deliver VSIX.
-- [ ] **W2.** Version 0.3.0 (LDAP + bookmarks + nav/theme), CHANGELOG, VSIX, CI green, deliver.
+- [x] **W2.** Version 0.3.0 (LDAP + bookmarks + nav/theme), CHANGELOG, VSIX, CI green, deliver.
 
 ## Resume notes (update each session)
 

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.3.0 — 2026-06-11
+
+Enterprise test candidate: a read-only **LDAP / Active Directory** connector with DNS
+auto-discovery, plus **bookmarks** for reusable reference queries.
+
+### Added — LDAP / Active Directory connector (ADR-0020)
+- **DNS auto-discovery**: derives the AD domain from the workstation
+  (`USERDNSDOMAIN`/`LOGONSERVER`/host FQDN/`resolv.conf`) and resolves standard AD **SRV**
+  records (`_gc._tcp.<domain>` global catalog, `_ldap._tcp.dc._msdcs.<domain>` domain
+  controllers), ranked by priority/weight, base DN derived as `DC=…`. **AI SharePoint: Discover
+  Active Directory (DNS)** shows results; the add-source wizard offers discovered endpoints with
+  manual fallback. No server addresses are hard-coded.
+- **Read-only queries** via `ldapts` (pure-JS, native-gate clean): simple bind with your own AD
+  account; free text uses AD **ANR** (matches name/login/email), raw LDAP filters pass through;
+  fetch an entry by DN. Server-side size + time limits, a curated non-sensitive attribute set
+  (never password attributes), bind + search only — no write path. Agent tools `#spSearchContext`
+  / `#spContextItem` work against AD.
+- **Account-lockout protection (ADR-0009) is enforced for AD**: an `invalidCredentials` bind is
+  classified as an auth failure, never auto-retried, and trips the breaker before the AD lockout
+  threshold.
+- **TLS**: LDAPS (636/3269) preferred; `aiSharePoint.ldap.tlsRejectUnauthorized` (default true)
+  and `aiSharePoint.ldap.useStartTls`. LDAP is direct TCP to the DC (not proxied) — documented,
+  with internal-CA guidance in the Admin Guide.
+
+### Added — bookmarks (ADR-0010)
+- Save named, reusable **queries or item locators** per reference source (CQL/JQL/LDAP filter, or
+  a page id / issue key / DN). The Reference Sources view is now two-level (sources → bookmarks);
+  click to run. Commands: **Add / Run / Remove Bookmark**. Agent tools: `#spBookmarks` (list),
+  `#spRunBookmark` (run by name). Locators only — never credentials.
+
+### Notes
+- Navigation/theme serialization for site repos is **deferred**: it requires SharePoint REST with
+  a different token audience that can't be validated in this build environment (see
+  `docs/ROADMAP_STATE.md`). The serializer is ready to accept it when that read path lands.
+- 25 new unit tests (106 total). LDAP/AD and bookmark live paths are unit-tested + API-verified;
+  validate against a real DC during the pilot (same posture as the Confluence/Jira adapters).
+
 ## 0.2.0 — 2026-06-11
 
 Two roadmap pillars land in their first production slices: **SharePoint-as-code (Git pull)**
