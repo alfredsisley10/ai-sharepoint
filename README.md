@@ -25,8 +25,9 @@ export it.
 - Ask about your connected sites in natural language; the assistant reads live site context
   (silently — it never pops a sign-in window from a chat question).
 - Slash commands: `/site` (live overview), `/sites`, `/usage`, `/help`.
-- In **Copilot agent mode**, four read-only tools are available for auto-invocation or
-  `#`-referencing: `#spConnections`, `#spSiteOverview`, `#spPages`, `#spUsage`.
+- In **Copilot agent mode**, nine read-only tools are available for auto-invocation or
+  `#`-referencing: `#spConnections`, `#spSiteOverview`, `#spPages`, `#spUsage`, `#spSources`,
+  `#spSearchContext`, `#spContextItem`, `#spBookmarks`, `#spRunBookmark`.
 
 ### 🔐 Enterprise-grade sign-in
 - **System-browser sign-in** (authorization-code + PKCE on a loopback port) or **device-code
@@ -54,10 +55,23 @@ export it.
   through whatever channel your enterprise permits.
 - Anonymous install ID is random and **rotatable** — never your machine ID.
 
-### 🗂 Sites, Usage, and Support views
+### 🔁 SharePoint as code (pull · write-back · revert)
+Mirror a managed site's lists, columns, and modern pages into a local Git repo; push to
+GitHub.com or your corporate GHES behind a machine-scoped host allowlist and PR gate. Edit the
+files (or let the assistant draft edits), commit, and **Apply Repository to SharePoint** —
+previewed, drift-checked, safety-snapshotted, deletions opt-in. **Revert Site to Commit**
+restores any earlier snapshot through the same pipeline.
+
+### 📚 Read-only reference sources
+Confluence and Jira (Cloud/Data Center) plus **LDAP/Active Directory with DNS auto-discovery**
+(SRV records from your workstation's domain) — all lockout-safe (a rejected credential is never
+auto-retried; 3 strikes freezes the source), cached, result-capped, and shareable with the team
+via secret-free config export/import.
+
+### 🗂 Sites, Sources, Usage, and Support views
 A dedicated activity-bar container with connection management (test, role change, sign-out,
-remove), live usage/budget breakdowns, and one-click access to logs, error reports, the user
-guide, and the privacy notice.
+remove), reference sources + bookmarks, live usage/budget breakdowns, and one-click access to
+logs, error reports, the user guide, and the privacy notice.
 
 ---
 

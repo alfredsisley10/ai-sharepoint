@@ -788,7 +788,7 @@
           {
             "id": "chat",
             "title": "Chat with @sharepoint",
-            "description": "Ask **@sharepoint** about your sites in the Chat view — try `/site` for a live overview. In agent mode, Copilot can call the read-only `#spSiteOverview`, `#spPages`, `#spConnections` and `#spUsage` tools itself.\n[Open Chat](command:workbench.action.chat.open?%22%40sharepoint%20%2Fhelp%22)",
+            "description": "Ask **@sharepoint** about your sites in the Chat view — try `/site` for a live overview. In agent mode, Copilot can call the read-only tools itself: site overviews, pages, reference sources (Confluence/Jira/LDAP), bookmarks, and usage.\n[Open Chat](command:workbench.action.chat.open?%22%40sharepoint%20%2Fhelp%22)",
             "media": {
               "image": "media/walkthrough/chat.svg",
               "altText": "Chat with @sharepoint"
