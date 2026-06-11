@@ -12,8 +12,15 @@ import {
 import { verifyConfluence, searchConfluence, getConfluencePage } from "./adapters/confluence";
 import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
 import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
-import { listConfluenceSpaces } from "./adapters/confluence";
-import { listJiraProjects, listJiraFavouriteFilters, listJsmQueues } from "./adapters/jira";
+import { listConfluenceSpaces, listAllConfluenceSpaces } from "./adapters/confluence";
+import {
+  listJiraProjects,
+  listJiraFavouriteFilters,
+  listJsmQueues,
+  listAllJiraProjects,
+  listAllJsmQueues,
+} from "./adapters/jira";
+import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
 import { verifyDb, searchDb, browseDb, describeDb, DbTlsOptions } from "./db/dbAdapters";
 import { SchemaCatalog } from "./db/schemaIndex";
@@ -202,6 +209,62 @@ export class ContextService {
     return this.tracked(source, false, () =>
       describeDb(source, credential, this.dbTls(), this.caps(), nowIso),
     );
+  }
+
+  /**
+   * Pre-cache the GLOBAL catalog of a Confluence/Jira source (pilot
+   * request): all spaces / projects+filters+queues, fetched page-by-page
+   * with the injected `checkpoint` awaited between requests so the user is
+   * periodically asked to continue and the source is never hammered.
+   * Lockout-gated like every read; persistence is the CatalogStore's job.
+   */
+  async precacheCatalog(
+    source: ContextSource,
+    checkpoint: LoadCheckpoint,
+  ): Promise<{ entries: CatalogEntry[]; complete: boolean }> {
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      if (source.type === "confluence") {
+        const { spaces, complete } = await listAllConfluenceSpaces(source, credential, caps, checkpoint);
+        return {
+          entries: spaces.map((sp) => ({
+            name: sp.name,
+            locator: `space = "${sp.key}" ORDER BY lastmodified DESC`,
+            kind: "query" as const,
+            detail: `Confluence space ${sp.key}`,
+          })),
+          complete,
+        };
+      }
+      if (source.type === "jira") {
+        const entries: CatalogEntry[] = [];
+        const queueResult = await listAllJsmQueues(source, credential, caps, checkpoint);
+        for (const q of queueResult.queues) {
+          entries.push({ name: `${q.desk}: ${q.name}`, locator: q.jql, kind: "query", detail: "JSM queue" });
+        }
+        if (!queueResult.complete) return { entries, complete: false };
+        const filters = await listJiraFavouriteFilters(source, credential, caps).catch(() => []);
+        for (const f of filters) {
+          entries.push({ name: f.name, locator: f.jql, kind: "query", detail: "Favourite filter" });
+        }
+        if (!(await checkpoint())) return { entries, complete: false };
+        const projectResult = await listAllJiraProjects(source, credential, caps, checkpoint);
+        for (const pr of projectResult.projects) {
+          entries.push({
+            name: `${pr.name} — recent issues`,
+            locator: `project = "${pr.key}" ORDER BY updated DESC`,
+            kind: "query",
+            detail: `Project ${pr.key}`,
+          });
+        }
+        return { entries, complete: projectResult.complete };
+      }
+      throw new AppError(
+        "Catalog pre-caching applies to Confluence and Jira sources.",
+        "config",
+      );
+    });
   }
 
   /**

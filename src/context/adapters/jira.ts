@@ -128,6 +128,49 @@ export interface JsmQueueInfo {
 }
 
 /** Projects (capped) — each becomes a "project = KEY" query bookmark. */
+/** Full project catalog for pre-caching. Cloud pages via /project/search
+ *  (50/page, `checkpoint` between pages); Data Center returns the whole list
+ *  in one call. */
+export async function listAllJiraProjects(
+  source: ContextSource,
+  credential: ContextCredential,
+  caps: ReadCaps,
+  checkpoint: () => Promise<boolean>,
+): Promise<{ projects: JiraProjectInfo[]; complete: boolean }> {
+  const base = source.baseUrl.replace(/\/$/, "");
+  if (source.deployment !== "cloud") {
+    const res = await fetchJson<Array<{ key?: string; name?: string }>>(
+      `${base}/rest/api/2/project`,
+      credential,
+      caps.timeoutMs,
+    );
+    return {
+      projects: (Array.isArray(res) ? res : [])
+        .filter((p) => p.key)
+        .map((p) => ({ key: p.key!, name: p.name ?? p.key! })),
+      complete: true,
+    };
+  }
+  const pageSize = 50;
+  const projects: JiraProjectInfo[] = [];
+  for (let startAt = 0; projects.length < 10_000; startAt += pageSize) {
+    const res = await fetchJson<{
+      values?: Array<{ key?: string; name?: string }>;
+      isLast?: boolean;
+    }>(
+      `${base}/rest/api/2/project/search?startAt=${startAt}&maxResults=${pageSize}`,
+      credential,
+      caps.timeoutMs,
+    );
+    for (const p of res.values ?? []) {
+      if (p.key) projects.push({ key: p.key, name: p.name ?? p.key });
+    }
+    if (res.isLast !== false) return { projects, complete: true };
+    if (!(await checkpoint())) return { projects, complete: false };
+  }
+  return { projects, complete: false };
+}
+
 export async function listJiraProjects(
   source: ContextSource,
   credential: ContextCredential,
@@ -170,6 +213,59 @@ export async function listJiraFavouriteFilters(
  *  queue endpoint is flagged experimental and 403s without it; Cloud ignores
  *  the header. */
 const JSM_HEADERS = { "X-ExperimentalApi": "opt-in" };
+
+/** Full queue catalog for pre-caching: up to 50 desks (paged), `checkpoint`
+ *  between every desk's queue fetch. Denials are noted, not fatal. */
+export async function listAllJsmQueues(
+  source: ContextSource,
+  credential: ContextCredential,
+  caps: ReadCaps,
+  checkpoint: () => Promise<boolean>,
+): Promise<{ queues: JsmQueueInfo[]; complete: boolean; note?: string }> {
+  const base = source.baseUrl.replace(/\/$/, "");
+  const desks: Array<{ id?: string; projectName?: string }> = [];
+  try {
+    for (let start = 0; desks.length < 50; start += 50) {
+      const res = await fetchJson<{
+        values?: Array<{ id?: string; projectName?: string }>;
+        isLastPage?: boolean;
+      }>(`${base}/rest/servicedeskapi/servicedesk?limit=50&start=${start}`, credential, caps.timeoutMs, JSM_HEADERS);
+      desks.push(...(res.values ?? []));
+      if (res.isLastPage !== false || (res.values ?? []).length === 0) break;
+      if (!(await checkpoint())) return { queues: [], complete: false };
+    }
+  } catch (err) {
+    return {
+      queues: [],
+      complete: true, // nothing more to fetch — not a JSM instance / no access
+      note: `service-desk list unavailable (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+  const queues: JsmQueueInfo[] = [];
+  let denied = 0;
+  for (const desk of desks) {
+    if (!desk.id) continue;
+    try {
+      const res = await fetchJson<{ values?: Array<{ name?: string; jql?: string }> }>(
+        `${base}/rest/servicedeskapi/servicedesk/${encodeURIComponent(desk.id)}/queue?limit=50`,
+        credential,
+        caps.timeoutMs,
+        JSM_HEADERS,
+      );
+      for (const q of res.values ?? []) {
+        if (q.name && q.jql) {
+          queues.push({ desk: desk.projectName ?? desk.id, name: q.name, jql: q.jql });
+        }
+      }
+    } catch {
+      denied += 1;
+    }
+    if (!(await checkpoint())) {
+      return { queues, complete: false, ...(denied ? { note: `${denied} desk(s) denied` } : {}) };
+    }
+  }
+  return { queues, complete: true, ...(denied ? { note: `${denied} desk(s) denied` } : {}) };
+}
 
 export async function listJsmQueues(
   source: ContextSource,

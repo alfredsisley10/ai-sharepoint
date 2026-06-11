@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
+import { CatalogStore } from "../context/catalogStore";
+import { isExpired, catalogAge } from "../context/catalogCache";
 import { ContextSource, ContextBookmark } from "../context/types";
 import { isSrvLocator } from "../context/ldap/srvLocator";
 
@@ -25,10 +27,13 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     private readonly sources: ContextSourcesStore,
     private readonly bookmarks: BookmarksStore,
     private readonly schemas: SchemaStore,
+    private readonly catalogs: CatalogStore,
+    private readonly now: () => string = () => new Date().toISOString(),
   ) {
     sources.onDidChange(() => this.emitter.fire());
     bookmarks.onDidChange(() => this.emitter.fire());
     schemas.onDidChange(() => this.emitter.fire());
+    catalogs.onDidChange(() => this.emitter.fire());
   }
 
   refresh(): void {
@@ -76,7 +81,9 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
       ? "context-source-locked"
       : DB_TYPES.has(source.type)
         ? "context-source-db"
-        : "context-source";
+        : source.type === "confluence" || source.type === "jira"
+          ? "context-source-atlassian"
+          : "context-source";
     const cell = (s: string) => s.replace(/\|/g, "\\|");
     item.tooltip = new vscode.MarkdownString(
       [
@@ -104,6 +111,15 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
                 const s = this.schemas.getSync(source.id);
                 if (!s) return "_not loaded — right-click → Load Schema_";
                 return `${s.catalog.tables.length} tables · semantic index ${s.semanticState}${s.semantic?.partial ? " (partial)" : ""}`;
+              })()} |`,
+            ]
+          : []),
+        ...(source.type === "confluence" || source.type === "jira"
+          ? [
+              `| Catalog | ${(() => {
+                const c = this.catalogs.getSync(source.id);
+                if (!c) return "_not pre-cached — offered on first browse_";
+                return `${c.entries.length} entries · cached ${catalogAge(c, this.now())}${isExpired(c, this.now()) ? " · **expired**" : ""}${c.complete ? "" : " · partial"}`;
               })()} |`,
             ]
           : []),

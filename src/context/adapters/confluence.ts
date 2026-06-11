@@ -107,6 +107,41 @@ export interface SpaceInfo {
   url: string;
 }
 
+/** Full space catalog for pre-caching: pages of 50; `checkpoint` is awaited
+ *  BETWEEN pages (while it's pending no requests are sent — the user-prompt
+ *  pause is itself the source-load throttle). */
+export async function listAllConfluenceSpaces(
+  source: ContextSource,
+  credential: ContextCredential,
+  caps: ReadCaps,
+  checkpoint: () => Promise<boolean>,
+): Promise<{ spaces: SpaceInfo[]; complete: boolean }> {
+  const base = source.baseUrl.replace(/\/$/, "");
+  const pageSize = 50;
+  const spaces: SpaceInfo[] = [];
+  const hardCap = 5_000; // sanity bound, far above real-world space counts
+  for (let start = 0; spaces.length < hardCap; start += pageSize) {
+    const res = await fetchJson<{
+      results?: Array<{ key?: string; name?: string; _links?: { webui?: string } }>;
+    }>(
+      `${base}/rest/api/space?type=global&limit=${pageSize}&start=${start}`,
+      credential,
+      caps.timeoutMs,
+    );
+    const page = (res.results ?? []).filter((sp) => sp.key);
+    for (const sp of page) {
+      spaces.push({
+        key: sp.key!,
+        name: sp.name ?? sp.key!,
+        url: webUrl(source, sp._links?.webui),
+      });
+    }
+    if (page.length < pageSize) return { spaces, complete: true };
+    if (!(await checkpoint())) return { spaces, complete: false };
+  }
+  return { spaces, complete: false };
+}
+
 /** Global spaces, capped — feeds the guided Browse & Bookmark picker. */
 export async function listConfluenceSpaces(
   source: ContextSource,

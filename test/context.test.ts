@@ -9,8 +9,18 @@ import {
 } from "../src/context/authFailures";
 import { TtlCache } from "../src/context/cache";
 import { authHeader, htmlToText } from "../src/context/http";
-import { searchConfluence, listConfluenceSpaces } from "../src/context/adapters/confluence";
-import { searchJira, listJiraFavouriteFilters, listJsmQueues } from "../src/context/adapters/jira";
+import {
+  searchConfluence,
+  listConfluenceSpaces,
+  listAllConfluenceSpaces,
+} from "../src/context/adapters/confluence";
+import {
+  searchJira,
+  listJiraFavouriteFilters,
+  listJsmQueues,
+  listAllJiraProjects,
+} from "../src/context/adapters/jira";
+import { buildCatalog, isExpired, catalogAge } from "../src/context/catalogCache";
 import { ContextSource, DEFAULT_CAPS } from "../src/context/types";
 
 const T0 = "2026-06-11T12:00:00.000Z";
@@ -255,4 +265,94 @@ test("jira search hits carry the issue key for item bookmarking", async () => {
     () => searchJira({ ...SRC, type: "jira" }, CRED, "x", DEFAULT_CAPS),
   );
   assert.equal(hits[0].meta?.key, "ENG-7");
+});
+
+// --- catalog pre-cache (pilot): paging, checkpoints, expiry -------------------
+
+test("listAllConfluenceSpaces pages until a short page; checkpoint stop keeps a partial", async () => {
+  const page = (start: number, n: number) => ({
+    body: {
+      results: Array.from({ length: n }, (_, i) => ({
+        key: `S${start + i}`,
+        name: `Space ${start + i}`,
+        _links: { webui: `/s/${start + i}` },
+      })),
+    },
+  });
+  // Two full pages then a short one → complete catalog of 120 spaces.
+  const full = await withFetch(
+    (url) => {
+      const start = Number(new URL(url).searchParams.get("start") ?? 0);
+      return page(start, start < 100 ? 50 : 20);
+    },
+    () => listAllConfluenceSpaces(SRC, CRED, DEFAULT_CAPS, async () => true),
+  );
+  assert.equal(full.spaces.length, 120);
+  assert.equal(full.complete, true);
+
+  // Checkpoint declines after the first page → usable partial, complete=false.
+  let asks = 0;
+  const partial = await withFetch(
+    (url) => page(Number(new URL(url).searchParams.get("start") ?? 0), 50),
+    () =>
+      listAllConfluenceSpaces(SRC, CRED, DEFAULT_CAPS, async () => {
+        asks += 1;
+        return asks < 2;
+      }),
+  );
+  assert.equal(partial.complete, false);
+  assert.equal(partial.spaces.length, 100); // stopped before page 3
+});
+
+test("listAllJiraProjects: cloud pages via project/search; DC fetches once", async () => {
+  const cloud = await withFetch(
+    (url) => {
+      const startAt = Number(new URL(url).searchParams.get("startAt") ?? 0);
+      return {
+        body: {
+          values: Array.from({ length: startAt === 0 ? 50 : 10 }, (_, i) => ({
+            key: `P${startAt + i}`,
+            name: `Project ${startAt + i}`,
+          })),
+          isLast: startAt > 0,
+        },
+      };
+    },
+    () =>
+      listAllJiraProjects(
+        { ...SRC, type: "jira", deployment: "cloud" },
+        CRED,
+        DEFAULT_CAPS,
+        async () => true,
+      ),
+  );
+  assert.equal(cloud.projects.length, 60);
+  assert.equal(cloud.complete, true);
+
+  let urls: string[] = [];
+  const dc = await withFetch(
+    (url) => {
+      urls.push(url);
+      return { body: [{ key: "OPS", name: "Operations" }] };
+    },
+    () =>
+      listAllJiraProjects({ ...SRC, type: "jira" }, CRED, DEFAULT_CAPS, async () => true),
+  );
+  assert.equal(dc.projects.length, 1);
+  assert.equal(urls.length, 1);
+  assert.match(urls[0], /rest\/api\/2\/project$/);
+});
+
+test("catalog expiry: fresh within TTL, expired after; age renders humanely", () => {
+  const built = buildCatalog(
+    [{ name: "X", locator: "q", kind: "query", detail: "d" }],
+    true,
+    "2026-06-11T00:00:00.000Z",
+    24,
+  );
+  assert.equal(isExpired(built, "2026-06-11T23:59:00.000Z"), false);
+  assert.equal(isExpired(built, "2026-06-12T00:00:01.000Z"), true);
+  assert.equal(catalogAge(built, "2026-06-11T02:00:00.000Z"), "2 h ago");
+  assert.equal(catalogAge(built, "2026-06-14T00:00:00.000Z"), "3 d ago");
+  assert.equal(catalogAge(built, "2026-06-11T00:10:00.000Z"), "10 min ago");
 });

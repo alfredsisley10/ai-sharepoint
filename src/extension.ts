@@ -55,6 +55,16 @@ import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
 import { SourceSchema, qualifiedName } from "./context/db/schemaIndex";
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
+import { CatalogStore } from "./context/catalogStore";
+import {
+  buildCatalog,
+  isExpired,
+  catalogAge,
+  DEFAULT_CATALOG_TTL_HOURS,
+  SourceCatalog,
+  CatalogEntry,
+  LoadCheckpoint,
+} from "./context/catalogCache";
 import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
@@ -126,9 +136,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const schemas = new SchemaStore(context.globalStorageUri);
   const schemaIndexer = new SchemaIndexer(copilot, schemas, telemetry, log, nowIso);
   void schemas.preload();
+  const catalogs = new CatalogStore(context.globalStorageUri);
+  void catalogs.preload();
 
   const sitesProvider = new SitesTreeProvider(sites);
-  const sourcesProvider = new SourcesTreeProvider(contextSources, bookmarks, schemas);
+  const sourcesProvider = new SourcesTreeProvider(contextSources, bookmarks, schemas, catalogs, nowIso);
   const usageProvider = new UsageTreeProvider(
     meter,
     budget,
@@ -236,6 +248,7 @@ export function activate(context: vscode.ExtensionContext): void {
       nowIso,
     ),
     schemas,
+    catalogs,
   );
 
   // --- Command wrapper: telemetry + central error UX ---------------------
@@ -1417,6 +1430,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await contextSources.remove(source.id);
       await bookmarks.removeForSource(source.id);
       await schemas.remove(source.id);
+      await catalogs.remove(source.id);
       contextCache.invalidateSource(source.id);
       telemetry.record("context.remove");
     }
@@ -1493,6 +1507,125 @@ export function activate(context: vscode.ExtensionContext): void {
     await schemaIndexer.indexInteractively(source, schema);
   });
 
+  // --- Catalog pre-cache (Confluence spaces / Jira projects+queues) --------
+  /** Continue?-checkpoint asked every N seconds. While the prompt (or the
+   *  user) waits, the page loop is parked — no requests reach the source,
+   *  so the ask itself is the overload protection. */
+  const makeCatalogCheckpoint = (sourceName: string): LoadCheckpoint => {
+    const everySeconds = Math.max(
+      5,
+      vscode.workspace.getConfiguration("aiSharePoint").get<number>("context.catalogCheckpointSeconds", 15),
+    );
+    const startedAt = Date.now();
+    let windowStart = Date.now();
+    return async () => {
+      if (Date.now() - windowStart < everySeconds * 1000) return true;
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      const pick = await vscode.window.showWarningMessage(
+        `Pre-caching the "${sourceName}" catalog has been running for ${elapsed}s. Keep loading? (No requests are sent while this prompt waits.)`,
+        "Keep Loading",
+        "Stop & Keep Partial",
+      );
+      windowStart = Date.now();
+      return pick === "Keep Loading";
+    };
+  };
+
+  const runCatalogPrecache = async (source: ContextSource): Promise<SourceCatalog | undefined> => {
+    const ttlHours = Math.max(
+      1,
+      vscode.workspace.getConfiguration("aiSharePoint").get<number>("context.catalogTtlHours", DEFAULT_CATALOG_TTL_HOURS),
+    );
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Pre-caching "${source.displayName}" catalog…`,
+        cancellable: true,
+      },
+      (_progress, token) => {
+        const checkpoint = makeCatalogCheckpoint(source.displayName);
+        return contextService.precacheCatalog(source, async () =>
+          token.isCancellationRequested ? false : checkpoint(),
+        );
+      },
+    );
+    const catalog = buildCatalog(result.entries, result.complete, nowIso(), ttlHours);
+    await catalogs.set(source.id, catalog);
+    telemetry.record("catalog.precache", {
+      type: source.type,
+      entries: String(result.entries.length),
+      complete: String(result.complete),
+    });
+    void vscode.window.showInformationMessage(
+      `Catalog cached: ${result.entries.length} entr${result.entries.length === 1 ? "y" : "ies"} from "${source.displayName}"${result.complete ? "" : " (partial — stopped at a checkpoint)"}. Expires in ${ttlHours} h; refresh any time via "Pre-cache Source Catalog".`,
+    );
+    return catalog;
+  };
+
+  register("aiSharePoint.precacheSourceCatalog", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    if (source.type !== "confluence" && source.type !== "jira") {
+      void vscode.window.showInformationMessage(
+        "Catalog pre-caching applies to Confluence and Jira sources (databases use Load/Refresh Database Schema).",
+      );
+      return;
+    }
+    await runCatalogPrecache(source);
+  });
+
+  /** Cached-catalog gate for browsing: fresh cache → instant local list;
+   *  expired → refresh/stale/live choice; first use → pre-cache offer. */
+  const catalogEntriesFor = async (
+    source: ContextSource,
+  ): Promise<CatalogEntry[] | "live" | undefined> => {
+    const cached = catalogs.getSync(source.id);
+    if (cached && !isExpired(cached, nowIso())) return cached.entries;
+    if (cached) {
+      const pick = await vscode.window.showQuickPick(
+        [
+          {
+            label: "$(sync) Refresh the full catalog now",
+            description: `cached ${catalogAge(cached, nowIso())} — expired`,
+            value: "refresh" as const,
+          },
+          {
+            label: "$(history) Use the expired copy",
+            description: `${cached.entries.length} entries, instant`,
+            value: "stale" as const,
+          },
+          { label: "$(cloud) Quick browse (capped, live)", value: "live" as const },
+        ],
+        { ignoreFocusOut: true, title: `"${source.displayName}" catalog cache has expired` },
+      );
+      if (!pick) return undefined;
+      if (pick.value === "stale") return cached.entries;
+      if (pick.value === "live") return "live";
+      return (await runCatalogPrecache(source))?.entries;
+    }
+    const pick = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(cloud-download) Pre-cache the full catalog (recommended)",
+          description: "one-time load with continue-checkpoints; searched locally afterwards",
+          value: "precache" as const,
+        },
+        {
+          label: "$(cloud) Quick browse (capped, live)",
+          description: "top entries only, nothing cached",
+          value: "live" as const,
+        },
+      ],
+      {
+        ignoreFocusOut: true,
+        title: `First browse of "${source.displayName}" — pre-cache its full catalog for fast local search?`,
+      },
+    );
+    if (!pick) return undefined;
+    if (pick.value === "live") return "live";
+    return (await runCatalogPrecache(source))?.entries;
+  };
+
   register("aiSharePoint.viewSourceSchema", async (arg) => {
     const source = await resolveSourceArg(arg, contextSources);
     if (!source || !requireDbSource(source)) return;
@@ -1531,7 +1664,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const source = await resolveSourceArg(arg, contextSources);
     if (!source) return;
 
-    type Cand = { name: string; locator: string; kind: "query" | "item"; detail: string };
+    type Cand = { name: string; locator: string; kind: ContextBookmark["kind"]; detail: string };
     let candidate: Cand | undefined;
 
     const catalogLabel =
@@ -1558,10 +1691,23 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!mode) return;
 
     if (mode.value === "catalog") {
-      const candidates = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `Browsing ${source.displayName}…` },
-        () => contextService.browseCandidates(source),
-      );
+      let candidates: ReadonlyArray<Cand>;
+      if (source.type === "confluence" || source.type === "jira") {
+        const cached = await catalogEntriesFor(source);
+        if (cached === undefined) return;
+        candidates =
+          cached === "live"
+            ? await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `Browsing ${source.displayName}…` },
+                () => contextService.browseCandidates(source),
+              )
+            : cached;
+      } else {
+        candidates = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Browsing ${source.displayName}…` },
+          () => contextService.browseCandidates(source),
+        );
+      }
       if (candidates.length === 0) {
         void vscode.window.showInformationMessage(
           source.type === "jira"

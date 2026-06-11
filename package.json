@@ -161,6 +161,12 @@
         "icon": "$(database)"
       },
       {
+        "command": "aiSharePoint.precacheSourceCatalog",
+        "title": "Pre-cache Source Catalog (spaces/projects/queues)…",
+        "category": "AI SharePoint",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "aiSharePoint.indexSourceSchema",
         "title": "Index Database Schema with Copilot…",
         "category": "AI SharePoint",
@@ -855,6 +861,11 @@
           "group": "1_schema@1"
         },
         {
+          "command": "aiSharePoint.precacheSourceCatalog",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-atlassian",
+          "group": "1_schema@1"
+        },
+        {
           "command": "aiSharePoint.indexSourceSchema",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
           "group": "1_schema@2"
@@ -1121,6 +1132,20 @@
           "minimum": 1,
           "order": 13,
           "markdownDescription": "Maximum results per reference-source query (ADR-0012 read-safety cap)."
+        },
+        "aiSharePoint.context.catalogTtlHours": {
+          "type": "number",
+          "default": 24,
+          "minimum": 1,
+          "order": 13,
+          "markdownDescription": "How long a pre-cached source catalog (Confluence spaces / Jira projects+queues) stays fresh. After expiry the next browse offers a refresh; the expired copy remains usable."
+        },
+        "aiSharePoint.context.catalogCheckpointSeconds": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "order": 13,
+          "markdownDescription": "While pre-caching a large catalog, ask every N seconds whether to continue. Loading pauses while the prompt waits, so the source system is never overtaxed."
         },
         "aiSharePoint.context.allowSchemaIndexing": {
           "type": "boolean",
