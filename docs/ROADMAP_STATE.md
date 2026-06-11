@@ -25,13 +25,13 @@
 - [x] **B3. Graph page-content read.** Extend `SharePointClient` with
       `getPageContent(siteId, pageId)` (`?$expand=canvasLayout`) and `getListColumns(siteId,
       listId)` for the serializer. Tolerates tenants that block the Pages API.
-- [ ] **B4. Git layer + engine + commands (vscode).** `src/sync/vscodeGit.ts` (duck-typed VS
+- [x] **B4. Git layer + engine + commands (vscode).** `src/sync/vscodeGit.ts` (duck-typed VS
       Code Git-extension API: init/open/add/commit/push/addRemote), `src/sync/syncEngine.ts`
       (pull → preview → apply → commit pipeline; dry-run; freshness note), sync config per
       connection (repo folder, remote URL, branch, review gate per ADR-0004). Commands:
       `sync.configureRepo`, `sync.pullSite` (preview-first), `sync.pushRemote` (PR-gate aware →
       opens compare URL on github.com or GHES). Managed-role guard (reference = refused).
-      Settings: `aiSharePoint.sync.allowedRemoteHosts` (machine), `sync.defaultReviewGate`.
+      Settings: `aiSharePoint.sync.allowedRemoteHosts` (machine). (defaultReviewGate setting dropped — the gate is chosen per repo in the wizard, PR-first.)
       Sites-view context menu entries. Generated repo hygiene: `.gitattributes` (LF),
       `.gitignore`, README stub in the site repo.
 - [ ] **B5. Docs.** USER_GUIDE sync section (incl. local-Git best practices + PR-gate flow),
@@ -77,3 +77,4 @@
 
 - 2026-06-11: File created; ADR-0019 authored alongside.
 - 2026-06-11: B1–B3 done (serializer + gates + Graph reads; 12 sync tests, 74 total).
+- 2026-06-11: B4 done (git layer via VS Code Git API, engine, configure/pull/push commands, allowlist setting, menus). B5 docs pending.

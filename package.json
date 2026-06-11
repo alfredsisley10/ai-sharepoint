@@ -44,7 +44,8 @@
       "restrictedConfigurations": [
         "aiSharePoint.auth.tenantAuthority",
         "aiSharePoint.auth.clientId",
-        "aiSharePoint.auth.additionalAuthorityHosts"
+        "aiSharePoint.auth.additionalAuthorityHosts",
+        "aiSharePoint.sync.allowedRemoteHosts"
       ]
     }
   },
@@ -97,6 +98,24 @@
         "title": "Refresh Sites View",
         "category": "AI SharePoint",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "aiSharePoint.configureSiteRepo",
+        "title": "Configure Site Repository (Git)…",
+        "category": "AI SharePoint",
+        "icon": "$(repo)"
+      },
+      {
+        "command": "aiSharePoint.pullSiteToRepo",
+        "title": "Pull Site to Repository (preview first)",
+        "category": "AI SharePoint",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "aiSharePoint.pushSiteRepo",
+        "title": "Push Site Repository to GitHub/GHES",
+        "category": "AI SharePoint",
+        "icon": "$(repo-push)"
       },
       {
         "command": "aiSharePoint.installCopilotChat",
@@ -385,19 +404,34 @@
           "group": "1_actions@2"
         },
         {
+          "command": "aiSharePoint.configureSiteRepo",
+          "when": "view == aiSharePoint.sitesView && viewItem == site-managed",
+          "group": "2_sync@1"
+        },
+        {
+          "command": "aiSharePoint.pullSiteToRepo",
+          "when": "view == aiSharePoint.sitesView && viewItem == site-managed",
+          "group": "2_sync@2"
+        },
+        {
+          "command": "aiSharePoint.pushSiteRepo",
+          "when": "view == aiSharePoint.sitesView && viewItem == site-managed",
+          "group": "2_sync@3"
+        },
+        {
           "command": "aiSharePoint.changeSiteRole",
           "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
-          "group": "2_manage@1"
+          "group": "3_manage@1"
         },
         {
           "command": "aiSharePoint.signOutSite",
           "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
-          "group": "2_manage@2"
+          "group": "3_manage@2"
         },
         {
           "command": "aiSharePoint.removeSite",
           "when": "view == aiSharePoint.sitesView && viewItem =~ /^site-/",
-          "group": "2_manage@3"
+          "group": "3_manage@3"
         }
       ],
       "commandPalette": [
@@ -427,6 +461,18 @@
         },
         {
           "command": "aiSharePoint.testConnection",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.configureSiteRepo",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.pullSiteToRepo",
+          "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.pushSiteRepo",
           "when": "aiSharePoint.hasSites"
         }
       ]
@@ -592,6 +638,18 @@
           "default": true,
           "order": 10,
           "markdownDescription": "Store redacted error reports locally for the diagnostics bundle. Disable to keep no error history at all."
+        },
+        "aiSharePoint.sync.allowedRemoteHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "github.com"
+          ],
+          "scope": "machine",
+          "order": 11,
+          "markdownDescription": "Git hosts that site repositories may push to (ADR-0019). Add your GitHub Enterprise Server host, e.g. `github.corp.example`. Machine-scoped: workspaces cannot override it."
         }
       }
     }

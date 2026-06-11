@@ -16,6 +16,22 @@ import { InstallIdStore } from "./diagnostics/installId";
 import { TelemetryService } from "./diagnostics/telemetry";
 import { ErrorReportStore } from "./diagnostics/errorReports";
 import { DiagnosticsExportService } from "./diagnostics/exportService";
+import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
+import { SyncEngine } from "./sync/syncEngine";
+import { openOrInitRepository } from "./sync/vscodeGit";
+import {
+  validateRemote,
+  compareUrl,
+  prBranchName,
+  repoHygieneFiles,
+  parseRemoteUrl,
+} from "./sync/remotePolicy";
+import {
+  isBlocked,
+  hasChanges,
+  commitMessageFor,
+  ChangeReport,
+} from "./sync/changeReport";
 import { UsageStatusBar } from "./ui/statusBar";
 import { SitesTreeProvider } from "./ui/sitesView";
 import { UsageTreeProvider } from "./ui/usageView";
@@ -555,6 +571,236 @@ export function activate(context: vscode.ExtensionContext): void {
 
   register("aiSharePoint.refreshSites", () => sitesProvider.refresh());
 
+  // --- Site sync (Track B slice 1 — ADR-0019) -------------------------------
+  const syncConfigs = new SyncConfigStore(context.globalState);
+  const syncEngine = new SyncEngine(access, log);
+
+  const requireManaged = (conn: SiteConnection): void => {
+    if (conn.role !== "managed") {
+      throw new AppError(
+        "Reference connections are read-only context (PLAN §5). Change the connection role to 'managed' to enable sync.",
+        "config",
+        "This connection is read-only (reference role).",
+      );
+    }
+  };
+  const allowedRemoteHosts = (): string[] =>
+    vscode.workspace
+      .getConfiguration("aiSharePoint")
+      .get<string[]>("sync.allowedRemoteHosts", ["github.com"]);
+
+  register("aiSharePoint.configureSiteRepo", async (arg) => {
+    const conn = await resolveConnArg(arg, sites, "Configure repository for which site?");
+    if (!conn) return;
+    requireManaged(conn);
+
+    const existing = syncConfigs.get(conn.siteUrl);
+    const folderPick = await vscode.window.showOpenDialog({
+      title: `Site repository folder for "${conn.displayName}" (1/3)`,
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: "Use this folder",
+      defaultUri: existing
+        ? vscode.Uri.file(existing.folder)
+        : vscode.workspace.workspaceFolders?.[0]?.uri,
+    });
+    if (!folderPick?.[0]) return;
+    const folder = folderPick[0];
+
+    const remoteUrl = await vscode.window.showInputBox({
+      title: "Remote repository (2/3) — GitHub.com or your GitHub Enterprise Server",
+      prompt: `Allowed hosts: ${allowedRemoteHosts().join(", ")} (admins extend via aiSharePoint.sync.allowedRemoteHosts). Leave empty for local-only.`,
+      value: existing?.remoteUrl ?? "",
+      placeHolder: "https://github.com/org/site-repo or git@github.corp.example:org/site-repo.git",
+      validateInput: (v) => {
+        if (!v.trim()) return undefined; // local-only is allowed
+        const verdict = validateRemote(v, allowedRemoteHosts());
+        return verdict.ok ? undefined : verdict.reason;
+      },
+    });
+    if (remoteUrl === undefined) return;
+
+    const gate = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(git-pull-request) PR-gated",
+          description: "push to a sharepoint-sync/* branch and open a pull request (recommended)",
+          value: "pr" as const,
+        },
+        {
+          label: "$(repo-push) Direct push",
+          description: "push the base branch directly",
+          value: "direct" as const,
+        },
+      ],
+      { title: "Review gate (3/3) — how pushes reach the remote (ADR-0004)" },
+    );
+    if (!gate) return;
+
+    const repo = await openOrInitRepository(folder);
+    // Repo hygiene (ADR-0019 §4): LF normalization is what keeps snapshots
+    // byte-stable across platforms; README only written when absent.
+    for (const [rel, content] of repoHygieneFiles(conn.displayName, conn.siteUrl)) {
+      const target = vscode.Uri.joinPath(folder, rel);
+      if (rel === "README.md") {
+        try {
+          await vscode.workspace.fs.stat(target);
+          continue;
+        } catch {
+          // absent — write it
+        }
+      }
+      await vscode.workspace.fs.writeFile(target, Buffer.from(content, "utf8"));
+    }
+    const trimmedRemote = remoteUrl.trim();
+    if (trimmedRemote && !repo.state.remotes.some((r) => r.name === "origin")) {
+      await repo.addRemote("origin", trimmedRemote);
+    }
+
+    const config: SiteSyncConfig = {
+      siteUrl: conn.siteUrl,
+      folder: folder.fsPath,
+      remoteUrl: trimmedRemote || undefined,
+      baseBranch: existing?.baseBranch ?? repo.state.HEAD?.name ?? "main",
+      reviewGate: gate.value,
+    };
+    await syncConfigs.set(config);
+    telemetry.record("sync.configure", {
+      gate: gate.value,
+      hasRemote: Boolean(trimmedRemote),
+    });
+    void vscode.window.showInformationMessage(
+      `Repository configured for "${conn.displayName}" (${gate.value === "pr" ? "PR-gated" : "direct push"}${trimmedRemote ? "" : ", local-only"}).`,
+      "Pull Site Now",
+    ).then((pick) => {
+      if (pick) void vscode.commands.executeCommand("aiSharePoint.pullSiteToRepo", conn);
+    });
+  });
+
+  register("aiSharePoint.pullSiteToRepo", async (arg) => {
+    const conn = await resolveConnArg(arg, sites, "Pull which site to its repository?");
+    if (!conn) return;
+    requireManaged(conn);
+    const config = syncConfigs.get(conn.siteUrl);
+    if (!config) {
+      const go = await vscode.window.showInformationMessage(
+        `No repository configured for "${conn.displayName}" yet.`,
+        "Configure Repository…",
+      );
+      if (go) await vscode.commands.executeCommand("aiSharePoint.configureSiteRepo", conn);
+      return;
+    }
+
+    const plan = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Pulling ${conn.displayName}…`,
+      },
+      (p) => syncEngine.plan(conn, config.folder, (msg) => p.report({ message: msg })),
+    );
+
+    if (isBlocked(plan.report)) {
+      log.error(
+        `Pull blocked: ${plan.report.leakFindings.map((f) => `${f.pattern}(${f.sample})`).join("; ")} ${plan.report.oversize.join(";")}`,
+      );
+      void vscode.window.showErrorMessage(
+        `Pull blocked: ${plan.report.leakFindings.length} credential-shaped finding(s) and ${plan.report.oversize.length} oversize file(s). Nothing was written — see logs.`,
+      );
+      return;
+    }
+    if (!hasChanges(plan.report)) {
+      await sites.markVerified(conn.siteUrl, nowIso());
+      void vscode.window.showInformationMessage(
+        `"${conn.displayName}" is already up to date (${plan.report.unchanged} files unchanged).`,
+      );
+      return;
+    }
+
+    const previewDoc = await vscode.workspace.openTextDocument({
+      language: "markdown",
+      content: renderPullPreview(conn.displayName, config, plan.report),
+    });
+    await vscode.window.showTextDocument(previewDoc, { preview: true });
+    const confirm = await vscode.window.showInformationMessage(
+      `Apply ${plan.report.added.length} added, ${plan.report.updated.length} updated, ${plan.report.removed.length} removed file(s) to ${config.folder} and commit?`,
+      { modal: true },
+      "Apply & Commit",
+    );
+    if (!confirm) return;
+
+    const staged = await syncEngine.apply(config.folder, plan.files, plan.report);
+    const repo = await openOrInitRepository(vscode.Uri.file(config.folder));
+    await repo.add(staged);
+    const message = commitMessageFor(conn.displayName, plan.report);
+    await repo.commit(message);
+    await sites.markVerified(conn.siteUrl, nowIso());
+    telemetry.record("sync.pull", {
+      added: plan.report.added.length,
+      updated: plan.report.updated.length,
+      removed: plan.report.removed.length,
+    });
+    log.info(`Committed: ${message}`);
+
+    const next = await vscode.window.showInformationMessage(
+      `Committed "${message}".`,
+      config.remoteUrl ? "Push to Remote" : "Configure Remote…",
+    );
+    if (next === "Push to Remote") {
+      await vscode.commands.executeCommand("aiSharePoint.pushSiteRepo", conn);
+    } else if (next === "Configure Remote…") {
+      await vscode.commands.executeCommand("aiSharePoint.configureSiteRepo", conn);
+    }
+  });
+
+  register("aiSharePoint.pushSiteRepo", async (arg) => {
+    const conn = await resolveConnArg(arg, sites, "Push which site repository?");
+    if (!conn) return;
+    requireManaged(conn);
+    const config = syncConfigs.get(conn.siteUrl);
+    if (!config?.remoteUrl) {
+      void vscode.window.showWarningMessage(
+        "No remote configured for this site repository — run “Configure Site Repository…” first.",
+      );
+      return;
+    }
+    // Re-validate at push time: the allowlist may have tightened (ADR-0019 §2).
+    const verdict = validateRemote(config.remoteUrl, allowedRemoteHosts());
+    if (!verdict.ok || !verdict.info) {
+      throw new AppError(verdict.reason ?? "Remote rejected.", "config",
+        "The configured remote host is not allowlisted.");
+    }
+
+    const repo = await openOrInitRepository(vscode.Uri.file(config.folder));
+    const base = config.baseBranch || repo.state.HEAD?.name || "main";
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Pushing site repository…" },
+      async (p) => {
+        if (config.reviewGate === "pr") {
+          const branch = prBranchName(nowIso());
+          p.report({ message: `branch ${branch}` });
+          await repo.createBranch(branch, true);
+          await repo.push("origin", branch, true);
+          await repo.checkout(base);
+          telemetry.record("sync.push", { gate: "pr" });
+          const url = compareUrl(verdict.info!, base, branch);
+          const open = await vscode.window.showInformationMessage(
+            `Pushed ${branch}. Open a pull request to merge into ${base}.`,
+            "Open Pull Request Page",
+          );
+          if (open) await vscode.env.openExternal(vscode.Uri.parse(url));
+        } else {
+          p.report({ message: `branch ${base}` });
+          await repo.push("origin", base, true);
+          telemetry.record("sync.push", { gate: "direct" });
+          void vscode.window.showInformationMessage(
+            `Pushed ${base} to ${parseRemoteUrl(config.remoteUrl!)?.host}.`,
+          );
+        }
+      },
+    );
+  });
+
   // --- Diagnostics & support ------------------------------------------------
   register("aiSharePoint.exportDiagnostics", () => exporter.run());
 
@@ -739,6 +985,35 @@ async function promptNumber(
     },
   });
   return raw === undefined ? undefined : Number(raw);
+}
+
+function renderPullPreview(
+  siteName: string,
+  config: SiteSyncConfig,
+  report: ChangeReport,
+): string {
+  const list = (title: string, items: string[]) =>
+    items.length
+      ? [`**${title} (${items.length}):**`, ...items.slice(0, 50).map((f) => `- \`${f}\``),
+         ...(items.length > 50 ? [`- _…and ${items.length - 50} more_`] : []), ""]
+      : [];
+  return [
+    `# Pull preview — ${siteName}`,
+    "",
+    `Target: \`${config.folder}\` · review gate: **${config.reviewGate}**`,
+    "",
+    "> Nothing has been written yet. Confirm in the dialog to apply these changes and commit.",
+    "",
+    ...list("Added", report.added),
+    ...list("Updated", report.updated),
+    ...list("Removed", report.removed),
+    `${report.unchanged} file(s) unchanged.`,
+    "",
+    ...(report.large.length
+      ? [`⚠️ Large files (≥50 MB): ${report.large.join(", ")} — consider excluding before pushing.`, ""]
+      : []),
+    "_Not yet synced (roadmap): navigation, theme, list items/documents, permissions._",
+  ].join("\n");
 }
 
 async function openBundledDoc(
