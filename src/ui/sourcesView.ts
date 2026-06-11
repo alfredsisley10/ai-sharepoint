@@ -1,22 +1,52 @@
 import * as vscode from "vscode";
 import { ContextSourcesStore } from "../context/sourcesStore";
-import { ContextSource } from "../context/types";
+import { BookmarksStore } from "../context/bookmarksStore";
+import { ContextSource, ContextBookmark } from "../context/types";
 
-/** Reference Sources view (PLAN §9 unified surface) — one row per source. */
-export class SourcesTreeProvider implements vscode.TreeDataProvider<ContextSource> {
+type Node = ContextSource | ContextBookmark;
+
+function isBookmark(node: Node): node is ContextBookmark {
+  return (node as ContextBookmark).locator !== undefined;
+}
+
+/**
+ * Reference Sources view (PLAN §9 unified surface): sources at the top level,
+ * their saved bookmarks (ADR-0010) as children.
+ */
+export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
 
-  constructor(private readonly sources: ContextSourcesStore) {
+  constructor(
+    private readonly sources: ContextSourcesStore,
+    private readonly bookmarks: BookmarksStore,
+  ) {
     sources.onDidChange(() => this.emitter.fire());
+    bookmarks.onDidChange(() => this.emitter.fire());
   }
 
   refresh(): void {
     this.emitter.fire();
   }
 
-  getTreeItem(source: ContextSource): vscode.TreeItem {
-    const item = new vscode.TreeItem(source.displayName);
+  getTreeItem(node: Node): vscode.TreeItem {
+    return isBookmark(node) ? this.bookmarkItem(node) : this.sourceItem(node);
+  }
+
+  getChildren(node?: Node): Node[] {
+    if (!node) return this.sources.list();
+    if (isBookmark(node)) return [];
+    return this.bookmarks.listForSource(node.id);
+  }
+
+  private sourceItem(source: ContextSource): vscode.TreeItem {
+    const bookmarkCount = this.bookmarks.listForSource(source.id).length;
+    const item = new vscode.TreeItem(
+      source.displayName,
+      bookmarkCount > 0
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None,
+    );
     item.id = source.id;
     const locked = this.sources.isLockedOut(source.id);
     item.description = `${source.type} · ${source.deployment}${locked ? " · locked" : ""}`;
@@ -43,6 +73,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<ContextSourc
         `| Auth | ${source.authMethod === "pat" ? "Personal access token" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : "Basic (username + token/password)"} |`,
         `| Account | ${source.account ?? "_not verified_"} |`,
         `| Verified | ${source.lastVerifiedAt ?? "_never_"} |`,
+        ...(bookmarkCount > 0 ? [`| Bookmarks | ${bookmarkCount} |`] : []),
         ...(locked
           ? ["", "🔒 **Auth lockout protection engaged** (3 failures). Reset via the context menu after checking the credential with your admin."]
           : []),
@@ -51,7 +82,22 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<ContextSourc
     return item;
   }
 
-  getChildren(element?: ContextSource): ContextSource[] {
-    return element ? [] : this.sources.list();
+  private bookmarkItem(bookmark: ContextBookmark): vscode.TreeItem {
+    const item = new vscode.TreeItem(bookmark.name);
+    item.id = bookmark.id;
+    item.description = bookmark.kind;
+    item.iconPath = new vscode.ThemeIcon(
+      bookmark.kind === "item" ? "bookmark" : bookmark.kind === "container" ? "folder" : "search",
+    );
+    item.contextValue = "context-bookmark";
+    item.tooltip = new vscode.MarkdownString(
+      [`**${bookmark.name}** _(${bookmark.kind})_`, "", "```", bookmark.locator, "```"].join("\n"),
+    );
+    item.command = {
+      command: "aiSharePoint.runBookmark",
+      title: "Run Bookmark",
+      arguments: [bookmark],
+    };
+    return item;
   }
 }

@@ -42,6 +42,8 @@ import {
   ContextSourceType,
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
+import { BookmarksStore } from "./context/bookmarksStore";
+import { ContextBookmark } from "./context/types";
 import { discoverActiveDirectory } from "./context/ldap/discoveryHost";
 import { guessBindUpn, domainToBaseDn } from "./context/ldap/discovery";
 import { realHostSignals } from "./context/ldap/discoveryHost";
@@ -104,9 +106,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const contextSources = new ContextSourcesStore(context.globalState, secrets, nowIso);
   const contextCache = new TtlCache();
   const contextService = new ContextService(contextSources, contextCache);
+  const bookmarks = new BookmarksStore(context.globalState);
 
   const sitesProvider = new SitesTreeProvider(sites);
-  const sourcesProvider = new SourcesTreeProvider(contextSources);
+  const sourcesProvider = new SourcesTreeProvider(contextSources, bookmarks);
   const usageProvider = new UsageTreeProvider(
     meter,
     budget,
@@ -120,7 +123,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const sourcesView = vscode.window.createTreeView("aiSharePoint.sourcesView", {
     treeDataProvider: sourcesProvider,
   });
-  context.subscriptions.push(sourcesView, contextSources);
+  context.subscriptions.push(sourcesView, contextSources, bookmarks);
   const usageView = vscode.window.createTreeView("aiSharePoint.usageView", {
     treeDataProvider: usageProvider,
   });
@@ -200,7 +203,7 @@ export function activate(context: vscode.ExtensionContext): void {
       errors,
       nowIso,
     ),
-    ...registerContextTools(contextSources, contextService, telemetry, errors),
+    ...registerContextTools(contextSources, contextService, bookmarks, telemetry, errors),
   );
 
   // --- Command wrapper: telemetry + central error UX ---------------------
@@ -967,9 +970,84 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (confirm === "Remove Source") {
       await contextSources.remove(source.id);
+      await bookmarks.removeForSource(source.id);
       contextCache.invalidateSource(source.id);
       telemetry.record("context.remove");
     }
+  });
+
+  register("aiSharePoint.addBookmark", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    const kindHint =
+      source.type === "ldap"
+        ? "LDAP filter / DN"
+        : source.type === "jira"
+          ? "JQL / issue key"
+          : "CQL / page id";
+    const locator = await vscode.window.showInputBox({
+      title: `Bookmark for "${source.displayName}" — locator`,
+      placeHolder: kindHint,
+      prompt: "A reusable query or a specific item locator (no credentials).",
+    });
+    if (!locator) return;
+    const kindPick = await vscode.window.showQuickPick(
+      [
+        { label: "$(search) Query", description: "a saved search to run", value: "query" as const },
+        { label: "$(bookmark) Item", description: "a specific page/issue/entry by id/key/DN", value: "item" as const },
+      ],
+      { title: "Bookmark kind" },
+    );
+    if (!kindPick) return;
+    const name = await vscode.window.showInputBox({
+      title: "Bookmark name",
+      placeHolder: "e.g. Open R&D incidents",
+      value: locator.slice(0, 40),
+    });
+    if (!name) return;
+    await bookmarks.add({
+      id: crypto.randomUUID(),
+      sourceId: source.id,
+      name: name.trim(),
+      locator: locator.trim(),
+      kind: kindPick.value,
+    });
+    telemetry.record("bookmark.add", { type: source.type, kind: kindPick.value });
+    void vscode.window.showInformationMessage(`Bookmark "${name.trim()}" saved.`);
+  });
+
+  register("aiSharePoint.runBookmark", async (arg) => {
+    const bookmark = arg as ContextBookmark | undefined;
+    if (!bookmark?.sourceId) return;
+    const source = contextSources.get(bookmark.sourceId);
+    if (!source) {
+      void vscode.window.showWarningMessage("This bookmark's source no longer exists.");
+      return;
+    }
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Running "${bookmark.name}"…` },
+      async () =>
+        bookmark.kind === "item"
+          ? await contextService.getItem(source, bookmark.locator)
+          : await contextService.search(source, bookmark.locator),
+    );
+    telemetry.record("bookmark.run", { kind: bookmark.kind });
+    const doc = await vscode.workspace.openTextDocument({
+      language: "json",
+      content: JSON.stringify(
+        { bookmark: bookmark.name, source: source.displayName, result },
+        null,
+        2,
+      ),
+    });
+    await vscode.window.showTextDocument(doc, { preview: true });
+  });
+
+  register("aiSharePoint.removeBookmark", async (arg) => {
+    const bookmark = arg as ContextBookmark | undefined;
+    if (!bookmark?.id) return;
+    await bookmarks.remove(bookmark.id);
+    telemetry.record("bookmark.remove");
   });
 
   register("aiSharePoint.resetSourceLockout", async (arg) => {

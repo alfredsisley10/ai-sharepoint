@@ -152,6 +152,22 @@
         "icon": "$(search)"
       },
       {
+        "command": "aiSharePoint.addBookmark",
+        "title": "Add Bookmark",
+        "category": "AI SharePoint",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "aiSharePoint.runBookmark",
+        "title": "Run Bookmark",
+        "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.removeBookmark",
+        "title": "Remove Bookmark",
+        "category": "AI SharePoint"
+      },
+      {
         "command": "aiSharePoint.installCopilotChat",
         "title": "Install GitHub Copilot Chat",
         "category": "AI SharePoint"
@@ -468,6 +484,46 @@
             "id"
           ]
         }
+      },
+      {
+        "name": "aisharepoint_list_bookmarks",
+        "displayName": "List Bookmarks",
+        "toolReferenceName": "spBookmarks",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(bookmark)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "List the user's saved reference bookmarks (named, reusable queries or item locators) with their source and kind. Use before running a bookmark by name.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "aisharepoint_run_bookmark",
+        "displayName": "Run Bookmark",
+        "toolReferenceName": "spRunBookmark",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(play)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Run a saved reference bookmark by name: executes its stored query (search) or fetches its stored item against the bookmark's source. Read-only, cached, capped.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The bookmark name."
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
       }
     ],
     "menus": {
@@ -583,6 +639,16 @@
           "command": "aiSharePoint.removeContextSource",
           "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
           "group": "2_manage@1"
+        },
+        {
+          "command": "aiSharePoint.addBookmark",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "1_actions@3"
+        },
+        {
+          "command": "aiSharePoint.removeBookmark",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-bookmark",
+          "group": "1_actions@1"
         }
       ],
       "commandPalette": [
@@ -625,6 +691,14 @@
         {
           "command": "aiSharePoint.pushSiteRepo",
           "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.runBookmark",
+          "when": "false"
+        },
+        {
+          "command": "aiSharePoint.removeBookmark",
+          "when": "false"
         }
       ]
     },

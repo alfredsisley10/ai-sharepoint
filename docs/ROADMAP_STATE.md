@@ -86,10 +86,15 @@
 
 ## Track D — Remaining scheduled features (enterprise test candidate)
 
-- [ ] **D1. Bookmarks (ADR-0010).** Bookmark store (shape already in context/types), add/remove
+- [x] **D1. Bookmarks (ADR-0010).** Bookmark store (shape already in context/types), add/remove
       from search results, list, and a `#spBookmarks` / resolve-by-name path in context tools.
-- [ ] **D2. Sync nav + theme serialization.** Extend serializer with `navigation.json` /
-      `theme.json` from Graph; manifest updates; tests keep no-diff invariant.
+- [~] **D2. Sync nav + theme serialization.** DEFERRED with rationale: SharePoint navigation
+      and theme are not in Graph v1.0 — they require SharePoint REST (`_api/navigation/MenuState`,
+      theming endpoints) with a **different token audience** (SP resource, not Graph) that
+      cannot be validated in this headless environment and is version-dependent (theme
+      especially). Deferred to a dedicated, live-tenant effort rather than shipping untested
+      token-acquisition surface into a test candidate. Serializer remains ready to accept
+      `navigation.json`/`theme.json` when the read path lands.
 - Deferred to dedicated efforts (NOT crammed into this candidate — large/multi-phase, high risk):
   SharePoint write-back via PnPjs (Phase 4/5), 3-way merge + revert (Phase 3), local MCP server
   (engine bump), automatic auth-method probing, remaining §9.2 adapters, workspace scoping.
@@ -109,3 +114,4 @@
 - 2026-06-11: A2+A4+A5 done (sources store + keychain creds, Reference Sources view, add/test/remove/reset-lockout/clear-cache commands, 3 context LM tools). Docs (A6+B5) + W1 remain.
 - 2026-06-11: B5+A6+W1 done — docs updated (user/admin guides, changelog), v0.2.0 packaged. **All planned increments for this session complete.** Next session: see the Deferred lists above (Phase 3 merge/revert, write-back, more adapters, bookmarks UI).
 - 2026-06-11: Track C done — LDAP/AD connector with DNS SRV auto-discovery (ldapts, pure-JS), framework dispatch, discovery + add/test flow, 19 LDAP tests (101 total). Track D (bookmarks, nav/theme) next.
+- 2026-06-11: D1 done (bookmarks ADR-0010: store, two-level Reference Sources tree, add/run/remove, #spBookmarks/#spRunBookmark tools, 5 pure tests, 106 total). D2 deferred (SP-REST/different-audience, untestable here). Wrapping 0.3.0.

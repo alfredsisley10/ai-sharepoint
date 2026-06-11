@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { ContextService } from "../context/contextService";
+import { BookmarksStore } from "../context/bookmarksStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -18,6 +19,7 @@ function text(s: string): vscode.LanguageModelToolResult {
 export function registerContextTools(
   store: ContextSourcesStore,
   service: ContextService,
+  bookmarks: BookmarksStore,
   telemetry: TelemetryService,
   errors: ErrorReportStore,
 ): vscode.Disposable[] {
@@ -103,6 +105,58 @@ export function registerContextTools(
           const source = resolveOrExplain(input.source);
           const item = await service.getItem(source, input.id);
           return JSON.stringify(item, null, 2);
+        },
+      ),
+    ),
+    vscode.lm.registerTool(
+      "aisharepoint_run_bookmark",
+      guarded<{ name: string }>(
+        "aisharepoint_run_bookmark",
+        "Running a saved bookmark",
+        async (input) => {
+          const all = bookmarks.list();
+          if (all.length === 0) {
+            return 'No bookmarks saved. The user can save reusable queries via "AI SharePoint: Add Bookmark".';
+          }
+          const bookmark = bookmarks.resolve(input.name);
+          if (!bookmark) {
+            return `No bookmark named "${input.name}". Available: ${all
+              .map((b) => b.name)
+              .join("; ")}.`;
+          }
+          const source = store.get(bookmark.sourceId);
+          if (!source) {
+            return `The source for bookmark "${bookmark.name}" no longer exists.`;
+          }
+          const result =
+            bookmark.kind === "item"
+              ? await service.getItem(source, bookmark.locator)
+              : await service.search(source, bookmark.locator);
+          return JSON.stringify(
+            { bookmark: bookmark.name, source: source.displayName, kind: bookmark.kind, result },
+            null,
+            2,
+          );
+        },
+      ),
+    ),
+    vscode.lm.registerTool(
+      "aisharepoint_list_bookmarks",
+      guarded<Record<string, never>>(
+        "aisharepoint_list_bookmarks",
+        "Listing bookmarks",
+        async () => {
+          const all = bookmarks.list();
+          if (all.length === 0) return "No bookmarks saved.";
+          return JSON.stringify(
+            all.map((b) => ({
+              name: b.name,
+              source: store.get(b.sourceId)?.displayName ?? "(missing)",
+              kind: b.kind,
+            })),
+            null,
+            2,
+          );
         },
       ),
     ),
