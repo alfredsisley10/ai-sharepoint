@@ -172,5 +172,6 @@ test("compare URL + PR branch naming work for github.com and GHES alike", () => 
 test("repo hygiene files enforce LF and warn about generated content", () => {
   const files = repoHygieneFiles("Marketing", "https://contoso.sharepoint.com/sites/Marketing");
   assert.match(files.get(".gitattributes")!, /eol=lf/);
-  assert.match(files.get("README.md")!, /managed by sync pulls/);
+  assert.match(files.get("README.md")!, /managed by sync/);
+  assert.match(files.get("README.md")!, /Apply Repository to SharePoint/);
 });

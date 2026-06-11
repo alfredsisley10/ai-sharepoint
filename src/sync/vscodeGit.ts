@@ -19,6 +19,9 @@ export interface GitRepository {
   state: {
     HEAD?: { name?: string };
     remotes: GitRemote[];
+    /** Uncommitted working-tree changes (used as a clean-tree guard). */
+    workingTreeChanges?: unknown[];
+    indexChanges?: unknown[];
   };
   add(paths: string[]): Promise<void>;
   commit(message: string): Promise<void>;

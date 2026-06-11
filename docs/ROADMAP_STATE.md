@@ -111,7 +111,7 @@
       createList/updateList/createColumn/updateColumn/createPage/updatePage/publishPage/
       deleteList/deletePage), `src/sync/pushEngine.ts` (freshness gate vs plan base → safety
       snapshot via pull+commit → sequential apply stop-on-error → re-pull+commit → summary).
-- [ ] **E3. Command + UX.** `aiSharePoint.applyRepoToSharePoint`: managed+repo guards, preview
+- [x] **E3. Command + UX.** `aiSharePoint.applyRepoToSharePoint`: managed+repo guards, preview
       doc, modal confirm, separate deletions opt-in, progress with per-op messages, partial-
       failure report; manifest (command/menus/palette); chat INSTRUCTIONS updated (write-back
       exists via explicit command; chat/tools stay read-only).

@@ -118,6 +118,12 @@
         "icon": "$(repo-push)"
       },
       {
+        "command": "aiSharePoint.applyRepoToSharePoint",
+        "title": "Apply Repository to SharePoint (write-back)…",
+        "category": "AI SharePoint",
+        "icon": "$(cloud-upload)"
+      },
+      {
         "command": "aiSharePoint.addContextSource",
         "title": "Add Context Source (Confluence/Jira)",
         "category": "AI SharePoint",
@@ -649,6 +655,11 @@
           "command": "aiSharePoint.removeBookmark",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-bookmark",
           "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.applyRepoToSharePoint",
+          "when": "view == aiSharePoint.sitesView && viewItem == site-managed",
+          "group": "2_sync@4"
         }
       ],
       "commandPalette": [
@@ -699,6 +710,10 @@
         {
           "command": "aiSharePoint.removeBookmark",
           "when": "false"
+        },
+        {
+          "command": "aiSharePoint.applyRepoToSharePoint",
+          "when": "aiSharePoint.hasSites"
         }
       ]
     },
