@@ -42,7 +42,7 @@
 
 ## Track A — Context-source framework + first adapters
 
-- [ ] **A1. Framework core (pure).** `src/context/types.ts` (source/bookmark/result shapes),
+- [x] **A1. Framework core (pure).** `src/context/types.ts` (source/bookmark/result shapes),
       `src/context/authFailures.ts` (ADR-0009 lockout-safe tracker: never auto-retry a bad
       secret, circuit-break at 3 consecutive failures, network≠auth), `src/context/cache.ts`
       (ADR-0011 TTL read-through, default 15 min, invalidate), caps policy (ADR-0012: max
@@ -50,7 +50,7 @@
 - [ ] **A2. Stores + credentials (vscode).** `src/context/sourcesStore.ts` (non-secret
       descriptors incl. chosen auth method per ADR-0015, globalState, events; credential wipe
       on remove). Credential JSON in keychain under `context:<id>:credential`.
-- [ ] **A3. Adapters: Confluence + Jira (Cloud & Data Center).** `src/context/http.ts` (shared
+- [x] **A3. Adapters: Confluence + Jira (Cloud & Data Center).** `src/context/http.ts` (shared
       fetch wrapper: timeout, result caps, status→ErrorCode), `adapters/confluence.ts`
       (verify, CQL/text search, get page w/ HTML-stripped excerpt, list spaces),
       `adapters/jira.ts` (verify via /myself, JQL/text search, get issue). Basic (user+token/
@@ -78,3 +78,4 @@
 - 2026-06-11: File created; ADR-0019 authored alongside.
 - 2026-06-11: B1–B3 done (serializer + gates + Graph reads; 12 sync tests, 74 total).
 - 2026-06-11: B4 done (git layer via VS Code Git API, engine, configure/pull/push commands, allowlist setting, menus). B5 docs pending.
+- 2026-06-11: A1+A3 done (lockout tracker, TTL cache, http wrapper, Confluence+Jira adapters; 86 tests). A2/A4/A5 next.
