@@ -50,6 +50,7 @@ import {
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
+import { aliasIssue, normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
 import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
@@ -1316,10 +1317,15 @@ export function activate(context: vscode.ExtensionContext): void {
       })) ?? "";
     if (!displayName) return;
 
+    const details = await promptSourceAliasAndDescription(contextSources.list());
+    if (!details) return;
+
     const source: ContextSource = {
       id: crypto.randomUUID(),
       type: typePick.value,
       displayName: displayName.trim(),
+      alias: details.alias,
+      description: details.description,
       baseUrl,
       baseDn,
       deployment,
@@ -1389,6 +1395,24 @@ export function activate(context: vscode.ExtensionContext): void {
       contextCache.invalidateSource(source.id);
       telemetry.record("context.remove");
     }
+  });
+
+  register("aiSharePoint.editSourceAlias", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    const details = await promptSourceAliasAndDescription(contextSources.list(), source);
+    if (!details) return;
+    const stored = contextSources.get(source.id) ?? source;
+    await contextSources.upsert({ ...stored, alias: details.alias, description: details.description });
+    telemetry.record("context.alias", {
+      alias: details.alias ? "set" : "cleared",
+      description: details.description ? "set" : "cleared",
+    });
+    void vscode.window.showInformationMessage(
+      details.alias
+        ? `"${source.displayName}" answers to "${details.alias}" now — e.g. @sharepoint find … in the ${details.alias} database.`
+        : `Alias cleared for "${source.displayName}".`,
+    );
   });
 
   register("aiSharePoint.browseSource", async (arg) => {
@@ -1653,6 +1677,19 @@ export function activate(context: vscode.ExtensionContext): void {
     const existingNames = new Set(contextSources.list().map((s) => s.displayName.toLowerCase()));
     const fresh = parsed.sources.filter((s) => !existingNames.has(s.displayName.toLowerCase()));
     const skipped = parsed.sources.length - fresh.length;
+    // Aliases must stay unique against what's already configured here — drop
+    // (don't fail on) imported aliases that collide.
+    const existingAliases = new Set(
+      contextSources.list().flatMap((s) => (s.alias ? [s.alias.toLowerCase()] : [])),
+    );
+    for (const s of fresh) {
+      if (s.alias && existingAliases.has(s.alias.toLowerCase())) {
+        parsed.warnings.push(`Alias "${s.alias}" of "${s.displayName}" is already in use here — dropped.`);
+        delete s.alias;
+      } else if (s.alias) {
+        existingAliases.add(s.alias.toLowerCase());
+      }
+    }
     if (fresh.length === 0 && parsed.bookmarks.length === 0) {
       void vscode.window.showWarningMessage(
         `Nothing to import${skipped ? ` (${skipped} source(s) already exist by name)` : ""}.`,
@@ -1926,6 +1963,41 @@ async function promptNumber(
   return raw === undefined ? undefined : Number(raw);
 }
 
+/** Shared by add + edit: optional chat alias (unique, validated) and
+ *  description. Enter on an empty box skips/clears; Esc cancels the flow. */
+async function promptSourceAliasAndDescription(
+  existing: ContextSource[],
+  current?: { id?: string; alias?: string; description?: string },
+): Promise<{ alias?: string; description?: string } | undefined> {
+  const aliasRaw = await vscode.window.showInputBox({
+    ignoreFocusOut: true,
+    title: "Chat alias (optional)",
+    value: current?.alias ?? "",
+    placeHolder: 'CMDB — short handle for @sharepoint chat ("…in the CMDB database")',
+    prompt: current?.alias
+      ? "Press Enter to keep/change, or clear the box to remove the alias."
+      : "Press Enter to skip. You can set it later via right-click → Edit Alias & Description.",
+    validateInput: (v) => (v.trim() ? aliasIssue(v, existing, current?.id) : undefined),
+  });
+  if (aliasRaw === undefined) return undefined;
+  const descriptionRaw = await vscode.window.showInputBox({
+    ignoreFocusOut: true,
+    title: "Description (optional)",
+    value: current?.description ?? "",
+    placeHolder: "What's in it — e.g. ServiceNow CMDB replica: application & service inventory",
+    prompt: "Shown to Copilot so it picks the right source for a question. Press Enter to skip.",
+    validateInput: (v) =>
+      v.trim().length > DESCRIPTION_MAX_LENGTH
+        ? `Keep it under ${DESCRIPTION_MAX_LENGTH} characters.`
+        : undefined,
+  });
+  if (descriptionRaw === undefined) return undefined;
+  return {
+    alias: aliasRaw.trim() ? normalizeAlias(aliasRaw) : undefined,
+    description: descriptionRaw.trim() ? descriptionRaw.trim().slice(0, DESCRIPTION_MAX_LENGTH) : undefined,
+  };
+}
+
 async function resolveSourceArg(
   arg: unknown,
   store: ContextSourcesStore,
@@ -1948,7 +2020,7 @@ async function resolveSourceArg(
   const pick = await vscode.window.showQuickPick(
     all.map((s) => ({
       label: s.displayName,
-      description: `${s.type} · ${s.deployment}`,
+      description: `${s.alias ? `“${s.alias}” · ` : ""}${s.type} · ${s.deployment}`,
       source: s,
     })),
     { ignoreFocusOut: true, title: "Which source?" },

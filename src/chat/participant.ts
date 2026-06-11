@@ -22,7 +22,10 @@ const INSTRUCTIONS = [
   "guessing: search_context queries a reference source (free text, or raw CQL/JQL/LDAP filter),",
   "get_context_item fetches one page/issue/directory entry, list_sources and list_bookmarks show",
   "what is available, run_bookmark executes a saved query by name, and site_overview/list_pages",
-  "read SharePoint sites. For research tasks (e.g. aggregating content about a topic), run one or",
+  "read SharePoint sites. Sources may carry a short ALIAS (e.g. \"CMDB\") and a description of",
+  "their contents — when the user names a source (\"…in the CMDB database\"), pass that alias as",
+  "the tool's source argument and trust the description when choosing where to look.",
+  "For research tasks (e.g. aggregating content about a topic), run one or",
   "more searches, synthesize the findings with links, and — when a query looks reusable — call",
   "suggest_bookmark to propose saving it; the user approves in a confirmation dialog.",
   "Your access is strictly READ-ONLY: never claim to have changed anything. Users apply changes",
@@ -124,6 +127,8 @@ function renderHelp(stream: vscode.ChatResponseStream): void {
       "",
       "Ask anything else in natural language — I can **search your reference sources too**:",
       "_“search Confluence for content about AI automation and summarize it”_,",
+      "_“find information about application X in the CMDB database”_ (sources answer to their",
+      "**alias** — set one via right-click → *Edit Alias & Description*),",
       "_“what's in the IT Help queue?”_ (runs your bookmarks), or",
       "_“draft a landing-page outline for our product catalog”_. When a search proves useful,",
       "I can propose saving it as a **bookmark** — you approve before anything persists.",
@@ -401,8 +406,11 @@ async function buildSiteContext(
   const bookmarkList = deps.bookmarks.list();
   const referenceBlock = [
     referenceSources.length
-      ? `Reference sources available to the search/get tools:\n${referenceSources
-          .map((s) => `- ${s.displayName} (${s.type}, ${s.deployment})`)
+      ? `Reference sources available to the search/get tools (alias in quotes — pass it as the source argument):\n${referenceSources
+          .map(
+            (s) =>
+              `- ${s.alias ? `"${s.alias}" — ` : ""}${s.displayName} (${s.type}, ${s.deployment})${s.description ? `: ${s.description}` : ""}`,
+          )
           .join("\n")}`
       : "No reference sources configured (the user can add Confluence/Jira/LDAP via 'Add Context Source').",
     bookmarkList.length

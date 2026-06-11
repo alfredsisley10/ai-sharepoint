@@ -1,4 +1,5 @@
 import { ContextSource, ContextBookmark, ContextAuthMethod } from "./types";
+import { normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./sourceRef";
 
 /**
  * Secret-free reference-config sharing (ADR-0013 slice 1).
@@ -15,6 +16,10 @@ export const REFERENCE_EXPORT_SCHEMA = "ai-sharepoint/reference-config/v1";
 export interface ExportedSource {
   type: ContextSource["type"];
   displayName: string;
+  /** Chat alias + description: non-secret, user-authored, shared so the
+   *  whole team can say "…in the CMDB database". */
+  alias?: string;
+  description?: string;
   baseUrl: string;
   baseDn?: string;
   deployment: ContextSource["deployment"];
@@ -58,6 +63,8 @@ export function buildReferenceExport(
       // leak into exports without a deliberate change here.
       type: s.type,
       displayName: s.displayName,
+      ...(s.alias ? { alias: s.alias } : {}),
+      ...(s.description ? { description: s.description } : {}),
       baseUrl: s.baseUrl,
       ...(s.baseDn ? { baseDn: s.baseDn } : {}),
       deployment: s.deployment,
@@ -104,6 +111,7 @@ export function parseReferenceImport(
   }
 
   const idByName = new Map<string, string>();
+  const seenAliases = new Set<string>();
   for (const s of Array.isArray(raw.sources) ? raw.sources : []) {
     if (
       !s ||
@@ -121,10 +129,21 @@ export function parseReferenceImport(
     }
     const id = newId();
     idByName.set(s.displayName.toLowerCase(), id);
+    // Aliases must be unique within the file too — first one wins.
+    let alias = typeof s.alias === "string" ? normalizeAlias(s.alias) : "";
+    if (alias && seenAliases.has(alias.toLowerCase())) {
+      out.warnings.push(`Duplicate alias "${alias}" on "${s.displayName}" — dropped.`);
+      alias = "";
+    }
+    if (alias) seenAliases.add(alias.toLowerCase());
     out.sources.push({
       id,
       type: s.type,
       displayName: s.displayName,
+      ...(alias ? { alias } : {}),
+      ...(typeof s.description === "string" && s.description.trim()
+        ? { description: s.description.trim().slice(0, DESCRIPTION_MAX_LENGTH) }
+        : {}),
       baseUrl: s.baseUrl,
       ...(s.baseDn ? { baseDn: s.baseDn } : {}),
       deployment: s.deployment === "cloud" ? "cloud" : "datacenter",

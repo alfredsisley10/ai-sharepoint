@@ -23,6 +23,12 @@ export interface ContextSource {
   id: string;
   type: ContextSourceType;
   displayName: string;
+  /** Short, unique, chat-friendly handle (e.g. "CMDB") — how users refer to
+   *  the source in @sharepoint chat. Matched case-insensitively. */
+  alias?: string;
+  /** User-authored one-liner on what the source contains; shown to the
+   *  model so it picks the right source for a question. */
+  description?: string;
   /** HTTP base for Confluence/Jira; ldap(s):// server URL for LDAP. */
   baseUrl: string;
   /** LDAP search base, e.g. DC=corp,DC=example,DC=com (LDAP sources only). */

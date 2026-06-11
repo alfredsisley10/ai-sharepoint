@@ -242,6 +242,21 @@ Jira, Cloud or Data Center (more source types are roadmap).
   *Reset Source Auth Lockout* (context menu) reopens a locked source — check with your admin
   first.
 
+### Aliases & descriptions: name sources the way you talk about them
+
+Give any source a short **chat alias** and a one-line **description** — optional steps when
+adding, or any time via right-click → **Edit Alias & Description**:
+
+- **Alias** (e.g. `CMDB`): the handle you use in chat — *"@sharepoint find information about
+  application X in the **CMDB** database"* goes straight to that connection. Aliases are
+  **unique** (validated as you type) so a reference is never ambiguous, matched
+  case-insensitively, and shown on the source's row in the view.
+- **Description** (e.g. *"ServiceNow CMDB replica: application & service inventory"*): shown to
+  Copilot with every request, so when you don't name a source the model still picks the right
+  one for the question.
+- Both travel with **Export/Import Reference Config**, so the whole team shares the same
+  vocabulary (still secret-free; colliding aliases are dropped with a warning on import).
+
 ### LDAP / Active Directory (with DNS auto-discovery)
 
 Reference AD users, groups, and OUs read-only — with **no server address to type** on a
@@ -407,7 +422,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Apply Repository to SharePoint (write-back)… | Write repo changes to the live site — previewed, freshness-checked, snapshot-guarded |
 | Revert Site to Commit… | Make the live site match an earlier snapshot commit (ADR-0005) |
 | Export / Import Reference Config | Share sources + bookmarks with the team, secret-free (ADR-0013) |
-| Add / Test / Remove Context Source · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only Confluence/Jira sources |
+| Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases) |
 | Remove Site Connection | Remove descriptor (+ tokens if last connection in tenant) |
 | Ask Copilot (metered) | One-shot prompt; streams into the “AI SharePoint — Copilot” output |
 | List Copilot Models | Models with relative cost; optionally set the preferred default |

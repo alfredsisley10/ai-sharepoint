@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { SecretStore } from "../secrets/secretStore";
 import { ContextSource, ContextCredential } from "./types";
+import { resolveSourceRef } from "./sourceRef";
 import {
   FailureState,
   canAttempt,
@@ -36,19 +37,10 @@ export class ContextSourcesStore {
     return this.list().find((s) => s.id === id);
   }
 
-  /** Resolve by id, display name (exact → substring), or sole source. */
+  /** Resolve by id, alias, display name, type, or sole source — alias-aware
+   *  matching shared with the chat tools (see sourceRef.ts). */
   resolve(reference?: string): ContextSource | undefined {
-    const all = this.list();
-    if (!reference?.trim()) {
-      return all.length === 1 ? all[0] : undefined;
-    }
-    const ref = reference.trim().toLowerCase();
-    return (
-      all.find((s) => s.id === reference) ??
-      all.find((s) => s.displayName.toLowerCase() === ref) ??
-      all.find((s) => s.type === ref) ??
-      all.find((s) => s.displayName.toLowerCase().includes(ref))
-    );
+    return resolveSourceRef(this.list(), reference);
   }
 
   async upsert(source: ContextSource): Promise<void> {

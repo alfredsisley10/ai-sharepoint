@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0 — 2026-06-11
+
+### Added — chat aliases & descriptions for reference sources (ADR-0023)
+- Every reference source can carry a short, **unique chat alias** (e.g. `CMDB`) and a one-line
+  **description** of its contents — set during add (optional steps) or any time via
+  right-click → **Edit Alias & Description**. The Reference Sources view shows the alias on the
+  row and both in the tooltip.
+- **Copilot understands them everywhere**: `@sharepoint find information about application X in
+  the CMDB database` resolves "CMDB" to the right connection. The alias+description ride in the
+  participant's context, the `#spSources` output, and every tool's `source` argument
+  (alias → display name → type precedence, case-insensitive, word-boundary phrase matching so
+  an alias like `DB` never matches inside "database"). Descriptions steer the model to the
+  right source when none is named.
+- Aliases travel with **Export/Import Reference Config** (allowlisted — still secret-free);
+  duplicates in a file or with existing sources are dropped with warnings, never ambiguous.
+
+
 ## 0.6.5 — 2026-06-11
 
 ### Changed — SQL Server setup is now a fully guided, field-by-field wizard (pilot)

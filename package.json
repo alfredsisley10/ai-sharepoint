@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.6.5",
+  "version": "0.7.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -146,6 +146,12 @@
         "command": "aiSharePoint.removeContextSource",
         "title": "Remove Context Source",
         "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.editSourceAlias",
+        "title": "Edit Alias & Description",
+        "category": "AI SharePoint",
+        "icon": "$(tag)"
       },
       {
         "command": "aiSharePoint.resetSourceLockout",
@@ -455,7 +461,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "List the user's configured read-only reference sources (Confluence, Jira) with type, deployment, and verification state. Use before searching to discover what is available.",
+        "modelDescription": "List the user's configured read-only reference sources (Confluence, Jira, LDAP/Active Directory, SQL Server/PostgreSQL/MySQL/MongoDB databases) with their chat alias (the short handle users say, e.g. \"CMDB\"), description of contents, type, deployment, and verification state. Use before searching to discover what is available and map a name the user mentioned to a source.",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -477,7 +483,7 @@
           "properties": {
             "source": {
               "type": "string",
-              "description": "Source display name or type. Optional when exactly one source exists."
+              "description": "Source alias (e.g. \"CMDB\"), display name, or type — as the user said it. Optional when exactly one source exists."
             },
             "query": {
               "type": "string",
@@ -505,7 +511,7 @@
           "properties": {
             "source": {
               "type": "string",
-              "description": "Source display name or type. Optional when exactly one source exists."
+              "description": "Source alias (e.g. \"CMDB\"), display name, or type — as the user said it. Optional when exactly one source exists."
             },
             "id": {
               "type": "string",
@@ -573,7 +579,7 @@
           "properties": {
             "source": {
               "type": "string",
-              "description": "Source display name or type. Optional when exactly one source exists."
+              "description": "Source alias (e.g. \"CMDB\"), display name, or type — as the user said it. Optional when exactly one source exists."
             },
             "name": {
               "type": "string",
@@ -756,6 +762,11 @@
           "command": "aiSharePoint.browseSource",
           "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
           "group": "1_actions@2"
+        },
+        {
+          "command": "aiSharePoint.editSourceAlias",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "1_actions@4"
         },
         {
           "command": "aiSharePoint.clearErrorReports",

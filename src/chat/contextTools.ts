@@ -5,6 +5,7 @@ import { BookmarksStore } from "../context/bookmarksStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
+import { sourceChatLabel } from "../context/sourceRef";
 
 /**
  * LM tools over the read-only context-source framework (PLAN §9 + ADR-0017).
@@ -50,8 +51,8 @@ export function registerContextTools(
         all.length === 0
           ? 'No reference sources configured. The user can add Confluence/Jira via "AI SharePoint: Add Context Source".'
           : `Could not match "${ref ?? ""}" to a source. Available: ${all
-              .map((s) => `${s.displayName} (${s.type})`)
-              .join("; ")}.`,
+              .map(sourceChatLabel)
+              .join("; ")}. Aliases, display names, and types all work as the source argument.`,
       );
     }
     return source;
@@ -71,6 +72,8 @@ export function registerContextTools(
           return JSON.stringify(
             all.map((s) => ({
               name: s.displayName,
+              ...(s.alias ? { alias: s.alias } : {}),
+              ...(s.description ? { description: s.description } : {}),
               type: s.type,
               deployment: s.deployment,
               verified: Boolean(s.lastVerifiedAt),

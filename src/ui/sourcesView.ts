@@ -50,7 +50,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     );
     item.id = source.id;
     const locked = this.sources.isLockedOut(source.id);
-    item.description = `${source.type} · ${source.deployment}${locked ? " · locked" : ""}`;
+    item.description = `${source.alias ? `“${source.alias}” · ` : ""}${source.type} · ${source.deployment}${locked ? " · locked" : ""}`;
     const icon =
       source.type === "jira"
         ? "issues"
@@ -68,12 +68,17 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
           : new vscode.ThemeColor("charts.yellow"),
     );
     item.contextValue = locked ? "context-source-locked" : "context-source";
+    const cell = (s: string) => s.replace(/\|/g, "\\|");
     item.tooltip = new vscode.MarkdownString(
       [
         `**${source.displayName}** _(read-only context — PLAN §9)_`,
+        ...(source.description ? ["", `_${cell(source.description)}_`] : []),
         "",
         `| | |`,
         `|---|---|`,
+        ...(source.alias
+          ? [`| Chat alias | “${cell(source.alias)}” — e.g. \`@sharepoint find … in ${cell(source.alias)}\` |`]
+          : []),
         `| Type | ${source.type} (${source.deployment}) |`,
         `| URL | ${source.baseUrl} |`,
         ...(isSrvLocator(source.baseUrl)

@@ -16,6 +16,8 @@ function sources(): ContextSource[] {
       id: "s1",
       type: "confluence",
       displayName: "Corp Wiki",
+      alias: "Wiki",
+      description: "Engineering knowledge base",
       baseUrl: "https://confluence.corp.example",
       deployment: "datacenter",
       authMethod: "pat",
@@ -76,6 +78,29 @@ test("round-trip: export → import regenerates ids and remaps bookmarks", () =>
   assert.equal(parsed.sources[0].account, undefined); // recipients re-verify
   assert.equal(parsed.sources[0].lastVerifiedAt, undefined);
   assert.deepEqual(parsed.warnings, []);
+  // Alias + description travel with the config so the whole team can say
+  // "…in the Wiki" — and the LDAP source without them stays clean.
+  assert.equal(parsed.sources[0].alias, "Wiki");
+  assert.equal(parsed.sources[0].description, "Engineering knowledge base");
+  assert.equal(parsed.sources[1].alias, undefined);
+});
+
+test("import drops duplicate aliases within a file (first wins) with a warning", () => {
+  const doc = {
+    $schema: REFERENCE_EXPORT_SCHEMA,
+    exportedAt: T0,
+    notice: "",
+    sources: [
+      { type: "mssql", displayName: "CMDB primary", alias: "CMDB", baseUrl: "mssql://a/CMDB", deployment: "datacenter", authMethod: "basic" },
+      { type: "mssql", displayName: "CMDB replica", alias: "cmdb", baseUrl: "mssql://b/CMDB", deployment: "datacenter", authMethod: "basic" },
+    ],
+    bookmarks: [],
+  };
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => crypto.randomUUID());
+  assert.equal(parsed.sources[0].alias, "CMDB");
+  assert.equal(parsed.sources[1].alias, undefined);
+  assert.equal(parsed.warnings.length, 1);
+  assert.match(parsed.warnings[0], /Duplicate alias/);
 });
 
 test("import rejects wrong schema and bad JSON", () => {
