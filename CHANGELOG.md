@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.0 — 2026-06-11
+
+Bookmark discoverability + agent-proposed bookmarks (pilot feedback).
+
+### Added — guided Browse & Bookmark
+- **Browse Source & Add Bookmark…** (inline bookmark button on every source row): pick directly
+  from the source's catalog — **Jira JSM queues** (each saved with its own JQL), **favourite
+  filters**, and **projects**; **Confluence spaces** (saved as recent-content queries) — or
+  search first and bookmark either the query itself or one specific result (issue, page, or
+  LDAP entry). Jira search hits now carry the issue key so picked results bookmark cleanly.
+- A dedicated **Bookmarks** section in the user guide (the 0.3.0 feature existed but was
+  context-menu-only and undocumented — discoverability fixed).
+
+### Fixed — @sharepoint can now actually use reference sources (tool calling)
+- Pilot finding: asking `@sharepoint` to *"search Confluence sites to aggregate relevant
+  content…"* produced answers with no Confluence data. Root cause: the chat participant made a
+  plain model request — the extension's tools were only available in Copilot **agent mode**,
+  never when addressing `@sharepoint` directly. The participant now declares all nine tools on
+  every request and runs a **tool-calling loop** (up to 4 rounds): the model searches
+  Confluence/Jira/LDAP, reads items, runs bookmarks, and synthesizes — with per-round metering,
+  the budget hard-cap re-checked between rounds, tool denials/failures fed back to the model
+  gracefully, and the chat's `toolInvocationToken` passed through so **suggest-bookmark
+  confirmations render right in the conversation**. The model's context now also inventories
+  your reference sources and saved bookmarks, and `/help` shows the research workflow.
+
+### Added — agent-suggested bookmarks (human-approved)
+- New tool **`#spSuggestBookmark`**: in agent mode, Copilot can search Confluence/Jira/LDAP,
+  identify recurring queries or items worth keeping, and **propose** them as bookmarks. The
+  proposal renders in VS Code's tool-confirmation UI (name, source, exact locator, reason) and
+  **nothing persists unless you approve**. The search tool's description nudges the agent
+  toward this workflow.
+- 4 new unit tests (146 total) covering spaces/filters/queues mapping and non-JSM fallback.
+
 ## 0.4.1 — 2026-06-11
 
 LDAP/Active Directory fixes from enterprise pilot feedback (ADR-0020 amendment).

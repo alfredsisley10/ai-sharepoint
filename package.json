@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -175,6 +175,12 @@
         "title": "Import Reference Config…",
         "category": "AI SharePoint",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "aiSharePoint.browseSource",
+        "title": "Browse Source & Add Bookmark…",
+        "category": "AI SharePoint",
+        "icon": "$(bookmark)"
       },
       {
         "command": "aiSharePoint.addBookmark",
@@ -464,7 +470,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Search a configured read-only reference source. Confluence accepts raw CQL or plain text; Jira accepts raw JQL or plain text; LDAP/Active Directory accepts a raw LDAP filter (e.g. \"(mail=*@corp.com)\") or plain text (matched against names, login, and email via AD ANR). Returns capped, cached results. Pass the source name when several are configured.",
+        "modelDescription": "Search a configured read-only reference source. Confluence accepts raw CQL or plain text; Jira accepts raw JQL or plain text; LDAP/Active Directory accepts a raw LDAP filter (e.g. \"(mail=*@corp.com)\") or plain text (matched against names, login, and email via AD ANR). Returns capped, cached results. Pass the source name when several are configured. If a query or result proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -547,6 +553,51 @@
           },
           "required": [
             "name"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_suggest_bookmark",
+        "displayName": "Suggest Bookmark",
+        "toolReferenceName": "spSuggestBookmark",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(bookmark)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "After searching the reference sources (Confluence, Jira, LDAP/AD) and identifying a query or item the user is likely to reuse — e.g. a Jira queue/JQL for their initiative, a Confluence space query, a person's directory entry — propose persisting it as a named bookmark. The user approves via a confirmation dialog before anything is saved; nothing persists without approval. Provide a short, descriptive name, the exact locator (raw CQL/JQL/LDAP filter for kind=query; page id/issue key/DN for kind=item), and a one-line reason.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Source display name or type. Optional when exactly one source exists."
+            },
+            "name": {
+              "type": "string",
+              "description": "Short descriptive bookmark name."
+            },
+            "locator": {
+              "type": "string",
+              "description": "CQL/JQL/LDAP filter (query) or page id / issue key / DN (item)."
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "query",
+                "item"
+              ],
+              "description": "Defaults to query."
+            },
+            "reason": {
+              "type": "string",
+              "description": "One line on why this is worth bookmarking (shown to the user)."
+            }
+          },
+          "required": [
+            "name",
+            "locator"
           ]
         }
       }
@@ -694,6 +745,16 @@
           "command": "aiSharePoint.revertSiteToCommit",
           "when": "view == aiSharePoint.sitesView && viewItem == site-managed",
           "group": "2_sync@5"
+        },
+        {
+          "command": "aiSharePoint.browseSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "inline@2"
+        },
+        {
+          "command": "aiSharePoint.browseSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "1_actions@2"
         }
       ],
       "commandPalette": [

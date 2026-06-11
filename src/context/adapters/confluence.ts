@@ -100,3 +100,31 @@ export async function getConfluencePage(
     },
   };
 }
+
+export interface SpaceInfo {
+  key: string;
+  name: string;
+  url: string;
+}
+
+/** Global spaces, capped — feeds the guided Browse & Bookmark picker. */
+export async function listConfluenceSpaces(
+  source: ContextSource,
+  credential: ContextCredential,
+  caps: ReadCaps,
+): Promise<SpaceInfo[]> {
+  const res = await fetchJson<{
+    results?: Array<{ key?: string; name?: string; _links?: { webui?: string } }>;
+  }>(
+    `${source.baseUrl.replace(/\/$/, "")}/rest/api/space?type=global&limit=${caps.maxResults}`,
+    credential,
+    caps.timeoutMs,
+  );
+  return (res.results ?? [])
+    .filter((sp) => sp.key)
+    .map((sp) => ({
+      key: sp.key!,
+      name: sp.name ?? sp.key!,
+      url: webUrl(source, sp._links?.webui),
+    }));
+}

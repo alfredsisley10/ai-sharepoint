@@ -5,6 +5,8 @@ import { SiteOverview } from "../auth/sharePointClient";
 import { CopilotService } from "../copilot/copilotService";
 import { UsageMeter } from "../copilot/meter";
 import { BudgetGuard, BudgetBlockedError } from "../copilot/budget";
+import { ContextSourcesStore } from "../context/sourcesStore";
+import { BookmarksStore } from "../context/bookmarksStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -15,21 +17,30 @@ export const PARTICIPANT_ID = "aiSharePoint.sharepoint";
 
 const INSTRUCTIONS = [
   "You are the AI SharePoint assistant inside Visual Studio Code.",
-  "You help users understand and manage SharePoint Online sites. YOUR access is READ-ONLY:",
-  "you can describe sites, lists, and pages from the provided context, answer governance questions,",
-  "and draft changes — but you must never claim to have changed anything in SharePoint yourself.",
-  "Users CAN apply changes via the extension's write-back flow: edit the site repository files",
-  "(lists/*.json, pages/*.json from 'Pull Site to Repository'), commit, then run",
-  "'AI SharePoint: Apply Repository to SharePoint' — every change is previewed, snapshot-guarded,",
-  "and human-approved. When asked to make a change, draft the exact file edits and point the user",
-  "to that flow. Prefer SharePoint's no-code, out-of-the-box features (modern pages, standard web",
-  "parts, lists) so sites stay maintainable by end users. Be concise and practical.",
+  "You help users with SharePoint Online sites AND the read-only reference sources they have",
+  "connected (Confluence, Jira, LDAP/Active Directory). You have TOOLS — use them instead of",
+  "guessing: search_context queries a reference source (free text, or raw CQL/JQL/LDAP filter),",
+  "get_context_item fetches one page/issue/directory entry, list_sources and list_bookmarks show",
+  "what is available, run_bookmark executes a saved query by name, and site_overview/list_pages",
+  "read SharePoint sites. For research tasks (e.g. aggregating content about a topic), run one or",
+  "more searches, synthesize the findings with links, and — when a query looks reusable — call",
+  "suggest_bookmark to propose saving it; the user approves in a confirmation dialog.",
+  "Your access is strictly READ-ONLY: never claim to have changed anything. Users apply changes",
+  "via the extension's write-back flow ('Pull Site to Repository' → edit/commit → 'Apply",
+  "Repository to SharePoint'), which is previewed, snapshot-guarded, and human-approved — when",
+  "asked to change a site, draft the exact repo file edits and point at that flow.",
+  "Prefer SharePoint's no-code, out-of-the-box features so sites stay maintainable. Be concise.",
 ].join(" ");
+
+/** Cap on tool-calling rounds per turn (each round is a metered request). */
+const MAX_TOOL_ROUNDS = 4;
 
 interface ChatDeps {
   ctx: vscode.ExtensionContext;
   sites: SitesStore;
   access: SiteAccess;
+  sources: ContextSourcesStore;
+  bookmarks: BookmarksStore;
   copilot: CopilotService;
   meter: UsageMeter;
   budget: BudgetGuard;
@@ -111,9 +122,12 @@ function renderHelp(stream: vscode.ChatResponseStream): void {
       "| `/usage` | This extension's Copilot usage vs. your budget |",
       "| `/help` | This help |",
       "",
-      "Ask anything else in natural language — e.g. _“what's on my Marketing site?”_ or",
-      "_“draft a landing-page outline for our product catalog”_. In **agent mode**, Copilot can also call",
-      "the `#aisharepoint` tools (connections, site overview, pages, usage) automatically.",
+      "Ask anything else in natural language — I can **search your reference sources too**:",
+      "_“search Confluence for content about AI automation and summarize it”_,",
+      "_“what's in the IT Help queue?”_ (runs your bookmarks), or",
+      "_“draft a landing-page outline for our product catalog”_. When a search proves useful,",
+      "I can propose saving it as a **bookmark** — you approve before anything persists.",
+      "The same tools are `#`-referenceable in Copilot **agent mode** (`#spSearchContext`, …).",
       "",
       "> Every model request is metered against your configured allowance — watch the gauge in the status bar.",
     ].join("\n"),
@@ -238,14 +252,13 @@ async function answerWithModel(
   stream: vscode.ChatResponseStream,
   token: vscode.CancellationToken,
 ): Promise<vscode.ChatResult> {
-  const model = request.model ?? undefined;
-
-  // Soft-cap heads-up before spending (hard cap throws from enforce()).
+  const model = request.model ?? (await deps.copilot.pickDefaultModel());
+  const modelKey = model.family || model.id;
+  const multiplier = deps.meter.multiplierFor(modelKey);
   const nowIso = deps.now();
-  const multiplier = model
-    ? deps.meter.multiplierFor(model.family || model.id)
-    : 1;
-  const verdict = deps.budget.evaluate(multiplier, nowIso);
+
+  // Hard cap throws (caught by the handler); soft cap warns once up front.
+  const verdict = deps.budget.enforce(multiplier, nowIso);
   if (verdict.state === "soft") {
     stream.markdown(
       `> ⚠️ Heads-up: ~${verdict.usedPct.toFixed(0)}% of your monthly Copilot allowance is used (soft cap ${verdict.softPct}%).\n\n`,
@@ -254,31 +267,128 @@ async function answerWithModel(
 
   const contextBlock = await buildSiteContext(deps, request, stream);
   const history = formatHistory(context);
-
   const prompt = [
     INSTRUCTIONS,
-    contextBlock ? `\n## Connected SharePoint context\n${contextBlock}` : "",
+    contextBlock ? `\n## Connected context\n${contextBlock}` : "",
     history ? `\n## Conversation so far\n${history}` : "",
     `\n## User request\n${request.prompt}`,
   ].join("\n");
 
-  const result = await deps.copilot.ask(
-    {
-      prompt,
-      label: "chat",
-      model,
-      onChunk: (chunk) => stream.markdown(chunk),
-      token,
-    },
-    deps.now,
-  );
+  // This extension's tools (SharePoint + reference sources + bookmarks),
+  // declared on the request so the model can call them from @sharepoint —
+  // not only from Copilot agent mode.
+  const tools: vscode.LanguageModelChatTool[] = vscode.lm.tools
+    .filter((t) => t.name.startsWith("aisharepoint_"))
+    .map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
 
-  if (result.premiumUnits > 0) {
+  const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+  let inputTokens = 0;
+  try {
+    inputTokens = await model.countTokens(prompt);
+  } catch {
+    // best-effort
+  }
+
+  let totalUnits = 0;
+  let sawText = false;
+  for (let round = 0; ; round++) {
+    // Every round is its own premium request — re-check the budget so a tool
+    // loop cannot blast through the hard cap mid-turn.
+    if (round > 0 && deps.budget.evaluate(multiplier, deps.now()).state === "hard" && verdict.mode === "block") {
+      stream.markdown("\n\n_Stopped: the Copilot budget hard cap was reached mid-conversation._");
+      break;
+    }
+
+    let text = "";
+    const toolCalls: vscode.LanguageModelToolCallPart[] = [];
+    let ok = false;
+    try {
+      const response = await model.sendRequest(
+        messages,
+        {
+          justification: "AI SharePoint chat (metered against your Copilot allowance)",
+          ...(round < MAX_TOOL_ROUNDS ? { tools } : {}),
+        },
+        token,
+      );
+      for await (const part of response.stream) {
+        if (part instanceof vscode.LanguageModelTextPart) {
+          text += part.value;
+          sawText = true;
+          stream.markdown(part.value);
+        } else if (part instanceof vscode.LanguageModelToolCallPart) {
+          toolCalls.push(part);
+        }
+      }
+      ok = true;
+    } finally {
+      let outputTokens = 0;
+      if (text) {
+        try {
+          outputTokens = await model.countTokens(text);
+        } catch {
+          outputTokens = Math.ceil(text.length / 4);
+        }
+      }
+      await deps.meter.record(
+        modelKey,
+        round === 0 ? inputTokens : 0,
+        outputTokens,
+        deps.now(),
+        "chat",
+        ok,
+      );
+      totalUnits += multiplier;
+    }
+
+    if (toolCalls.length === 0) {
+      break;
+    }
+
+    // Record the assistant turn (text + calls), invoke each tool, and feed
+    // results back. toolInvocationToken routes confirmations (e.g. the
+    // suggest-bookmark approval) into this chat turn's UI.
+    messages.push(
+      vscode.LanguageModelChatMessage.Assistant([
+        ...(text ? [new vscode.LanguageModelTextPart(text)] : []),
+        ...toolCalls,
+      ]),
+    );
+    const resultParts: vscode.LanguageModelToolResultPart[] = [];
+    for (const call of toolCalls) {
+      stream.progress(`Running ${call.name.replace("aisharepoint_", "").replace(/_/g, " ")}…`);
+      deps.telemetry.record("chat.toolCall", { tool: call.name });
+      try {
+        const result = await vscode.lm.invokeTool(
+          call.name,
+          { input: call.input, toolInvocationToken: request.toolInvocationToken },
+          token,
+        );
+        resultParts.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
+      } catch (err) {
+        // Tool denied (user rejected a confirmation) or failed — tell the
+        // model so it can continue gracefully instead of dying mid-turn.
+        resultParts.push(
+          new vscode.LanguageModelToolResultPart(call.callId, [
+            new vscode.LanguageModelTextPart(
+              `Tool ${call.name} was not completed: ${redactError(err).message}`,
+            ),
+          ]),
+        );
+      }
+    }
+    messages.push(vscode.LanguageModelChatMessage.User(resultParts));
+  }
+
+  if (!sawText) {
+    stream.markdown("_(The model returned no text — try rephrasing.)_");
+  }
+  if (totalUnits > 0) {
     stream.markdown(
-      `\n\n---\n_~${result.premiumUnits} premium unit(s) metered (estimate)._`,
+      `\n\n---\n_~${totalUnits} premium unit(s) metered this turn (estimate)._`,
     );
   }
-  return { metadata: { modelId: result.modelId } };
+  return { metadata: { modelId: model.id } };
 }
 
 /** Live, silent-auth-only context about the referenced (or sole) site. */
@@ -287,9 +397,26 @@ async function buildSiteContext(
   request: vscode.ChatRequest,
   stream: vscode.ChatResponseStream,
 ): Promise<string> {
+  const referenceSources = deps.sources.list();
+  const bookmarkList = deps.bookmarks.list();
+  const referenceBlock = [
+    referenceSources.length
+      ? `Reference sources available to the search/get tools:\n${referenceSources
+          .map((s) => `- ${s.displayName} (${s.type}, ${s.deployment})`)
+          .join("\n")}`
+      : "No reference sources configured (the user can add Confluence/Jira/LDAP via 'Add Context Source').",
+    bookmarkList.length
+      ? `Saved bookmarks (run by name with run_bookmark):\n${bookmarkList
+          .map((b) => `- ${b.name} [${b.kind}] on ${deps.sources.get(b.sourceId)?.displayName ?? "?"}`)
+          .join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   const all = deps.sites.list();
   if (all.length === 0) {
-    return "The user has no SharePoint connections configured yet. Suggest running 'AI SharePoint: Connect SharePoint Site' when site access would help.";
+    return `${referenceBlock}\nThe user has no SharePoint connections configured yet. Suggest running 'AI SharePoint: Connect SharePoint Site' when site access would help.`;
   }
 
   const urlInPrompt = deps.access.extractSiteUrl(request.prompt);
@@ -300,7 +427,7 @@ async function buildSiteContext(
     .join("\n");
 
   if (!conn) {
-    return `Configured connections:\n${inventory}\n(No single site could be inferred for this question — ask the user to name one if needed.)`;
+    return `${referenceBlock}\nConfigured connections:\n${inventory}\n(No single site could be inferred for this question — ask the user to name one if needed.)`;
   }
 
   try {
@@ -317,6 +444,7 @@ async function buildSiteContext(
       .map((p) => `  - ${p.title}`)
       .join("\n");
     return [
+      referenceBlock,
       `Configured connections:\n${inventory}`,
       `Active site: ${overview.site.displayName} (${overview.site.webUrl}) — role: ${conn.role}`,
       overview.site.description ? `Description: ${overview.site.description}` : "",
@@ -327,7 +455,7 @@ async function buildSiteContext(
       .join("\n");
   } catch (err) {
     deps.log.warn(`Chat context read failed: ${redactError(err).message}`);
-    return `Configured connections:\n${inventory}\n(Live read of "${conn.displayName}" failed — likely sign-in needed. The user can run "AI SharePoint: Test Site Connection".)`;
+    return `${referenceBlock}\nConfigured connections:\n${inventory}\n(Live read of "${conn.displayName}" failed — likely sign-in needed. The user can run "AI SharePoint: Test Site Connection".)`;
   }
 }
 

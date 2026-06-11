@@ -9,8 +9,8 @@ import {
 } from "../src/context/authFailures";
 import { TtlCache } from "../src/context/cache";
 import { authHeader, htmlToText } from "../src/context/http";
-import { searchConfluence } from "../src/context/adapters/confluence";
-import { searchJira } from "../src/context/adapters/jira";
+import { searchConfluence, listConfluenceSpaces } from "../src/context/adapters/confluence";
+import { searchJira, listJiraFavouriteFilters, listJsmQueues } from "../src/context/adapters/jira";
 import { ContextSource, DEFAULT_CAPS } from "../src/context/types";
 
 const T0 = "2026-06-11T12:00:00.000Z";
@@ -195,4 +195,49 @@ test("401 from a source classifies as auth.failed (feeds the lockout tracker)", 
     ),
     /Authentication rejected/,
   );
+});
+
+test("confluence spaces map to bookmarkable candidates", async () => {
+  const spaces = await withFetch(
+    () => ({ body: { results: [{ key: "ENG", name: "Engineering", _links: { webui: "/spaces/ENG" } }, { name: "broken (no key)" }] } }),
+    () => listConfluenceSpaces(SRC, CRED, DEFAULT_CAPS),
+  );
+  assert.deepEqual(spaces, [
+    { key: "ENG", name: "Engineering", url: "https://confluence.corp.example/spaces/ENG" },
+  ]);
+});
+
+test("jira favourite filters expose name + ready-made JQL", async () => {
+  const filters = await withFetch(
+    () => ({ body: [{ name: "My open bugs", jql: "assignee = currentUser() AND type = Bug" }, { name: "no jql" }] }),
+    () => listJiraFavouriteFilters({ ...SRC, type: "jira" }, CRED, DEFAULT_CAPS),
+  );
+  assert.equal(filters.length, 1);
+  assert.equal(filters[0].jql, "assignee = currentUser() AND type = Bug");
+});
+
+test("jsm queues flatten desks->queues with their JQL; non-JSM instances yield []", async () => {
+  const queues = await withFetch(
+    (url) =>
+      url.includes("/servicedesk?")
+        ? { body: { values: [{ id: "1", projectName: "IT Help" }] } }
+        : { body: { values: [{ name: "Unassigned", jql: "project = ITH AND assignee is EMPTY" }] } },
+    () => listJsmQueues({ ...SRC, type: "jira" }, CRED, DEFAULT_CAPS),
+  );
+  assert.deepEqual(queues, [
+    { desk: "IT Help", name: "Unassigned", jql: "project = ITH AND assignee is EMPTY" },
+  ]);
+  const none = await withFetch(
+    () => ({ status: 404, body: {} }),
+    () => listJsmQueues({ ...SRC, type: "jira" }, CRED, DEFAULT_CAPS),
+  );
+  assert.deepEqual(none, []);
+});
+
+test("jira search hits carry the issue key for item bookmarking", async () => {
+  const hits = await withFetch(
+    () => ({ body: { issues: [{ key: "ENG-7", fields: { summary: "X" } }] } }),
+    () => searchJira({ ...SRC, type: "jira" }, CRED, "x", DEFAULT_CAPS),
+  );
+  assert.equal(hits[0].meta?.key, "ENG-7");
 });

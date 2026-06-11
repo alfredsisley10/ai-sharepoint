@@ -165,3 +165,5 @@
 - 2026-06-11: D1 done (bookmarks ADR-0010: store, two-level Reference Sources tree, add/run/remove, #spBookmarks/#spRunBookmark tools, 5 pure tests, 106 total). D2 deferred (SP-REST/different-audience, untestable here). Wrapping 0.3.0.
 - 2026-06-11: Tracks E (write-back), F (revert), G (config sharing) done; 0.4.0 wrapped. **Every completable planned feature has shipped**; see the deferral register above.
 - 2026-06-11: 0.4.1 — LDAP pilot fixes: durable SRV locators (ldaps+srv://, per-connection re-resolution, network-only failover) + OS trust store for LDAPS (system-CA API, Linux bundles, NODE_EXTRA_CA_CERTS, pinned caCertificatesFile setting). ADR-0020 amended. 142 tests.
+- 2026-06-11: 0.5.0 — bookmark discoverability (guided Browse & Bookmark: JSM queues/filters/projects/spaces, search-then-bookmark, inline button) + #spSuggestBookmark agent tool with confirmation-gated persistence. 146 tests.
+- 2026-06-11: 0.5.0 (cont.) — @sharepoint participant gained a real tool-calling loop (was agent-mode-only): reference-source search/aggregation + in-chat bookmark confirmations now work from the participant. 146 tests.

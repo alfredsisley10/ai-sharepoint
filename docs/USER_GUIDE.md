@@ -136,6 +136,11 @@ Open the Chat view and address `@sharepoint`:
 - **Site context is automatic**: if your question references a connected site (by URL or name),
   or you have exactly one connection, the assistant reads the site's lists and pages live and
   answers from real data.
+- **Reference sources are searchable in chat**: ask things like _“search Confluence for content
+  about AI automation and aggregate what's relevant”_ — the assistant calls the same read-only
+  tools available in agent mode (search, fetch item, run bookmark), shows each step, and can
+  end by **proposing bookmarks** for the queries worth keeping (you approve in a confirmation
+  dialog). Each model round is metered and the budget hard cap is enforced mid-conversation.
 - **Sign-in is never triggered from chat.** Context reads use cached credentials only; if the
   cache has expired, the assistant tells you to run *Test Site Connection* instead of popping a
   browser window mid-conversation.
@@ -260,6 +265,25 @@ domain-joined machine.
   path.
 - **Lockout protection is critical here** — a wrong AD password is the fastest way to lock a
   real account, so the breaker (3 strikes, no auto-retry) applies exactly as above.
+### Bookmarks: reusable pointers for your initiatives
+
+Save the queues, spaces, filters, and entries you use repeatedly — per source, by name:
+
+- **Guided (recommended):** click the **bookmark icon** on a source row (or right-click →
+  *Browse Source & Add Bookmark…*). For **Jira** you pick from your **JSM queues** (each carries
+  its own JQL), **favourite filters**, or **projects**; for **Confluence** you pick a **space**
+  (saved as a recent-content query); for any source you can also *search first*, then bookmark
+  either the query itself or one specific result (issue, page, directory entry).
+- **Manual:** right-click a source → *Add Bookmark* and paste a raw CQL/JQL/LDAP filter or a
+  page id / issue key / DN.
+- **Use them:** bookmarks appear as children under their source (click to run), and in chat the
+  agent can list them (`#spBookmarks`) and run them by name (`#spRunBookmark`) — e.g.
+  *"run my 'IT Help: Unassigned' bookmark and summarize the queue."*
+- **Let Copilot propose them:** in agent mode, after searching your sources the assistant can
+  call `#spSuggestBookmark` to propose persisting a useful query — **you approve in a
+  confirmation dialog before anything is saved**. Try: *"search Jira for the Phoenix initiative's
+  open work and suggest bookmarks for the queries worth keeping."*
+
 - **Share with your team**: **Export Reference Config (secret-free)…** writes a JSON of source
   descriptors + bookmarks (never credentials or accounts — verified by a leak scan); teammates
   **Import Reference Config…** and sign in with their own credentials, with the working auth

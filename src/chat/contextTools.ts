@@ -140,6 +140,64 @@ export function registerContextTools(
         },
       ),
     ),
+    // Agent-proposed bookmarks: persistence is gated by VS Code's tool
+    // confirmation UI — the user sees name/locator/source and must approve
+    // in chat before anything is saved (human-in-the-loop by construction).
+    vscode.lm.registerTool<{
+      source?: string;
+      name: string;
+      locator: string;
+      kind?: "query" | "item";
+      reason?: string;
+    }>("aisharepoint_suggest_bookmark", {
+      prepareInvocation(options) {
+        const sourceName =
+          store.resolve(options.input.source)?.displayName ?? options.input.source ?? "?";
+        return {
+          invocationMessage: "Proposing a bookmark",
+          confirmationMessages: {
+            title: `Save bookmark "${options.input.name}"?`,
+            message: new vscode.MarkdownString(
+              [
+                `**Source:** ${sourceName}`,
+                `**Kind:** ${options.input.kind ?? "query"}`,
+                `**Locator:**`,
+                "```",
+                options.input.locator,
+                "```",
+                ...(options.input.reason ? [`_${options.input.reason}_`] : []),
+                "",
+                "Saved bookmarks appear in the Reference Sources view and run by name.",
+              ].join("\n"),
+            ),
+          },
+        };
+      },
+      async invoke(options) {
+        telemetry.record("tool.invoke", { tool: "aisharepoint_suggest_bookmark" });
+        try {
+          const input = options.input;
+          const source = resolveOrExplain(input.source);
+          if (!input.name?.trim() || !input.locator?.trim()) {
+            return text("A bookmark needs both a name and a locator (query or item id).");
+          }
+          await bookmarks.add({
+            id: crypto.randomUUID(),
+            sourceId: source.id,
+            name: input.name.trim().slice(0, 80),
+            locator: input.locator.trim(),
+            kind: input.kind === "item" ? "item" : "query",
+          });
+          telemetry.record("bookmark.add", { type: source.type, via: "agent" });
+          return text(
+            `Bookmark "${input.name.trim()}" saved under ${source.displayName}. It can now be run by name with the run-bookmark tool or from the Reference Sources view.`,
+          );
+        } catch (err) {
+          errors.capture("tool:aisharepoint_suggest_bookmark", err);
+          return text(`Could not save the bookmark: ${redactError(err).message}`);
+        }
+      },
+    }),
     vscode.lm.registerTool(
       "aisharepoint_list_bookmarks",
       guarded<Record<string, never>>(

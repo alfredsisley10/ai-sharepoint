@@ -196,6 +196,8 @@ export function activate(context: vscode.ExtensionContext): void {
       ctx: context,
       sites,
       access,
+      sources: contextSources,
+      bookmarks,
       copilot,
       meter,
       budget,
@@ -1208,6 +1210,116 @@ export function activate(context: vscode.ExtensionContext): void {
       contextCache.invalidateSource(source.id);
       telemetry.record("context.remove");
     }
+  });
+
+  register("aiSharePoint.browseSource", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+
+    type Cand = { name: string; locator: string; kind: "query" | "item"; detail: string };
+    let candidate: Cand | undefined;
+
+    const catalogLabel =
+      source.type === "confluence"
+        ? "$(library) Browse spaces"
+        : source.type === "jira"
+          ? "$(library) Browse queues, favourite filters & projects"
+          : undefined;
+    const mode = await vscode.window.showQuickPick(
+      [
+        ...(catalogLabel
+          ? [{ label: catalogLabel, description: "pick from the source's catalog", value: "catalog" as const }]
+          : []),
+        {
+          label: "$(search) Search, then bookmark",
+          description: "run a query; save the query itself or a specific result",
+          value: "search" as const,
+        },
+      ],
+      { title: `Browse & Bookmark — ${source.displayName}` },
+    );
+    if (!mode) return;
+
+    if (mode.value === "catalog") {
+      const candidates = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Browsing ${source.displayName}…` },
+        () => contextService.browseCandidates(source),
+      );
+      if (candidates.length === 0) {
+        void vscode.window.showInformationMessage(
+          "Nothing browsable was returned — try the search path instead.",
+        );
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        candidates.map((c) => ({
+          label: `$(${c.detail.includes("queue") ? "inbox" : c.detail.includes("filter") ? "filter" : "library"}) ${c.name}`,
+          description: c.detail,
+          detail: c.locator,
+          cand: c as Cand,
+        })),
+        { title: `Bookmark what from ${source.displayName}?`, matchOnDetail: true },
+      );
+      if (!pick) return;
+      candidate = pick.cand;
+    } else {
+      const query = await vscode.window.showInputBox({
+        title: `Search ${source.displayName}`,
+        placeHolder:
+          source.type === "ldap" ? "name / login / raw LDAP filter" : "free text, or raw CQL/JQL",
+      });
+      if (!query) return;
+      const hits = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Searching…" },
+        () => contextService.search(source, query),
+      );
+      const pick = await vscode.window.showQuickPick(
+        [
+          {
+            label: "$(save) Bookmark this query itself",
+            description: `${hits.length} result(s) just now`,
+            detail: query,
+            cand: { name: query.slice(0, 40), locator: query, kind: "query", detail: "" } as Cand,
+          },
+          ...hits.map((h) => ({
+            label: `$(bookmark) ${h.title}`,
+            description: Object.entries(h.meta ?? {})
+              .filter(([k]) => k !== "dn" && k !== "key" && k !== "id")
+              .slice(0, 3)
+              .map(([, v]) => v)
+              .join(" · "),
+            detail: h.url,
+            cand: {
+              name: h.title.slice(0, 60),
+              locator: h.meta?.key ?? h.meta?.id ?? h.meta?.dn ?? "",
+              kind: "item",
+              detail: "",
+            } as Cand,
+          })),
+        ].filter((i) => i.cand.locator),
+        { title: "Bookmark the query, or one specific result?", matchOnDetail: true },
+      );
+      if (!pick) return;
+      candidate = pick.cand;
+    }
+
+    const name = await vscode.window.showInputBox({
+      title: "Bookmark name",
+      value: candidate.name,
+      prompt: "Shown in the Reference Sources tree and usable by name in chat (#spRunBookmark).",
+    });
+    if (!name) return;
+    await bookmarks.add({
+      id: crypto.randomUUID(),
+      sourceId: source.id,
+      name: name.trim(),
+      locator: candidate.locator,
+      kind: candidate.kind,
+    });
+    telemetry.record("bookmark.add", { type: source.type, kind: candidate.kind, via: "browse" });
+    void vscode.window.showInformationMessage(
+      `Bookmark "${name.trim()}" saved under ${source.displayName}.`,
+    );
   });
 
   register("aiSharePoint.addBookmark", async (arg) => {

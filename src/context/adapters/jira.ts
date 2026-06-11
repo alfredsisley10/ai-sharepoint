@@ -77,6 +77,7 @@ export async function searchJira(
     title: `${i.key}: ${i.fields?.summary ?? ""}`.trim(),
     url: issueUrl(source, i.key),
     meta: {
+      key: i.key,
       status: i.fields?.status?.name ?? "",
       type: i.fields?.issuetype?.name ?? "",
       assignee: i.fields?.assignee?.displayName ?? "unassigned",
@@ -108,4 +109,95 @@ export async function getJiraIssue(
       ...(issue.fields?.updated ? { updated: issue.fields.updated } : {}),
     },
   };
+}
+
+export interface JiraProjectInfo {
+  key: string;
+  name: string;
+}
+
+export interface JiraFilterInfo {
+  name: string;
+  jql: string;
+}
+
+export interface JsmQueueInfo {
+  desk: string;
+  name: string;
+  jql: string;
+}
+
+/** Projects (capped) — each becomes a "project = KEY" query bookmark. */
+export async function listJiraProjects(
+  source: ContextSource,
+  credential: ContextCredential,
+  caps: ReadCaps,
+): Promise<JiraProjectInfo[]> {
+  const res = await fetchJson<Array<{ key?: string; name?: string }>>(
+    `${source.baseUrl.replace(/\/$/, "")}/rest/api/2/project`,
+    credential,
+    caps.timeoutMs,
+  );
+  return (Array.isArray(res) ? res : [])
+    .filter((p) => p.key)
+    .slice(0, caps.maxResults)
+    .map((p) => ({ key: p.key!, name: p.name ?? p.key! }));
+}
+
+/** The user's favourite saved filters — name + ready-made JQL. */
+export async function listJiraFavouriteFilters(
+  source: ContextSource,
+  credential: ContextCredential,
+  caps: ReadCaps,
+): Promise<JiraFilterInfo[]> {
+  const res = await fetchJson<Array<{ name?: string; jql?: string }>>(
+    `${source.baseUrl.replace(/\/$/, "")}/rest/api/2/filter/favourite`,
+    credential,
+    caps.timeoutMs,
+  );
+  return (Array.isArray(res) ? res : [])
+    .filter((f) => f.name && f.jql)
+    .slice(0, caps.maxResults)
+    .map((f) => ({ name: f.name!, jql: f.jql! }));
+}
+
+/** JSM queues (service desks expose each queue's JQL). Best-effort: plain
+ *  Jira instances without Service Management return [] rather than failing. */
+export async function listJsmQueues(
+  source: ContextSource,
+  credential: ContextCredential,
+  caps: ReadCaps,
+): Promise<JsmQueueInfo[]> {
+  const base = source.baseUrl.replace(/\/$/, "");
+  let desks: Array<{ id?: string; projectName?: string }>;
+  try {
+    const res = await fetchJson<{ values?: Array<{ id?: string; projectName?: string }> }>(
+      `${base}/rest/servicedeskapi/servicedesk?limit=10`,
+      credential,
+      caps.timeoutMs,
+    );
+    desks = res.values ?? [];
+  } catch {
+    return []; // not a JSM instance, or no agent access — fine
+  }
+  const queues: JsmQueueInfo[] = [];
+  for (const desk of desks.slice(0, 5)) {
+    if (!desk.id) continue;
+    try {
+      const res = await fetchJson<{ values?: Array<{ name?: string; jql?: string }> }>(
+        `${base}/rest/servicedeskapi/servicedesk/${encodeURIComponent(desk.id)}/queue?limit=${caps.maxResults}`,
+        credential,
+        caps.timeoutMs,
+      );
+      for (const q of res.values ?? []) {
+        if (q.name && q.jql) {
+          queues.push({ desk: desk.projectName ?? desk.id, name: q.name, jql: q.jql });
+        }
+        if (queues.length >= caps.maxResults) return queues;
+      }
+    } catch {
+      // queue access denied for this desk — skip it
+    }
+  }
+  return queues;
 }

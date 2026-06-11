@@ -12,6 +12,9 @@ import {
 import { verifyConfluence, searchConfluence, getConfluencePage } from "./adapters/confluence";
 import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
 import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
+import { listConfluenceSpaces } from "./adapters/confluence";
+import { listJiraProjects, listJiraFavouriteFilters, listJsmQueues } from "./adapters/jira";
+import { ContextBookmark } from "./types";
 import { AppError, classifyError } from "../core/errors";
 
 /**
@@ -161,6 +164,59 @@ export class ContextService {
             default:
               return getConfluencePage(source, credential, id, caps);
           }
+        });
+      },
+    );
+  }
+
+  /**
+   * Candidate bookmarks from the source's own catalog (Confluence spaces,
+   * Jira favourite filters / JSM queues / projects). Feeds the guided
+   * "Browse & Bookmark" picker; cached and lockout-gated like every read.
+   */
+  async browseCandidates(
+    source: ContextSource,
+  ): Promise<Array<Pick<ContextBookmark, "name" | "locator" | "kind"> & { detail: string }>> {
+    const caps = this.caps();
+    return this.cache.getOrLoad(
+      TtlCache.key(source.id, "browse", "catalog"),
+      this.ttlMs(),
+      async () => {
+        const credential = await this.storedCredential(source);
+        return this.tracked(source, false, async () => {
+          if (source.type === "confluence") {
+            const spaces = await listConfluenceSpaces(source, credential, caps);
+            return spaces.map((sp) => ({
+              name: sp.name,
+              locator: `space = "${sp.key}" ORDER BY lastmodified DESC`,
+              kind: "query" as const,
+              detail: `Confluence space ${sp.key}`,
+            }));
+          }
+          if (source.type === "jira") {
+            const out: Array<Pick<ContextBookmark, "name" | "locator" | "kind"> & { detail: string }> = [];
+            const [queues, filters, projects] = await Promise.all([
+              listJsmQueues(source, credential, caps),
+              listJiraFavouriteFilters(source, credential, caps).catch(() => []),
+              listJiraProjects(source, credential, caps).catch(() => []),
+            ]);
+            for (const q of queues) {
+              out.push({ name: `${q.desk}: ${q.name}`, locator: q.jql, kind: "query", detail: "JSM queue" });
+            }
+            for (const f of filters) {
+              out.push({ name: f.name, locator: f.jql, kind: "query", detail: "Favourite filter" });
+            }
+            for (const pr of projects) {
+              out.push({
+                name: `${pr.name} — recent issues`,
+                locator: `project = "${pr.key}" ORDER BY updated DESC`,
+                kind: "query",
+                detail: `Project ${pr.key}`,
+              });
+            }
+            return out.slice(0, caps.maxResults * 2);
+          }
+          return []; // LDAP: search-then-bookmark is the guided path
         });
       },
     );
