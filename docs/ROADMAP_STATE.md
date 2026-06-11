@@ -68,10 +68,37 @@
   probing (ADR-0015 — manual method choice + single verify ships now); remaining §9.2 adapter
   matrix (Splunk, Intune, Databricks, SQL Server, …); workspace scoping (Pillar 7).
 
+## Track C — LDAP / Active Directory connector (read-only) — ADR-0020
+
+- [ ] **C1. DNS auto-discovery (pure).** `src/context/ldap/discovery.ts`: workstation domain
+      signals (USERDNSDOMAIN/LOGONSERVER/FQDN/resolv.conf), SRV lookups
+      (`_ldap._tcp.dc._msdcs`, `_gc._tcp`) via injectable resolver, priority/weight ranking,
+      domain→baseDN, candidate endpoints (DC 389/636, GC 3268/3269). Unit tests.
+- [ ] **C2. LDAP adapter (ldapts).** `src/context/ldap/ldapClient.ts`: verify (simple bind,
+      classify invalidCredentials→auth.failed for ADR-0009), search (ANR for free text, raw
+      filter passthrough, sizeLimit/timeLimit caps, curated attrs), getEntry by DN; pure
+      entry→hit/item mappers unit-tested. TLS/StartTLS options.
+- [ ] **C3. Framework integration.** ContextService dispatch for `type==="ldap"`; sourcesStore
+      `baseDn` field; add-source flow runs discovery; credential prompt (UPN+password); view
+      icon; settings (`ldap.tlsRejectUnauthorized`, `ldap.useStartTls`); "Discover AD" surfaced.
+- [ ] **C4. Docs.** USER_GUIDE LDAP section, ADMIN_GUIDE (SRV records, ports, TLS/internal-CA,
+      lockout), CHANGELOG.
+
+## Track D — Remaining scheduled features (enterprise test candidate)
+
+- [ ] **D1. Bookmarks (ADR-0010).** Bookmark store (shape already in context/types), add/remove
+      from search results, list, and a `#spBookmarks` / resolve-by-name path in context tools.
+- [ ] **D2. Sync nav + theme serialization.** Extend serializer with `navigation.json` /
+      `theme.json` from Graph; manifest updates; tests keep no-diff invariant.
+- Deferred to dedicated efforts (NOT crammed into this candidate — large/multi-phase, high risk):
+  SharePoint write-back via PnPjs (Phase 4/5), 3-way merge + revert (Phase 3), local MCP server
+  (engine bump), automatic auth-method probing, remaining §9.2 adapters, workspace scoping.
+
 ## Wrap-up
 
 - [x] **W1.** Version 0.2.0, CHANGELOG consolidation, VSIX rebuild + CI green, state file final
       pass, deliver VSIX.
+- [ ] **W2.** Version 0.3.0 (LDAP + bookmarks + nav/theme), CHANGELOG, VSIX, CI green, deliver.
 
 ## Resume notes (update each session)
 

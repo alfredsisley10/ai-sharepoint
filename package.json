@@ -820,7 +820,8 @@
     "vscode:prepublish": "node esbuild.js --production"
   },
   "dependencies": {
-    "@azure/msal-node": "^2.16.2"
+    "@azure/msal-node": "^2.16.2",
+    "ldapts": "^8.1.8"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
