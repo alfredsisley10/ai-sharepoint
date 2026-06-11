@@ -1,8 +1,11 @@
 import * as vscode from "vscode";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { BookmarksStore } from "../context/bookmarksStore";
+import { SchemaStore } from "../context/schemaStore";
 import { ContextSource, ContextBookmark } from "../context/types";
 import { isSrvLocator } from "../context/ldap/srvLocator";
+
+const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
 type Node = ContextSource | ContextBookmark;
 
@@ -21,9 +24,11 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   constructor(
     private readonly sources: ContextSourcesStore,
     private readonly bookmarks: BookmarksStore,
+    private readonly schemas: SchemaStore,
   ) {
     sources.onDidChange(() => this.emitter.fire());
     bookmarks.onDidChange(() => this.emitter.fire());
+    schemas.onDidChange(() => this.emitter.fire());
   }
 
   refresh(): void {
@@ -67,7 +72,11 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
           ? new vscode.ThemeColor("charts.green")
           : new vscode.ThemeColor("charts.yellow"),
     );
-    item.contextValue = locked ? "context-source-locked" : "context-source";
+    item.contextValue = locked
+      ? "context-source-locked"
+      : DB_TYPES.has(source.type)
+        ? "context-source-db"
+        : "context-source";
     const cell = (s: string) => s.replace(/\|/g, "\\|");
     item.tooltip = new vscode.MarkdownString(
       [
@@ -89,6 +98,15 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
         `| Account | ${source.account ?? "_not verified_"} |`,
         `| Verified | ${source.lastVerifiedAt ?? "_never_"} |`,
         ...(bookmarkCount > 0 ? [`| Bookmarks | ${bookmarkCount} |`] : []),
+        ...(DB_TYPES.has(source.type)
+          ? [
+              `| Schema | ${(() => {
+                const s = this.schemas.getSync(source.id);
+                if (!s) return "_not loaded — right-click → Load Schema_";
+                return `${s.catalog.tables.length} tables · semantic index ${s.semanticState}${s.semantic?.partial ? " (partial)" : ""}`;
+              })()} |`,
+            ]
+          : []),
         ...(locked
           ? ["", "🔒 **Auth lockout protection engaged** (3 failures). Reset via the context menu after checking the credential with your admin."]
           : []),

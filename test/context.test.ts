@@ -216,22 +216,37 @@ test("jira favourite filters expose name + ready-made JQL", async () => {
   assert.equal(filters[0].jql, "assignee = currentUser() AND type = Bug");
 });
 
-test("jsm queues flatten desks->queues with their JQL; non-JSM instances yield []", async () => {
-  const queues = await withFetch(
+test("jsm queues flatten desks->queues with their JQL; non-JSM instances yield none + note", async () => {
+  const result = await withFetch(
     (url) =>
       url.includes("/servicedesk?")
         ? { body: { values: [{ id: "1", projectName: "IT Help" }] } }
         : { body: { values: [{ name: "Unassigned", jql: "project = ITH AND assignee is EMPTY" }] } },
     () => listJsmQueues({ ...SRC, type: "jira" }, CRED, DEFAULT_CAPS),
   );
-  assert.deepEqual(queues, [
+  assert.deepEqual(result.queues, [
     { desk: "IT Help", name: "Unassigned", jql: "project = ITH AND assignee is EMPTY" },
   ]);
+  assert.equal(result.note, undefined);
+  // Not a JSM instance (404): no queues, and the WHY is reported, not
+  // swallowed (pilot: empty browse looked broken).
   const none = await withFetch(
     () => ({ status: 404, body: {} }),
     () => listJsmQueues({ ...SRC, type: "jira" }, CRED, DEFAULT_CAPS),
   );
-  assert.deepEqual(none, []);
+  assert.deepEqual(none.queues, []);
+  assert.match(none.note ?? "", /service-desk list unavailable/);
+  // Desks visible but every queue API denied (DC without agent license /
+  // pre-fix experimental-API 403s).
+  const denied = await withFetch(
+    (url) =>
+      url.includes("/servicedesk?")
+        ? { body: { values: [{ id: "1", projectName: "IT Help" }] } }
+        : { status: 403, body: {} },
+    () => listJsmQueues({ ...SRC, type: "jira" }, CRED, DEFAULT_CAPS),
+  );
+  assert.deepEqual(denied.queues, []);
+  assert.match(denied.note ?? "", /denied on 1/);
 });
 
 test("jira search hits carry the issue key for item bookmarking", async () => {

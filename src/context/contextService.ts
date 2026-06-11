@@ -15,7 +15,8 @@ import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/lda
 import { listConfluenceSpaces } from "./adapters/confluence";
 import { listJiraProjects, listJiraFavouriteFilters, listJsmQueues } from "./adapters/jira";
 import { ContextBookmark } from "./types";
-import { verifyDb, searchDb, browseDb, DbTlsOptions } from "./db/dbAdapters";
+import { verifyDb, searchDb, browseDb, describeDb, DbTlsOptions } from "./db/dbAdapters";
+import { SchemaCatalog } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
 
 /**
@@ -189,6 +190,20 @@ export class ContextService {
     );
   }
 
+  /** Read the schema catalog a database connection can see (ADR-0024) —
+   *  metadata only, lockout-gated, stored-credential. Persistence is the
+   *  SchemaStore's job (this is not TTL-cached: schemas change rarely and
+   *  refresh is explicit). */
+  async loadSchemaCatalog(source: ContextSource, nowIso: string): Promise<SchemaCatalog> {
+    if (!ContextService.DB_TYPES.has(source.type)) {
+      throw new AppError("Schema catalogs apply to database sources only.", "config");
+    }
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      describeDb(source, credential, this.dbTls(), this.caps(), nowIso),
+    );
+  }
+
   /**
    * Candidate bookmarks from the source's own catalog (Confluence spaces,
    * Jira favourite filters / JSM queues / projects). Feeds the guided
@@ -215,12 +230,20 @@ export class ContextService {
           }
           if (source.type === "jira") {
             const out: Array<Pick<ContextBookmark, "name" | "locator" | "kind"> & { detail: string }> = [];
-            const [queues, filters, projects] = await Promise.all([
+            const notes: string[] = [];
+            const [queueResult, filters, projects] = await Promise.all([
               listJsmQueues(source, credential, caps),
-              listJiraFavouriteFilters(source, credential, caps).catch(() => []),
-              listJiraProjects(source, credential, caps).catch(() => []),
+              listJiraFavouriteFilters(source, credential, caps).catch((err) => {
+                notes.push(`favourite filters: ${err instanceof Error ? err.message : String(err)}`);
+                return [];
+              }),
+              listJiraProjects(source, credential, caps).catch((err) => {
+                notes.push(`projects: ${err instanceof Error ? err.message : String(err)}`);
+                return [];
+              }),
             ]);
-            for (const q of queues) {
+            if (queueResult.note) notes.push(`queues: ${queueResult.note}`);
+            for (const q of queueResult.queues) {
               out.push({ name: `${q.desk}: ${q.name}`, locator: q.jql, kind: "query", detail: "JSM queue" });
             }
             for (const f of filters) {
@@ -233,6 +256,15 @@ export class ContextService {
                 kind: "query",
                 detail: `Project ${pr.key}`,
               });
+            }
+            if (out.length === 0 && notes.length > 0) {
+              // Empty because of denials, not because the instance is empty —
+              // say exactly what was tried (pilot: silent [] looked broken).
+              throw new AppError(
+                `Jira returned nothing browsable: ${notes.join("; ")}.`,
+                "config",
+                "Queue listing requires a JSM agent license (the API also needs the experimental opt-in header, which is now sent). Favourite filters appear once you star filters in Jira. The search-then-bookmark path works regardless.",
+              );
             }
             return out.slice(0, caps.maxResults * 2);
           }

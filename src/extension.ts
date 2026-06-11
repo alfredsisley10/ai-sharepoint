@@ -51,6 +51,10 @@ import {
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
 import { aliasIssue, normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
+import { SchemaStore } from "./context/schemaStore";
+import { SchemaIndexer } from "./context/db/schemaIndexer";
+import { SourceSchema, qualifiedName } from "./context/db/schemaIndex";
+import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
@@ -119,9 +123,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const contextCache = new TtlCache();
   const contextService = new ContextService(contextSources, contextCache);
   const bookmarks = new BookmarksStore(context.globalState);
+  const schemas = new SchemaStore(context.globalStorageUri);
+  const schemaIndexer = new SchemaIndexer(copilot, schemas, telemetry, log, nowIso);
+  void schemas.preload();
 
   const sitesProvider = new SitesTreeProvider(sites);
-  const sourcesProvider = new SourcesTreeProvider(contextSources, bookmarks);
+  const sourcesProvider = new SourcesTreeProvider(contextSources, bookmarks, schemas);
   const usageProvider = new UsageTreeProvider(
     meter,
     budget,
@@ -200,6 +207,7 @@ export function activate(context: vscode.ExtensionContext): void {
       access,
       sources: contextSources,
       bookmarks,
+      schemas,
       copilot,
       meter,
       budget,
@@ -217,7 +225,17 @@ export function activate(context: vscode.ExtensionContext): void {
       errors,
       nowIso,
     ),
-    ...registerContextTools(contextSources, contextService, bookmarks, telemetry, errors),
+    ...registerContextTools(
+      contextSources,
+      contextService,
+      bookmarks,
+      schemas,
+      schemaIndexer,
+      telemetry,
+      errors,
+      nowIso,
+    ),
+    schemas,
   );
 
   // --- Command wrapper: telemetry + central error UX ---------------------
@@ -1343,6 +1361,12 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage(
         `Connected "${source.displayName}" as ${account} (read-only).`,
       );
+      if (DB_TYPES.has(source.type)) {
+        // First use of a database source: preload the schema catalog, then
+        // offer the Copilot semantic indexing (consent-gated, ADR-0024).
+        // Failures here never undo the just-added source.
+        void vscode.commands.executeCommand("aiSharePoint.loadSourceSchema", source);
+      }
     } catch (err) {
       // Nothing was saved — discard the unsaved source's failure record too.
       await contextSources.resetLockout(source.id);
@@ -1392,6 +1416,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (confirm === "Remove Source") {
       await contextSources.remove(source.id);
       await bookmarks.removeForSource(source.id);
+      await schemas.remove(source.id);
       contextCache.invalidateSource(source.id);
       telemetry.record("context.remove");
     }
@@ -1413,6 +1438,93 @@ export function activate(context: vscode.ExtensionContext): void {
         ? `"${source.displayName}" answers to "${details.alias}" now — e.g. @sharepoint find … in the ${details.alias} database.`
         : `Alias cleared for "${source.displayName}".`,
     );
+  });
+
+  // --- Database schema catalog + semantic index (ADR-0024) -----------------
+  const DB_SOURCE_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
+
+  const requireDbSource = (source: ContextSource): boolean => {
+    if (DB_SOURCE_TYPES.has(source.type)) return true;
+    void vscode.window.showInformationMessage(
+      `"${source.displayName}" is a ${source.type} source — schema catalogs apply to database sources.`,
+    );
+    return false;
+  };
+
+  const loadSchemaWithProgress = async (source: ContextSource): Promise<SourceSchema> => {
+    const catalog = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Reading "${source.displayName}" schema (metadata only)…`,
+      },
+      () => contextService.loadSchemaCatalog(source, nowIso()),
+    );
+    const previous = schemas.getSync(source.id);
+    const schema: SourceSchema = {
+      catalog,
+      // A re-pulled catalog keeps the existing semantic layer; re-index to
+      // cover newly appeared tables.
+      semantic: previous?.semantic,
+      semanticState: previous?.semanticState ?? "none",
+    };
+    await schemas.set(source.id, schema);
+    telemetry.record("schema.load", { type: source.type, tables: String(catalog.tables.length) });
+    return schema;
+  };
+
+  register("aiSharePoint.loadSourceSchema", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    const schema = await loadSchemaWithProgress(source);
+    void vscode.window.showInformationMessage(
+      `Schema loaded: ${schema.catalog.tables.length} tables/collections from "${source.displayName}"${schema.catalog.truncated ? " (truncated by caps)" : ""}.`,
+    );
+    if (schema.semanticState === "none") {
+      await schemaIndexer.indexInteractively(source, schema);
+    }
+  });
+
+  register("aiSharePoint.indexSourceSchema", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    const schema = schemas.getSync(source.id) ?? (await loadSchemaWithProgress(source));
+    // Explicit command: asking again is correct even after an earlier
+    // "don't ask" — the user is the one initiating now.
+    await schemaIndexer.indexInteractively(source, schema);
+  });
+
+  register("aiSharePoint.viewSourceSchema", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    const schema = schemas.getSync(source.id) ?? (await loadSchemaWithProgress(source));
+    const sem = new Map(
+      (schema.semantic?.tables ?? []).map((t) => [t.table.toLowerCase(), t]),
+    );
+    const lines = [
+      `# ${source.displayName} — schema catalog`,
+      "",
+      `- Engine: **${schema.catalog.engine}** · database **${schema.catalog.database}**`,
+      `- Fetched: ${schema.catalog.fetchedAt} · ${schema.catalog.tables.length} tables/collections${schema.catalog.truncated ? " · **truncated by caps**" : ""}`,
+      `- Semantic index: **${schema.semanticState}**${schema.semantic ? ` (${schema.semantic.tables.length} tables, model ${schema.semantic.modelId}${schema.semantic.partial ? ", partial" : ""})` : ""}`,
+      "",
+      "_Catalog = names and types read from the database. Semantic tags/synonyms (when indexed) are Copilot's generalization so free-form questions find the right columns._",
+    ];
+    for (const t of schema.catalog.tables) {
+      const s = sem.get(qualifiedName(t).toLowerCase());
+      lines.push("", `## ${qualifiedName(t)} _(${t.kind})_${s?.purpose ? ` — ${s.purpose}` : ""}`, "");
+      lines.push("| Column | Type | Meaning (tags) | Also known as |", "|---|---|---|---|");
+      for (const c of t.columns) {
+        const sc = s?.columns.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
+        lines.push(
+          `| ${c.name} | ${c.dataType} | ${sc ? sc.tags.join(", ") + (sc.note ? ` — ${sc.note}` : "") : ""} | ${sc?.synonyms.join(", ") ?? ""} |`,
+        );
+      }
+    }
+    const doc = await vscode.workspace.openTextDocument({
+      language: "markdown",
+      content: lines.join("\n"),
+    });
+    await vscode.window.showTextDocument(doc, { preview: true });
   });
 
   register("aiSharePoint.browseSource", async (arg) => {
@@ -1452,7 +1564,9 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (candidates.length === 0) {
         void vscode.window.showInformationMessage(
-          "Nothing browsable was returned — try the search path instead.",
+          source.type === "jira"
+            ? "Jira returned nothing browsable (no JSM queues, starred filters, or visible projects for this account). Star a filter in Jira or use the search path — both still work."
+            : "Nothing browsable was returned — try the search path instead.",
         );
         return;
       }
@@ -1509,6 +1623,23 @@ export function activate(context: vscode.ExtensionContext): void {
       candidate = pick.cand;
     }
 
+    // Database candidates are canned sample queries ("SELECT TOP 25 * …") —
+    // let the user tailor the SQL/spec before it's saved (pilot request).
+    if (DB_SOURCE_TYPES.has(source.type) && candidate.kind === "query") {
+      const edited = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title:
+          source.type === "mongodb"
+            ? "Bookmark query — adjust the MongoDB spec (JSON)"
+            : "Bookmark query — adjust the SQL (read-only SELECT)",
+        value: candidate.locator,
+        prompt: "Edit columns, WHERE clauses, limits… It stays guarded read-only at run time.",
+        validateInput: (v) => bookmarkLocatorIssue(source.type, "query", v),
+      });
+      if (!edited) return;
+      candidate = { ...candidate, locator: edited.trim() };
+    }
+
     const name = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "Bookmark name",
@@ -1532,26 +1663,35 @@ export function activate(context: vscode.ExtensionContext): void {
   register("aiSharePoint.addBookmark", async (arg) => {
     const source = await resolveSourceArg(arg, contextSources);
     if (!source) return;
+    const isDb = DB_SOURCE_TYPES.has(source.type);
     const kindHint =
       source.type === "ldap"
         ? "LDAP filter / DN"
         : source.type === "jira"
           ? "JQL / issue key"
-          : "CQL / page id";
+          : source.type === "mongodb"
+            ? '{"collection": "...", "filter": {...}, "limit": 25}'
+            : isDb
+              ? "SELECT … (read-only)"
+              : "CQL / page id";
     const locator = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: `Bookmark for "${source.displayName}" — locator`,
       placeHolder: kindHint,
       prompt: "A reusable query or a specific item locator (no credentials).",
+      validateInput: isDb ? (v) => bookmarkLocatorIssue(source.type, "query", v) : undefined,
     });
     if (!locator) return;
-    const kindPick = await vscode.window.showQuickPick(
-      [
-        { label: "$(search) Query", description: "a saved search to run", value: "query" as const },
-        { label: "$(bookmark) Item", description: "a specific page/issue/entry by id/key/DN", value: "item" as const },
-      ],
-      { ignoreFocusOut: true, title: "Bookmark kind" },
-    );
+    // Database bookmarks are always queries (there is no item fetch).
+    const kindPick = isDb
+      ? { value: "query" as const }
+      : await vscode.window.showQuickPick(
+          [
+            { label: "$(search) Query", description: "a saved search to run", value: "query" as const },
+            { label: "$(bookmark) Item", description: "a specific page/issue/entry by id/key/DN", value: "item" as const },
+          ],
+          { ignoreFocusOut: true, title: "Bookmark kind" },
+        );
     if (!kindPick) return;
     const name = await vscode.window.showInputBox({
       ignoreFocusOut: true,
@@ -1603,6 +1743,60 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!bookmark?.id) return;
     await bookmarks.remove(bookmark.id);
     telemetry.record("bookmark.remove");
+  });
+
+  register("aiSharePoint.editBookmark", async (arg) => {
+    let bookmark = arg as ContextBookmark | undefined;
+    if (!bookmark?.id) {
+      // Palette path: pick one.
+      const all = bookmarks.list();
+      if (all.length === 0) {
+        void vscode.window.showInformationMessage("No bookmarks saved yet.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        all.map((b) => ({
+          label: b.name,
+          description: contextSources.get(b.sourceId)?.displayName ?? "",
+          detail: b.locator,
+          bookmark: b,
+        })),
+        { ignoreFocusOut: true, title: "Edit which bookmark?", matchOnDetail: true },
+      );
+      if (!pick) return;
+      bookmark = pick.bookmark;
+    }
+    const source = contextSources.get(bookmark.sourceId);
+    const name = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Edit bookmark — name",
+      value: bookmark.name,
+      validateInput: (v) => (v.trim() ? undefined : "Enter a name"),
+    });
+    if (!name) return;
+    const locator = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title:
+        source && DB_SOURCE_TYPES.has(source.type) && bookmark.kind === "query"
+          ? source.type === "mongodb"
+            ? "Edit bookmark — MongoDB query spec (JSON)"
+            : "Edit bookmark — SQL query (read-only SELECT)"
+          : "Edit bookmark — locator (query or item id)",
+      value: bookmark.locator,
+      prompt:
+        source && DB_SOURCE_TYPES.has(source.type) && bookmark.kind === "query"
+          ? "Adjust the saved query freely — it stays guarded read-only at run time."
+          : "A reusable query or a specific item locator (no credentials).",
+      validateInput: (v) => bookmarkLocatorIssue(source?.type, bookmark!.kind, v),
+    });
+    if (!locator) return;
+    await bookmarks.update({
+      ...bookmark,
+      name: name.trim(),
+      locator: locator.trim(),
+    });
+    telemetry.record("bookmark.edit", { type: source?.type ?? "unknown" });
+    void vscode.window.showInformationMessage(`Bookmark "${name.trim()}" updated.`);
   });
 
   register("aiSharePoint.resetSourceLockout", async (arg) => {
@@ -1961,6 +2155,31 @@ async function promptNumber(
     },
   });
   return raw === undefined ? undefined : Number(raw);
+}
+
+/** Validate a bookmark locator at edit/save time. SQL bookmarks must stay
+ *  read-only SELECTs (the runtime guard re-checks — this is early feedback);
+ *  MongoDB bookmarks must be a valid query spec. */
+function bookmarkLocatorIssue(
+  type: ContextSourceType | undefined,
+  kind: ContextBookmark["kind"],
+  value: string,
+): string | undefined {
+  if (!value.trim()) return "Enter a locator";
+  if (kind !== "query") return undefined;
+  if (type === "mssql" || type === "postgres" || type === "mysql") {
+    const verdict = assertReadOnlySql(value);
+    return verdict.ok ? undefined : verdict.reason;
+  }
+  if (type === "mongodb") {
+    try {
+      parseMongoSpec(value);
+      return undefined;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+  return undefined;
 }
 
 /** Shared by add + edit: optional chat alias (unique, validated) and

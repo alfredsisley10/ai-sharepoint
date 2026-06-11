@@ -233,6 +233,11 @@ export function renderDashboardHtml(
   <h2>Budget</h2>
   ${gaugeBar(data)}
   <div class="legend"><span>soft cap ${data.softPct}%</span><span>hard cap ${data.hardPct}%</span><span>mode: ${esc(data.mode)}</span></div>
+  ${
+    data.monthRequests > 0 && data.usedUnits === 0
+      ? `<div class="empty" style="margin-top:10px">All ${data.monthRequests} request(s) this month ran on <b>included (0×) models</b> — they are counted but consume no premium units, so the gauge stays at 0%. Premium models (1×–10×) move it; see “List Copilot Models” for each model's multiplier.</div>`
+      : ""
+  }
 
   <h2>Last 30 days — premium units per day</h2>
   ${barChart(data.daily)}

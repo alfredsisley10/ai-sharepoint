@@ -14,6 +14,15 @@ import { MongoClient } from "mongodb";
 import { ContextSource, ContextCredential, ContextSearchHit, ReadCaps } from "../types";
 import { assertReadOnlySql, rowsToHits, parseMongoSpec } from "./readSafe";
 import { buildMssqlAuthentication, parseMssqlParams, resolveMssqlEndpoint } from "./mssqlAuth";
+import {
+  SchemaCatalog,
+  catalogFromRows,
+  catalogFromMongoSamples,
+  SCHEMA_MAX_TABLES,
+  SCHEMA_MAX_COLUMNS_PER_TABLE,
+  MONGO_MAX_COLLECTIONS,
+  MONGO_SAMPLE_DOCS,
+} from "./schemaIndex";
 import { loadTrustedCAs } from "../ldap/osTrust";
 import { AppError } from "../../core/errors";
 
@@ -332,6 +341,79 @@ export async function searchDb(
     guardSql(query),
   );
   return rowsToHits(rows, caps.maxResults, label);
+}
+
+// --- schema catalog (ADR-0024) ------------------------------------------------
+
+/** Column-level INFORMATION_SCHEMA queries, ordered so catalogFromRows can
+ *  group sequentially. Views are included — read-only access anyway. */
+const DESCRIBE_SQL: Record<SqlEngine, string> = {
+  mssql:
+    "SELECT t.TABLE_SCHEMA AS table_schema, t.TABLE_NAME AS table_name, t.TABLE_TYPE AS table_type, " +
+    "c.COLUMN_NAME AS column_name, c.DATA_TYPE AS data_type, c.IS_NULLABLE AS is_nullable " +
+    "FROM INFORMATION_SCHEMA.TABLES t JOIN INFORMATION_SCHEMA.COLUMNS c " +
+    "ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME " +
+    "WHERE t.TABLE_TYPE IN ('BASE TABLE','VIEW') " +
+    "ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME, c.ORDINAL_POSITION",
+  postgres:
+    "SELECT t.table_schema, t.table_name, t.table_type, c.column_name, c.data_type, c.is_nullable " +
+    "FROM information_schema.tables t JOIN information_schema.columns c " +
+    "ON t.table_schema = c.table_schema AND t.table_name = c.table_name " +
+    "WHERE t.table_type IN ('BASE TABLE','VIEW') " +
+    "AND t.table_schema NOT IN ('pg_catalog','information_schema') " +
+    "ORDER BY t.table_schema, t.table_name, c.ordinal_position",
+  mysql:
+    "SELECT t.table_schema, t.table_name, t.table_type, c.column_name, c.data_type, c.is_nullable " +
+    "FROM information_schema.tables t JOIN information_schema.columns c " +
+    "ON t.table_schema = c.table_schema AND t.table_name = c.table_name " +
+    "WHERE t.table_type IN ('BASE TABLE','VIEW') AND t.table_schema = DATABASE() " +
+    "ORDER BY t.table_schema, t.table_name, c.ordinal_position",
+};
+
+/** Read the full schema catalog the connection can see — metadata only
+ *  (table/column names and types; for MongoDB, field names inferred from a
+ *  small local sample whose values are immediately discarded). */
+export async function describeDb(
+  source: ContextSource,
+  credential: ContextCredential,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+  fetchedAt: string,
+): Promise<SchemaCatalog> {
+  const { database } = parseDbUrl(source);
+  if (source.type === "mongodb") {
+    const samples = await withMongo(source, credential, tls, caps, async (client, dbName) => {
+      const names = (
+        await client.db(dbName).listCollections(undefined, { nameOnly: true }).toArray()
+      )
+        .map((c) => c.name)
+        .filter((n) => !n.startsWith("system."))
+        .slice(0, MONGO_MAX_COLLECTIONS);
+      const out: Record<string, Array<Record<string, unknown>>> = {};
+      for (const name of names) {
+        out[name] = (await client
+          .db(dbName)
+          .collection(name)
+          .find({}, { limit: MONGO_SAMPLE_DOCS, maxTimeMS: caps.timeoutMs })
+          .toArray()) as Array<Record<string, unknown>>;
+      }
+      return out;
+    });
+    return catalogFromMongoSamples(database, samples, fetchedAt);
+  }
+  // Metadata queries need a row cap sized for catalogs, not result sets.
+  const schemaCaps: ReadCaps = {
+    ...caps,
+    maxResults: SCHEMA_MAX_TABLES * SCHEMA_MAX_COLUMNS_PER_TABLE,
+  };
+  const rows = await SQL_RUNNERS[source.type as SqlEngine](
+    source,
+    credential,
+    tls,
+    schemaCaps,
+    DESCRIBE_SQL[source.type as SqlEngine],
+  );
+  return catalogFromRows(source.type, database, rows, fetchedAt);
 }
 
 /** Tables/collections → ready-made sample-query bookmark candidates. */

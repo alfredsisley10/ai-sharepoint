@@ -18,6 +18,7 @@ export async function fetchJson<T>(
   url: string,
   credential: ContextCredential,
   timeoutMs: number,
+  extraHeaders?: Record<string, string>,
 ): Promise<T> {
   let res: Response;
   try {
@@ -25,6 +26,7 @@ export async function fetchJson<T>(
       headers: {
         Authorization: authHeader(credential),
         Accept: "application/json",
+        ...extraHeaders,
       },
       signal: AbortSignal.timeout(timeoutMs),
     });

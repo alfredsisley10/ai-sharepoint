@@ -39,6 +39,22 @@ export function withBookmark(
   ];
 }
 
+/** Replace a bookmark by id (rename-aware: a rename onto an existing
+ *  same-source name replaces that bookmark, matching withBookmark). */
+export function withUpdatedBookmark(
+  all: ContextBookmark[],
+  updated: ContextBookmark,
+): ContextBookmark[] {
+  return [
+    ...all.filter(
+      (b) =>
+        b.id !== updated.id &&
+        !(b.sourceId === updated.sourceId && b.name === updated.name),
+    ),
+    updated,
+  ];
+}
+
 export function withoutBookmark(
   all: ContextBookmark[],
   id: string,

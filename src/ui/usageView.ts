@@ -67,6 +67,11 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
     }
     const verdict = this.budget.evaluate(0, nowIso);
     const used = this.meter.premiumUnitsThisMonth(nowIso);
+    const monthRequests = this.meter.requestsThisMonth(nowIso);
+    // The default-model policy prefers the cheapest entitled model, which is
+    // usually an INCLUDED (0×) one — real requests, zero premium units. Say
+    // so, or the static gauge reads as a broken meter (pilot feedback).
+    const allIncluded = monthRequests > 0 && used === 0;
     const pct = Math.round(verdict.usedPct);
     const stateIcon =
       verdict.usedPct >= verdict.hardPct
@@ -82,10 +87,11 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
       {
         id: "gauge",
         label: `${pct}% of monthly allowance used`,
-        description: `~${used.toFixed(1)} / ${verdict.allowance} units`,
+        description: `~${used.toFixed(1)} / ${verdict.allowance} units${allIncluded ? " · all on included 0× models" : ""}`,
         icon: stateIcon,
-        tooltip:
-          "Estimate from this extension's local meter and the model multiplier table (ADR-0003) — not the live GitHub bill. Click for the dashboard.",
+        tooltip: allIncluded
+          ? `${monthRequests} request(s) this month ran on included (0×) models — they cost no premium units, so the gauge stays at 0%. Premium models (e.g. Claude Sonnet 1×, Claude Opus 10×) consume the allowance; pick one via "List Copilot Models" or the chat model picker. Estimate per ADR-0003 — not the live GitHub bill.`
+          : "Estimate from this extension's local meter and the model multiplier table (ADR-0003) — not the live GitHub bill. Click for the dashboard.",
         command: {
           command: "aiSharePoint.showUsage",
           title: "Open usage dashboard",
@@ -114,13 +120,16 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         label: "By model (this month)",
         icon: new vscode.ThemeIcon("circuit-board"),
         description: byModel.length === 0 ? "no usage yet" : undefined,
-        children: byModel.map((m) => ({
-          id: `model:${m.key}`,
-          label: m.key,
-          description: `${m.requests} req · ~${m.premiumUnits.toFixed(1)} units`,
-          icon: new vscode.ThemeIcon("symbol-misc"),
-          tooltip: `${m.inputTokens.toLocaleString()} tokens in / ${m.outputTokens.toLocaleString()} out${m.failures ? ` · ${m.failures} failed` : ""}`,
-        })),
+        children: byModel.map((m) => {
+          const multiplier = this.meter.multiplierFor(m.key);
+          return {
+            id: `model:${m.key}`,
+            label: m.key,
+            description: `${m.requests} req · ~${m.premiumUnits.toFixed(1)} units · ${multiplier}×${multiplier === 0 ? " included" : ""}`,
+            icon: new vscode.ThemeIcon("symbol-misc"),
+            tooltip: `${m.inputTokens.toLocaleString()} tokens in / ${m.outputTokens.toLocaleString()} out${m.failures ? ` · ${m.failures} failed` : ""}${multiplier === 0 ? "\nIncluded (0×) model: requests here never consume the premium allowance." : ""}`,
+          };
+        }),
       },
       {
         id: "byLabel",
@@ -130,8 +139,12 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         children: byLabel.map((l) => ({
           id: `label:${l.key}`,
           label: l.key,
-          description: `${l.requests} req · ~${l.premiumUnits.toFixed(1)} units`,
+          description: `${l.requests} req · ~${l.premiumUnits.toFixed(1)} units${l.premiumUnits === 0 ? " (0× models)" : ""}`,
           icon: new vscode.ThemeIcon("symbol-event"),
+          tooltip:
+            l.premiumUnits === 0
+              ? "These requests ran on included (0×) models — counted, but no premium units consumed."
+              : undefined,
         })),
       },
     ];

@@ -7,6 +7,7 @@ import { UsageMeter } from "../copilot/meter";
 import { BudgetGuard, BudgetBlockedError } from "../copilot/budget";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { BookmarksStore } from "../context/bookmarksStore";
+import { SchemaStore } from "../context/schemaStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -25,6 +26,9 @@ const INSTRUCTIONS = [
   "read SharePoint sites. Sources may carry a short ALIAS (e.g. \"CMDB\") and a description of",
   "their contents — when the user names a source (\"…in the CMDB database\"), pass that alias as",
   "the tool's source argument and trust the description when choosing where to look.",
+  "For free-form DATABASE questions ('records owned by X'), call db_schema with a topic first:",
+  "it returns the tables/columns whose semantic tags match (e.g. group_cio tagged ownership),",
+  "then write a SELECT against exactly those columns and run it with search_context.",
   "For research tasks (e.g. aggregating content about a topic), run one or",
   "more searches, synthesize the findings with links, and — when a query looks reusable — call",
   "suggest_bookmark to propose saving it; the user approves in a confirmation dialog.",
@@ -44,6 +48,7 @@ interface ChatDeps {
   access: SiteAccess;
   sources: ContextSourcesStore;
   bookmarks: BookmarksStore;
+  schemas: SchemaStore;
   copilot: CopilotService;
   meter: UsageMeter;
   budget: BudgetGuard;
@@ -407,10 +412,17 @@ async function buildSiteContext(
   const referenceBlock = [
     referenceSources.length
       ? `Reference sources available to the search/get tools (alias in quotes — pass it as the source argument):\n${referenceSources
-          .map(
-            (s) =>
-              `- ${s.alias ? `"${s.alias}" — ` : ""}${s.displayName} (${s.type}, ${s.deployment})${s.description ? `: ${s.description}` : ""}`,
-          )
+          .map((s) => {
+            const base = `- ${s.alias ? `"${s.alias}" — ` : ""}${s.displayName} (${s.type}, ${s.deployment})${s.description ? `: ${s.description}` : ""}`;
+            if (!["mssql", "postgres", "mysql", "mongodb"].includes(s.type)) return base;
+            const schema = deps.schemas.getSync(s.id);
+            const note = !schema
+              ? "schema not loaded yet — db_schema loads it on first use"
+              : schema.semanticState === "indexed"
+                ? "schema semantically indexed — db_schema(topic) maps concepts like ownership to columns"
+                : "schema loaded, no semantic index — offer index_db_schema";
+            return `${base} [${note}]`;
+          })
           .join("\n")}`
       : "No reference sources configured (the user can add Confluence/Jira/LDAP via 'Add Context Source').",
     bookmarkList.length

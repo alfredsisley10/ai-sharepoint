@@ -2,10 +2,16 @@ import * as vscode from "vscode";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { ContextService } from "../context/contextService";
 import { BookmarksStore } from "../context/bookmarksStore";
+import { SchemaStore } from "../context/schemaStore";
+import { SchemaIndexer } from "../context/db/schemaIndexer";
+import { SourceSchema, renderSchemaForModel } from "../context/db/schemaIndex";
+import { ContextSource } from "../context/types";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { sourceChatLabel } from "../context/sourceRef";
+
+const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
 /**
  * LM tools over the read-only context-source framework (PLAN §9 + ADR-0017).
@@ -21,8 +27,11 @@ export function registerContextTools(
   store: ContextSourcesStore,
   service: ContextService,
   bookmarks: BookmarksStore,
+  schemas: SchemaStore,
+  indexer: SchemaIndexer,
   telemetry: TelemetryService,
   errors: ErrorReportStore,
+  nowIso: () => string,
 ): vscode.Disposable[] {
   const guarded = <T>(
     name: string,
@@ -58,7 +67,89 @@ export function registerContextTools(
     return source;
   };
 
+  const resolveDbOrExplain = (ref?: string): ContextSource => {
+    const source = resolveOrExplain(ref);
+    if (!DB_TYPES.has(source.type)) {
+      throw new Error(
+        `"${source.displayName}" is a ${source.type} source — schema catalogs apply to database sources (SQL Server, PostgreSQL, MySQL, MongoDB).`,
+      );
+    }
+    return source;
+  };
+
+  /** Catalog on demand: cached on disk; first touch loads it live (stored
+   *  credential only — a tool call never prompts). */
+  const schemaFor = async (source: ContextSource): Promise<SourceSchema> => {
+    const cached = schemas.getSync(source.id);
+    if (cached) return cached;
+    const catalog = await service.loadSchemaCatalog(source, nowIso());
+    const fresh: SourceSchema = { catalog, semanticState: "none" };
+    await schemas.set(source.id, fresh);
+    return fresh;
+  };
+
   return [
+    vscode.lm.registerTool(
+      "aisharepoint_db_schema",
+      guarded<{ source?: string; topic?: string }>(
+        "aisharepoint_db_schema",
+        "Reading the database schema",
+        async (input) => {
+          const source = resolveDbOrExplain(input.source);
+          const schema = await schemaFor(source);
+          const rendered = renderSchemaForModel(schema, input.topic);
+          const hint =
+            schema.semanticState === "none"
+              ? '\n\nNote: this schema has no semantic index yet — column meanings are raw names. Offer to build one with the index_db_schema tool (the user approves in chat; only table/column names are sent to Copilot). With an index, questions like "records owned by X" map to ownership columns automatically.'
+              : schema.semantic?.partial
+                ? "\n\nNote: the semantic index is partial — re-running index_db_schema can complete it."
+                : "";
+          return rendered + hint;
+        },
+      ),
+    ),
+    // In-chat indexing: VS Code's tool-confirmation UI is the consent gate —
+    // the user sees exactly what will be sent (names only) and must approve.
+    vscode.lm.registerTool<{ source?: string }>("aisharepoint_index_db_schema", {
+      prepareInvocation(options) {
+        const source = store.resolve(options.input.source);
+        const schema = source ? schemas.getSync(source.id) : undefined;
+        const tables = schema?.catalog.tables.length;
+        return {
+          invocationMessage: "Indexing database schema with Copilot",
+          confirmationMessages: {
+            title: `Index "${source?.displayName ?? options.input.source ?? "database"}" schema with Copilot?`,
+            message: new vscode.MarkdownString(
+              [
+                `Sends **table and column names only** — no data rows — to your Copilot model${tables !== undefined ? ` (${tables} tables)` : ""}, metered against your allowance.`,
+                "",
+                "The resulting semantic index lets free-form questions find the right columns (e.g. `group_cio` → _owned by …_).",
+              ].join("\n"),
+            ),
+          },
+        };
+      },
+      async invoke(options, token) {
+        telemetry.record("tool.invoke", { tool: "aisharepoint_index_db_schema" });
+        try {
+          if (!SchemaIndexer.enabledByPolicy()) {
+            return text(
+              "Schema indexing with Copilot is disabled by policy (aiSharePoint.context.allowSchemaIndexing).",
+            );
+          }
+          const source = resolveDbOrExplain(options.input.source);
+          const schema = await schemaFor(source);
+          const indexed = await indexer.runIndexing(source, schema, undefined, token);
+          const n = indexed.semantic?.tables.length ?? 0;
+          return text(
+            `Schema indexed: ${n} of ${indexed.catalog.tables.length} tables now carry semantic tags${indexed.semantic?.partial ? " (partial — can be re-run to complete)" : ""}. Use the db_schema tool with a topic to find columns, then search with a SELECT.`,
+          );
+        } catch (err) {
+          errors.capture("tool:aisharepoint_index_db_schema", err);
+          return text(`Schema indexing failed: ${redactError(err).message}`);
+        }
+      },
+    }),
     vscode.lm.registerTool(
       "aisharepoint_list_sources",
       guarded<Record<string, never>>(

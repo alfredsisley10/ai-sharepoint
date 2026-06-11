@@ -162,12 +162,20 @@ export async function listJiraFavouriteFilters(
 }
 
 /** JSM queues (service desks expose each queue's JQL). Best-effort: plain
- *  Jira instances without Service Management return [] rather than failing. */
+ *  Jira instances without Service Management return no queues — but every
+ *  swallowed denial is reported in `note` so an empty browse is explainable
+ *  (pilot: "no results despite having queue access").
+ *
+ *  The X-ExperimentalApi header is required on Data Center/Server, where the
+ *  queue endpoint is flagged experimental and 403s without it; Cloud ignores
+ *  the header. */
+const JSM_HEADERS = { "X-ExperimentalApi": "opt-in" };
+
 export async function listJsmQueues(
   source: ContextSource,
   credential: ContextCredential,
   caps: ReadCaps,
-): Promise<JsmQueueInfo[]> {
+): Promise<{ queues: JsmQueueInfo[]; note?: string }> {
   const base = source.baseUrl.replace(/\/$/, "");
   let desks: Array<{ id?: string; projectName?: string }>;
   try {
@@ -175,12 +183,22 @@ export async function listJsmQueues(
       `${base}/rest/servicedeskapi/servicedesk?limit=10`,
       credential,
       caps.timeoutMs,
+      JSM_HEADERS,
     );
     desks = res.values ?? [];
-  } catch {
-    return []; // not a JSM instance, or no agent access — fine
+  } catch (err) {
+    // Not a JSM instance, or no agent access.
+    return {
+      queues: [],
+      note: `service-desk list unavailable (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+  if (desks.length === 0) {
+    return { queues: [], note: "no service desks visible to this account" };
   }
   const queues: JsmQueueInfo[] = [];
+  let denied = 0;
+  let lastError = "";
   for (const desk of desks.slice(0, 5)) {
     if (!desk.id) continue;
     try {
@@ -188,16 +206,25 @@ export async function listJsmQueues(
         `${base}/rest/servicedeskapi/servicedesk/${encodeURIComponent(desk.id)}/queue?limit=${caps.maxResults}`,
         credential,
         caps.timeoutMs,
+        JSM_HEADERS,
       );
       for (const q of res.values ?? []) {
         if (q.name && q.jql) {
           queues.push({ desk: desk.projectName ?? desk.id, name: q.name, jql: q.jql });
         }
-        if (queues.length >= caps.maxResults) return queues;
+        if (queues.length >= caps.maxResults) return { queues };
       }
-    } catch {
-      // queue access denied for this desk — skip it
+    } catch (err) {
+      denied += 1;
+      lastError = err instanceof Error ? err.message : String(err);
     }
   }
-  return queues;
+  return {
+    queues,
+    ...(denied > 0
+      ? {
+          note: `${desks.length} service desk(s) found but the queue API was denied on ${denied} (last: ${lastError}) — queue listing needs a JSM agent license`,
+        }
+      : {}),
+  };
 }

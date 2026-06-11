@@ -4,6 +4,7 @@ import {
   listForSource,
   resolveBookmark,
   withBookmark,
+  withUpdatedBookmark,
   withoutBookmark,
   withoutSource,
 } from "./bookmarkOps";
@@ -41,6 +42,10 @@ export class BookmarksStore {
 
   add(bookmark: ContextBookmark): Promise<void> {
     return this.save(withBookmark(this.list(), bookmark));
+  }
+
+  update(bookmark: ContextBookmark): Promise<void> {
+    return this.save(withUpdatedBookmark(this.list(), bookmark));
   }
 
   remove(id: string): Promise<void> {
