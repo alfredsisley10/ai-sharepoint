@@ -334,6 +334,15 @@ structure/content scoping + non-reversible-delta detection) — see ADR-0005.
 Sits on top of pillars 1–4 as **Language Model Tools** the `@sharepoint` agent can call in a loop, with
 every mutating action routed through the **preview → approve → apply → commit** path.
 
+**Surfacing to Copilot — dual local surface, one core** *(ADR-0017, research in `docs/research/`).*
+Capabilities are exposed two ways over a **single shared capability core** (SharePoint client, sync
+engine, §9 framework, bookmarks): (1) **VS Code Language Model Tools** (`registerTool` +
+`contributes.languageModelTools`, `when`-gated by role/state) that **Copilot agent mode** auto-invokes
+and users `#`-reference; and (2) a **local stdio MCP server** (`registerMcpServerDefinitionProvider` +
+`resolveMcpServerDefinition` for keychain auth) exposing the same tools + all §9 data sources to local
+MCP clients. **Local-only:** the cloud-hosted GitHub coding agent and the deprecated GitHub-App Copilot
+Extension/skillset path are **out of scope**; no secret ever leaves the machine.
+
 **Read/QA tools** (power objectives like *"no duplicate content"*, *"all links working"*)
 - Query site structure & content; crawl pages for links and validate (internal + external) with a
   report; detect duplicate/near-duplicate content; surface findings as a reviewable report, optionally
@@ -537,7 +546,9 @@ src/
                 azure-console, o365-console, servicenow, workday
     Sources view, role guard
   workspace/    workspace model + store, switcher, secret-free export/import, localization
+  core/         shared capability core (one impl behind both LM tools and MCP)
   agent/        chat participant, LM tools, analyzers, authoring recipes
+  mcp/          local stdio MCP server + mcpServerDefinitionProvider (ADR-0017)
   ui/           tree views, status bar, settings, merge integration
 docs/           PLAN.md, adr/
 ```
@@ -553,7 +564,7 @@ docs/           PLAN.md, adr/
 | **2. Sync core** | Serialize→Git→push; remote delta detection; dry-run + filters + size guard. | "Site as code" round-trips cleanly. |
 | **3. Conflicts** | 3-way merge + merge-editor; direct-in-SharePoint edits handled; revert-to-commit. | Two-way correctness + safe revert. |
 | **4. Agent — QA & cross-source** | `@sharepoint` with read/QA tools; link-check + duplicate-content; context-source **framework** (shared auth-failure backoff, auth-method discovery, bookmarks, TTL cache, read-safe queries) + first adapters (reference SharePoint, Confluence, Jira) + alignment objective. | Agentic loop + tool safety; read-context + lockout safety + auth discovery. |
-| **5. Agent — authoring** | Provisioning tools; flagship product-management-site scenario; maintainability validation. | The headline use case. |
+| **5. Agent — authoring & surfaces** | Provisioning tools; flagship product-management-site scenario; maintainability validation; **dual exposure — LM tools (agent mode) + local MCP server** over a shared core (ADR-0017). | The headline use case + Copilot agent-mode/MCP access. |
 | **6. Hardening & more sources** | Remaining adapters (Splunk, Intune, Databricks, SQL Server, Aternity, SignalFx, AppDynamics, Grafana) + all auth methods, **workspace export/import (secret-free)**, perf, telemetry/redaction, docs, marketplace packaging. | Breadth, sharing & release. |
 
 ---
@@ -584,6 +595,12 @@ docs/           PLAN.md, adr/
 - **K — Auth-method discovery + persistence:** ship **all** methods, **probe to discover** which works
   for the individual user (lockout-safe order), and **save the working method** in the workspace config
   so it's pre-selected and shareable (descriptor only; credentials stay local). → ADR-0015.
+- **L — Cross-platform:** one VSIX for macOS / Windows x64 / Windows ARM / Linux; pure-JS, no native
+  binaries, no OS-specific code. → ADR-0016.
+- **M — Copilot surface integration (local-only):** expose capabilities as **VS Code Language Model
+  Tools** (agent mode) **+ a local stdio MCP server** over one shared core. **Out of scope:** cloud
+  coding agent, remote/hosted MCP, and the deprecated GitHub-App Copilot Extension/skillset path. →
+  ADR-0017.
 - **E — No reliance on non-prod test instances:** we **do not assume** users have sandbox instances
   (most won't; where they do it's a separate credential in a separate auth domain). Safety is enforced
   at runtime against real access — verify-on-connect plus active-use failed-login tracking — not via a
@@ -625,3 +642,7 @@ remains *nice-to-have*, not required.)
 - **Secret leakage via workspace export:** a shared workspace could carry credentials — mitigated by
   secret-free-by-construction export (no keychain code path) + a pre-export scan; import re-prompts for
   each user's own credentials (ADR-0013).
+- **Tool/MCP exposure widening access:** surfacing capabilities to agent mode and local MCP clients
+  could broaden what the agent can reach — mitigated by `when`-gating, role-guarded read-only tools, and
+  a **local-only** stdio MCP server (no remote/cloud endpoint, no secret egress); the same auth/read
+  guards as direct use apply (ADR-0017).
