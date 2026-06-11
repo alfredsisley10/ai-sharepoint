@@ -5,6 +5,10 @@ import {
   buildMssqlAuthentication,
   parseMssqlParams,
   mssqlUrlIssue,
+  mssqlPortAndInstance,
+  parseSsmsServerName,
+  ssmsToUrl,
+  resolveMssqlEndpoint,
 } from "../src/context/db/mssqlAuth";
 import { parseDbUrl } from "../src/context/db/dbAdapters";
 
@@ -65,7 +69,51 @@ test("alternate ports flow through the connection URL (enterprise non-1433 insta
 test("mssqlUrlIssue: valid forms pass; port+instance conflict and missing db are rejected", () => {
   assert.equal(mssqlUrlIssue("mssql://host:14330/Sales"), undefined);
   assert.equal(mssqlUrlIssue("mssql://host/Sales?instance=PROD"), undefined);
-  assert.match(mssqlUrlIssue("mssql://host:1433/Sales?instance=PROD") ?? "", /not both/);
+  assert.equal(mssqlUrlIssue("mssql://host:1433/Sales?instance=PROD"), undefined); // legal — port wins
+  assert.ok(mssqlPortAndInstance("mssql://host:1433/Sales?instance=PROD"));
   assert.match(mssqlUrlIssue("mssql://host:14330") ?? "", /database name/);
   assert.match(mssqlUrlIssue("not a url") ?? "", /valid connection URL/);
+});
+
+test("parseSsmsServerName handles every SSMS server-name form DBAs hand out", () => {
+  assert.deepEqual(parseSsmsServerName("server.corp.com\\PROD,14330"), {
+    host: "server.corp.com",
+    instance: "PROD",
+    port: 14330,
+  });
+  assert.deepEqual(parseSsmsServerName("server.corp.com,14330"), {
+    host: "server.corp.com",
+    port: 14330,
+  });
+  assert.deepEqual(parseSsmsServerName("server\\PROD"), { host: "server", instance: "PROD" });
+  assert.deepEqual(parseSsmsServerName("server"), { host: "server" });
+  assert.equal(parseSsmsServerName("mssql://server/db"), null); // URLs handled elsewhere
+  assert.equal(parseSsmsServerName("server,99999"), null); // invalid port
+});
+
+test("ssmsToUrl applies SqlClient precedence: port wins, instance only as Browser fallback", () => {
+  assert.equal(
+    ssmsToUrl({ host: "server.corp.com", instance: "PROD", port: 14330 }, "Sales"),
+    "mssql://server.corp.com:14330/Sales",
+  );
+  assert.equal(
+    ssmsToUrl({ host: "server", instance: "PROD" }, "Sales"),
+    "mssql://server/Sales?instance=PROD",
+  );
+  assert.equal(ssmsToUrl({ host: "server" }, "Sales"), "mssql://server/Sales");
+});
+
+test("resolveMssqlEndpoint: explicit port beats instance; instance beats default", () => {
+  assert.deepEqual(
+    resolveMssqlEndpoint(14330, { instanceName: "PROD", encrypt: true, trustServerCertificate: false }),
+    { port: 14330 },
+  );
+  assert.deepEqual(
+    resolveMssqlEndpoint(undefined, { instanceName: "PROD", encrypt: true, trustServerCertificate: false }),
+    { instanceName: "PROD" },
+  );
+  assert.deepEqual(
+    resolveMssqlEndpoint(undefined, { encrypt: true, trustServerCertificate: false }),
+    { port: 1433 },
+  );
 });

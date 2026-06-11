@@ -84,9 +84,9 @@ export function parseMssqlParams(params: URLSearchParams): MssqlConnectParams {
 
 /**
  * Wizard-time validation for mssql:// URLs. Alternate ports are fully
- * supported (mssql://host:14330/db); a port combined with ?instance= is
- * rejected because TDS treats them as mutually exclusive — the named
- * instance's port is resolved via SQL Browser.
+ * supported (mssql://host:14330/db). Port + ?instance= together is legal —
+ * SqlClient/SSMS semantics apply: the port wins and the instance name is
+ * ignored for routing (no SQL Browser lookup).
  */
 export function mssqlUrlIssue(url: string): string | undefined {
   let u: URL;
@@ -98,8 +98,62 @@ export function mssqlUrlIssue(url: string): string | undefined {
   if (!u.pathname.replace(/^\/+/, "")) {
     return "Include the database name: …/dbname";
   }
-  if (u.port && u.searchParams.get("instance")) {
-    return "Use either :port or ?instance=NAME, not both — a named instance resolves its own port via SQL Browser";
-  }
   return undefined;
+}
+
+/** True when the URL carries both :port and ?instance= (informational). */
+export function mssqlPortAndInstance(url: string): boolean {
+  try {
+    const u = new URL(url.trim());
+    return Boolean(u.port && u.searchParams.get("instance"));
+  } catch {
+    return false;
+  }
+}
+
+export interface SsmsServerName {
+  host: string;
+  instance?: string;
+  port?: number;
+}
+
+/**
+ * Parse the native SSMS "Server name" forms DBAs hand out:
+ *   server.corp.com\\INSTANCE,14330  ·  server,14330  ·  server\\INSTANCE  ·  server
+ * Returns null when the input looks like a URL or is unusable.
+ */
+export function parseSsmsServerName(input: string): SsmsServerName | null {
+  const trimmed = input.trim();
+  if (!trimmed || trimmed.includes("://")) return null;
+  const m = trimmed.match(/^([A-Za-z0-9_.-]+)(?:\\([^,\s]+))?(?:,\s*(\d{1,5}))?$/);
+  if (!m) return null;
+  const port = m[3] ? Number(m[3]) : undefined;
+  if (port !== undefined && (port < 1 || port > 65535)) return null;
+  return {
+    host: m[1],
+    ...(m[2] ? { instance: m[2] } : {}),
+    ...(port !== undefined ? { port } : {}),
+  };
+}
+
+/** Build the mssql:// URL from an SSMS server name + database. SqlClient
+ *  precedence: an explicit port wins; the instance is kept only as the
+ *  SQL Browser fallback when no port is given. */
+export function ssmsToUrl(server: SsmsServerName, database: string): string {
+  if (server.port !== undefined) {
+    return `mssql://${server.host}:${server.port}/${encodeURIComponent(database)}`;
+  }
+  const base = `mssql://${server.host}/${encodeURIComponent(database)}`;
+  return server.instance ? `${base}?instance=${encodeURIComponent(server.instance)}` : base;
+}
+
+/** TDS endpoint selection with SqlClient precedence: explicit port → direct
+ *  TCP (instance ignored); else instance → SQL Browser; else default 1433. */
+export function resolveMssqlEndpoint(
+  port: number | undefined,
+  params: MssqlConnectParams,
+): { port: number } | { instanceName: string } {
+  if (port !== undefined) return { port };
+  if (params.instanceName) return { instanceName: params.instanceName };
+  return { port: 1433 };
 }

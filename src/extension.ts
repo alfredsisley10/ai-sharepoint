@@ -50,7 +50,12 @@ import {
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
-import { mssqlUrlIssue } from "./context/db/mssqlAuth";
+import {
+  mssqlUrlIssue,
+  mssqlPortAndInstance,
+  parseSsmsServerName,
+  ssmsToUrl,
+} from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { ContextBookmark } from "./context/types";
@@ -1170,7 +1175,7 @@ export function activate(context: vscode.ExtensionContext): void {
       defaultUpn = endpoint.defaultUpn;
     } else if (DB_TYPES.has(typePick.value)) {
       const placeholders: Record<string, string> = {
-        mssql: "mssql://sqlhost.corp.example:1433/MyDatabase — named instance (SSMS host\\\\PROD): mssql://sqlhost/MyDatabase?instance=PROD; self-signed cert: &trustServerCertificate=true",
+        mssql: "mssql://sqlhost:14330/MyDatabase — or paste the SSMS server name as-is: server.corp.com\\\\INSTANCE,14330",
         postgres: "postgresql://pghost.corp.example:5432/mydb  (?ssl=false to disable TLS)",
         mysql: "mysql://mysqlhost.corp.example:3306/mydb  (?ssl=true to enable TLS)",
         mongodb: "mongodb://mongo.corp.example:27017/mydb  (mongodb+srv:// supported)",
@@ -1181,6 +1186,16 @@ export function activate(context: vscode.ExtensionContext): void {
         placeHolder: placeholders[typePick.value],
         validateInput: (v) => {
           if (typePick.value === "mssql") {
+            if (parseSsmsServerName(v)) {
+              return undefined; // SSMS server-name form — database asked next
+            }
+            if (mssqlPortAndInstance(v)) {
+              return {
+                message:
+                  "Port takes precedence; the instance name is ignored for routing (SSMS/SqlClient behavior).",
+                severity: vscode.InputBoxValidationSeverity.Info,
+              };
+            }
             return mssqlUrlIssue(v);
           }
           try {
@@ -1194,6 +1209,24 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (!url) return;
       baseUrl = url.trim();
+      // Accept the native SSMS server name (server\\INSTANCE,port etc.):
+      // ask for the database, then build the URL with SqlClient precedence.
+      const ssms = typePick.value === "mssql" ? parseSsmsServerName(baseUrl) : null;
+      if (ssms) {
+        const database = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: `Database on ${ssms.host}${ssms.instance ? `\\${ssms.instance}` : ""}${ssms.port ? `,${ssms.port}` : ""}`,
+          placeHolder: "Sales",
+          validateInput: (v) => (v.trim() ? undefined : "Enter the database name"),
+        });
+        if (!database) return;
+        baseUrl = ssmsToUrl(ssms, database.trim());
+        if (ssms.instance && ssms.port !== undefined) {
+          void vscode.window.showInformationMessage(
+            `Connecting directly to port ${ssms.port} — the instance name "${ssms.instance}" is ignored for routing (SSMS behaves the same when a port is given).`,
+          );
+        }
+      }
       if (typePick.value === "mssql" && !/[?&]trustServerCertificate=/i.test(baseUrl)) {
         const certPick = await vscode.window.showQuickPick(
           [

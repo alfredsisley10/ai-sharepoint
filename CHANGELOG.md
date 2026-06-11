@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.4 — 2026-06-11
+
+### Added — paste the SSMS "Server name" as-is (pilot)
+- The working enterprise form `server.corp.com\INSTANCE,port` (and `server,port`,
+  `server\INSTANCE`) is now accepted **directly** in the SQL Server wizard — the database is
+  asked next and the connection URL is built automatically. Precedence matches SSMS/SqlClient
+  exactly: an explicit **port wins** and connects directly (the instance name is ignored for
+  routing — an info note says so); instance-only goes through SQL Browser. The 0.6.3 hard
+  error on port+instance was wrong against real-world DBA-provided strings and is replaced by
+  this SqlClient-faithful behavior (URL form `?instance=` + `:port` now also legal, port
+  preferred, informational note instead of rejection). 8 new assertions (165 tests).
+
+
 ## 0.6.3 — 2026-06-11
 
 ### Verified/Hardened — SQL Server on non-standard ports

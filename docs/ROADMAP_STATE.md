@@ -171,3 +171,4 @@
 - 2026-06-11: 0.6.1 — git init hardening (trust guard, post-init retry discovery, .git-exists remediation, add-to-workspace offer in the wizard).
 - 2026-06-11: 0.6.2 — MSSQL SSMS parity (dual auth incl. NTLM, named instances, trustServerCertificate opt-in, ELOGIN triage) + ignoreFocusOut across all wizards. 160 tests.
 - 2026-06-11: 0.6.3 — MSSQL alternate-port support verified + test-locked; port/instance mutual exclusivity enforced at entry. 162 tests.
+- 2026-06-11: 0.6.4 — SSMS server-name form accepted verbatim (server\\INSTANCE,port), SqlClient port-over-instance precedence (0.6.3 hard error reverted as wrong vs real DBA strings). 165 tests.

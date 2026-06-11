@@ -13,7 +13,7 @@ import * as mysql2 from "mysql2/promise";
 import { MongoClient } from "mongodb";
 import { ContextSource, ContextCredential, ContextSearchHit, ReadCaps } from "../types";
 import { assertReadOnlySql, rowsToHits, parseMongoSpec } from "./readSafe";
-import { buildMssqlAuthentication, parseMssqlParams } from "./mssqlAuth";
+import { buildMssqlAuthentication, parseMssqlParams, resolveMssqlEndpoint } from "./mssqlAuth";
 import { loadTrustedCAs } from "../ldap/osTrust";
 import { AppError } from "../../core/errors";
 
@@ -116,9 +116,9 @@ async function mssqlRows(
     authentication: buildMssqlAuthentication(credential),
     options: {
       database,
-      // Named instances (SSMS host\INSTANCE) resolve their port via SQL
-      // Browser; instanceName and port are mutually exclusive in TDS.
-      ...(mp.instanceName ? { instanceName: mp.instanceName } : { port: port ?? 1433 }),
+      // SqlClient precedence: an explicit port connects directly (instance
+      // name ignored); instance-only resolves the port via SQL Browser.
+      ...resolveMssqlEndpoint(port, mp),
       encrypt: mp.encrypt,
       trustServerCertificate: mp.trustServerCertificate,
       readOnlyIntent: true, // routes to readable replicas in AG setups
