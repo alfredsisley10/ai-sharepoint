@@ -93,7 +93,28 @@ design (ADR-0018) closes this with a **local-first, consent-explicit pipeline**:
 - **Rotatable pseudonym**: a random installation ID (never `machineId`) correlates reports from the
   same install; one command rotates it and the hash salt.
 
-## 6. Residual risks / explicitly out of scope for 0.1.0
+## 6. Post-build code-review findings (0.1.0 branch)
+
+An independent multi-angle review pass over the 0.1.0 diff produced 18 candidates. Fixed in
+this release: leak-scan patterns tightened to stay a superset of the redaction layer (bearer
+length, `access_token`/`sig`/`code` keys); site overview's lists+pages reads parallelized; a
+fragile duplicate pre-flight `countTokens` (an unguarded failure point) removed from
+*Ask Copilot*; usage figures unified on `BudgetGuard` verdicts with a single clock read per
+report; dead code removed (`anonUrlHost`, unused `copilot.blocked` error code).
+
+**Accepted follow-ups** (real but non-blocking; tracked for 0.2):
+
+| # | Finding | Why deferred |
+|---|---|---|
+| R1 | Per-call MSAL `PublicClientApplication` construction and per-request token acquisition (multiple keychain IPC round-trips per overview) → memoize providers per cache handle, reuse tokens until expiry | Perf only; correctness unaffected; touches the auth core, wants real-tenant testing |
+| R2 | Short-TTL cache for chat/tool site context (repeat questions re-fetch identical data) | Matches planned ADR-0011 cache framework — build once, there |
+| R3 | Telemetry/state writes per event → debounced flush | Bounded blobs today; revisit with usage data |
+| R4 | Dashboard re-renders whole webview per meter event while visible → postMessage incremental update | Visual churn only during bursts |
+| R5 | `recent` ledger tail is persisted but unread → drop field (with migration) | Touches persisted-state shape; do deliberately with a migration test |
+| R6 | Shared single source for the SharePoint host-suffix pattern + MSAL `toAccessToken`/silent-acquire helpers + a `confirmModal` helper (5 near-duplicates each) | Mechanical dedup, no behavior change |
+| R7 | `setBudget` / export snapshot re-embed setting keys & defaults → route through `readBudgetConfigFromSettings` | Drift risk documented; values currently consistent |
+
+## 7. Residual risks / explicitly out of scope for 0.1.0
 
 - Sync/merge/provisioning pillars (PLAN §7–§8 write paths) — roadmap, clearly labeled in docs.
 - Live billing API read (ADR-0003 auto-numerator) — the local estimator ships first; the REST

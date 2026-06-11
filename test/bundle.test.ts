@@ -100,10 +100,13 @@ test("leak scan blocks JWTs, raw tenants, emails, bearer creds, secrets", () => 
     c: "user@corp.example",
     d: "Bearer abcdef123456789012345",
     e: 'client_secret: "super-secret-value"',
+    f: "callback?access_token=abcdef123456&state=x", // keys must stay a superset of redaction.ts
+    g: "https://x/cb?code=AUTHCODE123456", // auth codes count only in querystring form
   });
   const found = scanForLeaks(dirty).filter((f) => f.severity === "block");
   const names = found.map((f) => f.pattern).sort();
   for (const expected of [
+    "authcode-in-url",
     "bearer-credential",
     "email-address",
     "jwt",
@@ -112,6 +115,12 @@ test("leak scan blocks JWTs, raw tenants, emails, bearer creds, secrets", () => 
   ]) {
     assert.ok(names.includes(expected), `missing ${expected} in ${names.join(",")}`);
   }
+});
+
+test("JSON error-code fields do not false-positive the secret scan", () => {
+  const clean = JSON.stringify({ errors: [{ code: "graph.forbidden", context: "chat" }] });
+  const blockers = scanForLeaks(clean).filter((f) => f.severity === "block");
+  assert.deepEqual(blockers, []);
 });
 
 test("leak scan ignores anonymized tenants but flags raw ones", () => {

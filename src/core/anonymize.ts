@@ -38,15 +38,6 @@ export function anonHost(host: string, salt: string): string {
   return anonToken(lower, salt);
 }
 
-/** Anonymize the host portion of a URL; returns just the anonymized host. */
-export function anonUrlHost(url: string, salt: string): string {
-  try {
-    return anonHost(new URL(url).hostname, salt);
-  } catch {
-    return anonToken(url, salt);
-  }
-}
-
 /** Random identifiers for the anonymous installation id and hash salt. */
 export function newAnonymousId(): string {
   return crypto.randomUUID();

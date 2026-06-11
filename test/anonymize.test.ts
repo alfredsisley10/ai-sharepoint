@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { anonToken, anonHost, anonUrlHost } from "../src/core/anonymize";
+import { anonToken, anonHost } from "../src/core/anonymize";
 
 test("anonToken is deterministic per salt and never echoes input", () => {
   const a = anonToken("contoso", "salt-1");
@@ -22,9 +22,4 @@ test("anonHost keeps the structural sharepoint suffix", () => {
 test("anonHost fully hashes non-sharepoint hosts", () => {
   const out = anonHost("intranet.corp.example", "s");
   assert.match(out, /^anon-[0-9a-f]{10}$/);
-});
-
-test("anonUrlHost extracts and anonymizes the host", () => {
-  const out = anonUrlHost("https://contoso.sharepoint.com/sites/HR", "s");
-  assert.match(out, /^anon-[0-9a-f]{10}\.sharepoint\.com$/);
 });

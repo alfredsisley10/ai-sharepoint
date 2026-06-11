@@ -245,12 +245,21 @@ interface LeakPattern {
 const LEAK_PATTERNS: LeakPattern[] = [
   { name: "jwt", severity: "block", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g },
   { name: "pem-block", severity: "block", re: /-----BEGIN [A-Z ]+-----/g },
-  { name: "bearer-credential", severity: "block", re: /\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{12,}/g },
+  { name: "bearer-credential", severity: "block", re: /\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{8,}/g },
   {
     name: "secret-assignment",
     severity: "block",
+    // Key list kept a superset of redaction.ts's key=value pattern so this
+    // last gate is never weaker than the first one. "code" is deliberately
+    // absent here — bundles legitimately contain `"code":"graph.forbidden"`
+    // fields — and is covered in querystring form by authcode-in-url below.
     // Tolerates JSON string escaping (\" around values) between key and value.
-    re: /\b(client_secret|password|api[_-]?key|refresh_token)\\?["']?\s*[:=]\s*[\\"']*(?!\[redacted)[^\s\\"',}{]{6,}/gi,
+    re: /\b(client_secret|password|pwd|secret|api[_-]?key|sig|signature|access_token|refresh_token|id_token)\\?["']?\s*[:=]\s*[\\"']*(?!\[redacted)[^\s\\"',}{]{6,}/gi,
+  },
+  {
+    name: "authcode-in-url",
+    severity: "block",
+    re: /[?&](code|access_token|id_token|sig)=(?!\[redacted)[^\s\\&"',]{6,}/gi,
   },
   { name: "email-address", severity: "block", re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   {

@@ -133,16 +133,14 @@ export class SharePointClient {
     }));
   }
 
-  /** Site + lists (+ pages when permitted) in one call for chat/tools. */
+  /** Site + lists (+ pages when permitted) for chat/tools. Lists and pages
+   *  are fetched in parallel; a blocked Pages API degrades gracefully. */
   async getSiteOverview(siteUrl: string): Promise<SiteOverview> {
     const site = await this.getSite(siteUrl);
-    const lists = await this.getLists(site.id);
-    let pages: PageInfo[] | undefined;
-    try {
-      pages = await this.getPages(site.id);
-    } catch {
-      pages = undefined; // Pages API blocked for this tenant/account — fine.
-    }
+    const [lists, pages] = await Promise.all([
+      this.getLists(site.id),
+      this.getPages(site.id).catch(() => undefined),
+    ]);
     return { site, lists, pages };
   }
 

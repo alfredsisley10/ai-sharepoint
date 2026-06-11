@@ -37,7 +37,7 @@ export class UsageStatusBar {
   refresh(): void {
     const nowIso = this.now();
     const verdict = this.budget.evaluate(0, nowIso);
-    const used = this.meter.premiumUnitsThisMonth(nowIso);
+    const used = verdict.usedUnits;
     const today = this.meter.requestsToday(nowIso);
     const pct = Math.min(999, Math.round(verdict.usedPct));
 

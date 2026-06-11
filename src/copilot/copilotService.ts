@@ -101,18 +101,6 @@ export class CopilotService {
     )[0];
   }
 
-  /** Pre-flight estimate for a prompt against a model (PLAN §4). */
-  async estimate(
-    prompt: string,
-    model: vscode.LanguageModelChat,
-  ): Promise<{ inputTokens: number; premiumUnits: number }> {
-    const inputTokens = await model.countTokens(prompt);
-    return {
-      inputTokens,
-      premiumUnits: this.costs.multiplierFor(model.family || model.id),
-    };
-  }
-
   /**
    * Send one metered chat request. Streams via `onChunk` and returns the full
    * text. Budget policy runs first (may throw BudgetBlockedError); usage is

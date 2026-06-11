@@ -13,7 +13,6 @@ export type ErrorCode =
   | "graph.throttled"
   | "graph.error"
   | "copilot.unavailable"
-  | "copilot.blocked"
   | "budget.blocked"
   | "network"
   | "config"

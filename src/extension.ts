@@ -203,9 +203,8 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const model = await copilot.pickDefaultModel();
-    const { inputTokens, premiumUnits } = await copilot.estimate(prompt, model);
     log.info(
-      `askCopilot: model=${model.family} est. ${inputTokens} input tokens, ${premiumUnits} premium unit(s)`,
+      `askCopilot: model=${model.family} (~${meter.multiplierFor(model.family || model.id)} premium unit(s) per request)`,
     );
 
     responses.show(true);

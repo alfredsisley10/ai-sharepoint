@@ -153,19 +153,21 @@ export function registerLanguageModelTools(
     vscode.lm.registerTool(
       "aisharepoint_copilot_usage",
       guarded<Record<string, never>>("aisharepoint_copilot_usage", "Checking Copilot usage and budget", async () => {
-        const verdict = budget.evaluate(0, now());
+        // One clock read so all figures come from the same month/day window.
+        const at = now();
+        const verdict = budget.evaluate(0, at);
         return JSON.stringify(
           {
             estimateDisclaimer:
               "Local estimate from this extension's meter (ADR-0003), not the live GitHub bill.",
-            monthPremiumUnits: meter.premiumUnitsThisMonth(now()),
+            monthPremiumUnits: verdict.usedUnits,
             monthlyAllowance: verdict.allowance,
             usedPercent: Math.round(verdict.usedPct),
             budgetMode: verdict.mode,
             softLimitPercent: verdict.softPct,
             hardLimitPercent: verdict.hardPct,
-            requestsToday: meter.requestsToday(now()),
-            byModel: meter.byModelThisMonth(now()),
+            requestsToday: meter.requestsToday(at),
+            byModel: meter.byModelThisMonth(at),
           },
           null,
           2,
