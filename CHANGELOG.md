@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.30.5 — 2026-06-12
+
+### Fixed — switching projects now re-scopes the Reference Sources view immediately (pilot)
+- Activating a project (or returning to **All sources**) updated the active scope but did **not
+  refresh the Reference Sources tree**: the `onDidChange` handler only rewrote the view's
+  header. So sources appeared to "vanish" entering a project, and selecting *All sources (no
+  project)* didn't bring them back until some unrelated refresh (adding a source, reopening the
+  view) happened to fire. The handler now calls `sourcesProvider.refresh()` on every project
+  change, so scoping applies and reverts instantly in both directions. No data was ever lost —
+  only the tree's rendering lagged the active scope.
+
 ## 0.30.4 — 2026-06-12
 
 ### Added — ER results are stamped with the build that produced them (pilot)

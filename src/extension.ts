@@ -488,15 +488,23 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // Reflect the active project in the Reference Sources view header.
-  const syncProjectBadge = () => {
-    if (!sourcesView) return;
-    safeViewOp(() => {
-      const active = projects.active();
-      sourcesView.description = active ? `Project: ${active.name}` : undefined;
-    });
+  // Switching project (or back to All Sources) must immediately re-scope the
+  // Reference Sources tree AND update its header. SourcesTreeProvider does
+  // not subscribe to project changes itself, so without the explicit
+  // refresh the tree kept showing the previous scope — sources "vanished"
+  // entering a project and didn't return on "All sources" until some other
+  // refresh fired (pilot).
+  const onProjectChange = () => {
+    if (sourcesView) {
+      safeViewOp(() => {
+        const active = projects.active();
+        sourcesView.description = active ? `Project: ${active.name}` : undefined;
+      });
+    }
+    sourcesProvider.refresh();
   };
-  syncProjectBadge();
-  context.subscriptions.push(projects.onDidChange(syncProjectBadge));
+  onProjectChange();
+  context.subscriptions.push(projects.onDidChange(onProjectChange));
 
   // --- Copilot Chat presence/sign-in detection -----------------------------
   // Drives walkthrough auto-completion (onContext) and the Usage view's
