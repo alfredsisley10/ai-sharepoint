@@ -22,7 +22,8 @@ import {
 } from "./adapters/jira";
 import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
-import { verifyDb, searchDb, browseDb, describeDb, sampleTableValues, DbTlsOptions } from "./db/dbAdapters";
+import { verifyDb, searchDb, browseDb, describeDb, sampleTableValues, probeJoinRate, DbTlsOptions } from "./db/dbAdapters";
+import { JoinProbeEnd, JoinProbeCounts } from "./db/erDiagram";
 import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
 import {
   verifyPowerBi,
@@ -402,6 +403,23 @@ export class ContextService {
         "config",
       );
     });
+  }
+
+  /** One join-rate probe (ADR-0030 "Build ER Diagram") — counts only,
+   *  lockout-gated, stored-credential, capped like every read. */
+  async probeJoin(
+    source: ContextSource,
+    from: JoinProbeEnd,
+    to: JoinProbeEnd,
+    sample: number,
+  ): Promise<JoinProbeCounts> {
+    if (!ContextService.DB_TYPES.has(source.type)) {
+      throw new AppError("Join probing applies to database sources only.", "config");
+    }
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      probeJoinRate(source, credential, this.dbTls(), this.caps(), from, to, sample),
+    );
   }
 
   /** Content-type indexing: bounded row sample for one table, reduced to

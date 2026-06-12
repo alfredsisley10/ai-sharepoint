@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.23.0 — 2026-06-12
+
+### Added — Build Database ER Diagram: relationships by probed join rates (ADR-0030) (pilot)
+- Enterprise databases rarely declare foreign keys, leaving users guessing which columns join.
+  The new **Build Database ER Diagram** function (next to *Index Database Schema* / *Index
+  Database Content Types*) establishes relationships **empirically**: candidate pairs are
+  proposed from the schema and the existing semantic/content indexes (FK-shaped names like
+  `customer_id` → `Customers`, identical non-generic names, identifier tags that agree;
+  type-compatible only), then each pair's **join rate is measured in both directions** — up to
+  100 distinct values sampled per side, counting matches on the other (≈2 bounded count
+  queries per pair; **only counts are read, no row data**; explicit consent first;
+  cancellable; per-pair failures degrade to a partial model).
+- **Scoring honors real-world data**: ≥95% match = *strong* (designed-in), ≥70% best-direction
+  = *likely* (relationships needn't join 100%), below = discarded as coincidence. Measuring
+  both directions captures the **inner-vs-outer** distinction — full containment one way with
+  partial the other marks an intentional **subset**, and the persisted note says which side
+  needs a LEFT JOIN to keep unmatched rows.
+- **Persisted and used everywhere**: the ER model is stored with the schema, drawn as a
+  **Mermaid ER diagram** + rate table in *View Database Schema & Semantic Index*, carried by
+  **Export/Import Reference Config** (teammates inherit it without re-probing), and appended
+  to every `#spDbSchema` answer so chat writes correct, efficient multi-table JOINs. Works on
+  SQL Server, PostgreSQL, MySQL, and MongoDB (`$lookup`).
+
 ## 0.22.2 — 2026-06-12
 
 ### Added — Power BI sign-in with nothing to install (pilot)

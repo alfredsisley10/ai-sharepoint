@@ -66,6 +66,40 @@ export interface SemanticIndex {
   contentIndexedAt?: string;
 }
 
+/** One PROBED relationship (ADR-0030): enterprise schemas rarely declare
+ *  foreign keys, so relationships are established empirically — sample
+ *  distinct values from one column and measure how many EXIST in the other
+ *  (both directions). A high match rate, on top of what schema/content
+ *  indexing says the columns mean, is a reliable join indicator. */
+export interface ProbedRelationship {
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  /** Share of sampled from-values found in to (0..1). */
+  forwardRate: number;
+  /** Share of sampled to-values found in from (0..1). */
+  backwardRate: number;
+  sampledForward: number;
+  sampledBackward: number;
+  verdict: "strong" | "likely";
+  /** Containment reading — encodes the inner-vs-outer-join consequence
+   *  ("from-side is a subset …"). */
+  note?: string;
+  /** Why this pair was tested ("name pattern: customer_id → Customers.id"). */
+  reason: string;
+}
+
+/** Persisted ER model — travels with the schema (and reference exports). */
+export interface ErModel {
+  builtAt: string;
+  sampleSize: number;
+  candidatesTested: number;
+  relationships: ProbedRelationship[];
+  /** True when cancellation/per-pair failures stopped probing early. */
+  partial?: boolean;
+}
+
 export interface SourceSchema {
   catalog: SchemaCatalog;
   semantic?: SemanticIndex;
@@ -73,6 +107,8 @@ export interface SourceSchema {
   semanticState: "none" | "indexed" | "declined";
   /** Content-type indexing state (sampled values described by Copilot). */
   contentState?: "none" | "indexed" | "declined";
+  /** Probed entity-relationship model ("Build ER Diagram", ADR-0030). */
+  er?: ErModel;
 }
 
 // Caps keep catalogs, prompts, and tool output bounded on huge databases.

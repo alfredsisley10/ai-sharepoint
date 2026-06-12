@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.22.2",
+  "version": "0.23.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -203,6 +203,12 @@
         "title": "Index Database Schema (Copilot summaries)…",
         "category": "AI SharePoint",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "aiSharePoint.buildErDiagram",
+        "title": "Build Database ER Diagram (probe join rates)…",
+        "category": "AI SharePoint",
+        "icon": "$(type-hierarchy)"
       },
       {
         "command": "aiSharePoint.viewSourceSchema",
@@ -1195,9 +1201,14 @@
           "group": "1_schema@3"
         },
         {
-          "command": "aiSharePoint.viewSourceSchema",
+          "command": "aiSharePoint.buildErDiagram",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
           "group": "1_schema@4"
+        },
+        {
+          "command": "aiSharePoint.viewSourceSchema",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
+          "group": "1_schema@5"
         },
         {
           "command": "aiSharePoint.clearErrorReports",

@@ -5,6 +5,7 @@ import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { SchemaIndexer } from "../context/db/schemaIndexer";
 import { SourceSchema, renderSchemaForModel } from "../context/db/schemaIndex";
+import { renderErForModel } from "../context/db/erDiagram";
 import { ContextSource } from "../context/types";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
@@ -99,13 +100,16 @@ export function registerContextTools(
           const source = resolveDbOrExplain(input.source);
           const schema = await schemaFor(source);
           const rendered = renderSchemaForModel(schema, input.topic);
+          // Probed JOIN paths (ADR-0030) ride along so multi-table questions
+          // get correct joins even though the schema declares no foreign keys.
+          const er = schema.er ? `\n${renderErForModel(schema.er).join("\n")}` : "";
           const hint =
             schema.semanticState === "none"
               ? '\n\nNote: this schema has no semantic index yet — column meanings are raw names. Offer to build one with the index_db_schema tool (the user approves in chat; only table/column names are sent to Copilot). With an index, questions like "records owned by X" map to ownership columns automatically.'
               : schema.semantic?.partial
                 ? "\n\nNote: the semantic index is partial — re-running index_db_schema can complete it."
                 : "";
-          return rendered + hint;
+          return rendered + er + hint;
         },
       ),
     ),

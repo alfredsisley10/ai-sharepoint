@@ -27,6 +27,14 @@ import {
   MONGO_SAMPLE_DOCS,
   CONTENT_SAMPLE_ROWS,
 } from "./schemaIndex";
+import {
+  buildJoinProbeSql,
+  buildJoinProbeMongo,
+  parseProbeCounts,
+  JoinProbeEnd,
+  JoinProbeCounts,
+  ER_SAMPLE_SIZE,
+} from "./erDiagram";
 import { loadTrustedCAs } from "../ldap/osTrust";
 import { AppError } from "../../core/errors";
 import { wireEnabled, emitWire, capDetail, safeJson } from "../../core/wireLog";
@@ -498,6 +506,39 @@ export async function sampleTableValues(
     buildSampleQuery(source.type, table),
   );
   return distinctValues(rows);
+}
+
+/** One join-rate probe, one direction (ADR-0030): sample distinct values of
+ *  from.column, count how many exist in to.column. COUNTS only — the values
+ *  themselves never leave the query. */
+export async function probeJoinRate(
+  source: ContextSource,
+  credential: ContextCredential,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+  from: JoinProbeEnd,
+  to: JoinProbeEnd,
+  sample = ER_SAMPLE_SIZE,
+): Promise<JoinProbeCounts> {
+  if (source.type === "mongodb") {
+    const spec = buildJoinProbeMongo(from, to, sample);
+    const docs = await withMongo(source, credential, tls, caps, (client, dbName) =>
+      client
+        .db(dbName)
+        .collection(spec.collection)
+        .aggregate(spec.pipeline, { maxTimeMS: caps.timeoutMs })
+        .toArray(),
+    );
+    return parseProbeCounts(docs as Array<Record<string, unknown>>);
+  }
+  const rows = await SQL_RUNNERS[source.type as SqlEngine](
+    source,
+    credential,
+    tls,
+    { ...caps, maxResults: 2 },
+    buildJoinProbeSql(source.type as SqlEngine, from, to, sample),
+  );
+  return parseProbeCounts(rows);
 }
 
 /** Tables/collections → ready-made sample-query bookmark candidates. */

@@ -51,7 +51,13 @@ import { buildReferenceExport, parseReferenceImport } from "./context/referenceE
 import { aliasIssue, normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
-import { SourceSchema, qualifiedName } from "./context/db/schemaIndex";
+import { SourceSchema, ErModel, ProbedRelationship, qualifiedName } from "./context/db/schemaIndex";
+import {
+  proposeJoinCandidates,
+  classifyJoin,
+  renderErMermaid,
+  ER_SAMPLE_SIZE,
+} from "./context/db/erDiagram";
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { CatalogStore } from "./context/catalogStore";
 import {
@@ -2620,6 +2626,112 @@ export function activate(context: vscode.ExtensionContext): void {
     return (await runCatalogPrecache(source))?.entries;
   };
 
+  register("aiSharePoint.buildErDiagram", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    const schema = schemas.getSync(source.id) ?? (await loadSchemaWithProgress(source));
+    const candidates = proposeJoinCandidates(schema);
+    if (candidates.length === 0) {
+      void vscode.window.showInformationMessage(
+        "No plausible join candidates found. Run “Index Database Schema” (and optionally “Index Database Content Types”) first — their tags propose pairs — or the tables share no compatible columns.",
+      );
+      return;
+    }
+    const consent = await vscode.window.showInformationMessage(
+      `Build the ER model for "${source.displayName}"? ${candidates.length} candidate column pair(s) will be probed with bounded read-only queries (≈${candidates.length * 2} count queries over ${ER_SAMPLE_SIZE}-distinct-value samples). Only match COUNTS are read — no row data leaves the database. High join rates reveal the relationships most enterprise schemas never declare as foreign keys; both directions are measured so intentional subsets are recognized.`,
+      { modal: true },
+      "Probe & Build",
+    );
+    if (consent !== "Probe & Build") return;
+    // Qualified candidate names → concrete schema/table/column probe ends.
+    const endFor = (qualified: string, column: string) => {
+      const t = schema.catalog.tables.find(
+        (x) => qualifiedName(x).toLowerCase() === qualified.toLowerCase(),
+      );
+      return t ? { ...(t.schema ? { schema: t.schema } : {}), table: t.name, column } : undefined;
+    };
+    const relationships: ProbedRelationship[] = [];
+    let tested = 0;
+    let partial = false;
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Building ER model for "${source.displayName}"…`,
+        cancellable: true,
+      },
+      async (progress, token) => {
+        for (let i = 0; i < candidates.length; i++) {
+          if (token.isCancellationRequested) {
+            partial = true;
+            break;
+          }
+          const c = candidates[i];
+          const from = endFor(c.fromTable, c.fromColumn);
+          const to = endFor(c.toTable, c.toColumn);
+          if (!from || !to) continue;
+          progress.report({
+            increment: 100 / candidates.length,
+            message: `${i + 1}/${candidates.length}: ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn}`,
+          });
+          try {
+            // Both directions: full containment one way + partial the other
+            // is how an intentional subset shows itself (inner vs outer).
+            const forward = await contextService.probeJoin(source, from, to, ER_SAMPLE_SIZE);
+            const backward = await contextService.probeJoin(source, to, from, ER_SAMPLE_SIZE);
+            tested += 1;
+            const graded = classifyJoin(forward, backward);
+            if (graded.verdict) {
+              relationships.push({
+                fromTable: c.fromTable,
+                fromColumn: c.fromColumn,
+                toTable: c.toTable,
+                toColumn: c.toColumn,
+                forwardRate: graded.forwardRate,
+                backwardRate: graded.backwardRate,
+                sampledForward: forward.sampled,
+                sampledBackward: backward.sampled,
+                verdict: graded.verdict,
+                ...(graded.note ? { note: graded.note } : {}),
+                reason: c.reason,
+              });
+            }
+          } catch (err) {
+            // One failed pair (permissions, timeout) never voids the rest.
+            partial = true;
+            log.warn(
+              `ER probe failed for ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+      },
+    );
+    relationships.sort(
+      (a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate),
+    );
+    const er: ErModel = {
+      builtAt: nowIso(),
+      sampleSize: ER_SAMPLE_SIZE,
+      candidatesTested: tested,
+      relationships,
+      ...(partial ? { partial: true } : {}),
+    };
+    await schemas.set(source.id, { ...(schemas.getSync(source.id) ?? schema), er });
+    telemetry.record("schema.er", {
+      type: source.type,
+      candidates: String(candidates.length),
+      tested: String(tested),
+      found: String(relationships.length),
+      partial: String(partial),
+    });
+    const view = await vscode.window.showInformationMessage(
+      `ER model for "${source.displayName}": ${relationships.length} relationship(s) confirmed from ${tested} probed pair(s)${partial ? " (partial — re-run to finish)" : ""}. Persisted with the schema; chat now uses these JOIN paths for multi-table questions.`,
+      "View Schema & ER Diagram",
+    );
+    if (view) {
+      await vscode.commands.executeCommand("aiSharePoint.viewSourceSchema", contextSources.get(source.id));
+    }
+  });
+
   register("aiSharePoint.viewSourceSchema", async (arg) => {
     const source = await resolveSourceArg(arg, contextSources);
     if (!source || !requireDbSource(source)) return;
@@ -2633,9 +2745,30 @@ export function activate(context: vscode.ExtensionContext): void {
       `- Engine: **${schema.catalog.engine}** · database **${schema.catalog.database}**`,
       `- Fetched: ${schema.catalog.fetchedAt} · ${schema.catalog.tables.length} tables/collections${schema.catalog.truncated ? " · **truncated by caps**" : ""}`,
       `- Semantic index: **${schema.semanticState}**${schema.semantic ? ` (${schema.semantic.tables.length} tables, model ${schema.semantic.modelId}${schema.semantic.partial ? ", partial" : ""})` : ""}`,
+      `- ER model: **${schema.er ? `${schema.er.relationships.length} relationship(s)` : "not built"}**${schema.er ? ` (probed ${schema.er.builtAt}${schema.er.partial ? ", partial" : ""})` : " — run “Build Database ER Diagram”"}`,
       "",
       "_Catalog = names and types read from the database. Semantic tags/synonyms (when indexed) are Copilot's generalization so free-form questions find the right columns._",
     ];
+    if (schema.er) {
+      lines.push(
+        "",
+        "## Entity relationships (probed join rates)",
+        "",
+        `_No foreign keys needed: each pair below was tested empirically — up to ${schema.er.sampleSize} distinct values sampled per side, match rate measured in both directions (forward/backward). ≈100% = designed-in join; full one way + partial the other = an intentional subset (use a LEFT JOIN from the wider side). Open the markdown preview for the diagram._`,
+        "",
+        "```mermaid",
+        renderErMermaid(schema.er),
+        "```",
+        "",
+        "| Join | Match fwd | Match back | Verdict | Reading |",
+        "|---|---|---|---|---|",
+      );
+      for (const r of schema.er.relationships) {
+        lines.push(
+          `| \`${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn}\` | ${Math.round(r.forwardRate * 100)}% | ${Math.round(r.backwardRate * 100)}% | ${r.verdict} | ${r.note ?? r.reason} |`,
+        );
+      }
+    }
     for (const t of schema.catalog.tables) {
       const s = sem.get(qualifiedName(t).toLowerCase());
       lines.push("", `## ${qualifiedName(t)} _(${t.kind})_${s?.purpose ? ` — ${s.purpose}` : ""}`, "");
