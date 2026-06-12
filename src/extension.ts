@@ -311,26 +311,39 @@ export function activate(context: vscode.ExtensionContext): void {
     { dispose: () => setWireSink(undefined) },
   );
   // In-place VSIX upgrades can run the new extension.js against a stale
-  // cached manifest until the window reloads — createTreeView then throws
-  // "No view is registered with id". One missing view must not abort the
-  // whole activation, and SIX missing views must not raise six toasts
-  // (pilot: every update produced a pile of identical warnings). Failures
-  // are collected and surfaced ONCE — as information, not an error, with
-  // the remedy as a button. Details go to the log only.
-  const unregisteredViews: string[] = [];
+  // cached manifest until the window reloads. Anything the cached manifest
+  // doesn't declare THROWS on registration — createTreeView for a new view
+  // ("No view is registered with id"), lm.registerTool for a tool added by
+  // the update (which aborts activation mid-flight, breaking commands too).
+  // Strategy: read the manifest VS Code ACTUALLY loaded and skip what it
+  // can't host; wrap every registration block; surface ONE information
+  // prompt with the fix as a button. Details go to the log only.
+  const loadedManifest = context.extension.packageJSON as {
+    contributes?: {
+      views?: Record<string, Array<{ id?: string }>>;
+      languageModelTools?: Array<{ name?: string }>;
+    };
+  };
+  const declaredViews = new Set(
+    Object.values(loadedManifest.contributes?.views ?? {})
+      .flat()
+      .map((v) => v.id)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const pendingRegistrations: string[] = [];
   let reloadPromptQueued = false;
   const promptReloadOnce = () => {
     if (reloadPromptQueued) return;
     reloadPromptQueued = true;
-    // Activation registers views synchronously; a short delay coalesces
-    // every failure into the one prompt.
+    // Activation registers everything synchronously; a short delay
+    // coalesces every failure into the one prompt.
     setTimeout(() => {
       log.warn(
-        `Views pending window reload after the update: ${unregisteredViews.join(", ")}.`,
+        `Pending window reload after the update — not yet registered: ${pendingRegistrations.join(", ")}.`,
       );
       void vscode.window
         .showInformationMessage(
-          "AI SharePoint finished updating — reload the window to activate its views.",
+          "AI SharePoint finished updating — reload the window to activate everything.",
           "Reload Window",
         )
         .then((pick) => {
@@ -344,15 +357,40 @@ export function activate(context: vscode.ExtensionContext): void {
     id: string,
     provider: vscode.TreeDataProvider<T>,
   ): vscode.TreeView<T> | undefined => {
+    // Manifest pre-check: a view the loaded manifest doesn't declare would
+    // throw on creation AND keep throwing asynchronously from later
+    // refresh/badge traffic — never create it at all.
+    if (declaredViews.size > 0 && !declaredViews.has(id)) {
+      pendingRegistrations.push(id);
+      promptReloadOnce();
+      return undefined;
+    }
     try {
       return vscode.window.createTreeView(id, { treeDataProvider: provider });
     } catch (err) {
       log.warn(
         `View ${id} could not be registered (${err instanceof Error ? err.message : String(err)}) — usually a pending window reload after a VSIX upgrade.`,
       );
-      unregisteredViews.push(id);
+      pendingRegistrations.push(id);
       promptReloadOnce();
       return undefined;
+    }
+  };
+  /** Registration blocks (chat participant, language-model tools) throw as
+   *  a GROUP against a stale manifest — degrade to the reload prompt
+   *  instead of aborting activation (which used to strand commands and
+   *  surface raw errors). Registrations made before the throw stay live
+   *  until the reload; that is harmless and short-lived. */
+  const tryRegister = (label: string, make: () => vscode.Disposable[]): vscode.Disposable[] => {
+    try {
+      return make();
+    } catch (err) {
+      log.warn(
+        `${label} could not be registered (${err instanceof Error ? err.message : String(err)}) — pending window reload after the update.`,
+      );
+      pendingRegistrations.push(label);
+      promptReloadOnce();
+      return [];
     }
   };
 
@@ -391,9 +429,9 @@ export function activate(context: vscode.ExtensionContext): void {
     outbox,
     commsProvider,
     outbox.onDidChange(syncCommsBadge),
-    ...registerCommsTools(outbox, telemetry, errors, nowIso),
-    ...registerSiteDevTools(sites, access, syncConfigs, telemetry, errors),
-    ...registerProjectTools(projects, telemetry, errors),
+    ...tryRegister("communication tools", () => registerCommsTools(outbox, telemetry, errors, nowIso)),
+    ...tryRegister("site-dev tools", () => registerSiteDevTools(sites, access, syncConfigs, telemetry, errors)),
+    ...tryRegister("project tools", () => registerProjectTools(projects, telemetry, errors)),
   );
   const projectsProvider = new ProjectsTreeProvider(projects, contextSources);
   const projectsView = tryCreateTreeView("aiSharePoint.projectsView", projectsProvider);
@@ -466,39 +504,45 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // --- Chat + tools ------------------------------------------------------
   context.subscriptions.push(
-    registerChatParticipant({
-      ctx: context,
-      sites,
-      access,
-      sources: contextSources,
-      bookmarks,
-      schemas,
-      projects,
-      copilot,
-      meter,
-      telemetry,
-      errors,
-      log,
-      now: nowIso,
-    }),
-    ...registerLanguageModelTools(
-      sites,
-      access,
-      meter,
-      telemetry,
-      errors,
-      nowIso,
+    ...tryRegister("chat participant", () => [
+      registerChatParticipant({
+        ctx: context,
+        sites,
+        access,
+        sources: contextSources,
+        bookmarks,
+        schemas,
+        projects,
+        copilot,
+        meter,
+        telemetry,
+        errors,
+        log,
+        now: nowIso,
+      }),
+    ]),
+    ...tryRegister("site tools", () =>
+      registerLanguageModelTools(
+        sites,
+        access,
+        meter,
+        telemetry,
+        errors,
+        nowIso,
+      ),
     ),
-    ...registerContextTools(
-      contextSources,
-      contextService,
-      bookmarks,
-      schemas,
-      schemaIndexer,
-      telemetry,
-      errors,
-      nowIso,
-      () => projects.scope(contextSources.list()),
+    ...tryRegister("context tools", () =>
+      registerContextTools(
+        contextSources,
+        contextService,
+        bookmarks,
+        schemas,
+        schemaIndexer,
+        telemetry,
+        errors,
+        nowIso,
+        () => projects.scope(contextSources.list()),
+      ),
     ),
     schemas,
     catalogs,

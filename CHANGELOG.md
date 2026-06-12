@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.27.1 — 2026-06-12
+
+### Fixed — updates no longer surface ANY raw registration errors (pilot, second report)
+- The 0.24.1 fix consolidated **view-creation** failures, but two other registration classes
+  still threw raw errors after an in-place update: **language-model tools added by the update**
+  (most releases add one — registering a tool the cached manifest doesn't declare throws and
+  **aborted activation mid-flight**, stranding commands and surfacing raw text), and views
+  created against a stale manifest could keep throwing **asynchronously** from later
+  refresh/badge traffic even when creation appeared to succeed.
+- Activation now reads the manifest **VS Code actually loaded** and skips what it can't host:
+  views not declared there are never created (so they can't throw later either), and every
+  registration block (chat participant, site/context/communication/site-dev/project tools)
+  degrades gracefully instead of aborting. Everything funnels into the single
+  *"AI SharePoint finished updating — reload the window to activate everything"* prompt with
+  its **Reload Window** button; per-item details go to the extension log only.
+
 ## 0.27.0 — 2026-06-12
 
 ### Added — scoped, seeded ER runs: pick the tables, hint the AI, hand over known joins (pilot)
