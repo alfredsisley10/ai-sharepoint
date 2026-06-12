@@ -460,6 +460,11 @@ Have findings reach people — **without the assistant ever sending anything its
   compliance/DLP applies as always.
 - **Outlook safety valve**: *Save to Outlook Drafts* puts the draft in your mailbox without
   sending — finish and send from Outlook itself.
+- **Test the channel without composing anything**: *Test Outlook Channel…* creates a draft
+  **addressed to you alone** containing a verification code (nothing is sent), you confirm the
+  code from your Outlook **Drafts** folder, and the test draft is removed automatically. The
+  test is a complete transaction — it never asks for a recipient or starts another draft.
+  Composing a real email is always its own flow (*Draft Outlook Email…*), started by you.
 - Send-capable permissions (`Chat.ReadWrite`, `Mail.Send`, …) are requested **only** by this
   flow, on first use (ADR-0025).
 

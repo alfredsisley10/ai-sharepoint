@@ -115,6 +115,12 @@ import {
   MAX_BODY_CHARS,
   MAX_SUBJECT_CHARS,
 } from "./comms/outbox";
+import {
+  channelTestCode,
+  channelTestEmail,
+  channelTestCodeMatches,
+  CHANNEL_TEST_CODE_LENGTH,
+} from "./comms/channelTest";
 import { CommsTreeProvider } from "./ui/commsView";
 import { registerCommsTools } from "./chat/commsTools";
 import { registerSiteDevTools } from "./chat/siteDevTools";
@@ -462,7 +468,8 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.registerCommand(id, async (...args: unknown[]) => {
         telemetry.record("command", { id: id.replace("aiSharePoint.", "") });
         try {
-          await fn(...args);
+          // Pass results through — tools read outcomes via executeCommand.
+          return await fn(...args);
         } catch (err) {
           const code = errors.capture(id, err);
           log.error(`${id} failed`, err);
@@ -484,6 +491,7 @@ export function activate(context: vscode.ExtensionContext): void {
           } else if (pick === "Export Diagnostics") {
             await vscode.commands.executeCommand("aiSharePoint.exportDiagnostics");
           }
+          return undefined;
         }
       }),
     );
@@ -3091,6 +3099,79 @@ export function activate(context: vscode.ExtensionContext): void {
       "Review & Send Now",
     );
     if (review) await vscode.commands.executeCommand("aiSharePoint.reviewCommDraft", draft);
+  });
+
+  // Pilot: testing the channel is its OWN transaction — verify, clean up,
+  // stop. It must never flow into composing a message (that is
+  // draftOutlookEmail, started by the user when THEY need it).
+  register("aiSharePoint.testOutlookChannel", async (): Promise<"verified" | "cancelled"> => {
+    const client = await commsClientFor();
+    if (!client) return "cancelled";
+    const code = channelTestCode(nodeCrypto.randomBytes(CHANNEL_TEST_CODE_LENGTH));
+    const mail = channelTestEmail(code);
+    let created: { id: string; webLink?: string };
+    try {
+      created = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Creating a test draft (addressed to yourself) in your mailbox…",
+        },
+        async () => client.createMailDraft([await client.me()], mail.subject, mail.body),
+      );
+    } catch (err) {
+      const hint = explainCommsError(err instanceof Error ? err.message : String(err));
+      if (hint) {
+        throw new AppError(
+          `Could not reach your Outlook via Microsoft Graph: ${err instanceof Error ? err.message : String(err)}`,
+          "graph.forbidden",
+          hint,
+        );
+      }
+      throw err;
+    }
+    telemetry.record("comms.channelTest", { step: "draftCreated" });
+    void vscode.window
+      .showInformationMessage(
+        "Test draft created in your Outlook Drafts folder — addressed to you alone; nothing was sent.",
+        ...(created.webLink ? ["Open in Outlook"] : []),
+      )
+      .then((open) => {
+        if (open && created.webLink) void vscode.env.openExternal(vscode.Uri.parse(created.webLink));
+      });
+    const entered = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Outlook channel test — code from the draft",
+      prompt: `Open Outlook → Drafts: the draft “${mail.subject}” (to yourself) contains a ${CHANNEL_TEST_CODE_LENGTH}-digit code. Esc cancels the test.`,
+      placeHolder: `${CHANNEL_TEST_CODE_LENGTH}-digit code`,
+      validateInput: (v) =>
+        !v.trim()
+          ? `Enter the ${CHANNEL_TEST_CODE_LENGTH}-digit code from the draft (Esc cancels).`
+          : channelTestCodeMatches(code, v)
+            ? undefined
+            : "That doesn't match the code in the test draft — check the newest draft addressed to you.",
+    });
+    let cleaned = true;
+    try {
+      await client.deleteMailDraft(created.id);
+    } catch (err) {
+      cleaned = false;
+      log.warn(`Channel-test draft cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const cleanupNote = cleaned
+      ? "The test draft was removed."
+      : "The test draft could not be removed — delete it from your Drafts folder.";
+    if (!entered) {
+      telemetry.record("comms.channelTest", { outcome: "cancelled" });
+      void vscode.window.showInformationMessage(
+        `Outlook channel test cancelled. ${cleanupNote} Nothing was sent.`,
+      );
+      return "cancelled";
+    }
+    telemetry.record("comms.channelTest", { outcome: "verified" });
+    void vscode.window.showInformationMessage(
+      `Outlook channel verified ✅ — the draft reached your mailbox. ${cleanupNote} Nothing was sent. Emailing someone is a separate flow: “Draft Outlook Email…” whenever you need it.`,
+    );
+    return "verified";
   });
 
   register("aiSharePoint.editCommDraft", async (arg) => {

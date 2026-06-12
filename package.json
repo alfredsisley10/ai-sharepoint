@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -179,6 +179,12 @@
         "title": "Draft Outlook Email…",
         "category": "AI SharePoint",
         "icon": "$(mail)"
+      },
+      {
+        "command": "aiSharePoint.testOutlookChannel",
+        "title": "Test Outlook Channel…",
+        "category": "AI SharePoint",
+        "icon": "$(beaker)"
       },
       {
         "command": "aiSharePoint.reviewCommDraft",
@@ -802,7 +808,7 @@
           "sharepoint",
           "communications"
         ],
-        "modelDescription": "PREPARE (never send) a Microsoft Teams chat message or an Outlook email to specific individuals, e.g. after research the user asked to share. The draft goes to the extension's Communications outbox where the USER must review and explicitly approve it before anything is sent — you cannot send, and must tell the user the draft awaits their approval in the Communications view. Provide recipients as emails/UPNs (max 10), a subject for email, and a plain-text body.",
+        "modelDescription": "PREPARE (never send) a Microsoft Teams chat message or an Outlook email to specific individuals, e.g. after research the user asked to share. The draft goes to the extension's Communications outbox where the USER must review and explicitly approve it before anything is sent — you cannot send, and must tell the user the draft awaits their approval in the Communications view. Provide recipients as emails/UPNs (max 10), a subject for email, and a plain-text body. Use ONLY for a message the user explicitly asked to prepare, addressed to recipients THEY named. Never use it to test or demonstrate the channel (that is aisharepoint_test_outlook_channel), and never invoke it as a follow-on to a just-completed channel test — testing and composing are separate transactions.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -836,6 +842,22 @@
             "to",
             "body"
           ]
+        }
+      },
+      {
+        "name": "aisharepoint_test_outlook_channel",
+        "displayName": "Test Outlook Channel",
+        "toolReferenceName": "spTestOutlookChannel",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(beaker)",
+        "tags": [
+          "sharepoint",
+          "communications"
+        ],
+        "modelDescription": "Self-contained health check of the Outlook channel: creates a draft addressed to the USER THEMSELVES containing a verification code (nothing is ever sent), the user confirms the code from their Outlook Drafts folder in a VS Code dialog, and the test draft is then removed. Use when the user asks to test/verify that the Outlook channel works. The test is one complete transaction — when it finishes, report the outcome and STOP; do not prepare any message afterwards unless the user separately asks for one and names the recipient. Takes no input.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
         }
       },
       {
@@ -1007,6 +1029,11 @@
           "command": "aiSharePoint.draftOutlookEmail",
           "when": "view == aiSharePoint.commsView",
           "group": "navigation@2"
+        },
+        {
+          "command": "aiSharePoint.testOutlookChannel",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@3"
         },
         {
           "command": "aiSharePoint.addContextSource",

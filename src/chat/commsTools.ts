@@ -22,7 +22,53 @@ export function registerCommsTools(
   errors: ErrorReportStore,
   nowIso: () => string,
 ): vscode.Disposable[] {
+  const text = (s: string) =>
+    new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(s)]);
   return [
+    // Channel test = its own bounded transaction (pilot): draft-to-self with
+    // a code, user confirms, draft removed — never chains into a new draft.
+    vscode.lm.registerTool<Record<string, never>>("aisharepoint_test_outlook_channel", {
+      prepareInvocation() {
+        return {
+          invocationMessage: "Testing the Outlook channel (draft to yourself)",
+          confirmationMessages: {
+            title: "Test the Outlook channel?",
+            message: new vscode.MarkdownString(
+              [
+                "Creates a draft **addressed to you alone** containing a verification code — **nothing is sent**.",
+                "You confirm the code from your Outlook **Drafts** folder, then the test draft is removed.",
+                "",
+                "_A self-contained check: it never starts a real email._",
+              ].join("\n"),
+            ),
+          },
+        };
+      },
+      async invoke() {
+        telemetry.record("tool.invoke", { tool: "aisharepoint_test_outlook_channel" });
+        try {
+          const outcome = await vscode.commands.executeCommand<
+            "verified" | "cancelled" | undefined
+          >("aiSharePoint.testOutlookChannel");
+          if (outcome === "verified") {
+            return text(
+              "Outlook channel test PASSED — the user confirmed the code from their Drafts folder, the test draft was removed, and nothing was sent. The test transaction is COMPLETE: report the result and stop. Do NOT prepare a draft or ask for a recipient now — composing a message is a separate transaction the user starts explicitly.",
+            );
+          }
+          if (outcome === "cancelled") {
+            return text(
+              "The user cancelled the Outlook channel test (any test draft was cleaned up; nothing was sent). Do not retry on your own and do not start drafting anything — wait for the user's next request.",
+            );
+          }
+          return text(
+            "The Outlook channel test could not complete — the user already saw the error and remediation. Do not start drafting anything; let the user decide the next step.",
+          );
+        } catch (err) {
+          errors.capture("tool:aisharepoint_test_outlook_channel", err);
+          return text(`The Outlook channel test failed to run: ${redactError(err).message}`);
+        }
+      },
+    }),
     vscode.lm.registerTool<{
       channel: "teams" | "outlook";
       to: string;

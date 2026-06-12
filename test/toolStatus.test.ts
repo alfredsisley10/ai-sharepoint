@@ -31,6 +31,10 @@ test("each tool gets a meaningful, input-aware line", () => {
     "Preparing a Teams message to jdoe@corp.example…",
   );
   assert.equal(
+    describeToolCall("aisharepoint_test_outlook_channel", {}),
+    "Testing the Outlook channel (draft to yourself — nothing is sent)…",
+  );
+  assert.equal(
     describeToolCall("aisharepoint_apply_site", {}),
     "Launching apply-to-SharePoint (your approval required)…",
   );

@@ -35,6 +35,8 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Proposing a bookmark${str(i.name) ? ` “${short(String(i.name), 40)}”` : ""} to save…`;
     case "aisharepoint_draft_communication":
       return `Preparing a ${i.channel === "teams" ? "Teams message" : "draft email"}${str(i.to) ? ` to ${short(String(i.to), 40)}` : ""}…`;
+    case "aisharepoint_test_outlook_channel":
+      return "Testing the Outlook channel (draft to yourself — nothing is sent)…";
     case "aisharepoint_site_overview":
       return `Reading ${str(i.site) ?? "the site"} overview…`;
     case "aisharepoint_list_pages":

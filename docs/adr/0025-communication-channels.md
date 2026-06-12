@@ -46,3 +46,21 @@
 - Bodies are plain text in v1 (no HTML), bounded at 10k characters;
   attachments and channel posts (vs chats) are explicitly out of scope
   until asked for.
+
+## Amendment (0.20.0): the channel test is a bounded transaction
+
+Pilot: verifying the Outlook channel by improvising a draft-to-self led
+straight into a recipient prompt — reading as one chained send flow.
+Decision: **testing the channel and composing a message are separate
+transactions.**
+
+- `Test Outlook Channel…` (command + `test_outlook_channel` tool, which
+  takes **no input**) creates a draft addressed to the **user
+  themselves** carrying a short verification code, the user confirms the
+  code from their Drafts folder, and the test draft is **deleted**
+  (`Mail.ReadWrite` only — the test can never send). The flow then
+  terminates: no recipient prompt, no follow-on draft, and the tool's
+  result instructs the model that the transaction is complete.
+- `draft_communication` is contractually *not* a test vehicle: it is
+  used only for a message the user explicitly requested, addressed to
+  recipients the user named.

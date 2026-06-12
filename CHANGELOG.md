@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.20.0 — 2026-06-12
+
+### Added — Outlook channel test is its own transaction (pilot)
+- Pilot: after confirming a verification code from a draft-to-self, the flow immediately asked
+  for a **recipient's email** — reading as if the test chained straight into composing another
+  email. Testing the channel and composing a message are now **separate transactions**.
+- New **Test Outlook Channel…** command (palette + Communications view title): creates a draft
+  **addressed to you alone** carrying a 6-digit code (nothing is sent), you confirm the code
+  from your Outlook **Drafts** folder, and the test draft is **removed automatically**. The
+  flow then ends — no recipient prompt, no follow-on draft. Cancelling also cleans up.
+- New `#spTestOutlookChannel` agent tool so *"test the outlook channel"* in chat runs the same
+  bounded check instead of improvising drafts: confirmation-gated, no inputs (the recipient is
+  hardwired to yourself), and the result explicitly tells the assistant the transaction is
+  complete. The draft tool's contract and the @sharepoint instructions now state: never use
+  drafts to test the channel, and never follow a finished test by drafting or asking for a
+  recipient — composing starts only from an explicit user request naming the recipient.
+
 ## 0.19.0 — 2026-06-12
 
 ### Added — Projects view + goals, reference context, and a separate AI-managed memory (pilot)

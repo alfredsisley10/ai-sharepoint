@@ -54,6 +54,28 @@ export class CommsClient extends SharePointClient {
     return me.id;
   }
 
+  /** The signed-in user as a recipient — the channel test's ONLY target. */
+  async me(): Promise<ResolvedRecipient> {
+    const me = await this.request<{
+      id: string;
+      displayName?: string;
+      mail?: string;
+      userPrincipalName?: string;
+    }>(
+      "GET",
+      "/me?$select=id,displayName,mail,userPrincipalName",
+      undefined,
+      DIRECTORY_SCOPES,
+    );
+    const address = me.mail ?? me.userPrincipalName;
+    if (!address) {
+      throw new Error(
+        "Your account exposes no email address (mail/userPrincipalName) — the mailbox cannot be addressed.",
+      );
+    }
+    return { id: me.id, displayName: me.displayName ?? address, address };
+  }
+
   /** Create (or reuse, for oneOnOne Graph dedupes) the chat, then post. */
   async sendTeamsMessage(recipients: ResolvedRecipient[], body: string): Promise<void> {
     const myId = await this.myUserId();
@@ -104,6 +126,16 @@ export class CommsClient extends SharePointClient {
       `/me/messages/${encodeURIComponent(messageId)}/send`,
       undefined,
       MAIL_SEND_SCOPES,
+    );
+  }
+
+  /** Remove a mailbox draft — channel-test cleanup. Same scope as creating it. */
+  deleteMailDraft(messageId: string): Promise<void> {
+    return this.request(
+      "DELETE",
+      `/me/messages/${encodeURIComponent(messageId)}`,
+      undefined,
+      MAIL_DRAFT_SCOPES,
     );
   }
 }
