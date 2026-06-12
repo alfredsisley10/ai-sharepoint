@@ -186,3 +186,67 @@ test("browse candidates come from live enumeration with the default table first"
   assert.ok(candidates.some((c) => c.detail.includes("incident")));
   assert.ok(candidates.some((c) => c.detail.includes("kb_knowledge")));
 });
+
+// --- Browser-session cookie replay (snow-session) ---------------------------
+
+const SESSION_TABLE_PASTE = [
+  "Name\tValue\tDomain\tPath",
+  "JSESSIONID\tABC123\tcorp.service-now.com\t/",
+  "glide_user_route\tglide.x\tcorp.service-now.com\t/",
+].join("\n");
+
+function withFetchInit<T>(
+  responder: (url: string, init?: RequestInit) => Response,
+  run: () => Promise<T>,
+): Promise<T> {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) =>
+    responder(String(url), init)) as typeof fetch;
+  return run().finally(() => {
+    globalThis.fetch = original;
+  });
+}
+
+test("a stored DevTools-table cookie paste is normalized into a legal Cookie header at send time", async () => {
+  let cookie = "";
+  let auth: string | undefined;
+  await withFetchInit(
+    (_url, init) => {
+      const headers = init?.headers as Record<string, string>;
+      cookie = headers.Cookie ?? "";
+      auth = headers.Authorization;
+      return new Response(JSON.stringify({ result: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    () => searchServiceNow(SRC, { method: "snow-session", secret: SESSION_TABLE_PASTE }, "outage", DEFAULT_CAPS),
+  );
+  assert.equal(cookie, "JSESSIONID=ABC123; glide_user_route=glide.x");
+  assert.equal(auth, undefined, "cookie sessions must not send Authorization");
+});
+
+test("rejected cookie session (401) reports the replayed cookie NAMES and re-capture guidance", async () => {
+  await assert.rejects(
+    withFetchInit(
+      () => new Response("{}", { status: 401 }),
+      () => searchServiceNow(SRC, { method: "snow-session", secret: SESSION_TABLE_PASTE }, "outage", DEFAULT_CAPS),
+    ),
+    (err: Error & { userSummary?: string }) => {
+      assert.match(err.message, /JSESSIONID, glide_user_route/);
+      assert.ok(!err.message.includes("ABC123"), "cookie VALUES must never appear in errors");
+      assert.match(err.userSummary ?? "", /re-capture/i);
+      return true;
+    },
+  );
+});
+
+test("an HTML login page in response to a cookie session explains expiry instead of 'non-JSON'", async () => {
+  await assert.rejects(
+    withFetchInit(
+      () => new Response("<html><body>Sign in to ServiceNow</body></html>", { status: 200 }),
+      () => searchServiceNow(SRC, { method: "snow-session", secret: SESSION_TABLE_PASTE }, "outage", DEFAULT_CAPS),
+    ),
+    /login page \(session expired|login page/,
+  );
+});

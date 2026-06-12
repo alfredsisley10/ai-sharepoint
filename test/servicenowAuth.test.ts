@@ -47,3 +47,52 @@ test("cleanCookieString strips a leading Cookie: header; cookieStringIssue valid
   assert.equal(cookieStringIssue("JSESSIONID=abc; glide_user_route=g"), undefined);
   assert.match(cookieStringIssue("not-a-cookie") ?? "", /cookie string/);
 });
+
+test("cleanCookieString normalizes a DevTools cookie-TABLE paste (full set, tab-separated rows)", async () => {
+  const { cleanCookieString } = await import("../src/context/adapters/servicenowAuth");
+  // Edge/Chrome Application → Cookies: select-all + copy = header row + one
+  // tab-separated row per cookie, extra columns after value.
+  const tablePaste = [
+    "Name\tValue\tDomain\tPath\tExpires / Max-Age\tSize\tHttpOnly\tSecure",
+    "JSESSIONID\tABC123\tcorp.service-now.com\t/\tSession\t38\t✓\t✓",
+    "glide_user_route\tglide.abcdef\tcorp.service-now.com\t/\t2027-06-12\t28\t\t✓",
+    "BIGipServerpool_corp\t1234.5678.0000\tcorp.service-now.com\t/\tSession\t34\t\t",
+  ].join("\n");
+  assert.equal(
+    cleanCookieString(tablePaste),
+    "JSESSIONID=ABC123; glide_user_route=glide.abcdef; BIGipServerpool_corp=1234.5678.0000",
+  );
+});
+
+test("cleanCookieString accepts Firefox Copy-All JSON and name=value lines", async () => {
+  const { cleanCookieString } = await import("../src/context/adapters/servicenowAuth");
+  const ffJson = JSON.stringify([
+    { name: "JSESSIONID", value: "ABC", host: "corp.service-now.com" },
+    { name: "glide_user_route", value: "glide.x" },
+  ]);
+  assert.equal(cleanCookieString(ffJson), "JSESSIONID=ABC; glide_user_route=glide.x");
+  assert.equal(
+    cleanCookieString("JSESSIONID=ABC\nglide_user_route=glide.x\n"),
+    "JSESSIONID=ABC; glide_user_route=glide.x",
+  );
+});
+
+test("cleanCookieString drops Set-Cookie attributes and duplicate names; result is header-legal", async () => {
+  const { cleanCookieString } = await import("../src/context/adapters/servicenowAuth");
+  assert.equal(
+    cleanCookieString("JSESSIONID=ABC; Path=/; Secure; HttpOnly; SameSite=None; JSESSIONID=OLD"),
+    "JSESSIONID=ABC",
+  );
+  // No CR/LF/TAB may survive into the header value (fetch would throw).
+  const cleaned = cleanCookieString("JSESSIONID\tABC\t/\nglide\tx\ty");
+  assert.ok(!/[\r\n\t]/.test(cleaned), cleaned);
+});
+
+test("cookieNames lists names only — the safe diagnostic for rejected sessions", async () => {
+  const { cookieNames } = await import("../src/context/adapters/servicenowAuth");
+  assert.deepEqual(cookieNames("Cookie: JSESSIONID=secretvalue; glide_user_route=g"), [
+    "JSESSIONID",
+    "glide_user_route",
+  ]);
+  assert.deepEqual(cookieNames("garbage"), []);
+});

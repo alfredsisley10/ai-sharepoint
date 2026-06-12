@@ -90,6 +90,7 @@ import {
   exchangeSnowCode,
   cleanCookieString,
   cookieStringIssue,
+  cookieNames,
   SNOW_LOOPBACK_PORT,
 } from "./context/adapters/servicenowAuth";
 import {
@@ -3839,11 +3840,19 @@ async function promptContextCredential(
         password: true,
         placeHolder: "JSESSIONID=…; glide_user_route=…; BIGipServer…=…",
         prompt:
-          "In the tab where you're signed in to ServiceNow, open DevTools → Application → Cookies (or copy the whole Cookie request header from the Network tab) and paste the cookie string here. Read-only access only. Stored solely in your OS keychain, verified once (lockout-safe). It expires when your ServiceNow session does — re-capture via Test Context Source.",
+          "In the tab where you're signed in to ServiceNow: DevTools → Network → any request → copy the whole **Cookie request header** (most reliable). Also accepted: the Application/Storage → Cookies table rows (full set, tab-separated) or Firefox's Copy-All JSON — pastes are normalized to a proper cookie header either way. Read-only access only. Stored solely in your OS keychain, verified once (lockout-safe). It expires when your ServiceNow session does — re-capture via Test Context Source.",
         validateInput: (v) => cookieStringIssue(v),
       });
       if (!secret) return undefined;
-      return { method: "snow-session", secret: cleanCookieString(secret) };
+      const cleaned = cleanCookieString(secret);
+      // Names-only capture diagnostic (values never shown): the immediate
+      // tell when a paste lost the session cookies (pilot: "full set of
+      // cookies" pastes arrived as DevTools table rows and failed opaquely).
+      const names = cookieNames(cleaned);
+      void vscode.window.showInformationMessage(
+        `Captured ${names.length} session cookie(s): ${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}${names.some((n) => n.toUpperCase() === "JSESSIONID") ? "" : " — note: no JSESSIONID found; if verification fails, copy the Cookie header from the Network tab instead"}.`,
+      );
+      return { method: "snow-session", secret: cleaned };
     }
     if (mode.value === "browser") {
       if (!snowClientId) {

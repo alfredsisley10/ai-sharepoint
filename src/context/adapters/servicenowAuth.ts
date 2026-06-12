@@ -162,15 +162,133 @@ export async function refreshSnowTokens(
   return next;
 }
 
-/** Normalize a pasted ServiceNow cookie string: drop a leading "Cookie:"
- *  header name and surrounding whitespace. The browser session's cookies
- *  (JSESSIONID, glide_*, BIGipServer affinity) are replayed verbatim. */
+/** Cookie ATTRIBUTE names (from Set-Cookie text or DevTools table columns)
+ *  that are not session cookies — dropped during normalization so a paste
+ *  of richer material never sends `Path=/` as a cookie. */
+const COOKIE_ATTRIBUTES = new Set([
+  "path",
+  "domain",
+  "expires",
+  "max-age",
+  "samesite",
+  "secure",
+  "httponly",
+  "priority",
+  "partitioned",
+  "size",
+  "sourceport",
+  "sourcescheme",
+]);
+
+/** RFC 6265 cookie-name token. */
+const COOKIE_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+interface ParsedCookie {
+  name: string;
+  value: string;
+}
+
+/** "a=1; b=2" (header form) or a single "a=1" → pairs. */
+function lineToPairs(line: string): ParsedCookie[] {
+  return line
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const i = part.indexOf("=");
+      return i <= 0 ? { name: "", value: "" } : { name: part.slice(0, i), value: part.slice(i + 1) };
+    })
+    .filter((p) => p.name);
+}
+
+/** Firefox Storage → Cookies "Copy All" pastes JSON: an array of
+ *  {name, value, …} objects, or an object keyed by cookie name. */
+function pairsFromJson(parsed: unknown): ParsedCookie[] | undefined {
+  if (Array.isArray(parsed)) {
+    const out = parsed
+      .filter((c): c is { name?: unknown; value?: unknown } => Boolean(c) && typeof c === "object")
+      .map((c) => ({ name: String(c.name ?? ""), value: String(c.value ?? "") }))
+      .filter((c) => c.name);
+    return out.length > 0 ? out : undefined;
+  }
+  if (parsed && typeof parsed === "object") {
+    const out: ParsedCookie[] = [];
+    for (const [name, v] of Object.entries(parsed)) {
+      if (typeof v === "string") out.push({ name, value: v });
+      else if (v && typeof v === "object" && typeof (v as { value?: unknown }).value === "string") {
+        out.push({ name, value: (v as { value: string }).value });
+      }
+    }
+    return out.length > 0 ? out : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Normalize a pasted ServiceNow cookie capture into a proper Cookie header
+ * value ("name=value; name=value"). Pilot: users paste "the full set of
+ * session cookies" in whatever shape their browser hands them, and anything
+ * but a clean header string used to reach the wire raw — newlines/tabs in a
+ * header value make fetch throw, surfacing as a baffling network error.
+ * Accepted shapes:
+ *  - a Cookie request header, with or without the leading "Cookie:" label;
+ *  - the DevTools cookie TABLE (Edge/Chrome Application → Cookies select-all:
+ *    one `name<TAB>value<TAB>domain…` row per line, header row dropped);
+ *  - Firefox "Copy All" JSON (array of {name, value} or name-keyed object);
+ *  - one name=value per line (cookie-manager exports);
+ *  - Set-Cookie style text (attributes like Path/Secure/HttpOnly dropped).
+ * Idempotent on already-clean strings; called again at send time so stored
+ * captures self-heal. */
 export function cleanCookieString(raw: string): string {
-  return raw.trim().replace(/^cookie:\s*/i, "").trim();
+  const text = raw.replace(/^\uFEFF/, "").trim().replace(/^cookie:\s*/i, "").trim();
+  if (!text) return "";
+  let pairs: ParsedCookie[] | undefined;
+  if (text.startsWith("[") || text.startsWith("{")) {
+    try {
+      pairs = pairsFromJson(JSON.parse(text));
+    } catch {
+      // not JSON — fall through to line parsing
+    }
+  }
+  if (!pairs) {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    pairs = lines.flatMap((line) => {
+      if (line.includes("\t")) {
+        // DevTools table row: first two columns are name and value.
+        const [name = "", value = ""] = line.split("\t");
+        if (name && !name.includes("=")) return [{ name: name.trim(), value: value.trim() }];
+      }
+      return lineToPairs(line);
+    });
+  }
+  const seen = new Set<string>();
+  const out: ParsedCookie[] = [];
+  for (const p of pairs) {
+    const name = p.name.trim();
+    if (!name || !COOKIE_NAME_RE.test(name)) continue;
+    if (COOKIE_ATTRIBUTES.has(name.toLowerCase())) continue;
+    // The copied table's header row ("Name  Value  Domain …").
+    if (name.toLowerCase() === "name" && p.value.trim().toLowerCase() === "value") continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push({ name, value: p.value.trim().replace(/^"(.*)"$/, "$1") });
+  }
+  return out.map((p) => `${p.name}=${p.value}`).join("; ");
+}
+
+/** Cookie NAMES in a stored capture — safe to show/log (never values).
+ *  The diagnostic for "why was my session rejected". */
+export function cookieNames(raw: string): string[] {
+  return cleanCookieString(raw)
+    .split(";")
+    .map((p) => p.trim().split("=")[0])
+    .filter(Boolean);
 }
 
 export function cookieStringIssue(raw: string): string | undefined {
   const c = cleanCookieString(raw);
-  if (!c.includes("=")) return "That doesn't look like a cookie string (expected name=value pairs).";
+  if (!c.includes("=")) {
+    return "That doesn't look like a cookie string — paste the Cookie request header (Network tab), the DevTools cookie table rows, or Firefox's Copy-All JSON.";
+  }
   return undefined;
 }

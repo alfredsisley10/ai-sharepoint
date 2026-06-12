@@ -377,9 +377,15 @@ Connect your organization's **Vertex AI Search** app (the enterprise Gemini sear
 Reference your instance's ITSM and CMDB records **read-only**:
 
 - **Sign-in**: **Browser session** is recommended for SSO and needs **no admin OAuth setup** —
-  sign in to ServiceNow in your browser, then paste your session cookies (DevTools → Application
-  → Cookies, or the Cookie request header). Read-only; re-captured the same way when the session
-  expires. Basic and OAuth token/OAuth-client paths remain available.
+  sign in to ServiceNow in your browser, then paste your session cookies. Every paste shape is
+  accepted and normalized to a proper cookie header: the **Cookie request header** (DevTools →
+  Network → any request — most reliable), the **Application/Storage → Cookies table** rows
+  (select the full set and copy; tab-separated is fine), **Firefox's Copy-All JSON**, or
+  one-`name=value`-per-line exports. After the paste the wizard confirms the **cookie names**
+  it captured (values are never shown) and warns if `JSESSIONID` is missing. If the session is
+  later rejected, the error lists the replayed cookie names and how to re-capture. Read-only;
+  re-captured the same way when the session expires (*Test Context Source*). Basic and OAuth
+  token/OAuth-client paths remain available.
 - **Add** (Reference Sources → `+` → *ServiceNow*): enter the instance URL
   (`https://yourorg.service-now.com`) and sign in — **least-privilege integration account**
   (Basic) or an OAuth bearer token. The wizard then **lists the tables your account can

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.20.1 — 2026-06-12
+
+### Fixed — ServiceNow browser-session: full-cookie-set pastes now connect (pilot)
+- Pasting the **full set of session cookies** from the browser failed to connect: only a clean
+  `name=value; name=value` header string survived the old normalization, so DevTools
+  **cookie-table** pastes (tab/newline-separated rows) reached the wire raw — newlines are
+  illegal in an HTTP header, so the request failed before it was even sent, surfacing as a
+  baffling network error. Pastes are now **normalized from every common shape**: the Cookie
+  request header (with/without the `Cookie:` label), the Edge/Chrome Application → Cookies
+  table (full set, header row and extra columns dropped), Firefox **Copy-All JSON**,
+  one-`name=value`-per-line exports, and Set-Cookie text (attributes like `Path`/`Secure`
+  dropped, duplicates de-duplicated). Stored captures are re-normalized at send time, so an
+  already-saved bad paste self-heals without re-entry.
+- **New diagnostics**: after the paste, the wizard confirms how many cookies were captured and
+  their **names** (values are never shown or logged), warning when `JSESSIONID` is missing; a
+  rejected session (401/403) now reports exactly which cookie names were replayed plus
+  re-capture guidance; and a **200 HTML login page** answer — how an expired cookie session
+  usually manifests — is now explained as session expiry instead of "non-JSON content".
+
 ## 0.20.0 — 2026-06-12
 
 ### Removed — monthly premium-request allowance & estimated-cost tracking (pilot)
