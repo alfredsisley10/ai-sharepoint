@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.23.0 — 2026-06-12
+
+### Added — observability wave: Splunk Observability Cloud + Grafana connectors (ADR-0032/0033)
+- **Splunk Observability Cloud** (the former SignalFx) as a read-only reference source:
+  - Setup from **what you have** — paste the app URL (`app.us1.signalfx.com`, including the
+    `observability.splunk.com` domains) or just the realm (`us1`); the API endpoint is derived.
+    Pick what bare questions search by default: metrics, **active incidents**, detectors, or
+    dashboards.
+  - **Access-token sign-in** (Settings → Access Tokens, API scope) via the proper `X-SF-TOKEN`
+    header (new `sfx-token` method, masked in wire logs like all secrets).
+  - Ask *"what's alerting right now?"* (active incidents, filtered locally), find detectors/
+    dashboards by name (deep links + item fetch with description/SignalFlow program), search
+    metric/dimension metadata (`name:*word*` contains-queries). Browse lists dashboards,
+    detectors, and a standing *Active incidents* candidate. SignalFlow execution is
+    deliberately out of v1.
+- **Grafana** (Cloud stack or self-hosted) as a read-only reference source:
+  - Just the browser URL; **service-account token** sign-in (Viewer role suffices) or basic
+    auth on self-hosted.
+  - Plain text searches dashboards; JSON specs target folders, **alert-rule state**
+    (firing/pending/inactive via the Viewer-readable unified-alerting endpoint), recent
+    **annotations** (deploys/incidents), or datasources (admin-only listings explain
+    themselves instead of failing opaquely). Dashboard hits deep-link and fetch as items
+    (description + panel inventory). Browse lists folders + standing alert/annotation
+    candidates.
+- Both ride the standard rails: lockout-safe single-read verification, TTL cache, result
+  caps, wire-logging redaction, export/import of source configs, and the workspace export
+  of full result sets (0.22.0).
+
 ## 0.22.0 — 2026-06-12
 
 ### Added — export search results to a workspace file (datasets without the chat cap) (ADR-0031) (pilot)

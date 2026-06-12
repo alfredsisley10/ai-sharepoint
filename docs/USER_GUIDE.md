@@ -456,6 +456,45 @@ Analyze Power BI data without leaving chat — **read-only, with your existing s
   DAX-only (read-only by API design), row-capped, and your Power BI licenses, workspace roles,
   and row-level security apply exactly as in the service.
 
+### Splunk Observability Cloud (the former SignalFx)
+
+Metrics metadata, detectors, dashboards, and **what's alerting right now** (ADR-0032):
+
+- **Add** (Reference Sources → `+` → *Splunk Observability Cloud*): paste the URL you open in
+  the browser (`https://app.us1.signalfx.com`) **or just the realm** (`us1`) — the API
+  endpoint is derived. Then pick what bare chat questions should search by default: metrics,
+  **active incidents**, detectors, or dashboards.
+- **Sign in** with an **access token** (Splunk Observability → Settings → Access Tokens, API
+  scope) — sent as `X-SF-TOKEN`, stored only in your OS keychain, verified with a single
+  lockout-safe read.
+- **Ask in chat**: *"what's alerting right now in observability?"* (incidents), *"find the
+  detector for disk space"*, or target a kind explicitly —
+  `{"type": "metric|dimension|detector|dashboard|incident", "query": "cpu", "limit": 25}`.
+  Detector/dashboard hits deep-link into the app and can be fetched as items
+  (`detector:<id>` shows the description and SignalFlow program).
+- **Browse & Bookmark** lists your dashboards and detectors, plus a standing *Active
+  incidents* bookmark candidate. SignalFlow program execution (computed timeseries) is not in
+  v1 — reads are metadata/state only.
+
+### Grafana (Cloud or self-hosted)
+
+Dashboards, alert-rule state, and annotations (ADR-0033):
+
+- **Add** (Reference Sources → `+` → *Grafana*): just the URL you open in the browser
+  (`https://acme.grafana.net` or your self-hosted address).
+- **Sign in** with a **service account token** (Administration → Service accounts → Add
+  token; the **Viewer** role is enough) — or basic auth on self-hosted. Stored only in your
+  OS keychain, verified with a single lockout-safe read.
+- **Ask in chat**: *"find the payments latency dashboard in Grafana"* (plain text searches
+  dashboards), *"which Grafana alerts are firing?"* —
+  `{"type": "alert", "query": ""}` returns each rule's **state** (firing/pending/inactive);
+  `{"type": "annotation"}` recalls recent deploy/incident annotations;
+  `{"type": "dashboard", "folderUid": "…"}` scopes to a folder. Dashboard hits deep-link and
+  fetch as items (`dashboard:<uid>` shows the description + panel inventory).
+- **Browse & Bookmark** lists your folders (each a scoped dashboard search) plus standing
+  *Alert rules — current state* and *Recent annotations* candidates. Datasource listings may
+  need admin permission — the error says so; everything else reads with Viewer.
+
 ### Export search results to a workspace file (ADR-0031)
 
 Chat results are capped on purpose — when you want the **dataset itself**, export it instead

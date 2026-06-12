@@ -39,6 +39,18 @@ import {
 } from "./adapters/servicenow";
 import { verifySplunk, searchSplunk, browseSplunkCandidates } from "./adapters/splunk";
 import {
+  verifySplunkObs,
+  searchSplunkObs,
+  getSplunkObsItem,
+  browseSplunkObsCandidates,
+} from "./adapters/splunkObservability";
+import {
+  verifyGrafana,
+  searchGrafana,
+  getGrafanaItem,
+  browseGrafanaCandidates,
+} from "./adapters/grafana";
+import {
   snowTokensFromSecret,
   snowTokenExpired,
   refreshSnowTokens,
@@ -195,6 +207,10 @@ export class ContextService {
           return this.snowCredential(source, credential).then((c) => verifyServiceNow(source, c, caps));
         case "splunk":
           return verifySplunk(source, credential, caps);
+        case "splunkobs":
+          return verifySplunkObs(source, credential, caps);
+        case "grafana":
+          return verifyGrafana(source, credential, caps);
         default:
           return verifyConfluence(source, credential, caps);
       }
@@ -260,6 +276,10 @@ export class ContextService {
         );
       case "splunk":
         return searchSplunk(source, credential, query, caps);
+      case "splunkobs":
+        return searchSplunkObs(source, credential, query, caps);
+      case "grafana":
+        return searchGrafana(source, credential, query, caps);
       default:
         return searchConfluence(source, credential, query, caps);
     }
@@ -331,6 +351,10 @@ export class ContextService {
               return getLdapEntry(source, credential, id, this.ldapTls(), caps);
             case "jira":
               return getJiraIssue(source, credential, id, caps);
+            case "splunkobs":
+              return getSplunkObsItem(source, credential, id, caps);
+            case "grafana":
+              return getGrafanaItem(source, credential, id, caps);
             default:
               return getConfluencePage(source, credential, id, caps);
           }
@@ -515,6 +539,12 @@ export class ContextService {
           }
           if (source.type === "splunk") {
             return browseSplunkCandidates(source, credential, caps);
+          }
+          if (source.type === "splunkobs") {
+            return browseSplunkObsCandidates(source, credential, caps);
+          }
+          if (source.type === "grafana") {
+            return browseGrafanaCandidates(source, credential, caps);
           }
           return []; // LDAP: search-then-bookmark is the guided path
         });

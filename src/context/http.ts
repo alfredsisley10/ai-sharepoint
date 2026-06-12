@@ -16,10 +16,15 @@ export function authHeader(credential: ContextCredential): string {
 /** Build the auth header(s) for a credential. Cookie-session credentials
  *  (ServiceNow browser SSO — `snow-session`) authenticate the REST API by
  *  replaying the browser's session **cookies** for read requests, so they
- *  send a `Cookie` header and no `Authorization`. */
+ *  send a `Cookie` header and no `Authorization`. Splunk Observability
+ *  Cloud access tokens (`sfx-token`) travel in the `X-SF-TOKEN` header
+ *  (masked in wire logs by the secret-key filter, like Authorization). */
 export function authHeaders(credential: ContextCredential): Record<string, string> {
   if (credential.method === "snow-session") {
     return { Cookie: credential.secret };
+  }
+  if (credential.method === "sfx-token") {
+    return { "X-SF-TOKEN": credential.secret };
   }
   return { Authorization: authHeader(credential) };
 }

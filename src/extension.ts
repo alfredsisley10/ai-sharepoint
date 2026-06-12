@@ -59,6 +59,7 @@ import {
   EXPORT_TIMEOUT_MS,
   EXPORT_DIR,
 } from "./context/exportData";
+import { deriveSplunkObsEndpoints } from "./context/adapters/splunkObservability";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
 import { SourceSchema, qualifiedName } from "./context/db/schemaIndex";
@@ -1435,6 +1436,8 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
         { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
         { label: "$(pulse) Splunk", description: "read-only SPL searches (oneshot, time-bounded)", value: "splunk" as ContextSourceType },
+        { label: "$(dashboard) Splunk Observability Cloud", description: "metrics/detectors/dashboards/active incidents (the former SignalFx)", value: "splunkobs" as ContextSourceType },
+        { label: "$(graph-line) Grafana", description: "dashboards, alert-rule state, annotations — Cloud or self-hosted", value: "grafana" as ContextSourceType },
       ],
       { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );
@@ -1747,6 +1750,52 @@ export function activate(context: vscode.ExtensionContext): void {
       if (web.trim()) params.set("web", web.trim().replace(/\/+$/, ""));
       const qs = params.toString();
       if (qs) baseUrl += `?${qs}`;
+    } else if (typePick.value === "splunkobs") {
+      deployment = "cloud";
+      // Users know the app URL (or just the realm) — both API and app
+      // addresses derive from it.
+      const entry = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Splunk Observability Cloud — the URL you open in your browser (or just the realm)",
+        placeHolder: "https://app.us1.signalfx.com — or simply: us1",
+        validateInput: (v) =>
+          deriveSplunkObsEndpoints(v)
+            ? undefined
+            : "Paste the app/API URL (app.<realm>.signalfx.com) or the realm (us0, us1, eu0, …)",
+      });
+      if (!entry) return;
+      const ep = deriveSplunkObsEndpoints(entry)!;
+      const typeDefault = await vscode.window.showQuickPick(
+        [
+          { label: "$(graph) Metrics", description: "free-text questions search metric names (default)", value: "metric" as const },
+          { label: "$(flame) Active incidents", description: "what is alerting right now", value: "incident" as const },
+          { label: "$(bell) Detectors", description: "alerting rules by name", value: "detector" as const },
+          { label: "$(dashboard) Dashboards", description: "dashboards by name", value: "dashboard" as const },
+        ],
+        { ignoreFocusOut: true, title: "What should bare chat questions search by default?" },
+      );
+      if (!typeDefault) return;
+      const obsParams = new URLSearchParams();
+      obsParams.set("web", ep.appBase);
+      obsParams.set("type", typeDefault.value);
+      baseUrl = `${ep.apiBase}?${obsParams.toString()}`;
+    } else if (typePick.value === "grafana") {
+      const entry = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Grafana — the URL you open in your browser",
+        placeHolder: "https://acme.grafana.net  or  https://grafana.corp.example",
+        validateInput: (v) => {
+          try {
+            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+          } catch {
+            return "Enter a valid https:// URL";
+          }
+        },
+      });
+      if (!entry) return;
+      const u = new URL(entry.trim());
+      baseUrl = `${u.protocol}//${u.host}`;
+      deployment = /\.grafana\.net$/i.test(u.hostname) ? "cloud" : "datacenter";
     } else if (typePick.value === "powerbi") {
       deployment = "cloud";
       // Pilot: users only know app.powerbi.com — confirm the portal, sign in
@@ -4145,6 +4194,63 @@ async function promptContextCredential(
     const secret = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "ServiceNow password",
+      password: true,
+      prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+    });
+    if (!secret) return undefined;
+    return { method: "basic", username: username.trim(), secret };
+  }
+  if (type === "splunkobs") {
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Splunk Observability Cloud access token",
+      password: true,
+      placeHolder: "org access token with API authentication scope",
+      prompt:
+        "Splunk Observability → Settings → Access Tokens (API scope). Sent as X-SF-TOKEN; stored only in your OS keychain; verified with a single read (lockout-safe).",
+    });
+    if (!secret) return undefined;
+    return { method: "sfx-token", secret: secret.trim() };
+  }
+  if (type === "grafana") {
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(shield) Service account token (recommended)",
+          description: "Administration → Service accounts → Add token (Viewer role is enough)",
+          value: "pat" as const,
+        },
+        {
+          label: "$(key) Username + password",
+          description: "self-hosted basic auth — a least-privilege Viewer account",
+          value: "basic" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Grafana sign-in" },
+    );
+    if (!mode) return undefined;
+    if (mode.value === "pat") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Grafana service account token",
+        password: true,
+        placeHolder: "glsa_…",
+        prompt:
+          "Administration → Service accounts → Add service account (Viewer) → Add token. Stored only in your OS keychain; verified with a single read (lockout-safe).",
+      });
+      if (!secret) return undefined;
+      return { method: "pat", secret: secret.trim() };
+    }
+    const username = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Grafana user",
+      placeHolder: "viewer.readonly",
+      prompt: "Use a least-privilege Viewer account where available.",
+    });
+    if (!username) return undefined;
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Grafana password",
       password: true,
       prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
     });
