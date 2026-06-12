@@ -80,6 +80,7 @@ export class UsageDashboard {
     const verdict = this.budget.evaluate(0, nowIso);
     return {
       generatedAt: nowIso,
+      configured: verdict.configured,
       usedUnits: this.meter.premiumUnitsThisMonth(nowIso),
       allowance: verdict.allowance,
       usedPct: verdict.usedPct,

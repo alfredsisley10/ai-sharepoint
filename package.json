@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -1304,10 +1304,10 @@
       "properties": {
         "aiSharePoint.copilot.monthlyPremiumRequestAllowance": {
           "type": "number",
-          "default": 300,
-          "minimum": 1,
+          "default": 0,
+          "minimum": 0,
           "order": 1,
-          "markdownDescription": "Your monthly Copilot premium-request allowance — the denominator of the usage gauge. A fallback for when the allowance cannot be read automatically (ADR-0003)."
+          "markdownDescription": "Your plan's monthly **premium-request allowance** — enter it only from an authoritative source (your GitHub billing/plan page). **0 (default) = not configured**: the extension shows measured usage only (units used, rate, by model/task) and shows **no gauge, percentages, or caps**, because inventing a denominator would mislead."
         },
         "aiSharePoint.copilot.preferredModelFamily": {
           "type": "string",

@@ -6,7 +6,7 @@ import { BudgetConfig, BudgetMode } from "./budget";
 export function readBudgetConfigFromSettings(): BudgetConfig {
   const cfg = vscode.workspace.getConfiguration("aiSharePoint");
   return {
-    allowance: cfg.get<number>("copilot.monthlyPremiumRequestAllowance", 300),
+    allowance: cfg.get<number>("copilot.monthlyPremiumRequestAllowance", 0),
     mode: cfg.get<BudgetMode>("budget.mode", "block"),
     softPct: cfg.get<number>("budget.softLimitPercent", 80),
     hardPct: cfg.get<number>("budget.hardLimitPercent", 100),

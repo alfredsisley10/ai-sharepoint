@@ -161,9 +161,13 @@ function renderUsage(deps: ChatDeps, stream: vscode.ChatResponseStream): void {
   const lines = [
     `**Copilot usage (this extension's estimate — not the live GitHub bill):**`,
     "",
-    `- This month: **~${deps.meter.premiumUnitsThisMonth(nowIso).toFixed(1)}** of ${verdict.allowance} premium units (**${verdict.usedPct.toFixed(0)}%**)`,
+    verdict.configured
+      ? `- This month: **~${deps.meter.premiumUnitsThisMonth(nowIso).toFixed(1)}** of ${verdict.allowance} premium units (**${verdict.usedPct.toFixed(0)}%**)`
+      : `- This month: **~${deps.meter.premiumUnitsThisMonth(nowIso).toFixed(1)}** premium units used _(no budget configured — usage only)_`,
     `- Today: **${deps.meter.requestsToday(nowIso)}** request(s)`,
-    `- Budget: soft ${verdict.softPct}% / hard ${verdict.hardPct}% (${verdict.mode})`,
+    verdict.configured
+      ? `- Budget: soft ${verdict.softPct}% / hard ${verdict.hardPct}% (${verdict.mode})`
+      : `- Budget: not configured (set your plan's real allowance via "Set Copilot Budget" to enable caps)`,
   ];
   if (byModel.length > 0) {
     lines.push("", "| Model | Requests | Premium units |", "|---|---|---|");

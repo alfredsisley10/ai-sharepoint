@@ -82,6 +82,77 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
 
     const byModel = this.meter.byModelThisMonth(nowIso);
     const byLabel = this.meter.byLabelThisMonth(nowIso);
+    const dayOfMonth = Math.max(1, new Date(nowIso).getUTCDate());
+    const daysInMonth = new Date(
+      new Date(nowIso).getUTCFullYear(),
+      new Date(nowIso).getUTCMonth() + 1,
+      0,
+    ).getUTCDate();
+    const perDay = used / dayOfMonth;
+    const rateNode = {
+      id: "rate",
+      label: `Rate: ~${perDay.toFixed(1)} units/day`,
+      description: `projected ~${(perDay * daysInMonth).toFixed(0)} by month-end at this pace`,
+      icon: new vscode.ThemeIcon("graph-line"),
+      tooltip: "Measured usage rate (this extension's local meter) — a projection of consumption, not a comparison against any budget.",
+    };
+    if (!verdict.configured) {
+      return [
+        {
+          id: "usedOnly",
+          label: `~${used.toFixed(1)} premium units used this month`,
+          description: `${monthRequests} request(s)${allIncluded ? " · all on included 0× models" : ""}`,
+          icon: new vscode.ThemeIcon("dashboard"),
+          tooltip:
+            "Local measured usage only (ADR-0003 estimate — not the GitHub bill). No budget gauge is shown because no allowance has been configured: the extension will not invent one. If you know your plan's monthly premium-request allowance (from your GitHub billing/plan page), set it via “Set Copilot Budget”.",
+          command: { command: "aiSharePoint.showUsage", title: "Open usage dashboard" },
+        },
+        {
+          id: "today",
+          label: `Today: ${this.meter.requestsToday(nowIso)} request(s)`,
+          description: `~${this.meter.premiumUnitsToday(nowIso).toFixed(1)} units`,
+          icon: new vscode.ThemeIcon("calendar"),
+        },
+        rateNode,
+        {
+          id: "budget",
+          label: "Budget: not configured",
+          description: "usage shown without a gauge",
+          icon: new vscode.ThemeIcon("shield"),
+          tooltip:
+            "Set your plan's real monthly allowance (authoritative source: GitHub billing) to enable the % gauge and soft/hard caps. Without it, nothing is blocked or warned.",
+          command: { command: "aiSharePoint.setBudget", title: "Set Copilot Budget" },
+        },
+        {
+          id: "byModel",
+          label: "By model (this month)",
+          icon: new vscode.ThemeIcon("circuit-board"),
+          description: byModel.length === 0 ? "no usage yet" : undefined,
+          children: byModel.map((m) => {
+            const multiplier = this.meter.multiplierFor(m.key);
+            return {
+              id: `model:${m.key}`,
+              label: m.key,
+              description: `${m.requests} req · ~${m.premiumUnits.toFixed(1)} units · ${multiplier}×${multiplier === 0 ? " included" : ""}`,
+              icon: new vscode.ThemeIcon("symbol-misc"),
+              tooltip: `${m.inputTokens.toLocaleString()} tokens in / ${m.outputTokens.toLocaleString()} out${m.failures ? ` · ${m.failures} failed` : ""}`,
+            };
+          }),
+        },
+        {
+          id: "byLabel",
+          label: "By task (this month)",
+          icon: new vscode.ThemeIcon("tasklist"),
+          description: byLabel.length === 0 ? "no usage yet" : undefined,
+          children: byLabel.map((l) => ({
+            id: `label:${l.key}`,
+            label: l.key,
+            description: `${l.requests} req · ~${l.premiumUnits.toFixed(1)} units${l.premiumUnits === 0 ? " (0× models)" : ""}`,
+            icon: new vscode.ThemeIcon("symbol-event"),
+          })),
+        },
+      ];
+    }
 
     return [
       {
@@ -103,6 +174,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         description: `~${this.meter.premiumUnitsToday(nowIso).toFixed(1)} units`,
         icon: new vscode.ThemeIcon("calendar"),
       },
+      rateNode,
       {
         id: "budget",
         label: `Budget: soft ${verdict.softPct}% · hard ${verdict.hardPct}%`,

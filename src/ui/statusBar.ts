@@ -40,6 +40,21 @@ export class UsageStatusBar {
     const used = verdict.usedUnits;
     const today = this.meter.requestsToday(nowIso);
     const pct = Math.min(999, Math.round(verdict.usedPct));
+    if (!verdict.configured) {
+      this.item.text = `$(graph-line) ~${used.toFixed(1)}u · ${today} today`;
+      this.item.backgroundColor = undefined;
+      this.item.tooltip = new vscode.MarkdownString(
+        [
+          "**Copilot usage (this extension, local estimate)**",
+          "",
+          `| This month | ~${used.toFixed(1)} premium units |`,
+          `| Today | ${today} request(s) |`,
+          "",
+          "_No budget configured — only measured usage is shown. If you know your plan's monthly premium-request allowance (GitHub billing page), set it via “Set Copilot Budget” to enable the gauge and caps._",
+        ].join("\n"),
+      );
+      return;
+    }
 
     this.item.text = `$(graph-line) ${pct}% · ${today} today`;
     this.item.backgroundColor =

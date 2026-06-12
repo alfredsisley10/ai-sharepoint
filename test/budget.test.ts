@@ -59,9 +59,12 @@ test("free (0-unit) requests are never blocked, even at the hard cap", () => {
   assert.equal(v.state, "soft");
 });
 
-test("config is sanitized: hard >= soft, allowance >= 1", () => {
+test("config is sanitized: hard >= soft; non-positive allowance = NOT configured", () => {
   const v = guard(5, { allowance: -10, softPct: 90, hardPct: 50 }).evaluate(0, NOW);
-  assert.equal(v.allowance, 1);
+  assert.equal(v.configured, false);
+  assert.equal(v.allowance, 0);
+  assert.equal(v.usedPct, 0);
+  assert.equal(v.state, "ok");
   assert.ok(v.hardPct >= v.softPct);
 });
 
@@ -75,4 +78,16 @@ test("BudgetBlockedError carries the verdict and a user summary", () => {
     assert.ok(err.verdict.usedPct >= 200);
     assert.ok(err.userSummary);
   }
+});
+
+
+test("unconfigured allowance: usage-only — no percentages, never warns or blocks (pilot)", () => {
+  const g = guard(9999, { allowance: 0, mode: "block", softPct: 80, hardPct: 100 });
+  const v = g.evaluate(50, NOW);
+  assert.equal(v.configured, false);
+  assert.equal(v.state, "ok");
+  assert.equal(v.usedPct, 0);
+  assert.equal(v.projectedPct, 0);
+  // enforce must be a no-op: huge usage with block mode still passes.
+  assert.doesNotThrow(() => g.enforce(50, NOW));
 });

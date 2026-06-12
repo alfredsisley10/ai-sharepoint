@@ -17,6 +17,9 @@ export interface UsageSource {
 }
 
 export interface BudgetVerdict {
+  /** False when no allowance has been entered — usage-only mode: no
+   *  percentages, no caps (an invented denominator would mislead). */
+  configured: boolean;
   state: "ok" | "soft" | "hard";
   mode: BudgetMode;
   allowance: number;
@@ -51,12 +54,15 @@ export class BudgetGuard {
     private readonly readConfig: () => BudgetConfig,
   ) {}
 
-  private config(): BudgetConfig {
+  private config(): BudgetConfig & { configured: boolean } {
     const raw = this.readConfig();
-    const allowance = Math.max(1, raw.allowance);
+    // 0/negative = "not configured": the default ships unset because a
+    // made-up allowance (the old 300) misled users (pilot).
+    const configured = raw.allowance > 0;
+    const allowance = configured ? raw.allowance : 0;
     const softPct = Math.max(0, raw.softPct);
     const hardPct = Math.max(softPct, raw.hardPct);
-    return { allowance, mode: raw.mode, softPct, hardPct };
+    return { allowance, mode: raw.mode, softPct, hardPct, configured };
   }
 
   /**
@@ -64,17 +70,17 @@ export class BudgetGuard {
    * Never throws — returns a verdict for the caller to act on.
    */
   evaluate(nextUnits: number, nowIso: string): BudgetVerdict {
-    const { allowance, mode, softPct, hardPct } = this.config();
+    const { allowance, mode, softPct, hardPct, configured } = this.config();
     const usedUnits = this.usage.premiumUnitsThisMonth(nowIso);
-    const usedPct = (usedUnits / allowance) * 100;
-    const projectedPct = ((usedUnits + nextUnits) / allowance) * 100;
+    const usedPct = configured ? (usedUnits / allowance) * 100 : 0;
+    const projectedPct = configured ? ((usedUnits + nextUnits) / allowance) * 100 : 0;
 
     let state: BudgetVerdict["state"] = "ok";
-    if (mode !== "off") {
+    if (configured && mode !== "off") {
       if (projectedPct > hardPct) state = "hard";
       else if (projectedPct > softPct) state = "soft";
     }
-    return { state, mode, allowance, usedUnits, usedPct, projectedPct, softPct, hardPct };
+    return { configured, state, mode, allowance, usedUnits, usedPct, projectedPct, softPct, hardPct };
   }
 
   /**

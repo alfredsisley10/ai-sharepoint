@@ -599,7 +599,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const cfg = vscode.workspace.getConfiguration("aiSharePoint");
     const allowance = await promptNumber(
       "Monthly premium-request allowance (the gauge's denominator)",
-      cfg.get<number>("copilot.monthlyPremiumRequestAllowance", 300),
+      cfg.get<number>("copilot.monthlyPremiumRequestAllowance", 0),
       1,
     );
     if (allowance === undefined) return;
