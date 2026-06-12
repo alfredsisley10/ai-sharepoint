@@ -24,11 +24,84 @@ import {
  */
 
 export const ER_SAMPLE_SIZE = 100;
+/** Floor of the dynamic candidate budget (the old fixed cap). */
 export const ER_MAX_CANDIDATES = 40;
 /** ≈100%: the rate at which a join reads as designed-in. */
 export const ER_STRONG_RATE = 0.95;
 /** Below this in BOTH directions, the pair is discarded as coincidence. */
 export const ER_LIKELY_RATE = 0.7;
+
+// --- adaptive strategy (ADR-0030 amendment) -----------------------------------
+// Probing scales with the database instead of a fixed 40×100 plan: row
+// estimates first (catalog statistics — cheap), complete joins where both
+// tables are small, sampled probes that ESCALATE while the database answers
+// fast and back off when it strains.
+
+/** Both sides at or under this → test the COMPLETE join, not a sample. */
+export const ER_FULL_JOIN_MAX_ROWS = 50_000;
+/** A probe faster than this invites escalation toward completeness. */
+export const ER_FAST_PROBE_MS = 1_500;
+/** A probe slower than this pauses the run briefly and stops escalating. */
+export const ER_SLOW_PROBE_MS = 5_000;
+/** Sampled probes never exceed this many values per side. */
+export const ER_MAX_SAMPLE = 10_000;
+/** Ceiling on thorough-mode exhaustive pairs (still cancellable). */
+export const ER_EXHAUSTIVE_PAIR_CAP = 500;
+
+/** Row estimates keyed by lowercase qualified table name. */
+export type RowEstimates = Record<string, number>;
+
+/** Dynamic candidate budget: grows with the catalog, never below the old
+ *  fixed cap, bounded so a 300-table warehouse stays a bounded run. */
+export function candidateBudget(catalog: Pick<SourceSchema["catalog"], "tables">): number {
+  const tables = catalog.tables.length;
+  const columns = catalog.tables.reduce((n, t) => n + t.columns.length, 0);
+  return Math.min(300, Math.max(ER_MAX_CANDIDATES, tables * 3 + Math.floor(columns / 20)));
+}
+
+/** First-tier sample for a pair, from row estimates: "full" when both sides
+ *  are small enough for a complete join; otherwise sized down as the target
+ *  grows (each sampled value costs one indexed-at-best lookup there).
+ *  Unknown sizes (0/absent estimate) probe conservatively. */
+export function initialSampleSize(rowsFrom: number, rowsTo: number): number | "full" {
+  if (rowsFrom > 0 && rowsTo > 0 && rowsFrom <= ER_FULL_JOIN_MAX_ROWS && rowsTo <= ER_FULL_JOIN_MAX_ROWS) {
+    return "full";
+  }
+  if (rowsTo > 10_000_000) return 100;
+  if (rowsTo > 1_000_000) return 250;
+  if (rowsTo > 0 || rowsFrom > 0) return 500;
+  return ER_SAMPLE_SIZE; // nothing known — the conservative classic
+}
+
+/** Escalation policy: while the database answers FAST, push the sample ×5
+ *  toward completeness (the preference when performance allows); stop at
+ *  the cap, at full coverage of the from-side, or the moment a probe is no
+ *  longer fast. Returns the next sample, "full" when the from-side fits a
+ *  complete pass, or undefined to stop. */
+export function nextSampleSize(
+  current: number,
+  durationMs: number,
+  rowsFrom: number,
+): number | "full" | undefined {
+  if (durationMs >= ER_FAST_PROBE_MS) return undefined;
+  if (rowsFrom > 0 && current >= rowsFrom) return undefined; // already complete
+  const next = current * 5;
+  if (rowsFrom > 0 && (next >= rowsFrom || rowsFrom <= ER_FULL_JOIN_MAX_ROWS)) {
+    return current >= rowsFrom ? undefined : "full";
+  }
+  if (current >= ER_MAX_SAMPLE) return undefined;
+  return Math.min(next, ER_MAX_SAMPLE);
+}
+
+/** Stable dedupe key for a pair, direction-insensitive. */
+export function pairKey(c: Pick<JoinCandidate, "fromTable" | "fromColumn" | "toTable" | "toColumn">): string {
+  return [
+    `${c.fromTable}.${c.fromColumn}`.toLowerCase(),
+    `${c.toTable}.${c.toColumn}`.toLowerCase(),
+  ]
+    .sort()
+    .join("‖");
+}
 
 export interface JoinCandidate {
   fromTable: string;
@@ -120,18 +193,13 @@ function keyColumnOf(table: TableDef, refName: string): string | undefined {
  */
 export function proposeJoinCandidates(
   schema: SourceSchema,
-  maxCandidates = ER_MAX_CANDIDATES,
+  maxCandidates = candidateBudget(schema.catalog),
 ): JoinCandidate[] {
   const tables = schema.catalog.tables;
   const out: JoinCandidate[] = [];
   const seen = new Set<string>();
   const add = (c: JoinCandidate) => {
-    const key = [
-      `${c.fromTable}.${c.fromColumn}`.toLowerCase(),
-      `${c.toTable}.${c.toColumn}`.toLowerCase(),
-    ]
-      .sort()
-      .join("‖");
+    const key = pairKey(c);
     if (seen.has(key)) return;
     seen.add(key);
     out.push(c);
@@ -236,28 +304,74 @@ export function proposeJoinCandidates(
     .slice(0, maxCandidates);
 }
 
+/**
+ * Thorough mode: EVERY type-compatible cross-table column pair — but only
+ * between tables small enough (per row estimates) that complete testing is
+ * cheap, deduped against the heuristic set, capped, lowest priority. This is
+ * the "every permutation and combination for completeness" pass, kept
+ * performance-sensitive by the size gate + cap + cancellable runner.
+ */
+export function proposeExhaustivePairs(
+  schema: SourceSchema,
+  rowEstimates: RowEstimates,
+  exclude: Set<string>,
+  maxRows = ER_FULL_JOIN_MAX_ROWS,
+  cap = ER_EXHAUSTIVE_PAIR_CAP,
+): JoinCandidate[] {
+  const small = schema.catalog.tables.filter((t) => {
+    const rows = rowEstimates[qualifiedName(t).toLowerCase()];
+    return rows !== undefined && rows > 0 && rows <= maxRows;
+  });
+  const out: JoinCandidate[] = [];
+  for (let i = 0; i < small.length && out.length < cap; i++) {
+    for (let j = i + 1; j < small.length && out.length < cap; j++) {
+      for (const a of small[i].columns) {
+        const famA = joinFamily(a.dataType);
+        if (!famA) continue;
+        for (const b of small[j].columns) {
+          if (out.length >= cap) break;
+          if (joinFamily(b.dataType) !== famA) continue;
+          const candidate: JoinCandidate = {
+            fromTable: qualifiedName(small[i]),
+            fromColumn: a.name,
+            toTable: qualifiedName(small[j]),
+            toColumn: b.name,
+            reason: "exhaustive (small tables)",
+            priority: 1,
+          };
+          const key = pairKey(candidate);
+          if (exclude.has(key)) continue;
+          exclude.add(key);
+          out.push(candidate);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // --- probe queries --------------------------------------------------------------
 
 type SqlEngine = "mssql" | "postgres" | "mysql";
 
 /**
- * One probe = one direction: sample up to `sample` DISTINCT non-null values
- * of from.column and count how many EXIST in to.column. Returns columns
- * `sampled` and `matched` — counts only, no data.
+ * One probe = one direction: DISTINCT non-null values of from.column —
+ * capped at `sample`, or ALL of them when sample is "full" (the complete
+ * join test for small tables) — counting how many EXIST in to.column.
+ * Returns columns `sampled` and `matched` — counts only, no data.
  */
 export function buildJoinProbeSql(
   engine: SqlEngine,
   from: JoinProbeEnd,
   to: JoinProbeEnd,
-  sample = ER_SAMPLE_SIZE,
+  sample: number | "full" = ER_SAMPLE_SIZE,
 ): string {
   const q = (c: string) => (engine === "mssql" ? `[${c}]` : engine === "mysql" ? `\`${c}\`` : `"${c}"`);
   const fromTarget = from.schema ? `${q(from.schema)}.${q(from.table)}` : q(from.table);
   const toTarget = to.schema ? `${q(to.schema)}.${q(to.table)}` : q(to.table);
-  const sub =
-    engine === "mssql"
-      ? `SELECT DISTINCT TOP ${sample} ${q(from.column)} AS v FROM ${fromTarget} WHERE ${q(from.column)} IS NOT NULL`
-      : `SELECT DISTINCT ${q(from.column)} AS v FROM ${fromTarget} WHERE ${q(from.column)} IS NOT NULL LIMIT ${sample}`;
+  const top = sample === "full" ? "" : engine === "mssql" ? `TOP ${sample} ` : "";
+  const limit = sample === "full" || engine === "mssql" ? "" : ` LIMIT ${sample}`;
+  const sub = `SELECT DISTINCT ${top}${q(from.column)} AS v FROM ${fromTarget} WHERE ${q(from.column)} IS NOT NULL${limit}`;
   return (
     `SELECT COUNT(*) AS sampled, ` +
     `SUM(CASE WHEN EXISTS (SELECT 1 FROM ${toTarget} t WHERE t.${q(to.column)} = s.v) THEN 1 ELSE 0 END) AS matched ` +
@@ -265,18 +379,19 @@ export function buildJoinProbeSql(
   );
 }
 
-/** MongoDB variant: distinct sample via $group, existence via $lookup. */
+/** MongoDB variant: distinct sample via $group, existence via $lookup;
+ *  "full" omits the $limit stage (complete join test). */
 export function buildJoinProbeMongo(
   from: JoinProbeEnd,
   to: JoinProbeEnd,
-  sample = ER_SAMPLE_SIZE,
+  sample: number | "full" = ER_SAMPLE_SIZE,
 ): { collection: string; pipeline: object[] } {
   return {
     collection: from.table,
     pipeline: [
       { $match: { [from.column]: { $ne: null } } },
       { $group: { _id: `$${from.column}` } },
-      { $limit: sample },
+      ...(sample === "full" ? [] : [{ $limit: sample }]),
       { $lookup: { from: to.table, localField: "_id", foreignField: to.column, as: "m" } },
       {
         $group: {
@@ -287,6 +402,46 @@ export function buildJoinProbeMongo(
       },
     ],
   };
+}
+
+/** One catalog-statistics query per engine: APPROXIMATE row counts for every
+ *  table — statistics, not COUNT(*), so sizing a 1B-row warehouse costs the
+ *  same as a 1k-row one. Columns: table_schema, table_name, row_estimate. */
+export function buildRowEstimateSql(engine: SqlEngine): string {
+  switch (engine) {
+    case "mssql":
+      return (
+        "SELECT s.name AS table_schema, t.name AS table_name, SUM(p.rows) AS row_estimate " +
+        "FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id " +
+        "JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0, 1) " +
+        "GROUP BY s.name, t.name"
+      );
+    case "postgres":
+      return (
+        "SELECT n.nspname AS table_schema, c.relname AS table_name, GREATEST(c.reltuples, 0)::bigint AS row_estimate " +
+        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +
+        "WHERE c.relkind IN ('r', 'm', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema')"
+      );
+    case "mysql":
+      return (
+        "SELECT table_schema, table_name, table_rows AS row_estimate " +
+        "FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema = DATABASE()"
+      );
+  }
+}
+
+/** Estimate rows → map keyed by lowercase qualified name. */
+export function parseRowEstimates(rows: Array<Record<string, unknown>>): RowEstimates {
+  const out: RowEstimates = {};
+  for (const r of rows) {
+    const val = (k: string) => r[k] ?? r[k.toUpperCase()] ?? r[k.toLowerCase()];
+    const schema = val("table_schema");
+    const name = val("table_name");
+    if (!name) continue;
+    const key = `${schema ? `${String(schema)}.` : ""}${String(name)}`.toLowerCase();
+    out[key] = Math.max(0, Number(val("row_estimate")) || 0);
+  }
+  return out;
 }
 
 /** Tolerant of engine casing and string counts; SUM over zero rows is NULL. */
@@ -341,7 +496,7 @@ export function renderErMermaid(model: ErModel): string {
       r.forwardRate >= ER_STRONG_RATE && r.backwardRate >= ER_STRONG_RATE ? "||--||" : "}o--||";
     const safe = (s: string) => s.replace(/"/g, "'");
     lines.push(
-      `  "${safe(r.fromTable)}" ${card} "${safe(r.toTable)}" : "${safe(r.fromColumn)} -> ${safe(r.toColumn)} (${pct(r.forwardRate)}/${pct(r.backwardRate)})"`,
+      `  "${safe(r.fromTable)}" ${card} "${safe(r.toTable)}" : "${safe(r.fromColumn)} -> ${safe(r.toColumn)} (${pct(r.forwardRate)}/${pct(r.backwardRate)}${r.complete ? ", complete" : ""})"`,
     );
   }
   return lines.join("\n");
@@ -352,11 +507,11 @@ export function renderErForModel(model: ErModel, maxLines = 25): string[] {
   if (model.relationships.length === 0) return [];
   const lines = [
     "",
-    `Probed JOIN paths (match rate forward/backward over ${model.sampleSize}-value samples; high rate = intended relationship — no foreign keys are declared):`,
+    "Probed JOIN paths (match rate forward/backward; 'complete' = the entire join was tested, otherwise an adaptive sample; high rate = intended relationship — no foreign keys are declared):",
   ];
   for (const r of model.relationships.slice(0, maxLines)) {
     lines.push(
-      `- JOIN ${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn} (${pct(r.forwardRate)}/${pct(r.backwardRate)}, ${r.verdict}${r.note ? ` — ${r.note}` : ""})`,
+      `- JOIN ${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn} (${pct(r.forwardRate)}/${pct(r.backwardRate)}${r.complete ? ", complete" : ""}, ${r.verdict}${r.note ? ` — ${r.note}` : ""})`,
     );
   }
   lines.push("Use these columns when querying across tables; honor the subset notes when choosing INNER vs LEFT JOIN.");

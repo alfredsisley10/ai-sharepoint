@@ -82,6 +82,9 @@ export interface ProbedRelationship {
   backwardRate: number;
   sampledForward: number;
   sampledBackward: number;
+  /** True when the winning test covered EVERY distinct value (complete
+   *  join, not a sample) — small tables, or escalation reached full. */
+  complete?: boolean;
   verdict: "strong" | "likely";
   /** Containment reading — encodes the inner-vs-outer-join consequence
    *  ("from-side is a subset …"). */
@@ -93,11 +96,17 @@ export interface ProbedRelationship {
 /** Persisted ER model — travels with the schema (and reference exports). */
 export interface ErModel {
   builtAt: string;
+  /** Baseline sample size; actual probes adapt per pair (row estimates,
+   *  escalation while fast, complete joins on small tables). */
   sampleSize: number;
   candidatesTested: number;
   relationships: ProbedRelationship[];
   /** True when cancellation/per-pair failures stopped probing early. */
   partial?: boolean;
+  /** "thorough" also tested every type-compatible pair across small tables. */
+  mode?: "standard" | "thorough";
+  /** Approximate per-table row counts observed during the build. */
+  rowEstimates?: Record<string, number>;
 }
 
 export interface SourceSchema {

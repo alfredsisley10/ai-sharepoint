@@ -1,6 +1,21 @@
 # ADR-0030: ER model by join-rate probing
 
-- **Status:** Accepted (2026-06-12)
+- **Status:** Accepted (2026-06-12); amended 2026-06-12 (adaptive sizing)
+- **Amendment (2026-06-12):** the fixed 40-candidate × 100-value plan was
+  arbitrary. The run is now sized by the database itself: a SIZING PASS
+  reads approximate row counts from catalog statistics (never COUNT(*)),
+  the candidate budget scales with tables/columns (40…300), pairs where
+  BOTH tables are small (≤50k rows) get **complete join tests** instead
+  of samples, larger targets start with row-count-sized samples
+  (100–500), and each pair **escalates ×5 toward completeness while
+  probes answer fast** (<1.5s), stopping at 10k values, full coverage,
+  or the first non-fast probe. Sensitivity dominates: a slow probe
+  (≥5s) pauses the run to give the database air, and three consecutive
+  slow/failed probes de-escalate the rest of the run to minimal
+  samples. A **Thorough mode** additionally tests every type-compatible
+  column pair across the small tables (the completeness preference),
+  capped and cancellable. Relationships verified by complete joins are
+  flagged (`complete`) in the model, the view, and the tool output.
 - **Context:** Enterprise databases routinely ship with no declared
   foreign keys, so users (and the assistant) cannot know which columns
   join to which — multi-table questions produce wrong or inefficient

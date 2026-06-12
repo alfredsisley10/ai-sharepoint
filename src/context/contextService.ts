@@ -22,8 +22,8 @@ import {
 } from "./adapters/jira";
 import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
-import { verifyDb, searchDb, browseDb, describeDb, sampleTableValues, probeJoinRate, DbTlsOptions } from "./db/dbAdapters";
-import { JoinProbeEnd, JoinProbeCounts } from "./db/erDiagram";
+import { verifyDb, searchDb, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, DbTlsOptions } from "./db/dbAdapters";
+import { JoinProbeEnd, JoinProbeCounts, RowEstimates } from "./db/erDiagram";
 import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
 import {
   verifyPowerBi,
@@ -406,12 +406,13 @@ export class ContextService {
   }
 
   /** One join-rate probe (ADR-0030 "Build ER Diagram") — counts only,
-   *  lockout-gated, stored-credential, capped like every read. */
+   *  lockout-gated, stored-credential, capped like every read. "full"
+   *  tests the complete join (small tables / escalated runs). */
   async probeJoin(
     source: ContextSource,
     from: JoinProbeEnd,
     to: JoinProbeEnd,
-    sample: number,
+    sample: number | "full",
   ): Promise<JoinProbeCounts> {
     if (!ContextService.DB_TYPES.has(source.type)) {
       throw new AppError("Join probing applies to database sources only.", "config");
@@ -419,6 +420,18 @@ export class ContextService {
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
       probeJoinRate(source, credential, this.dbTls(), this.caps(), from, to, sample),
+    );
+  }
+
+  /** Approximate per-table row counts (catalog statistics) — the sizing
+   *  pass that plans the adaptive ER probe (ADR-0030 amendment). */
+  async estimateRows(source: ContextSource): Promise<RowEstimates> {
+    if (!ContextService.DB_TYPES.has(source.type)) {
+      throw new AppError("Row estimation applies to database sources only.", "config");
+    }
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      estimateRowCounts(source, credential, this.dbTls(), this.caps()),
     );
   }
 

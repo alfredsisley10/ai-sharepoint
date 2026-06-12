@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.24.0 — 2026-06-12
+
+### Changed — ER probing is now adaptive: sized by your database, escalating to complete joins (pilot)
+- The fixed 40-pair × 100-value plan was arbitrary. The run is now planned from the data:
+  - **Sizing pass first** — approximate row counts for every table from catalog statistics
+    (one query; never `COUNT(*)`, so sizing a warehouse costs the same as a sandbox).
+  - **Dynamic candidate budget** — scales with tables and columns (40…300).
+  - **Complete joins where they're cheap** — pairs whose tables are both ≤50k rows are tested
+    in full (every distinct value), not sampled; relationships verified this way are flagged
+    `complete` in the model, the view, and chat's JOIN-path output.
+  - **Escalation while fast** — sampled pairs start at a row-count-sized sample (100–500) and
+    grow ×5 after every fast probe (<1.5s) toward full coverage or a 10k cap, because
+    completeness is preferred whenever the database can afford it.
+  - **Sensitivity over completeness** — a slow probe (≥5s) pauses the run to give the database
+    air; three consecutive slow or failed probes de-escalate the remainder to minimal samples.
+  - **Thorough mode** — optionally tests *every* type-compatible column pair across the small
+    tables (capped, cancellable, deduped against the heuristic candidates) for the full
+    permutation sweep.
+- The consent dialog now states the actual plan (how many complete joins vs sampled probes);
+  per-pair progress shows the sample tier in use.
+
 ## 0.23.2 — 2026-06-12
 
 ### Fixed — Vertex AI Search for Entra-federated users with no GCP access (pilot)

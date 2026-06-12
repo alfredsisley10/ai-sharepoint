@@ -359,18 +359,24 @@ reasons — ADR-0022):
   it writes a SELECT. **Indexes are shared via Export/Import Reference Config**, so one
   teammate's indexing run benefits everyone.
 - **Build Database ER Diagram (ADR-0030)** — for the common enterprise case where **no foreign
-  keys are declared** and nobody is sure what joins to what. The wizard proposes candidate
-  column pairs from the schema and the indexes above (FK-shaped names, matching non-generic
-  names, identifier tags that agree), then **probes each pair's real join rate in both
-  directions**: up to 100 distinct values sampled per side, counting how many exist on the
-  other (≈2 bounded count-queries per pair — **only counts are read, never row data**, and a
-  consent dialog states the totals first). ≈100% match reads as a designed-in relationship;
-  a high-but-partial rate still counts (subsets are normal); **full one way + partial the
-  other marks an intentional subset**, and the saved note says which side needs a LEFT JOIN —
-  the inner-vs-outer distinction, measured rather than guessed. The result persists with the
-  schema, renders as a **Mermaid ER diagram** plus a rate table in *View Database Schema &
-  Semantic Index*, travels with reference-config exports, and is fed to chat so multi-table
-  questions JOIN on the right columns.
+  keys are declared** and nobody is sure what joins to what. The run is **sized by your
+  database, not by fixed numbers**: a sizing pass reads approximate row counts from catalog
+  statistics (cheap — never `COUNT(*)`), the candidate budget scales with the catalog, and
+  then each candidate pair's **real join rate is probed in both directions**. Pairs where both
+  tables are small (≤50k rows) get **complete join tests**; larger targets start with
+  right-sized samples that **escalate toward completeness while the database answers fast**
+  and back off the moment it doesn't (slow probes pause the run; repeated strain de-escalates
+  it). A **Thorough mode** additionally tests *every* type-compatible column pair across the
+  small tables. Candidates come from the schema and the indexes above (FK-shaped names,
+  matching non-generic names, identifier tags that agree); **only match counts are read, never
+  row data**, and a consent dialog states the plan first. ≈100% match reads as a designed-in
+  relationship; a high-but-partial rate still counts (subsets are normal); **full one way +
+  partial the other marks an intentional subset**, and the saved note says which side needs a
+  LEFT JOIN — the inner-vs-outer distinction, measured rather than guessed. The result
+  persists with the schema (complete-join verifications flagged), renders as a **Mermaid ER
+  diagram** plus a rate table in *View Database Schema & Semantic Index*, travels with
+  reference-config exports, and is fed to chat so multi-table questions JOIN on the right
+  columns.
 - **TLS** trusts the OS store and the shared pinned CA bundle setting
   (`aiSharePoint.ldap.caCertificatesFile` — applies to all non-HTTP sources).
 

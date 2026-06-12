@@ -200,3 +200,99 @@ test("mermaid + tool rendering carry rates, cardinality, and join guidance", () 
   assert.match(renderErMermaid(emptyModel), /no relationships/);
   assert.deepEqual(renderErForModel(emptyModel), []);
 });
+
+// --- adaptive strategy (ADR-0030 amendment) ----------------------------------
+
+test("candidateBudget scales with the catalog and never drops below the old fixed cap", async () => {
+  const { candidateBudget } = await import("../src/context/db/erDiagram");
+  const tables = (n: number, cols: number) => ({
+    tables: Array.from({ length: n }, (_, i) => ({
+      name: `t${i}`,
+      kind: "table" as const,
+      columns: Array.from({ length: cols }, (_, j) => ({ name: `c${j}`, dataType: "int" })),
+    })),
+  });
+  assert.equal(candidateBudget(tables(3, 4)), 40, "small DB keeps the floor");
+  assert.equal(candidateBudget(tables(50, 20)), 200, "mid-size scales up (50×3 + 1000/20)");
+  assert.equal(candidateBudget(tables(300, 80)), 300, "bounded on warehouses");
+});
+
+test("initialSampleSize: complete joins for small pairs, shrinking samples as the target grows", async () => {
+  const { initialSampleSize, ER_FULL_JOIN_MAX_ROWS } = await import("../src/context/db/erDiagram");
+  assert.equal(initialSampleSize(10_000, 40_000), "full", "both small → full join test");
+  assert.equal(initialSampleSize(10_000, ER_FULL_JOIN_MAX_ROWS + 1), 500, "target just over → sampled");
+  assert.equal(initialSampleSize(200_000, 5_000_000), 250);
+  assert.equal(initialSampleSize(200_000, 50_000_000), 100, "huge target → smallest sample");
+  assert.equal(initialSampleSize(0, 0), 100, "unknown sizes → conservative classic");
+});
+
+test("nextSampleSize escalates ×5 while fast, reaches full on small tables, and stops when slow or capped", async () => {
+  const { nextSampleSize, ER_MAX_SAMPLE, ER_FAST_PROBE_MS } = await import("../src/context/db/erDiagram");
+  assert.equal(nextSampleSize(100, 200, 10_000_000), 500, "fast → ×5");
+  assert.equal(nextSampleSize(2_000, 100, 80_000), 10_000, "fast keeps escalating toward the cap");
+  assert.equal(nextSampleSize(ER_MAX_SAMPLE, 100, 10_000_000), undefined, "cap reached");
+  assert.equal(nextSampleSize(100, ER_FAST_PROBE_MS, 1_000_000), undefined, "not fast → stop");
+  assert.equal(nextSampleSize(500, 100, 2_000), "full", "small from-side upgrades to a complete pass");
+  assert.equal(nextSampleSize(5_000, 100, 2_000), undefined, "already covered the from-side");
+});
+
+test("'full' probes drop TOP/LIMIT ($limit) — the complete join test", async () => {
+  const { buildJoinProbeSql, buildJoinProbeMongo } = await import("../src/context/db/erDiagram");
+  const from = { schema: "dbo", table: "Orders", column: "customer_id" };
+  const to = { schema: "dbo", table: "Customers", column: "id" };
+  const mssql = buildJoinProbeSql("mssql", from, to, "full");
+  assert.ok(!/TOP /.test(mssql), mssql);
+  const pg = buildJoinProbeSql("postgres", { table: "a", column: "x" }, { table: "b", column: "y" }, "full");
+  assert.ok(!/LIMIT/.test(pg), pg);
+  const mongo = buildJoinProbeMongo({ table: "a", column: "x" }, { table: "b", column: "y" }, "full");
+  assert.ok(!mongo.pipeline.some((s) => "$limit" in (s as Record<string, unknown>)), JSON.stringify(mongo.pipeline));
+});
+
+test("row estimates: one statistics query per engine; parser tolerates casing and missing schema", async () => {
+  const { buildRowEstimateSql, parseRowEstimates } = await import("../src/context/db/erDiagram");
+  assert.match(buildRowEstimateSql("mssql"), /sys\.partitions/);
+  assert.match(buildRowEstimateSql("postgres"), /reltuples/);
+  assert.match(buildRowEstimateSql("mysql"), /information_schema\.tables/);
+  // Statistics, never COUNT(*): sizing a warehouse must be cheap.
+  for (const engine of ["mssql", "postgres", "mysql"] as const) {
+    assert.ok(!/COUNT\(\*\)/i.test(buildRowEstimateSql(engine)));
+  }
+  const est = parseRowEstimates([
+    { TABLE_SCHEMA: "dbo", TABLE_NAME: "Orders", ROW_ESTIMATE: "1200000" },
+    { table_schema: null, table_name: "events", row_estimate: 42 },
+  ]);
+  assert.equal(est["dbo.orders"], 1_200_000);
+  assert.equal(est["events"], 42);
+});
+
+test("thorough mode: exhaustive pairs only across small tables, deduped against heuristics, capped", async () => {
+  const { proposeExhaustivePairs, proposeJoinCandidates, pairKey } = await import(
+    "../src/context/db/erDiagram"
+  );
+  const schema = schemaWith();
+  const heuristic = proposeJoinCandidates(schema);
+  const tried = new Set(heuristic.map((c) => pairKey(c)));
+  const est = {
+    "dbo.customers": 1_000,
+    "dbo.orders": 2_000,
+    "dbo.invoices": 9_000_000, // too big — excluded from exhaustive testing
+  };
+  const pairs = proposeExhaustivePairs(schema, est, tried);
+  assert.ok(pairs.length > 0);
+  assert.ok(pairs.every((p) => p.reason === "exhaustive (small tables)"));
+  assert.ok(
+    !pairs.some((p) => p.fromTable === "dbo.Invoices" || p.toTable === "dbo.Invoices"),
+    "large tables stay out of the exhaustive pass",
+  );
+  // The heuristic customer_id↔id pair is not re-proposed.
+  assert.ok(
+    !pairs.some((p) => pairKey(p) === pairKey({ fromTable: "dbo.Orders", fromColumn: "customer_id", toTable: "dbo.Customers", toColumn: "id" })),
+  );
+  // Type families still gate: int columns never pair with nvarchar ones.
+  const cols = (t: string) => schema.catalog.tables.find((x) => `dbo.${x.name}` === t)!.columns;
+  for (const p of pairs) {
+    const a = cols(p.fromTable).find((c) => c.name === p.fromColumn)!.dataType;
+    const b = cols(p.toTable).find((c) => c.name === p.toColumn)!.dataType;
+    assert.equal(/int/.test(a), /int/.test(b), `${p.fromColumn}↔${p.toColumn}`);
+  }
+});

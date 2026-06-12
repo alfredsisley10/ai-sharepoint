@@ -30,7 +30,10 @@ import {
 import {
   buildJoinProbeSql,
   buildJoinProbeMongo,
+  buildRowEstimateSql,
   parseProbeCounts,
+  parseRowEstimates,
+  RowEstimates,
   JoinProbeEnd,
   JoinProbeCounts,
   ER_SAMPLE_SIZE,
@@ -518,7 +521,7 @@ export async function probeJoinRate(
   caps: ReadCaps,
   from: JoinProbeEnd,
   to: JoinProbeEnd,
-  sample = ER_SAMPLE_SIZE,
+  sample: number | "full" = ER_SAMPLE_SIZE,
 ): Promise<JoinProbeCounts> {
   if (source.type === "mongodb") {
     const spec = buildJoinProbeMongo(from, to, sample);
@@ -539,6 +542,43 @@ export async function probeJoinRate(
     buildJoinProbeSql(source.type as SqlEngine, from, to, sample),
   );
   return parseProbeCounts(rows);
+}
+
+/** Approximate per-table row counts from catalog STATISTICS — one query for
+ *  SQL engines, estimatedDocumentCount per collection for MongoDB. Sizing
+ *  information for the adaptive ER probe plan (ADR-0030 amendment). */
+export async function estimateRowCounts(
+  source: ContextSource,
+  credential: ContextCredential,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+): Promise<RowEstimates> {
+  if (source.type === "mongodb") {
+    return withMongo(source, credential, tls, caps, async (client, dbName) => {
+      const names = (
+        await client.db(dbName).listCollections(undefined, { nameOnly: true }).toArray()
+      )
+        .map((c) => c.name)
+        .filter((n) => !n.startsWith("system."))
+        .slice(0, MONGO_MAX_COLLECTIONS);
+      const out: RowEstimates = {};
+      for (const name of names) {
+        out[name.toLowerCase()] = await client
+          .db(dbName)
+          .collection(name)
+          .estimatedDocumentCount({ maxTimeMS: caps.timeoutMs });
+      }
+      return out;
+    });
+  }
+  const rows = await SQL_RUNNERS[source.type as SqlEngine](
+    source,
+    credential,
+    tls,
+    { ...caps, maxResults: SCHEMA_MAX_TABLES },
+    buildRowEstimateSql(source.type as SqlEngine),
+  );
+  return parseRowEstimates(rows);
 }
 
 /** Tables/collections → ready-made sample-query bookmark candidates. */

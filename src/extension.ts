@@ -54,9 +54,16 @@ import { SchemaIndexer } from "./context/db/schemaIndexer";
 import { SourceSchema, ErModel, ProbedRelationship, qualifiedName } from "./context/db/schemaIndex";
 import {
   proposeJoinCandidates,
+  proposeExhaustivePairs,
   classifyJoin,
   renderErMermaid,
+  initialSampleSize,
+  nextSampleSize,
+  pairKey,
   ER_SAMPLE_SIZE,
+  ER_FULL_JOIN_MAX_ROWS,
+  ER_SLOW_PROBE_MS,
+  ER_EXHAUSTIVE_PAIR_CAP,
 } from "./context/db/erDiagram";
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { CatalogStore } from "./context/catalogStore";
@@ -2639,20 +2646,56 @@ export function activate(context: vscode.ExtensionContext): void {
     const source = await resolveSourceArg(arg, contextSources);
     if (!source || !requireDbSource(source)) return;
     const schema = schemas.getSync(source.id) ?? (await loadSchemaWithProgress(source));
-    const candidates = proposeJoinCandidates(schema);
-    if (candidates.length === 0) {
+    // Sizing pass (ADR-0030 amendment): approximate row counts from catalog
+    // statistics plan the whole run — complete joins where tables are small,
+    // right-sized samples where they aren't.
+    const rowEstimates = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Estimating table sizes in "${source.displayName}"…` },
+      () => contextService.estimateRows(source).catch(() => ({}) as Record<string, number>),
+    );
+    const heuristic = proposeJoinCandidates(schema);
+    if (heuristic.length === 0) {
       void vscode.window.showInformationMessage(
         "No plausible join candidates found. Run “Index Database Schema” (and optionally “Index Database Content Types”) first — their tags propose pairs — or the tables share no compatible columns.",
       );
       return;
     }
+    const smallTables = schema.catalog.tables.filter((t) => {
+      const rows = rowEstimates[qualifiedName(t).toLowerCase()];
+      return rows !== undefined && rows > 0 && rows <= ER_FULL_JOIN_MAX_ROWS;
+    }).length;
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(beaker) Standard — heuristic candidates",
+          description: `${heuristic.length} pair(s): FK-shaped names, matching names, agreeing tags`,
+          value: "standard" as const,
+        },
+        {
+          label: "$(microscope) Thorough — also every column pair across small tables",
+          description: `adds all type-compatible pairs between the ${smallTables} table(s) ≤ ${ER_FULL_JOIN_MAX_ROWS.toLocaleString()} rows (complete joins, capped at ${ER_EXHAUSTIVE_PAIR_CAP})`,
+          value: "thorough" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Build ER Diagram — how exhaustively?" },
+    );
+    if (!mode) return;
+    const tried = new Set(heuristic.map((c) => pairKey(c)));
+    const candidates =
+      mode.value === "thorough"
+        ? [...heuristic, ...proposeExhaustivePairs(schema, rowEstimates, tried)]
+        : heuristic;
+    const fullPairs = candidates.filter((c) => {
+      const f = rowEstimates[c.fromTable.toLowerCase()] ?? 0;
+      const t = rowEstimates[c.toTable.toLowerCase()] ?? 0;
+      return initialSampleSize(f, t) === "full";
+    }).length;
     const consent = await vscode.window.showInformationMessage(
-      `Build the ER model for "${source.displayName}"? ${candidates.length} candidate column pair(s) will be probed with bounded read-only queries (≈${candidates.length * 2} count queries over ${ER_SAMPLE_SIZE}-distinct-value samples). Only match COUNTS are read — no row data leaves the database. High join rates reveal the relationships most enterprise schemas never declare as foreign keys; both directions are measured so intentional subsets are recognized.`,
+      `Build the ER model for "${source.displayName}"? ${candidates.length} candidate pair(s) will be probed with bounded read-only count queries (≈${candidates.length * 2}+): ${fullPairs} pair(s) get COMPLETE join tests (both tables small), the rest start with row-count-sized samples and ESCALATE toward completeness while the database answers fast — backing off the moment it doesn't. Only match COUNTS are read; no row data leaves the database.`,
       { modal: true },
       "Probe & Build",
     );
     if (consent !== "Probe & Build") return;
-    // Qualified candidate names → concrete schema/table/column probe ends.
     const endFor = (qualified: string, column: string) => {
       const t = schema.catalog.tables.find(
         (x) => qualifiedName(x).toLowerCase() === qualified.toLowerCase(),
@@ -2662,6 +2705,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const relationships: ProbedRelationship[] = [];
     let tested = 0;
     let partial = false;
+    let slowStreak = 0;
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -2678,15 +2722,41 @@ export function activate(context: vscode.ExtensionContext): void {
           const from = endFor(c.fromTable, c.fromColumn);
           const to = endFor(c.toTable, c.toColumn);
           if (!from || !to) continue;
-          progress.report({
-            increment: 100 / candidates.length,
-            message: `${i + 1}/${candidates.length}: ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn}`,
-          });
+          const rowsFrom = rowEstimates[c.fromTable.toLowerCase()] ?? 0;
+          const rowsTo = rowEstimates[c.toTable.toLowerCase()] ?? 0;
+          // After three consecutive slow probes the whole run de-escalates
+          // to minimal samples — sensitivity beats completeness.
+          let sample: number | "full" =
+            slowStreak >= 3 ? ER_SAMPLE_SIZE : initialSampleSize(rowsFrom, rowsTo);
           try {
-            // Both directions: full containment one way + partial the other
-            // is how an intentional subset shows itself (inner vs outer).
-            const forward = await contextService.probeJoin(source, from, to, ER_SAMPLE_SIZE);
-            const backward = await contextService.probeJoin(source, to, from, ER_SAMPLE_SIZE);
+            let forward = { sampled: 0, matched: 0 };
+            let backward = { sampled: 0, matched: 0 };
+            let complete = sample === "full";
+            for (;;) {
+              progress.report({
+                increment: 0,
+                message: `${i + 1}/${candidates.length}: ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn} (${sample === "full" ? "complete join" : `${sample}-value sample`})`,
+              });
+              const started = Date.now();
+              forward = await contextService.probeJoin(source, from, to, sample);
+              backward = await contextService.probeJoin(source, to, from, sample);
+              const duration = Date.now() - started;
+              if (duration >= ER_SLOW_PROBE_MS) {
+                slowStreak += 1;
+                // Give the database air after a slow round (sensitivity).
+                await new Promise((r) => setTimeout(r, Math.min(2_000, duration)));
+              } else {
+                slowStreak = 0;
+              }
+              if (sample === "full") {
+                complete = true;
+                break;
+              }
+              const next = slowStreak > 0 ? undefined : nextSampleSize(sample, duration, rowsFrom);
+              if (next === undefined) break;
+              sample = next;
+              complete = next === "full";
+            }
             tested += 1;
             const graded = classifyJoin(forward, backward);
             if (graded.verdict) {
@@ -2699,6 +2769,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 backwardRate: graded.backwardRate,
                 sampledForward: forward.sampled,
                 sampledBackward: backward.sampled,
+                ...(complete ? { complete: true } : {}),
                 verdict: graded.verdict,
                 ...(graded.note ? { note: graded.note } : {}),
                 reason: c.reason,
@@ -2707,10 +2778,12 @@ export function activate(context: vscode.ExtensionContext): void {
           } catch (err) {
             // One failed pair (permissions, timeout) never voids the rest.
             partial = true;
+            slowStreak += 1;
             log.warn(
               `ER probe failed for ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn}: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
+          progress.report({ increment: 100 / candidates.length });
         }
       },
     );
@@ -2723,17 +2796,21 @@ export function activate(context: vscode.ExtensionContext): void {
       candidatesTested: tested,
       relationships,
       ...(partial ? { partial: true } : {}),
+      mode: mode.value,
+      rowEstimates,
     };
     await schemas.set(source.id, { ...(schemas.getSync(source.id) ?? schema), er });
     telemetry.record("schema.er", {
       type: source.type,
+      mode: mode.value,
       candidates: String(candidates.length),
       tested: String(tested),
       found: String(relationships.length),
       partial: String(partial),
     });
+    const completeCount = relationships.filter((r) => r.complete).length;
     const view = await vscode.window.showInformationMessage(
-      `ER model for "${source.displayName}": ${relationships.length} relationship(s) confirmed from ${tested} probed pair(s)${partial ? " (partial — re-run to finish)" : ""}. Persisted with the schema; chat now uses these JOIN paths for multi-table questions.`,
+      `ER model for "${source.displayName}": ${relationships.length} relationship(s) from ${tested} probed pair(s) (${completeCount} verified by complete joins)${partial ? " — partial, re-run to finish" : ""}. Persisted with the schema; chat now uses these JOIN paths.`,
       "View Schema & ER Diagram",
     );
     if (view) {
@@ -2763,7 +2840,7 @@ export function activate(context: vscode.ExtensionContext): void {
         "",
         "## Entity relationships (probed join rates)",
         "",
-        `_No foreign keys needed: each pair below was tested empirically — up to ${schema.er.sampleSize} distinct values sampled per side, match rate measured in both directions (forward/backward). ≈100% = designed-in join; full one way + partial the other = an intentional subset (use a LEFT JOIN from the wider side). Open the markdown preview for the diagram._`,
+        `_No foreign keys needed: each pair below was tested empirically — complete joins where both tables are small (≤ ${ER_FULL_JOIN_MAX_ROWS.toLocaleString()} rows), adaptive samples escalated toward completeness while the database answered fast elsewhere; match rate measured in both directions (forward/backward). ≈100% = designed-in join; full one way + partial the other = an intentional subset (use a LEFT JOIN from the wider side).${schema.er.mode === "thorough" ? " Thorough mode: every type-compatible pair across small tables was also tested." : ""} Open the markdown preview for the diagram._`,
         "",
         "```mermaid",
         renderErMermaid(schema.er),
@@ -2774,7 +2851,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       for (const r of schema.er.relationships) {
         lines.push(
-          `| \`${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn}\` | ${Math.round(r.forwardRate * 100)}% | ${Math.round(r.backwardRate * 100)}% | ${r.verdict} | ${r.note ?? r.reason} |`,
+          `| \`${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn}\` | ${Math.round(r.forwardRate * 100)}%${r.complete ? " (complete)" : ""} | ${Math.round(r.backwardRate * 100)}% | ${r.verdict} | ${r.note ?? r.reason} |`,
         );
       }
     }
