@@ -107,7 +107,7 @@ export interface TestedPair {
   backwardRate: number;
   sampledForward: number;
   sampledBackward: number;
-  outcome: "strong" | "likely" | "rejected" | "failed";
+  outcome: "strong" | "likely" | "defined" | "rejected" | "failed";
   reason: string;
 }
 
@@ -125,6 +125,11 @@ export interface ErModel {
   mode?: "standard" | "ai" | "thorough";
   /** Approximate per-table row counts observed during the build. */
   rowEstimates?: Record<string, number>;
+  /** When the latest run was scoped to a table subset, its size — the rest
+   *  of the model's relationships were preserved from earlier runs. */
+  scopeTables?: number;
+  /** The user's data description, re-used to seed the next run's AI pass. */
+  aiHint?: string;
   /** Probe report: outcome counts ride in `tested`; zero-sample probes
    *  signal a systemic sampling problem rather than absent relationships. */
   report?: {

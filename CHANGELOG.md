@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.27.0 — 2026-06-12
+
+### Added — scoped, seeded ER runs: pick the tables, hint the AI, hand over known joins (pilot)
+- **Search & multi-select table scoping.** A 100-table database is rarely one diagram: the
+  wizard now opens with an optional **prefix/keyword filter** that pre-selects tables (shared
+  prefixes usually mean a shared objective — `fin_, gl_`), followed by a **searchable
+  multi-select** (each entry shows kind, column count, and estimated rows) to refine by hand.
+  Candidates, thorough-mode pairs, and the AI prompt all work on the scoped set — and
+  persisting now **merges**: relationships outside the scope survive from earlier runs while
+  re-probed pairs take the fresh measurement, so large databases get mapped neighborhood by
+  neighborhood.
+- **Describe the data for the AI.** In the AI modes a free-text hint (*"SAP FI tables — MANDT
+  is the client key on every table; gl_-prefixed tables share the ledger key"*) is weighted
+  into Copilot's join hypotheses, giving it the domain knowledge no catalog carries. The hint
+  persists with the model and pre-fills the next run.
+- **Hand over known joins.** Semicolon-separated joins (SQL syntax or
+  `table.column = table.column`) are parsed against the full catalog (they may cross the
+  scope), probed **first**, and kept even when the measured rate falls below the automatic
+  thresholds — marked *defined* with the rates visible, same semantics as chat's `test_join`.
+  Unresolvable entries are reported with actionable errors and skipped, never fatal.
+
 ## 0.26.0 — 2026-06-12
 
 ### Added — refine the ER diagram from chat with your own joins (pilot)

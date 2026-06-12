@@ -352,18 +352,43 @@ test("AI join proposals validate against the catalog: hallucinations and type mi
   assert.deepEqual(parseJoinCandidateResponse("no json here", schema), []);
 });
 
-test("the refinement prompt shows the model what was measured", async () => {
+test("the refinement prompt shows the model what was measured; the user's hint is weighted in", async () => {
   const { buildJoinCandidatePrompt } = await import("../src/context/db/erDiagram");
-  const prompt = buildJoinCandidatePrompt(schemaWith(), [
-    {
-      fromTable: "dbo.Orders", fromColumn: "region_code", toTable: "dbo.Customers", toColumn: "region_code",
-      forwardRate: 0.64, backwardRate: 0.1, sampledForward: 100, sampledBackward: 100,
-      outcome: "rejected", reason: "same column name: region_code",
-    },
-  ]);
+  const prompt = buildJoinCandidatePrompt(schemaWith(), {
+    rejected: [
+      {
+        fromTable: "dbo.Orders", fromColumn: "region_code", toTable: "dbo.Customers", toColumn: "region_code",
+        forwardRate: 0.64, backwardRate: 0.1, sampledForward: 100, sampledBackward: 100,
+        outcome: "rejected", reason: "same column name: region_code",
+      },
+    ],
+    hint: "SAP FI tables — MANDT is the client key on every table",
+  });
   assert.match(prompt, /ALREADY probed/);
   assert.match(prompt, /region_code: 64%\/10%/);
   assert.match(prompt, /DIFFERENT hypotheses/);
+  assert.match(prompt, /weight this domain knowledge heavily: SAP FI tables — MANDT/);
+  // No hint → no hint block.
+  assert.ok(!/domain knowledge/.test(buildJoinCandidatePrompt(schemaWith())));
+});
+
+test("mergeRelationships: scoped runs keep prior findings, re-probed pairs take the new rates", async () => {
+  const { mergeRelationships, pairKey } = await import("../src/context/db/erDiagram");
+  const rel = (fromColumn: string, forwardRate: number) => ({
+    fromTable: "dbo.Orders", fromColumn, toTable: "dbo.Customers", toColumn: "id",
+    forwardRate, backwardRate: 0.2, sampledForward: 100, sampledBackward: 100,
+    verdict: "strong" as const, reason: "x",
+  });
+  const previous = [rel("customer_id", 0.98), rel("region_code", 0.8)];
+  const next = [rel("customer_id", 0.91)];
+  const merged = mergeRelationships(previous, next);
+  assert.equal(merged.length, 2, "out-of-scope finding survives");
+  assert.equal(
+    merged.find((r) => pairKey(r) === pairKey(rel("customer_id", 0)))?.forwardRate,
+    0.91,
+    "re-probed pair takes the new measurement",
+  );
+  assert.equal(merged[0].forwardRate, 0.91, "rate-ordered");
 });
 
 test("98–99% joins classify as designed joins with a data-quality note", async () => {

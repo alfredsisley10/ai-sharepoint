@@ -2,7 +2,22 @@
 
 - **Status:** Accepted (2026-06-12); amended 2026-06-12 (adaptive sizing);
   amended 2026-06-12 (AI-assisted candidates, probe report, data-quality
-  tier); amended 2026-06-12 (user-defined joins from chat)
+  tier); amended 2026-06-12 (user-defined joins from chat); amended
+  2026-06-12 (scoped runs, AI hints, known joins in the wizard)
+- **Amendment (scoped/guided runs):** the wizard scopes and seeds the
+  run. (1) **Table scoping** — an optional prefix/keyword filter
+  PRE-SELECTS tables (shared prefixes usually mean a shared objective),
+  then a searchable multi-select refines the set; candidates, exhaustive
+  pairs, and the AI prompt all operate on the scoped catalog. Persisting
+  MERGES: re-probed pairs take the new measurement, relationships outside
+  the scope survive from earlier runs (`mergeRelationships`), so a
+  100-table database is mapped neighborhood by neighborhood. (2) **AI
+  hint** — a free-text description of the data ("SAP FI tables; MANDT is
+  the client key everywhere") is weighted into the join-hypothesis
+  prompt and persisted on the model to seed re-runs. (3) **Known joins**
+  — semicolon-separated joins (SQL or bare equality) are parsed, probed
+  FIRST (priority 6), and kept even below the automatic thresholds
+  (verdict "defined"), identical to chat's test_join semantics.
 - **Amendment (user-defined joins):** the ER model is refinable
   incrementally from chat. `test_join` parses a supplied join (SQL
   syntax with aliases, or `table.column = table.column`), resolves it

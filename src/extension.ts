@@ -61,6 +61,8 @@ import {
   renderProbeReport,
   buildJoinCandidatePrompt,
   parseJoinCandidateResponse,
+  parseJoinSpec,
+  mergeRelationships,
   initialSampleSize,
   nextSampleSize,
   pairKey,
@@ -2684,14 +2686,53 @@ export function activate(context: vscode.ExtensionContext): void {
       { location: vscode.ProgressLocation.Notification, title: `Estimating table sizes in "${source.displayName}"…` },
       () => contextService.estimateRows(source).catch(() => ({}) as Record<string, number>),
     );
-    const heuristic = proposeJoinCandidates(schema);
-    if (heuristic.length === 0) {
-      void vscode.window.showInformationMessage(
-        "No plausible join candidates found. Run “Index Database Schema” (and optionally “Index Database Content Types”) first — their tags propose pairs — or the tables share no compatible columns.",
-      );
+    // Scope: a 100-table database is rarely ONE diagram. An optional
+    // prefix/keyword filter PRE-SELECTS tables (shared prefixes usually mean
+    // a shared objective), then a searchable multi-select lets the user
+    // refine by hand. Relationships outside the scope survive from earlier
+    // runs (merge on persist).
+    const prefixFilter = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: `Scope the ER run (1/2, optional) — ${schema.catalog.tables.length} table(s) available`,
+      prompt:
+        "Comma-separated prefixes or keywords to PRE-SELECT tables (e.g. `fin_, gl_` — shared prefixes usually mean a shared objective). Leave empty to pre-select everything; you refine in the next step either way.",
+      placeHolder: "fin_, gl_   (Enter to pre-select all tables)",
+    });
+    if (prefixFilter === undefined) return;
+    const needles = prefixFilter
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const matchesFilter = (t: (typeof schema.catalog.tables)[number]) =>
+      needles.length === 0 ||
+      needles.some((n) => t.name.toLowerCase().includes(n) || qualifiedName(t).toLowerCase().includes(n));
+    const tablePicks = await vscode.window.showQuickPick(
+      schema.catalog.tables.map((t) => ({
+        label: qualifiedName(t),
+        description: `${t.kind} · ${t.columns.length} column(s)${rowEstimates[qualifiedName(t).toLowerCase()] !== undefined ? ` · ~${rowEstimates[qualifiedName(t).toLowerCase()].toLocaleString()} rows` : ""}`,
+        picked: matchesFilter(t),
+        table: t,
+      })),
+      {
+        ignoreFocusOut: true,
+        canPickMany: true,
+        matchOnDescription: true,
+        title: "Scope the ER run (2/2) — type to search, check the tables/views to include",
+        placeHolder: needles.length > 0 ? `Pre-selected by: ${needles.join(", ")} — adjust as needed` : "All tables pre-selected — uncheck to narrow",
+      },
+    );
+    if (!tablePicks) return;
+    const selectedTables = tablePicks.map((p) => p.table);
+    if (selectedTables.length < 2) {
+      void vscode.window.showInformationMessage("An ER run needs at least two tables in scope.");
       return;
     }
-    const smallTables = schema.catalog.tables.filter((t) => {
+    const scoped: SourceSchema =
+      selectedTables.length === schema.catalog.tables.length
+        ? schema
+        : { ...schema, catalog: { ...schema.catalog, tables: selectedTables } };
+    const heuristic = proposeJoinCandidates(scoped);
+    const smallTables = scoped.catalog.tables.filter((t) => {
       const rows = rowEstimates[qualifiedName(t).toLowerCase()];
       return rows !== undefined && rows > 0 && rows <= ER_FULL_JOIN_MAX_ROWS;
     }).length;
@@ -2724,15 +2765,70 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!mode) return;
     const aiEnabled = aiAvailable && mode.value !== "standard";
     const tried = new Set(heuristic.map((c) => pairKey(c)));
-    // AI proposals run FIRST in the queue (priority 5): Copilot sees what
-    // the heuristics cannot — content-type summaries saying two differently
-    // named columns hold the same identifiers.
+    // Known joins, manually supplied: probed FIRST and kept even below the
+    // automatic thresholds (the user asserted them).
+    const knownInput = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Known joins (optional) — semicolon-separated",
+      prompt:
+        'Joins you already know are right, e.g. "dbo.Orders.customer_id = dbo.Customers.id; FROM Invoices i JOIN Customers c ON i.cust_no = c.id". They are probed first and persist even if the measured rate is low (marked "defined").',
+      placeHolder: "table.column = table.column; …   (Enter to skip)",
+    });
+    if (knownInput === undefined) return;
+    const userJoins: JoinCandidate[] = [];
+    const joinIssues: string[] = [];
+    for (const part of knownInput.split(/[;\n]/).map((s) => s.trim()).filter(Boolean)) {
+      const parsed = parseJoinSpec(part, schema); // FULL schema: known joins may cross the scope
+      if ("issue" in parsed) {
+        joinIssues.push(`"${part.slice(0, 60)}": ${parsed.issue}`);
+        continue;
+      }
+      const candidate: JoinCandidate = {
+        fromTable: parsed.fromTable,
+        fromColumn: parsed.fromColumn,
+        toTable: parsed.toTable,
+        toColumn: parsed.toColumn,
+        reason: "user-provided join",
+        priority: 6,
+        userDefined: true,
+      };
+      const k = pairKey(candidate);
+      if (tried.has(k)) continue;
+      tried.add(k);
+      userJoins.push(candidate);
+    }
+    if (joinIssues.length > 0) {
+      void vscode.window.showWarningMessage(
+        `${joinIssues.length} known join(s) didn't resolve and will be skipped: ${joinIssues.join(" · ").slice(0, 400)}`,
+      );
+    }
+    // The user's description of the data — domain knowledge the catalog
+    // can't carry — seeds the AI hypothesis pass (and persists for re-runs).
+    let aiHint = schema.er?.aiHint ?? "";
+    if (aiEnabled) {
+      const hintInput = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Describe this data for the AI (optional)",
+        value: aiHint,
+        prompt:
+          "Domain knowledge that helps the join hypotheses, e.g. “SAP FI tables — MANDT is the client key on every table; *_BUKRS columns are company codes; tables prefixed gl_ share the ledger key”.",
+        placeHolder: "What is this data? Which columns are shared keys? (Enter to skip)",
+      });
+      if (hintInput === undefined) return;
+      aiHint = hintInput.trim();
+    }
+    // AI proposals run early in the queue (priority 5): Copilot sees what
+    // the heuristics cannot — content-type summaries and the user's hint
+    // saying two differently named columns hold the same identifiers.
     const aiPropose = async (rejected?: TestedPair[]): Promise<JoinCandidate[]> => {
       const res = await copilot.ask(
-        { prompt: buildJoinCandidatePrompt(schema, rejected), label: "erCandidates" },
+        {
+          prompt: buildJoinCandidatePrompt(scoped, { rejected, ...(aiHint ? { hint: aiHint } : {}) }),
+          label: "erCandidates",
+        },
         nowIso,
       );
-      return parseJoinCandidateResponse(res.text, schema).filter((p) => {
+      return parseJoinCandidateResponse(res.text, scoped).filter((p) => {
         const k = pairKey(p);
         if (tried.has(k)) return false;
         tried.add(k);
@@ -2751,10 +2847,17 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }
     const candidates = [
+      ...userJoins,
       ...aiPairs,
       ...heuristic,
-      ...(mode.value === "thorough" ? proposeExhaustivePairs(schema, rowEstimates, tried) : []),
+      ...(mode.value === "thorough" ? proposeExhaustivePairs(scoped, rowEstimates, tried) : []),
     ];
+    if (candidates.length === 0) {
+      void vscode.window.showInformationMessage(
+        "No join candidates in this scope. Widen the table selection, supply known joins, or run “Index Database Schema”/“Index Database Content Types” first so tags can propose pairs.",
+      );
+      return;
+    }
     const fullPairs = candidates.filter((c) => {
       const f = rowEstimates[c.fromTable.toLowerCase()] ?? 0;
       const t = rowEstimates[c.toTable.toLowerCase()] ?? 0;
@@ -2855,6 +2958,9 @@ export function activate(context: vscode.ExtensionContext): void {
             tested += 1;
             if (forward.sampled === 0 && backward.sampled === 0) zeroSampleCount += 1;
             const graded = classifyJoin(forward, backward);
+            // User-provided joins persist even below the thresholds — the
+            // user asserted them; the measured rates stay visible.
+            const verdict = graded.verdict ?? (c.userDefined ? ("defined" as const) : undefined);
             testedLog.push({
               fromTable: c.fromTable,
               fromColumn: c.fromColumn,
@@ -2864,10 +2970,10 @@ export function activate(context: vscode.ExtensionContext): void {
               backwardRate: graded.backwardRate,
               sampledForward: forward.sampled,
               sampledBackward: backward.sampled,
-              outcome: graded.verdict ?? "rejected",
+              outcome: verdict ?? "rejected",
               reason: c.reason,
             });
-            if (graded.verdict) {
+            if (verdict) {
               relationships.push({
                 fromTable: c.fromTable,
                 fromColumn: c.fromColumn,
@@ -2878,7 +2984,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 sampledForward: forward.sampled,
                 sampledBackward: backward.sampled,
                 ...(complete ? { complete: true } : {}),
-                verdict: graded.verdict,
+                verdict,
                 ...(graded.note ? { note: graded.note } : {}),
                 reason: c.reason,
               });
@@ -2941,14 +3047,21 @@ export function activate(context: vscode.ExtensionContext): void {
       (a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate),
     );
     const bestRate = (t: TestedPair) => Math.max(t.forwardRate, t.backwardRate);
+    // A scoped run must not erase what earlier runs established outside its
+    // scope: re-probed pairs take the new measurement, the rest survive.
+    const previous = schemas.getSync(source.id)?.er;
     const er: ErModel = {
       builtAt: nowIso(),
       sampleSize: ER_SAMPLE_SIZE,
       candidatesTested: tested,
-      relationships,
+      relationships: mergeRelationships(previous?.relationships ?? [], relationships),
       ...(partial ? { partial: true } : {}),
       mode: mode.value,
-      rowEstimates,
+      rowEstimates: { ...(previous?.rowEstimates ?? {}), ...rowEstimates },
+      ...(selectedTables.length < schema.catalog.tables.length
+        ? { scopeTables: selectedTables.length }
+        : {}),
+      ...(aiHint ? { aiHint } : {}),
       report: {
         tested: [...testedLog].sort((a, b) => bestRate(b) - bestRate(a)).slice(0, 80),
         zeroSampleCount,

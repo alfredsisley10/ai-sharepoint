@@ -112,6 +112,9 @@ export interface JoinCandidate {
   toColumn: string;
   reason: string;
   priority: number;
+  /** User-supplied join: persists as "defined" even when the measured rate
+   *  falls below the automatic thresholds. */
+  userDefined?: boolean;
 }
 
 export interface JoinProbeCounts {
@@ -496,15 +499,25 @@ export function classifyJoin(
 
 export const ER_AI_MAX_PAIRS = 40;
 
+export interface JoinPromptOptions {
+  /** Refinement round: the model sees what was measured and how it failed. */
+  rejected?: TestedPair[];
+  maxPairs?: number;
+  /** The user's description of the data — domain knowledge the catalog
+   *  cannot carry ("SAP FI tables; MANDT is the client key everywhere"). */
+  hint?: string;
+}
+
 /** Prompt Copilot for join hypotheses from everything the indexes know —
- *  names, types, semantic tags/synonyms, content-type summaries. With
- *  `rejected` present this is the REFINEMENT round: the model sees what was
- *  measured (and how it failed) and proposes different hypotheses. */
+ *  names, types, semantic tags/synonyms, content-type summaries — plus the
+ *  user's own description of the data when given. With `rejected` present
+ *  this is the REFINEMENT round. */
 export function buildJoinCandidatePrompt(
   schema: SourceSchema,
-  rejected?: TestedPair[],
-  maxPairs = ER_AI_MAX_PAIRS,
+  opts: JoinPromptOptions = {},
 ): string {
+  const rejected = opts.rejected;
+  const maxPairs = opts.maxPairs ?? ER_AI_MAX_PAIRS;
   const semBy = new Map((schema.semantic?.tables ?? []).map((t) => [t.table.toLowerCase(), t]));
   const tableLines: string[] = [];
   for (const t of schema.catalog.tables) {
@@ -537,6 +550,12 @@ export function buildJoinCandidatePrompt(
   return [
     `You are inferring JOIN relationships for a ${schema.catalog.engine} database ("${schema.catalog.database}") that declares no foreign keys.`,
     "From the tables below (column types, semantic tags, and content-type summaries of actual values), propose the column pairs MOST LIKELY to join — keys referencing other tables, shared business identifiers, matching code domains. Only pairs whose types can join. No same-table pairs.",
+    ...(opts.hint?.trim()
+      ? [
+          "",
+          `The user describes this data as follows — weight this domain knowledge heavily: ${opts.hint.trim().slice(0, 800)}`,
+        ]
+      : []),
     "",
     `Return ONLY JSON, exactly: {"pairs":[{"fromTable":"<qualified table>","fromColumn":"<col>","toTable":"<qualified table>","toColumn":"<col>","why":"<one short line>"}]} — at most ${maxPairs} pairs, most confident first.`,
     ...rejectedBlock,
@@ -544,6 +563,19 @@ export function buildJoinCandidatePrompt(
     "Tables:",
     tableLines.join("\n\n"),
   ].join("\n");
+}
+
+/** Merge a (possibly scoped) run into the previous model's relationships:
+ *  re-probed pairs take the new measurement, everything else survives — a
+ *  run scoped to 10 of 100 tables must not erase the other 90's findings. */
+export function mergeRelationships(
+  previous: ProbedRelationship[],
+  next: ProbedRelationship[],
+): ProbedRelationship[] {
+  const nextKeys = new Set(next.map((r) => pairKey(r)));
+  return [...previous.filter((r) => !nextKeys.has(pairKey(r))), ...next].sort(
+    (a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate),
+  );
 }
 
 /** Validate the model's proposals against the catalog: hallucinated tables/
@@ -801,13 +833,13 @@ export function renderErForModel(model: ErModel, maxLines = 25): string[] {
 export function renderProbeReport(model: ErModel): string[] {
   const report = model.report;
   if (!report) return [];
-  const counts = { strong: 0, likely: 0, rejected: 0, failed: 0 };
+  const counts = { strong: 0, likely: 0, defined: 0, rejected: 0, failed: 0 };
   for (const t of report.tested) counts[t.outcome] += 1;
   const lines = [
     "",
     "### Probe report",
     "",
-    `_${model.candidatesTested} pair(s) probed${model.mode ? ` (${model.mode} mode)` : ""}: **${counts.strong} strong**, **${counts.likely} likely**, ${counts.rejected} below thresholds, ${counts.failed} failed${report.aiProposed !== undefined ? ` · ${report.aiProposed} pair(s) proposed by Copilot${report.aiRefined ? ` + ${report.aiRefined} in the refinement round` : ""}` : ""}._`,
+    `_${model.candidatesTested} pair(s) probed${model.mode ? ` (${model.mode} mode)` : ""}${model.scopeTables ? `, scoped to ${model.scopeTables} table(s)` : ""}: **${counts.strong} strong**, **${counts.likely} likely**${counts.defined > 0 ? `, **${counts.defined} user-defined** (kept despite the measured rate)` : ""}, ${counts.rejected} below thresholds, ${counts.failed} failed${report.aiProposed !== undefined ? ` · ${report.aiProposed} pair(s) proposed by Copilot${report.aiRefined ? ` + ${report.aiRefined} in the refinement round` : ""}` : ""}._`,
   ];
   if (report.zeroSampleCount > 0 && report.zeroSampleCount >= Math.max(3, model.candidatesTested / 2)) {
     lines.push(
