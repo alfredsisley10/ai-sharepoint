@@ -757,13 +757,42 @@ function buildAliasMap(text: string): Map<string, string> {
   return aliases;
 }
 
+/** The final identifier segment of a (possibly multi-part, bracketed,
+ *  quoted) table reference: `[ADExport].[dbo].[LDAP_USERS]` → `ldap_users`.
+ *  Table-NAME matching — not full-qualified-name matching — is what makes a
+ *  working query parse against a catalog stored under a different (or no)
+ *  schema, the single most common real-world mismatch. */
+function tableNameOf(ref: string): string {
+  const segs = ref.split(".").map(stripIdent).filter(Boolean);
+  return (segs[segs.length - 1] ?? "").toLowerCase();
+}
+
+/** Catalog tables a reference could denote, matched by table NAME and
+ *  tolerant of schema differences. When the reference carries a schema
+ *  AND the catalog tables carry schemas, a matching schema is preferred to
+ *  disambiguate same-named tables across schemas. */
+function tablesByRef(ref: string, schema: SourceSchema): TableDef[] {
+  const name = tableNameOf(ref);
+  if (!name) return [];
+  const byName = schema.catalog.tables.filter((t) => t.name.toLowerCase() === name);
+  if (byName.length <= 1) return byName;
+  // Same name in several schemas → prefer the schema the reference named.
+  const segs = ref.split(".").map(stripIdent).filter(Boolean);
+  const refSchema = segs.length >= 2 ? segs[segs.length - 2].toLowerCase() : undefined;
+  if (refSchema) {
+    const inSchema = byName.filter((t) => (t.schema ?? "").toLowerCase() === refSchema);
+    if (inSchema.length > 0) return inSchema;
+  }
+  return byName;
+}
+
 /** Tables a SNIPPET alias plausibly abbreviates: token initials of the
- *  table name end with the alias, or a name token starts with it — so an
- *  undeclared `u`/`ga`/`g` in pasted ON-logic still finds
+ *  table name match/end with the alias, or a name token starts with it — so
+ *  an undeclared `u`/`ga`/`g` in pasted ON-logic still finds
  *  LDAP_USERS / LDAP_GROUP_ASSOCIATION / LDAP_GROUPS. */
 function inferTablesFromAlias(alias: string, schema: SourceSchema): TableDef[] {
   const a = alias.toLowerCase();
-  if (!a || a.length > 12) return [];
+  if (!a || a.length > 12 || a.includes(".")) return [];
   return schema.catalog.tables.filter((t) => {
     const tokens = t.name.toLowerCase().split(/[_\s]+/).filter(Boolean);
     const initials = tokens.map((tok) => tok[0]).join("");
@@ -774,10 +803,17 @@ function inferTablesFromAlias(alias: string, schema: SourceSchema): TableDef[] {
 const tablesWithColumn = (column: string, pool: TableDef[]): TableDef[] =>
   pool.filter((t) => t.columns.some((c) => c.name.toLowerCase() === column.toLowerCase()));
 
-/** Candidate tables for one `qualifier.column` side: exact/declared-alias
- *  resolution first, then alias INFERENCE, then pure column membership —
- *  any portion of working SQL must parse, including fragments whose
- *  aliases were never declared. */
+/**
+ * Candidate tables for one `qualifier.column` side. Precedence:
+ *  1. The reference names a catalog table (by name, schema-tolerant) — or a
+ *     declared alias pointing at one. If that table HAS the column, return
+ *     it; if it matched a table but not the column, return it anyway so the
+ *     caller emits a precise "column not in <table>" error (never silently
+ *     re-resolve to a different table the column happens to live in).
+ *  2. Snippet alias inference (undeclared `u`/`ga`), narrowed by the column.
+ *  3. Bare column with no usable qualifier: tables the paste names, else any
+ *     catalog table carrying the column.
+ */
 function candidateTables(
   rawRef: string | undefined,
   column: string,
@@ -786,20 +822,17 @@ function candidateTables(
 ): TableDef[] {
   const all = schema.catalog.tables;
   if (rawRef) {
-    const ref = stripIdent(rawRef).toLowerCase();
-    const target = stripIdent(aliases.get(ref) ?? rawRef).toLowerCase();
-    const exact = all.filter(
-      (x) => qualifiedName(x).toLowerCase() === target || x.name.toLowerCase() === target,
-    );
-    if (exact.length > 0) return tablesWithColumn(column, exact.length ? exact : all);
-    const inferred = tablesWithColumn(column, inferTablesFromAlias(ref, schema));
+    const key = stripIdent(rawRef).toLowerCase();
+    const aliasTarget = aliases.get(key);
+    const named = tablesByRef(aliasTarget ?? rawRef, schema);
+    if (named.length > 0) {
+      const withCol = tablesWithColumn(column, named);
+      return withCol.length > 0 ? withCol : named; // precise column error
+    }
+    const inferred = tablesWithColumn(column, inferTablesFromAlias(key, schema));
     if (inferred.length > 0) return inferred;
   }
-  // Column-membership fallback: prefer tables the paste actually names.
-  const declared = [...new Set([...aliases.values()].map((v) => stripIdent(v).toLowerCase()))]
-    .flatMap((name) =>
-      all.filter((x) => qualifiedName(x).toLowerCase() === name || x.name.toLowerCase() === name),
-    );
+  const declared = [...new Set(aliases.values())].flatMap((v) => tablesByRef(v, schema));
   const inDeclared = tablesWithColumn(column, declared);
   return inDeclared.length > 0 ? inDeclared : tablesWithColumn(column, all);
 }
@@ -815,27 +848,20 @@ function resolveSides(
 ): ParsedJoinSpec | { issue: string } {
   let candA = candidateTables(a.ref, a.column, aliases, schema);
   let candB = candidateTables(b.ref, b.column, aliases, schema);
-  if (candA.length === 0 || candB.length === 0) {
-    const missing = candA.length === 0 ? a : b;
-    // Precise message when the table itself resolved but lacks the column.
-    if (missing.ref) {
-      const ref = stripIdent(aliases.get(stripIdent(missing.ref).toLowerCase()) ?? missing.ref).toLowerCase();
-      const named = schema.catalog.tables.find(
-        (x) => qualifiedName(x).toLowerCase() === ref || x.name.toLowerCase() === ref,
-      );
-      if (named) {
-        return {
-          issue: `Column "${missing.column}" is not in ${qualifiedName(named)} (has: ${named.columns
-            .slice(0, 12)
-            .map((c) => c.name)
-            .join(", ")}${named.columns.length > 12 ? ", …" : ""}).`,
-        };
-      }
+  // No candidate table at all for a side: the reference (if any) names no
+  // catalog table, or no table carries a bare column.
+  const noMatch = (side: { ref?: string; column: string }): { issue: string } => {
+    if (side.ref) {
+      return {
+        issue: `Table "${stripIdent(side.ref)}" is not in the loaded catalog — check the schema is loaded and you selected the right database.`,
+      };
     }
     return {
-      issue: `"${missing.ref ? `${stripIdent(missing.ref)}.` : ""}${missing.column}" is not in the catalog — no table matches${missing.ref ? ` "${stripIdent(missing.ref)}" and none` : ""} has a column "${missing.column}" (load/refresh the schema first?).`,
+      issue: `No catalog table has a column "${side.column}" (load/refresh the schema, or the column name differs).`,
     };
-  }
+  };
+  if (candA.length === 0) return noMatch(a);
+  if (candB.length === 0) return noMatch(b);
   if (candA.length === 1) candB = candB.filter((t) => t !== candA[0]).length > 0 ? candB.filter((t) => t !== candA[0]) : candB;
   if (candB.length === 1) candA = candA.filter((t) => t !== candB[0]).length > 0 ? candA.filter((t) => t !== candB[0]) : candA;
   if (candA.length > 1 || candB.length > 1) {
@@ -849,15 +875,30 @@ function resolveSides(
   if (tableA === tableB) {
     return { issue: "Both sides resolve to the same table — a relationship needs two tables." };
   }
-  const colA = tableA.columns.find((c) => c.name.toLowerCase() === a.column.toLowerCase())!;
-  const colB = tableB.columns.find((c) => c.name.toLowerCase() === b.column.toLowerCase())!;
-  const famA = joinFamily(colA.dataType);
-  const famB = joinFamily(colB.dataType);
+  // The resolved table may have matched by NAME but lack the named column
+  // (candidateTables returns it so we can say so precisely).
+  const colA = tableA.columns.find((c) => c.name.toLowerCase() === a.column.toLowerCase());
+  const colB = tableB.columns.find((c) => c.name.toLowerCase() === b.column.toLowerCase());
+  for (const [t, col, side] of [
+    [tableA, colA, a],
+    [tableB, colB, b],
+  ] as const) {
+    if (!col) {
+      return {
+        issue: `Column "${side.column}" is not in ${qualifiedName(t)} (has: ${t.columns
+          .slice(0, 12)
+          .map((c) => c.name)
+          .join(", ")}${t.columns.length > 12 ? ", …" : ""}).`,
+      };
+    }
+  }
+  const famA = joinFamily(colA!.dataType);
+  const famB = joinFamily(colB!.dataType);
   return {
     fromTable: qualifiedName(tableA),
-    fromColumn: colA.name,
+    fromColumn: colA!.name,
     toTable: qualifiedName(tableB),
-    toColumn: colB.name,
+    toColumn: colB!.name,
     ...(famA && famB && famA === famB
       ? {}
       : {
@@ -985,28 +1026,56 @@ export function parseJoinSpec(
  *  resolve the SQL (deep subqueries, dialect quirks, derived tables). The
  *  pasted SQL itself is sent, plus table/column names; the user is told. */
 export function buildSqlJoinExtractionPrompt(sql: string, schema: SourceSchema): string {
+  // EVERY column with its type — never filtered. A working query may join on
+  // a column the join-family heuristic would exclude (LOB/odd types); the
+  // model must be able to see any column the SQL references, or it can't map
+  // the very joins the user provided (pilot: "could not determine joins").
   const tableLines = schema.catalog.tables
     .map(
       (t) =>
-        `${qualifiedName(t)}: ${t.columns
-          .filter((c) => joinFamily(c.dataType))
-          .map((c) => c.name)
-          .join(", ")}`,
+        `${qualifiedName(t)}: ${t.columns.map((c) => `${c.name} (${c.dataType})`).join(", ")}`,
     )
     .join("\n")
-    .slice(0, 4_000);
+    .slice(0, 6_000);
   return [
     `You are extracting the JOIN relationships used by WORKING SQL against a ${schema.catalog.engine} database ("${schema.catalog.database}").`,
     "The paste may be ANY portion of a query: a full SELECT, only the join/filtering logic, or a fragment whose table aliases are never declared — infer which catalog table each column belongs to from the column lists below. Resolve aliases (including derived tables when their source is clear) and list every join condition between TWO of the catalog tables as column pairs. Use the qualified table names exactly as given. Ignore literal filters, self-joins, and tables not in the catalog.",
     "",
     'Return ONLY JSON, exactly: {"pairs":[{"fromTable":"<qualified table>","fromColumn":"<col>","toTable":"<qualified table>","toColumn":"<col>","why":"<the SQL fragment this came from>"}]}.',
     "",
-    "Catalog tables (joinable columns):",
+    "Catalog tables (every column with its type):",
     tableLines,
     "",
     "SQL:",
     sql.slice(0, 4_000),
   ].join("\n");
+}
+
+/** Table names a FROM/JOIN clause references, by NAME segment — used to tell
+ *  the user, precisely, which of their SQL's tables aren't in the loaded
+ *  catalog (the real reason extraction returns nothing when the wrong
+ *  database/schema is loaded). Returns the referenced names and which are
+ *  missing from the catalog. */
+export function diagnoseSqlAgainstCatalog(
+  sql: string,
+  schema: SourceSchema,
+): { referenced: string[]; missing: string[]; catalogTables: string[] } {
+  const referenced: string[] = [];
+  const seen = new Set<string>();
+  for (const m of sql.matchAll(/\b(?:from|join)\s+([A-Za-z0-9_.[\]"`]+)/gi)) {
+    const name = tableNameOf(m[1]);
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      referenced.push(stripIdent(m[1]));
+    }
+  }
+  const have = new Set(schema.catalog.tables.map((t) => t.name.toLowerCase()));
+  const missing = referenced.filter((r) => !have.has(tableNameOf(r)));
+  return {
+    referenced,
+    missing,
+    catalogTables: schema.catalog.tables.map((t) => qualifiedName(t)),
+  };
 }
 
 /** Add/replace one relationship in the persisted model (user-defined joins

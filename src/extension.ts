@@ -64,6 +64,7 @@ import {
   parseJoinCandidateResponse,
   parseJoinSpecs,
   buildSqlJoinExtractionPrompt,
+  diagnoseSqlAgainstCatalog,
   mergeRelationships,
   buildCastRetryCandidates,
   initialSampleSize,
@@ -2905,6 +2906,16 @@ export function activate(context: vscode.ExtensionContext): void {
             .map((j) => `${j.fromColumn}↔${j.toColumn}`)
             .join(", ")}${userJoins.length > 4 ? ", …" : ""}.`,
         );
+      } else {
+        // Nothing parsed: the usual real cause is the SQL's tables not being
+        // in the LOADED catalog (wrong database/schema, or schema not
+        // refreshed). Say so by name instead of a blank "couldn't determine".
+        const diag = diagnoseSqlAgainstCatalog(knownInput, schema);
+        if (diag.missing.length > 0) {
+          void vscode.window.showWarningMessage(
+            `These table(s) in your SQL aren't in the loaded catalog: ${diag.missing.join(", ")}. The catalog has ${diag.catalogTables.length} table(s)${diag.catalogTables.length <= 12 ? `: ${diag.catalogTables.join(", ")}` : ` (e.g. ${diag.catalogTables.slice(0, 8).join(", ")}, …)`}. Run “Load/Refresh Database Schema” or confirm you selected the right database, then retry.`,
+          );
+        }
       }
       // AI summarization fallback: messy SQL (deep subqueries, dialect
       // quirks) that deterministic parsing couldn't fully resolve.

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.31.1 — 2026-06-12
+
+### Fixed — pasted working SQL parses even when the catalog's schema differs (ER diagram) (pilot)
+- A working two-join Active Directory query still produced "could not determine any joins" —
+  through BOTH the deterministic parser AND Copilot. Two compounding, now-fixed causes:
+  - **Table resolution required the full qualified name to match.** The SQL says
+    `dbo.LDAP_USERS`; if the loaded catalog stored that table bare (`LDAP_USERS`) or under a
+    different schema, nothing resolved and every join became a "not found/ambiguous" issue.
+    Resolution now matches on the **table-name segment** — schema-tolerant and multi-part
+    tolerant (`ADExport.dbo.LDAP_USERS` → `LDAP_USERS`) — and prefers the reference's schema
+    only to disambiguate same-named tables across schemas.
+  - **The Copilot extraction prompt listed only "joinable" columns.** It now lists **every
+    column with its type**, so the model can always see the columns a working query joins on
+    (LOB/odd types included; casts handle type mismatches at probe time).
+- **Real diagnosis when nothing parses**: if the SQL's tables aren't in the loaded catalog, the
+  wizard now names them and shows the catalog's actual tables — *"these tables aren't in the
+  loaded catalog: …; the catalog has: … — run Load/Refresh Database Schema or confirm the right
+  database"* — instead of a blank "couldn't determine joins". Error messages distinguish
+  "table not in catalog" from "column not in that table".
+
 ## 0.31.0 — 2026-06-12
 
 ### Added — Teams delivery without admin consent: Incoming Webhooks (pilot)

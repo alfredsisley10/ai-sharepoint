@@ -460,7 +460,7 @@ test("parseJoinSpec returns actionable issues and flags cross-family joins", asy
   assert.match((parseJoinSpec("just words", schema) as { issue: string }).issue, /No join condition found/);
   assert.match(
     (parseJoinSpec("dbo.Ghost.x = dbo.Customers.id", schema) as { issue: string }).issue,
-    /not in the catalog/,
+    /not in the loaded catalog/,
   );
   assert.match(
     (parseJoinSpec("dbo.Orders.nope = dbo.Customers.id", schema) as { issue: string }).issue,
@@ -695,7 +695,7 @@ test("parseJoinSpecs extracts EVERY join from a working query, alias-aware, dedu
   const partial = parseJoinSpecs("a.x = dbo.Customers.id; dbo.Orders.customer_id = dbo.Customers.id", schema);
   assert.equal(partial.joins.length, 1);
   assert.equal(partial.issues.length, 1);
-  assert.match(partial.issues[0], /not in the catalog/);
+  assert.match(partial.issues[0], /not in the loaded catalog/);
   // No equality at all → a guiding issue.
   assert.match(parseJoinSpecs("SELECT 1", schema).issues[0], /No join condition/);
 });
@@ -708,7 +708,7 @@ test("the SQL-summarization prompt carries the catalog and the SQL; cross-family
   const prompt = buildSqlJoinExtractionPrompt("SELECT * FROM Orders o JOIN Customers c ON o.customer_id = c.id", schema);
   assert.match(prompt, /WORKING SQL/);
   assert.match(prompt, /ANY portion of a query/);
-  assert.match(prompt, /dbo\.Customers: id, name, region_code/);
+  assert.match(prompt, /dbo\.Customers: id \(int\), name \(nvarchar\)/);
   assert.match(prompt, /FROM Orders o JOIN Customers c/);
   // allowCrossFamily keeps int↔nvarchar pairs as cast probes (the working
   // query is the evidence the join runs).
@@ -792,4 +792,102 @@ test("the probe report names the build that produced it (torn installs made resu
     report: { tested: [], zeroSampleCount: 0 },
   }).join("\n");
   assert.match(text, /probed \(ai mode\) by v0\.30\.4/);
+});
+
+// --- the real bug: SQL resolves against a SCHEMA-MISMATCHED catalog (0.31.1) ---
+
+function ldapCatalog(withSchema: boolean): SourceSchema {
+  const t = (name: string, cols: string[]) => ({
+    ...(withSchema ? { schema: "dbo" } : {}),
+    name,
+    kind: "table" as const,
+    columns: cols.map((c) => ({ name: c, dataType: "nvarchar" })),
+  });
+  return {
+    catalog: {
+      fetchedAt: T0,
+      engine: "mssql",
+      database: "ad",
+      tables: [
+        t("LDAP_USERS", ["distinguishedName", "sAMAccountName"]),
+        t("LDAP_GROUPS", ["distinguishedName", "cn"]),
+        t("LDAP_GROUP_ASSOCIATION", ["group_dn", "member_dn"]),
+      ],
+    },
+    semanticState: "none",
+  };
+}
+
+const TWO_JOIN_AD_QUERY = `
+  SELECT u.sAMAccountName, g.cn
+  FROM dbo.LDAP_USERS u
+  JOIN dbo.LDAP_GROUP_ASSOCIATION ga ON u.distinguishedName = ga.member_dn
+  JOIN dbo.LDAP_GROUPS g ON ga.group_dn = g.distinguishedName
+`;
+
+test("the working two-join AD query parses against a catalog stored WITHOUT a schema (the real bug)", async () => {
+  const { parseJoinSpecs } = await import("../src/context/db/erDiagram");
+  // SQL says dbo.LDAP_USERS; catalog stored the table bare (no schema).
+  // Pre-fix this resolved to nothing and produced "could not determine joins".
+  const { joins, issues } = parseJoinSpecs(TWO_JOIN_AD_QUERY, ldapCatalog(false));
+  assert.equal(joins.length, 2, JSON.stringify({ joins, issues }));
+  const flat = joins.map((j) => `${j.fromTable}.${j.fromColumn}=${j.toTable}.${j.toColumn}`).sort().join(" ");
+  assert.match(flat, /LDAP_GROUP_ASSOCIATION\.member_dn=LDAP_USERS\.distinguishedName|LDAP_USERS\.distinguishedName=LDAP_GROUP_ASSOCIATION\.member_dn/);
+  assert.match(flat, /LDAP_GROUPS\.distinguishedName|LDAP_GROUP_ASSOCIATION\.group_dn/);
+});
+
+test("the same query parses with schema present, and when the SQL omits the schema", async () => {
+  const { parseJoinSpecs } = await import("../src/context/db/erDiagram");
+  assert.equal(parseJoinSpecs(TWO_JOIN_AD_QUERY, ldapCatalog(true)).joins.length, 2);
+  const noSchemaSql = TWO_JOIN_AD_QUERY.replace(/dbo\./g, "");
+  assert.equal(parseJoinSpecs(noSchemaSql, ldapCatalog(true)).joins.length, 2, "bare SQL vs dbo catalog");
+  // Three-part db.schema.table also resolves by the final name segment.
+  const threePart = TWO_JOIN_AD_QUERY.replace(/dbo\./g, "ADExport.dbo.");
+  assert.equal(parseJoinSpecs(threePart, ldapCatalog(true)).joins.length, 2, "three-part names");
+});
+
+test("same-named tables across schemas are disambiguated by the reference's schema", async () => {
+  const { parseJoinSpecs } = await import("../src/context/db/erDiagram");
+  const schema: SourceSchema = {
+    catalog: {
+      fetchedAt: T0, engine: "mssql", database: "x",
+      tables: [
+        { schema: "dbo", name: "T", kind: "table", columns: [{ name: "a", dataType: "int" }] },
+        { schema: "stg", name: "T", kind: "table", columns: [{ name: "a", dataType: "int" }] },
+        { schema: "dbo", name: "U", kind: "table", columns: [{ name: "a", dataType: "int" }] },
+      ],
+    },
+    semanticState: "none",
+  };
+  const { joins } = parseJoinSpecs("dbo.T.a = dbo.U.a", schema);
+  assert.equal(joins.length, 1);
+  assert.equal(joins[0].fromTable, "dbo.T");
+});
+
+test("the SQL-extraction prompt lists EVERY column with its type (not just join-family)", async () => {
+  const { buildSqlJoinExtractionPrompt } = await import("../src/context/db/erDiagram");
+  const schema: SourceSchema = {
+    catalog: {
+      fetchedAt: T0, engine: "mssql", database: "ad",
+      tables: [{ schema: "dbo", name: "LDAP_USERS", kind: "table", columns: [
+        { name: "distinguishedName", dataType: "ntext" },   // LOB — was filtered out before
+        { name: "whenCreated", dataType: "datetime" },        // non-join-family — must still appear
+      ] }],
+    },
+    semanticState: "none",
+  };
+  const prompt = buildSqlJoinExtractionPrompt("…", schema);
+  assert.match(prompt, /distinguishedName \(ntext\)/);
+  assert.match(prompt, /whenCreated \(datetime\)/);
+});
+
+test("diagnoseSqlAgainstCatalog names the missing tables and the catalog it has", async () => {
+  const { diagnoseSqlAgainstCatalog } = await import("../src/context/db/erDiagram");
+  const d = diagnoseSqlAgainstCatalog(
+    "FROM dbo.WRONG_TABLE w JOIN dbo.LDAP_USERS u ON w.id = u.id",
+    ldapCatalog(true),
+  );
+  assert.deepEqual(d.missing, ["dbo.WRONG_TABLE"]);
+  assert.ok(d.referenced.includes("dbo.LDAP_USERS"));
+  assert.ok(d.catalogTables.includes("dbo.LDAP_USERS"));
 });
