@@ -54,6 +54,22 @@ export class CommsClient extends SharePointClient {
     return me.id;
   }
 
+  /** The signed-in user's own mailbox address — the destination for the
+   *  Outlook end-to-end self-test (verification, ADR-0025 amendment). */
+  async myAddress(): Promise<ResolvedRecipient> {
+    const me = await this.request<{ id: string; displayName?: string; mail?: string; userPrincipalName?: string }>(
+      "GET",
+      "/me?$select=id,displayName,mail,userPrincipalName",
+      undefined,
+      DIRECTORY_SCOPES,
+    );
+    return {
+      id: me.id,
+      displayName: me.displayName ?? "you",
+      address: me.mail ?? me.userPrincipalName ?? "",
+    };
+  }
+
   /** Create (or reuse, for oneOnOne Graph dedupes) the chat, then post. */
   async sendTeamsMessage(recipients: ResolvedRecipient[], body: string): Promise<void> {
     const myId = await this.myUserId();

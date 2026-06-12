@@ -572,6 +572,14 @@ Analyze Power BI data without leaving chat — **read-only, with your existing s
 
 Have findings reach people — **without the assistant ever sending anything itself**:
 
+- **Verify a method before first use.** Each delivery method (Outlook, Teams via Graph, each
+  Teams webhook) must pass a one-time **end-to-end test** before it's offered for sending. Run
+  *AI SharePoint: Test Communication Method…* (Communications view title bar): it sends a real
+  message containing a **verification code** — Outlook to **yourself**, a webhook to its
+  **channel**, Graph Teams to a recipient you pick — and you type the code back to confirm it
+  arrived. Only then can drafts target that method (the approval dialog shows only verified
+  options). This proves consent/webhook/delivery actually work rather than failing at send time.
+
 - **Prepare** a draft: *Draft Teams Message…* / *Draft Outlook Email…* (view title buttons),
   or ask `@sharepoint` — *"draft a Teams message to jdoe@corp.example summarizing this"* —
   which queues via a confirmation-gated tool. Individuals only (max 10 recipients).
@@ -722,6 +730,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Load/Refresh / Index / View Database Schema · Pre-cache Source Catalog | Schema understanding (ADR-0024) and catalog pre-cache per source |
 | Draft Teams Message / Draft Outlook Email · Review & Send / Edit / Discard Communication Draft | Approval-gated communications (ADR-0025) |
 | Configure Teams Webhook (no admin consent)… | Add/remove channel Incoming Webhooks so Teams drafts can post without `Chat.ReadWrite` |
+| Test Communication Method (end-to-end)… | Send a coded test message (Outlook→self, webhook→channel, Graph→a recipient) and confirm the code; required before a method can send |
 | Edit Bookmark | Rename / modify a bookmark's saved query (SQL validated read-only) |
 | Remove Site Connection | Remove descriptor (+ tokens if last connection in tenant) |
 | Ask Copilot | One-shot prompt; streams into the “AI SharePoint — Copilot” output |

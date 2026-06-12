@@ -146,6 +146,14 @@ import {
   postTeamsWebhook,
 } from "./comms/teamsWebhook";
 import {
+  CommsMethodKind,
+  verificationKey,
+  generateVerificationCode,
+  codeMatches,
+  buildTestMessage,
+  verifiedLabel,
+} from "./comms/commsTest";
+import {
   CommDraft,
   CommChannel,
   parseRecipients,
@@ -3934,8 +3942,125 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!name?.trim()) return;
     await setTeamsWebhooks([...hooks.filter((w) => w.name !== name.trim()), { name: name.trim(), url: url.trim() }]);
     void vscode.window.showInformationMessage(
-      `Teams webhook "${name.trim()}" saved. Teams drafts can now be posted to it from the approval dialog — no admin consent needed.`,
+      `Teams webhook "${name.trim()}" saved. Test it (“AI SharePoint: Test Communication Method”) to enable it for sending.`,
     );
+  });
+
+  // Communications verification (ADR-0025 amendment): a method is offered for
+  // sending only after a real end-to-end test — a coded message the user
+  // confirms receiving — so consent/webhook/delivery is proven, not assumed.
+  const VERIFIED_KEY = "aiSharePoint.commsVerified";
+  const verifiedAt = (key: string): string | undefined =>
+    context.globalState.get<Record<string, string>>(VERIFIED_KEY, {})[key];
+  const markVerified = async (key: string): Promise<void> => {
+    const map = { ...context.globalState.get<Record<string, string>>(VERIFIED_KEY, {}) };
+    map[key] = nowIso();
+    await context.globalState.update(VERIFIED_KEY, map);
+  };
+  const anyTeamsVerified = async (): Promise<boolean> =>
+    Boolean(verifiedAt(verificationKey("teams-graph"))) ||
+    (await getTeamsWebhooks()).some((w) => verifiedAt(verificationKey("teams-webhook", w.name)));
+
+  /** Run one method's end-to-end test: send a coded message, have the user
+   *  confirm the code, persist verification on success. Returns verified. */
+  const runCommsTest = async (
+    kind: CommsMethodKind,
+    webhook?: TeamsWebhook,
+  ): Promise<boolean> => {
+    const code = generateVerificationCode();
+    const label = kind === "outlook" ? "Outlook email" : webhook ? `Teams “${webhook.name}”` : "Teams";
+    const { subject, body } = buildTestMessage(code, label);
+    try {
+      if (kind === "teams-webhook" && webhook) {
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Posting a test to “${webhook.name}”…` },
+          () => postTeamsWebhook(webhook.url, buildTeamsWebhookPayload({ body, title: subject })),
+        );
+      } else {
+        const client = await commsClientFor();
+        if (!client) return false;
+        if (kind === "outlook") {
+          await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: "Sending a test email to yourself…" },
+            async () => {
+              const me = await client.myAddress();
+              if (!me.address) throw new AppError("Could not determine your mailbox address.", "config");
+              const created = await client.createMailDraft([me], subject, body);
+              await client.sendMailDraft(created.id);
+            },
+          );
+        } else {
+          // Graph Teams can't message yourself in a oneOnOne — test against a
+          // real recipient the user can check (a colleague, or a self-chat
+          // where the tenant allows it).
+          const ref = await vscode.window.showInputBox({
+            ignoreFocusOut: true,
+            title: "Teams test — recipient to message",
+            prompt:
+              "Direct Teams messaging can't post to a 1:1 chat with only yourself, so pick someone who can confirm the code (a willing colleague, or your own address if your tenant allows self-chat).",
+            placeHolder: "colleague@corp.example",
+            validateInput: (v) => recipientIssue(parseRecipients(v)),
+          });
+          if (!ref) return false;
+          await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: "Sending a Teams test…" },
+            async () => {
+              const resolved = await client.resolveRecipient(parseRecipients(ref)[0]);
+              await client.sendTeamsMessage([resolved], body);
+            },
+          );
+        }
+      }
+    } catch (err) {
+      const hint = explainCommsError(err instanceof Error ? err.message : String(err));
+      void vscode.window.showErrorMessage(
+        `Test ${label} send failed: ${err instanceof Error ? err.message : String(err)}${hint ? ` — ${hint}` : ""}`,
+      );
+      return false;
+    }
+    const entered = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: `Confirm the ${label} test`,
+      prompt: `Check ${kind === "teams-webhook" ? "the channel" : kind === "outlook" ? "your inbox" : "the Teams chat"} and enter the verification code from the message.`,
+      placeHolder: "e.g. ABC-D29",
+    });
+    if (entered === undefined) return false;
+    if (!codeMatches(entered, code)) {
+      void vscode.window.showWarningMessage(
+        `That code didn't match — ${label} is not verified. The message may not have been delivered; re-test after checking.`,
+      );
+      return false;
+    }
+    await markVerified(verificationKey(kind, webhook?.name));
+    telemetry.record("comms.verify", { kind });
+    void vscode.window.showInformationMessage(`✓ ${label} verified end-to-end — it's now available for sending.`);
+    return true;
+  };
+
+  register("aiSharePoint.testCommsMethod", async () => {
+    const webhooks = await getTeamsWebhooks();
+    const pick = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(mail) Outlook email (self-test with a code)",
+          description: verifiedLabel(verifiedAt(verificationKey("outlook"))),
+          run: () => runCommsTest("outlook"),
+        },
+        {
+          label: "$(comment-discussion) Teams via Graph (Chat.ReadWrite)",
+          description: verifiedLabel(verifiedAt(verificationKey("teams-graph"))),
+          run: () => runCommsTest("teams-graph"),
+        },
+        ...webhooks.map((w) => ({
+          label: `$(plug) Teams webhook — ${w.name}`,
+          description: verifiedLabel(verifiedAt(verificationKey("teams-webhook", w.name))),
+          run: () => runCommsTest("teams-webhook", w),
+        })),
+      ],
+      { ignoreFocusOut: true, title: "Test which communication method? (sends a coded message you confirm)" },
+    );
+    if (!pick) return;
+    await pick.run();
   });
 
   const promptCommDraft = async (
@@ -3993,6 +4118,15 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   register("aiSharePoint.draftTeamsMessage", async () => {
+    // A method must be proven before it's offered (ADR-0025 amendment).
+    if (!(await anyTeamsVerified())) {
+      const go = await vscode.window.showInformationMessage(
+        "No Teams delivery method is verified yet. Test one end-to-end first (a coded message you confirm) — then drafting can target it.",
+        "Test Teams Method",
+      );
+      if (go === "Test Teams Method") await vscode.commands.executeCommand("aiSharePoint.testCommsMethod");
+      return;
+    }
     const draft = await promptCommDraft("teams");
     if (!draft) return;
     await outbox.add(draft);
@@ -4005,6 +4139,14 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   register("aiSharePoint.draftOutlookEmail", async () => {
+    if (!verifiedAt(verificationKey("outlook"))) {
+      const go = await vscode.window.showInformationMessage(
+        "Outlook isn't verified yet. Run a one-time end-to-end test (sends a coded email to yourself you confirm) before drafting.",
+        "Test Outlook",
+      );
+      if (go === "Test Outlook" && !(await runCommsTest("outlook"))) return;
+      if (go !== "Test Outlook") return;
+    }
     const draft = await promptCommDraft("outlook");
     if (!draft) return;
     await outbox.add(draft);
@@ -4082,31 +4224,56 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     await vscode.window.showTextDocument(previewDoc, { preview: true });
 
-    // Teams has no Graph "draft" — Chat.ReadWrite posts live (admin consent).
-    // Incoming Webhooks are the no-consent alternative: offer each configured
-    // channel webhook as its own send button.
-    const webhooks = draft.channel === "teams" ? await getTeamsWebhooks() : [];
+    // Only VERIFIED methods are offered as send options (ADR-0025
+    // amendment): a delivery path must have passed its end-to-end test.
+    // Teams has no Graph "draft" — Chat.ReadWrite posts live; Incoming
+    // Webhooks are the no-consent alternative, each its own button.
+    const allWebhooks = draft.channel === "teams" ? await getTeamsWebhooks() : [];
+    const webhooks = allWebhooks.filter((w) => verifiedAt(verificationKey("teams-webhook", w.name)));
+    const graphVerified =
+      draft.channel === "teams"
+        ? Boolean(verifiedAt(verificationKey("teams-graph")))
+        : Boolean(verifiedAt(verificationKey("outlook")));
     const WEBHOOK_PREFIX = "Post to ";
     const sendLabel = draft.channel === "teams" ? "Send via Teams (Graph)" : "Send Email";
     const webhookButtons = webhooks.map((w) => `${WEBHOOK_PREFIX}${w.name}`);
-    const buttons =
+    const sendButtons =
       draft.channel === "outlook"
-        ? [sendLabel, "Save to Outlook Drafts", "Discard Draft"]
-        : [...webhookButtons, sendLabel, "Discard Draft"];
-    const choice = await vscode.window.showWarningMessage(
-      `Approve this ${draft.channel === "teams" ? "Teams message" : "email"}?`,
-      {
-        modal: true,
-        detail:
-          `To: ${draft.to.join(", ")}${draft.subject ? `\nSubject: ${draft.subject}` : ""}\n\nIt is sent from YOUR account${draft.origin === "agent" ? " (content was prepared by the assistant — review it)" : ""}. The full text is open in the editor behind this dialog.` +
-          (draft.channel === "teams"
-            ? webhooks.length > 0
-              ? `\n\n“Post to …” delivers to a Teams CHANNEL via webhook (no admin consent; recipients are listed in the card, not messaged directly). “Send via Teams (Graph)” needs Chat.ReadWrite consent and messages recipients directly.`
-              : `\n\nDirect Teams messaging needs Chat.ReadWrite admin consent. No consent? Configure a channel Incoming Webhook (“AI SharePoint: Configure Teams Webhook”) to post without it.`
-            : ""),
-      },
-      ...buttons,
-    );
+        ? [...(graphVerified ? [sendLabel] : []), "Save to Outlook Drafts"]
+        : [...webhookButtons, ...(graphVerified ? [sendLabel] : [])];
+    if (sendButtons.length === 0) {
+      // Nothing verified for this channel — don't offer a dead send button.
+      const go = await vscode.window.showWarningMessage(
+        `No verified ${draft.channel === "teams" ? "Teams" : "Outlook"} method to send this. Test one end-to-end first (a coded message you confirm).`,
+        { modal: true, detail: "The draft stays pending. Outlook can still be saved to your mailbox Drafts." },
+        "Test a Method",
+        ...(draft.channel === "outlook" ? ["Save to Outlook Drafts"] : []),
+        "Keep Pending",
+      );
+      if (go === "Test a Method") {
+        await vscode.commands.executeCommand("aiSharePoint.testCommsMethod");
+        return;
+      }
+      if (go !== "Save to Outlook Drafts") return;
+    }
+    const choice =
+      sendButtons.length === 0
+        ? "Save to Outlook Drafts"
+        : await vscode.window.showWarningMessage(
+            `Approve this ${draft.channel === "teams" ? "Teams message" : "email"}?`,
+            {
+              modal: true,
+              detail:
+                `To: ${draft.to.join(", ")}${draft.subject ? `\nSubject: ${draft.subject}` : ""}\n\nIt is sent from YOUR account${draft.origin === "agent" ? " (content was prepared by the assistant — review it)" : ""}. The full text is open in the editor behind this dialog.` +
+                (draft.channel === "teams"
+                  ? webhooks.length > 0
+                    ? `\n\n“Post to …” delivers to a Teams CHANNEL via webhook (recipients are listed in the card, not messaged directly). ${graphVerified ? "“Send via Teams (Graph)” messages recipients directly." : ""}`
+                    : ``
+                  : ""),
+            },
+            ...sendButtons,
+            "Discard Draft",
+          );
     if (!choice) return; // stays pending
     if (choice === "Discard Draft") {
       await outbox.remove(draft.id);

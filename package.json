@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.31.1",
+  "version": "0.32.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -203,6 +203,12 @@
         "title": "Configure Teams Webhook (no admin consent)…",
         "category": "AI SharePoint",
         "icon": "$(plug)"
+      },
+      {
+        "command": "aiSharePoint.testCommsMethod",
+        "title": "Test Communication Method (end-to-end)…",
+        "category": "AI SharePoint",
+        "icon": "$(beaker)"
       },
       {
         "command": "aiSharePoint.indexSourceSchema",
@@ -1040,6 +1046,11 @@
           "command": "aiSharePoint.configureTeamsWebhook",
           "when": "view == aiSharePoint.commsView",
           "group": "1_config@1"
+        },
+        {
+          "command": "aiSharePoint.testCommsMethod",
+          "when": "view == aiSharePoint.commsView",
+          "group": "1_config@2"
         },
         {
           "command": "aiSharePoint.addContextSource",

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.32.0 — 2026-06-12
+
+### Added — communications methods must pass an end-to-end test before they're offered (pilot)
+- Every delivery method — **Outlook**, **Teams via Graph**, and **each Teams webhook** — now
+  has to prove itself before drafting or sending can use it. *AI SharePoint: Test Communication
+  Method…* (Communications view title bar) sends a **real message with a one-time verification
+  code** and asks you to type the code back, confirming the whole path end to end (consent /
+  webhook / actual delivery to the right place):
+  - **Outlook** sends a coded email **to yourself** (created and sent via your mailbox) — check
+    your inbox, enter the code.
+  - **Teams webhook** posts a coded card to its **channel** — confirm it there.
+  - **Teams via Graph** sends to a recipient you choose (a colleague, or yourself where the
+    tenant allows self-chat — Graph can't post a 1:1 to only you).
+- **Gating**: *Draft Outlook Email* / *Draft Teams Message* require a verified method first
+  (and offer to run the test); the approval dialog only shows **verified** send options, so
+  there are no dead "Send" buttons that fail at the last step. Verification is remembered per
+  method (Outlook can still *Save to Outlook Drafts* without sending). A failed/mismatched code
+  leaves the method unverified with guidance to re-test.
+
 ## 0.31.1 — 2026-06-12
 
 ### Fixed — pasted working SQL parses even when the catalog's schema differs (ER diagram) (pilot)
