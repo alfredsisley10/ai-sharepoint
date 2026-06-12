@@ -204,34 +204,76 @@ export async function getServiceNowItem(
   };
 }
 
-/** Curated starter tables → bookmark candidates (no admin-only schema
- *  reads required; unreadable tables simply fail at run time with the
- *  instance's own message). */
-export function browseServiceNowCandidates(
-  defaultTable?: string,
-): Array<{ name: string; locator: string; kind: "query"; detail: string }> {
-  const tables: Array<[string, string]> = [
-    ["incident", "Incidents"],
-    ["change_request", "Change requests"],
-    ["problem", "Problems"],
-    ["sc_req_item", "Service catalog request items"],
-    ["cmdb_ci", "CMDB configuration items"],
-    ["cmdb_ci_appl", "CMDB applications"],
-    ["kb_knowledge", "Knowledge articles"],
-    ["sys_user", "Users"],
-    ["sys_user_group", "Groups"],
-  ];
-  if (defaultTable && !tables.some(([t]) => t === defaultTable)) {
-    tables.unshift([defaultTable, `${defaultTable} (default table)`]);
+const CURATED_TABLES: Array<[string, string]> = [
+  ["incident", "Incidents"],
+  ["change_request", "Change requests"],
+  ["problem", "Problems"],
+  ["sc_req_item", "Service catalog request items"],
+  ["cmdb_ci", "CMDB configuration items"],
+  ["cmdb_ci_appl", "CMDB applications"],
+  ["kb_knowledge", "Knowledge articles"],
+  ["sys_user", "Users"],
+  ["sys_user_group", "Groups"],
+];
+
+/** Enumerate the tables this account can actually read (pilot: "connect,
+ *  then show me what I have"). Preferred: the sys_db_object catalog (full
+ *  list with labels). When ACLs deny it, fall back to live-probing the
+ *  curated ITSM/CMDB set with 1-row reads and keep only what answered. */
+export async function listSnowTables(
+  source: Pick<ContextSource, "baseUrl">,
+  credential: ContextCredential,
+  caps: ReadCaps,
+): Promise<Array<{ name: string; label: string }>> {
+  const base = instanceBase(source);
+  try {
+    const res = await fetchJson<{ result?: Array<{ name?: string; label?: string }> }>(
+      `${base}/api/now/table/sys_db_object?sysparm_fields=name,label&sysparm_limit=400&sysparm_query=ORDERBYlabel`,
+      credential,
+      caps.timeoutMs,
+    );
+    const curated = new Set(CURATED_TABLES.map(([t]) => t));
+    const out = (res.result ?? [])
+      .filter((t): t is { name: string; label: string } => Boolean(t.name && t.label))
+      .filter((t) => TABLE_RE.test(t.name) && (!t.name.startsWith("sys_") || curated.has(t.name)));
+    if (out.length > 0) return out;
+  } catch {
+    // sys_db_object denied for this role — probe the curated set instead.
   }
-  return tables.map(([table, label]) => ({
-    name: `${label} — recently updated`,
-    locator: JSON.stringify({
-      table,
-      query: "ORDERBYDESCsys_updated_on",
-      limit: 25,
-    }),
+  const probes = await Promise.allSettled(
+    CURATED_TABLES.map(([name]) =>
+      fetchJson(
+        `${base}/api/now/table/${enc(name)}?sysparm_limit=1&sysparm_fields=sys_id`,
+        credential,
+        caps.timeoutMs,
+      ),
+    ),
+  );
+  return CURATED_TABLES.filter((_, i) => probes[i].status === "fulfilled").map(
+    ([name, label]) => ({ name, label }),
+  );
+}
+
+/** Live table enumeration → bookmark candidates (recently-updated query
+ *  per readable table; the configured default table is listed first). */
+export async function browseServiceNowCandidates(
+  source: Pick<ContextSource, "baseUrl">,
+  credential: ContextCredential,
+  caps: ReadCaps,
+): Promise<Array<{ name: string; locator: string; kind: "query"; detail: string }>> {
+  const defaultTable = defaultSnowTable(source);
+  let tables = await listSnowTables(source, credential, caps);
+  if (defaultTable) {
+    const hit = tables.find((t) => t.name === defaultTable);
+    tables = [
+      hit ?? { name: defaultTable, label: `${defaultTable} (default table)` },
+      ...tables.filter((t) => t.name !== defaultTable),
+    ];
+  }
+  return tables.slice(0, caps.maxResults * 2).map((t) => ({
+    name: `${t.label} — recently updated`,
+    locator: JSON.stringify({ table: t.name, query: "ORDERBYDESCsys_updated_on", limit: 25 }),
     kind: "query",
-    detail: `ServiceNow table ${table}`,
+    detail: `ServiceNow table ${t.name}`,
   }));
 }

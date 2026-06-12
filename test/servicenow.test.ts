@@ -6,6 +6,7 @@ import {
   searchServiceNow,
   getServiceNowItem,
   browseServiceNowCandidates,
+  listSnowTables,
   SNOW_DEFAULT_TABLE,
 } from "../src/context/adapters/servicenow";
 import { ContextSource, DEFAULT_CAPS } from "../src/context/types";
@@ -133,14 +134,55 @@ test("getItem fetches table/sys_id, flattens display values, skips sys_ noise", 
   await assert.rejects(getServiceNowItem(SRC, CRED, "not-a-sys-id", DEFAULT_CAPS), /table\/sys_id/);
 });
 
-test("browse candidates cover ITSM + CMDB tables and honor the default table", () => {
-  const candidates = browseServiceNowCandidates("u_custom_app");
-  assert.equal(candidates[0].detail, "ServiceNow table u_custom_app");
+test("listSnowTables prefers the sys_db_object catalog and filters sys_* noise", async () => {
+  const tables = await withFetch(
+    (url) => {
+      assert.match(url, /sys_db_object/);
+      return {
+        body: {
+          result: [
+            { name: "incident", label: "Incident" },
+            { name: "u_custom_app", label: "Custom Apps" },
+            { name: "sys_properties", label: "System Properties" },
+            { name: "sys_user", label: "User" },
+            { name: "no_label" },
+          ],
+        },
+      };
+    },
+    () => listSnowTables(SRC, CRED, DEFAULT_CAPS),
+  );
+  assert.deepEqual(
+    tables.map((t) => t.name),
+    ["incident", "u_custom_app", "sys_user"],
+  );
+});
+
+test("listSnowTables falls back to probing curated tables when the catalog is denied", async () => {
+  const tables = await withFetch(
+    (url) => {
+      if (url.includes("sys_db_object")) return { status: 403, body: {} };
+      // Only incident and cmdb_ci answer for this account.
+      return /\/table\/(incident|cmdb_ci)\?/.test(url) ? { body: { result: [] } } : { status: 403, body: {} };
+    },
+    () => listSnowTables(SRC, CRED, DEFAULT_CAPS),
+  );
+  assert.deepEqual(tables.map((t) => t.name), ["incident", "cmdb_ci"]);
+});
+
+test("browse candidates come from live enumeration with the default table first", async () => {
+  const candidates = await withFetch(
+    (url) =>
+      url.includes("sys_db_object")
+        ? { body: { result: [{ name: "incident", label: "Incident" }, { name: "kb_knowledge", label: "Knowledge" }] } }
+        : { body: { result: [] } },
+    () => browseServiceNowCandidates(SRC, CRED, DEFAULT_CAPS),
+  );
+  // SRC's default table (cmdb_ci_appl) leads even though the catalog lacks it.
+  assert.equal(candidates[0].detail, "ServiceNow table cmdb_ci_appl");
   const locator = JSON.parse(candidates[0].locator) as { table: string; query: string };
-  assert.equal(locator.table, "u_custom_app");
+  assert.equal(locator.table, "cmdb_ci_appl");
   assert.match(locator.query, /ORDERBYDESCsys_updated_on/);
-  const tables = candidates.map((c) => c.detail);
-  assert.ok(tables.some((t) => t.includes("incident")));
-  assert.ok(tables.some((t) => t.includes("cmdb_ci")));
-  assert.ok(tables.some((t) => t.includes("kb_knowledge")));
+  assert.ok(candidates.some((c) => c.detail.includes("incident")));
+  assert.ok(candidates.some((c) => c.detail.includes("kb_knowledge")));
 });

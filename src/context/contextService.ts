@@ -36,7 +36,6 @@ import {
   searchServiceNow,
   getServiceNowItem,
   browseServiceNowCandidates,
-  defaultSnowTable,
 } from "./adapters/servicenow";
 import { verifySplunk, searchSplunk, browseSplunkCandidates } from "./adapters/splunk";
 import { SchemaCatalog } from "./db/schemaIndex";
@@ -428,7 +427,7 @@ export class ContextService {
             return browsePowerBi(this.powerBiTokens(credential), caps);
           }
           if (source.type === "servicenow") {
-            return browseServiceNowCandidates(defaultSnowTable(source));
+            return browseServiceNowCandidates(source, credential, caps);
           }
           if (source.type === "splunk") {
             return browseSplunkCandidates(source, credential, caps);

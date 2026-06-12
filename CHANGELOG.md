@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.4 — 2026-06-12
+
+### Changed — ServiceNow setup is "connect, then pick from what you can access" (pilot)
+- The wizard now signs in right after the instance URL and **enumerates the tables your
+  account can actually read**: the full `sys_db_object` catalog (with labels) where permitted,
+  otherwise a live probe of the common ITSM/CMDB set — you pick the default table from a list
+  (or "no default") instead of typing names like `incident`. Manual entry remains only as the
+  fallback when listing is denied.
+- **Browse & Bookmark now enumerates live** too: every readable table appears as a
+  recently-updated starter query (default table first) — searchable content reflects your real
+  access, not a fixed list.
+
 ## 0.10.3 — 2026-06-12
 
 ### Changed — Vertex AI Search setup works from just your corporate URL (pilot)

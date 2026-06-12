@@ -374,19 +374,19 @@ Connect your organization's **Vertex AI Search** app (the enterprise Gemini sear
 
 Reference your instance's ITSM and CMDB records **read-only**:
 
-- **Add** (Reference Sources → `+` → *ServiceNow*): instance URL
-  (`https://yourorg.service-now.com`) and an optional **default table** (defaults to
-  `incident`). Sign in with a **least-privilege integration account** (Basic) or an OAuth
-  bearer token — instance ACLs decide what's visible, and the lockout breaker protects the
-  account.
+- **Add** (Reference Sources → `+` → *ServiceNow*): enter the instance URL
+  (`https://yourorg.service-now.com`) and sign in — **least-privilege integration account**
+  (Basic) or an OAuth bearer token. The wizard then **lists the tables your account can
+  read** and you pick a default from the list (or "no default"); nothing to type. Instance
+  ACLs decide what's visible, and the lockout breaker protects the account.
 - **Ask naturally**: free text searches the default table's text index
   (*"@sharepoint search ServiceNow for the Berlin email outage"*); power users can pass a
   native encoded query (`active=true^priority=1`) or target any table with JSON —
   `{"table": "cmdb_ci_appl", "query": "ORDERBYDESCsys_updated_on", "limit": 25}`. Single
   records fetch as `table/sys_id`, with reference fields shown as display names.
-- **Browse & Bookmark** offers a curated starter set — incidents, changes, problems, request
-  items, CMDB CIs/applications, knowledge, users, groups, plus your default table — each as a
-  recently-updated query. Pair it with an alias like `CMDB` and chat reads the way you talk:
+- **Browse & Bookmark** enumerates your readable tables live (full catalog where permitted,
+  the common ITSM/CMDB set otherwise) — each as a recently-updated query, default table
+  first. Pair it with an alias like `CMDB` and chat reads the way you talk:
   *"find the app records owned by X in CMDB"*.
 
 ### Splunk

@@ -77,6 +77,7 @@ import {
 import { setWireSink } from "./core/wireLog";
 import { setLdapDnsServers } from "./context/ldap/ldapClient";
 import { enumeratePowerBiDatasets, POWERBI_SCOPES } from "./context/adapters/powerbi";
+import { listSnowTables } from "./context/adapters/servicenow";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
 import {
@@ -1461,16 +1462,48 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (!url) return;
       baseUrl = url.trim().replace(/\/+$/, "");
-      const table = await vscode.window.showInputBox({
-        ignoreFocusOut: true,
-        title: "ServiceNow — default table (optional)",
-        value: "incident",
-        prompt: "Free-text chat queries search this table; JSON specs can target any table. Press Enter to accept.",
-        validateInput: (v) => (!v.trim() || /^[a-z0-9_]+$/.test(v.trim()) ? undefined : "Table names are lowercase_with_underscores"),
-      });
-      if (table === undefined) return;
-      if (table.trim()) {
-        baseUrl += `?table=${encodeURIComponent(table.trim())}`;
+      // Connect first, then enumerate what THIS account can read — no table
+      // names to know (pilot). Falls back to typing one if listing fails.
+      presetCredential = await promptContextCredential("servicenow", "cloud");
+      if (!presetCredential) return;
+      const snowCred = presetCredential;
+      let tables: Array<{ name: string; label: string }> = [];
+      try {
+        tables = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Listing the ServiceNow tables you can access…" },
+          () => listSnowTables({ baseUrl }, snowCred, contextService.caps()),
+        );
+      } catch (err) {
+        log.warn(`ServiceNow table enumeration failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (tables.length > 0) {
+        const pick = await vscode.window.showQuickPick(
+          [
+            {
+              label: "$(list-unordered) No default — pick a table per question",
+              description: "free-text chat questions will need a table named",
+              name: undefined as string | undefined,
+            },
+            ...tables.map((t) => ({ label: t.label, description: t.name, name: t.name as string | undefined })),
+          ],
+          {
+            ignoreFocusOut: true,
+            title: `Default table (${tables.length} readable) — free-text questions search here`,
+            matchOnDescription: true,
+          },
+        );
+        if (!pick) return;
+        if (pick.name) baseUrl += `?table=${encodeURIComponent(pick.name)}`;
+      } else {
+        const table = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "ServiceNow — default table (listing unavailable; optional)",
+          value: "incident",
+          prompt: "Couldn't enumerate tables with this account — type one (the instance still enforces its ACLs).",
+          validateInput: (v) => (!v.trim() || /^[a-z0-9_]+$/.test(v.trim()) ? undefined : "Table names are lowercase_with_underscores"),
+        });
+        if (table === undefined) return;
+        if (table.trim()) baseUrl += `?table=${encodeURIComponent(table.trim())}`;
       }
     } else if (typePick.value === "splunk") {
       deployment = "datacenter";
