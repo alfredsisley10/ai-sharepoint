@@ -33,6 +33,8 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Running bookmark${str(i.name) ? ` “${short(String(i.name), 40)}”` : ""}…`;
     case "aisharepoint_suggest_bookmark":
       return `Proposing a bookmark${str(i.name) ? ` “${short(String(i.name), 40)}”` : ""} to save…`;
+    case "aisharepoint_export_context_results":
+      return `Exporting ${src ?? "search"} results to a workspace file…`;
     case "aisharepoint_draft_communication":
       return `Preparing a ${i.channel === "teams" ? "Teams message" : "draft email"}${str(i.to) ? ` to ${short(String(i.to), 40)}` : ""}…`;
     case "aisharepoint_test_outlook_channel":

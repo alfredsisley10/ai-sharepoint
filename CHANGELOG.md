@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.22.0 — 2026-06-12
+
+### Added — export search results to a workspace file (datasets without the chat cap) (ADR-0031) (pilot)
+- Chat results stay capped (good for context budgets) — but when you want the **data itself**,
+  **Export Context Search Results to File…** (palette, or right-click a source) runs the same
+  read-only query with **export bounds — up to 50,000 rows, 120s** — and writes **every** result
+  to `ai-sharepoint-exports/` in your workspace: **CSV** for tabular results (full values, not
+  the chat truncation), **JSON** for MongoDB documents.
+- `#spExportResults` agent tool: *"export all CMDB servers to a file"* runs the export behind a
+  confirmation naming the query and destination, and hands the model **only the file path and
+  row count** — the dataset never enters the chat context, and the tool contract tells the
+  assistant not to read it back unless you ask about a small slice.
+- SQL Server now **stops the wire stream at the row cap** (`connection.cancel()`), so exporting
+  50k rows of a 12M-row table doesn't drain the table; the ADR-0030 cost guard is bypassed for
+  exports — your confirmation *is* the accepted bulk read (read-only guard, cap, and timeout
+  still apply).
+
 ## 0.21.0 — 2026-06-12
 
 ### Added — SQL Server cost guard: size first, sample when expensive (ADR-0030) (pilot)

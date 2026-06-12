@@ -50,7 +50,15 @@ import {
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
-import { aliasIssue, normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
+import { aliasIssue, normalizeAlias, resolveSourceRef, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
+import {
+  rowsToCsv,
+  exportFileName,
+  sanitizeExportFileName,
+  EXPORT_MAX_ROWS,
+  EXPORT_TIMEOUT_MS,
+  EXPORT_DIR,
+} from "./context/exportData";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
 import { SourceSchema, qualifiedName } from "./context/db/schemaIndex";
@@ -2842,6 +2850,91 @@ export function activate(context: vscode.ExtensionContext): void {
     contextCache.clear();
     void vscode.window.showInformationMessage("Cached reference-source results cleared.");
   });
+
+  // ADR-0031: large datasets leave through FILES, not chat — run the query
+  // with export bounds and write every row into the workspace, so Copilot
+  // only ever sees the path and a count.
+  register(
+    "aiSharePoint.exportSearchResults",
+    async (arg): Promise<{ file: string; rows: number } | undefined> => {
+      const plain =
+        arg && typeof arg === "object" && !("baseUrl" in arg)
+          ? (arg as { source?: string; query?: string; fileName?: string })
+          : undefined;
+      const source = plain?.source
+        ? resolveSourceRef(contextSources.list(), plain.source)
+        : await resolveSourceArg(arg, contextSources);
+      if (!source) {
+        if (plain?.source) {
+          throw new AppError(`No reference source matches "${plain.source}".`, "config");
+        }
+        return undefined;
+      }
+      const isDb = ["mssql", "postgres", "mysql", "mongodb"].includes(source.type);
+      const query =
+        plain?.query?.trim() ||
+        (await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: `Export from ${source.displayName} — query`,
+          prompt: `Runs read-only with export bounds (up to ${EXPORT_MAX_ROWS.toLocaleString("en-US")} rows, ${Math.round(EXPORT_TIMEOUT_MS / 1000)}s) and writes every result to a file — nothing is sent to Copilot.`,
+          placeHolder: isDb
+            ? source.type === "mongodb"
+              ? '{"collection": "...", "filter": {...}}'
+              : "SELECT … (single read-only statement)"
+            : "Raw query (CQL/JQL/filter/SPL…) or free text",
+        }));
+      if (!query?.trim()) return undefined;
+      const ext = source.type === "mongodb" ? "json" : "csv";
+      const fileName =
+        (plain?.fileName ? sanitizeExportFileName(plain.fileName, ext) : undefined) ??
+        exportFileName(source.alias ?? source.displayName, ext, nowIso());
+      const rows = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Exporting from ${source.displayName} (up to ${EXPORT_MAX_ROWS.toLocaleString("en-US")} rows)…`,
+        },
+        () =>
+          contextService.searchForExport(source, query, {
+            maxResults: EXPORT_MAX_ROWS,
+            timeoutMs: EXPORT_TIMEOUT_MS,
+          }),
+      );
+      const content = ext === "json" ? JSON.stringify(rows, null, 2) : rowsToCsv(rows);
+      const ws = vscode.workspace.workspaceFolders?.[0];
+      let target: vscode.Uri;
+      let shownPath: string;
+      if (ws) {
+        const dir = vscode.Uri.joinPath(ws.uri, EXPORT_DIR);
+        await vscode.workspace.fs.createDirectory(dir);
+        target = vscode.Uri.joinPath(dir, fileName);
+        shownPath = `${EXPORT_DIR}/${fileName}`;
+      } else {
+        const picked = await vscode.window.showSaveDialog({
+          saveLabel: "Export",
+          filters: ext === "json" ? { JSON: ["json"] } : { CSV: ["csv"] },
+          defaultUri: vscode.Uri.file(fileName),
+        });
+        if (!picked) return undefined;
+        target = picked;
+        shownPath = picked.fsPath;
+      }
+      await vscode.workspace.fs.writeFile(target, Buffer.from(content, "utf8"));
+      telemetry.record("context.export", { type: source.type, rows: String(rows.length) });
+      const capNote =
+        rows.length >= EXPORT_MAX_ROWS
+          ? ` — capped at ${EXPORT_MAX_ROWS.toLocaleString("en-US")}; narrow the query for the rest`
+          : "";
+      void vscode.window
+        .showInformationMessage(
+          `Exported ${rows.length.toLocaleString("en-US")} row(s) to ${shownPath}${capNote}.`,
+          "Open File",
+        )
+        .then(async (open) => {
+          if (open) await vscode.window.showTextDocument(target);
+        });
+      return { file: shownPath, rows: rows.length };
+    },
+  );
 
   register("aiSharePoint.exportReferenceConfig", async () => {
     const all = contextSources.list();

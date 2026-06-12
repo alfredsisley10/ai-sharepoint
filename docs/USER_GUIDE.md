@@ -456,6 +456,24 @@ Analyze Power BI data without leaving chat — **read-only, with your existing s
   DAX-only (read-only by API design), row-capped, and your Power BI licenses, workspace roles,
   and row-level security apply exactly as in the service.
 
+### Export search results to a workspace file (ADR-0031)
+
+Chat results are capped on purpose — when you want the **dataset itself**, export it instead
+of fighting the cap:
+
+- **Export Context Search Results to File…** (palette, or right-click any source): enter the
+  same kind of read-only query you'd use in chat (SELECT, MongoDB spec, CQL/JQL/SPL, free
+  text); it runs with **export bounds** (up to 50,000 rows, 120s) and writes **every** result
+  to `ai-sharepoint-exports/` in your workspace — **CSV** for tabular sources (full values),
+  **JSON** for MongoDB.
+- Or just ask: *"@sharepoint export all CMDB servers to a file"* — you approve a confirmation
+  naming the query and destination, and the assistant receives **only the path and row
+  count**: the data never enters the chat context (that's the point — Copilot doesn't need to
+  see it for you to have it).
+- Read-only guards, the row cap, and the timeout still apply; the SQL Server cost guard is
+  bypassed for exports because your confirmation *is* the accepted bulk read. Add the folder
+  to `.gitignore` if your workspace repo shouldn't carry data extracts.
+
 ## Communications: Teams & Outlook drafts you approve
 
 Have findings reach people — **without the assistant ever sending anything itself**:

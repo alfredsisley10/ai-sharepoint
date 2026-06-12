@@ -35,6 +35,10 @@ test("each tool gets a meaningful, input-aware line", () => {
     "Testing the Outlook channel (draft to yourself — nothing is sent)…",
   );
   assert.equal(
+    describeToolCall("aisharepoint_export_context_results", { source: "CMDB" }),
+    "Exporting CMDB results to a workspace file…",
+  );
+  assert.equal(
     describeToolCall("aisharepoint_apply_site", {}),
     "Launching apply-to-SharePoint (your approval required)…",
   );

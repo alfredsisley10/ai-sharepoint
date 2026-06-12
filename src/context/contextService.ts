@@ -22,7 +22,7 @@ import {
 } from "./adapters/jira";
 import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
-import { verifyDb, searchDb, browseDb, describeDb, sampleTableValues, DbTlsOptions } from "./db/dbAdapters";
+import { verifyDb, searchDb, searchDbRaw, browseDb, describeDb, sampleTableValues, DbTlsOptions } from "./db/dbAdapters";
 import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
 import {
   verifyPowerBi,
@@ -228,31 +228,66 @@ export class ContextService {
       this.ttlMs(),
       async () => {
         const credential = await this.storedCredential(source);
-        return this.tracked(source, false, () => {
-          if (ContextService.DB_TYPES.has(source.type)) {
-            return searchDb(source, credential, query, this.dbTls(), caps, opts);
-          }
-          switch (source.type) {
-            case "ldap":
-              return searchLdap(source, credential, query, this.ldapTls(), caps);
-            case "jira":
-              return searchJira(source, credential, query, caps);
-            case "vertexai":
-              return searchVertex(source, credential, query, caps);
-            case "powerbi":
-              return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
-            case "servicenow":
-              return this.snowCredential(source, credential).then((c) =>
-                searchServiceNow(source, c, query, caps),
-              );
-            case "splunk":
-              return searchSplunk(source, credential, query, caps);
-            default:
-              return searchConfluence(source, credential, query, caps);
-          }
-        });
+        return this.tracked(source, false, () =>
+          this.dispatchSearch(source, credential, query, caps, opts),
+        );
       },
     );
+  }
+
+  private dispatchSearch(
+    source: ContextSource,
+    credential: ContextCredential,
+    query: string,
+    caps: ReadCaps,
+    opts?: { allowExpensive?: boolean },
+  ): Promise<ContextSearchHit[]> {
+    if (ContextService.DB_TYPES.has(source.type)) {
+      return searchDb(source, credential, query, this.dbTls(), caps, opts);
+    }
+    switch (source.type) {
+      case "ldap":
+        return searchLdap(source, credential, query, this.ldapTls(), caps);
+      case "jira":
+        return searchJira(source, credential, query, caps);
+      case "vertexai":
+        return searchVertex(source, credential, query, caps);
+      case "powerbi":
+        return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
+      case "servicenow":
+        return this.snowCredential(source, credential).then((c) =>
+          searchServiceNow(source, c, query, caps),
+        );
+      case "splunk":
+        return searchSplunk(source, credential, query, caps);
+      default:
+        return searchConfluence(source, credential, query, caps);
+    }
+  }
+
+  /** Export-grade search (ADR-0031): same queries, bigger bounds, RAW rows
+   *  for file serialization — uncached (datasets are too big to keep, and an
+   *  export should always be a fresh read). DB sources return raw rows/
+   *  documents; other sources return their hits flattened to rows. */
+  async searchForExport(
+    source: ContextSource,
+    query: string,
+    exportCaps: { maxResults: number; timeoutMs: number },
+  ): Promise<Array<Record<string, unknown>>> {
+    const caps = { ...this.caps(), ...exportCaps };
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      if (ContextService.DB_TYPES.has(source.type)) {
+        return searchDbRaw(source, credential, query, this.dbTls(), caps);
+      }
+      const hits = await this.dispatchSearch(source, credential, query, caps);
+      return hits.map((h) => ({
+        title: h.title,
+        url: h.url,
+        ...(h.excerpt ? { excerpt: h.excerpt } : {}),
+        ...(h.meta ?? {}),
+      }));
+    });
   }
 
   async getItem(source: ContextSource, id: string): Promise<ContextItem> {

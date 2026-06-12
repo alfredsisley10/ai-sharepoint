@@ -212,13 +212,22 @@ async function mssqlRows(
     });
     const result = await new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
       const rows: Array<Record<string, unknown>> = [];
+      let cappedOut = false;
       // READ UNCOMMITTED (NOLOCK semantics) so reads never block writers.
       const request = new TdsRequest(
         `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;\n${sql}`,
-        (err) => (err ? reject(err) : resolve(rows)),
+        // A cancel WE issued at the row cap is success, not an error.
+        (err) => (err && !cappedOut ? reject(err) : resolve(rows)),
       );
       request.on("row", (columns: Array<{ value: unknown; metadata: { colName: string } }>) => {
-        if (rows.length >= caps.maxResults) return; // client-side cap
+        if (rows.length >= caps.maxResults) {
+          // Stop the server stream at the cap instead of draining it.
+          if (!cappedOut) {
+            cappedOut = true;
+            connection.cancel();
+          }
+          return;
+        }
         const row: Record<string, unknown> = {};
         for (const col of columns) {
           row[col.metadata.colName || `col${Object.keys(row).length}`] = col.value;
@@ -481,6 +490,35 @@ export async function searchDb(
     sql,
   );
   return rowsToHits(rows, caps.maxResults, label);
+}
+
+/** Export-grade search (ADR-0031): the SAME read-only query, but returning
+ *  RAW rows/documents (full values, export caps) for file serialization.
+ *  The cost guard is intentionally bypassed — an export is the user's
+ *  explicit request for the large dataset; the row cap and timeout still
+ *  bound the read. */
+export async function searchDbRaw(
+  source: ContextSource,
+  credential: ContextCredential,
+  query: string,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+): Promise<Array<Record<string, unknown>>> {
+  if (source.type === "mongodb") {
+    const spec = parseMongoSpec(query);
+    return withMongo(source, credential, tls, caps, (client, dbName) =>
+      client
+        .db(dbName)
+        .collection(spec.collection)
+        .find(spec.filter, {
+          ...(spec.projection ? { projection: spec.projection } : {}),
+          limit: Math.min(spec.limit ?? caps.maxResults, caps.maxResults),
+          maxTimeMS: caps.timeoutMs,
+        })
+        .toArray(),
+    ) as Promise<Array<Record<string, unknown>>>;
+  }
+  return SQL_RUNNERS[source.type as SqlEngine](source, credential, tls, caps, guardSql(query));
 }
 
 // --- schema catalog (ADR-0024) ------------------------------------------------
