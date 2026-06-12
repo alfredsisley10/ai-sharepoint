@@ -371,9 +371,11 @@ Connect your organization's **Vertex AI Search** app (the enterprise Gemini sear
   search page you open via SSO**
   (`https://vertexaisearch.cloud.google/<region>/home/cid/<app id>?csesidx=…` — the region and
   app id are read from it; the `csesidx` session id is ignored), a Cloud Console link, or the
-  serving config. It pre-fills whatever the URL carries and tells you where the app owner finds
-  the rest (the corporate page doesn't name the hosting project, so that's the one thing it may
-  still ask for).
+  serving config. It pre-fills whatever the URL carries; the corporate page doesn't name the
+  hosting project, so the wizard offers **"Find the project for me"** — it scans the projects
+  your Google sign-in can see and probes which one hosts the app (no IDs to know). Manual entry
+  remains for accounts that use the app without any project role (`gcloud projects list` —
+  locally or at shell.cloud.google.com — or ask whoever shared the page).
 - **SSO via the gcloud CLI (recommended)**: each call uses a **live token from your existing
   `gcloud auth login` session** — your corporate Google SSO — and nothing is ever stored.
   No CLI? Paste an OAuth access token instead (kept in your OS keychain; ~1 h lifetime, the

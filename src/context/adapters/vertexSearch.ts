@@ -386,6 +386,45 @@ export async function listVertexEngines(
   return out;
 }
 
+/** Find which project(s) host a known engine — the auto-detection behind
+ *  "my corporate search URL names the app (cid) and region, but not the
+ *  project". A STANDARD user can rarely ask an admin, but their Google
+ *  sign-in can already list the projects where they hold any role — so we
+ *  probe each one's engine list in the hinted location and match the id.
+ *  Permission gaps on individual projects are skipped, capped, and batched. */
+export async function findVertexProjectForEngine(
+  token: string,
+  projects: Array<{ projectId: string }>,
+  engineId: string,
+  location: string,
+  timeoutMs: number,
+  onProgress?: (checked: number, total: number) => void,
+): Promise<string[]> {
+  const candidates = projects.slice(0, 100).map((p) => p.projectId);
+  const matches: string[] = [];
+  const BATCH = 5;
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    const batch = candidates.slice(i, i + BATCH);
+    const results = await Promise.allSettled(
+      batch.map(async (projectId) => {
+        const res = await fetchVertexJson<{ engines?: Array<{ name?: string }> }>(
+          `${endpointForLocation(location)}/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/collections/default_collection/engines`,
+          token,
+          timeoutMs,
+        );
+        return (res.engines ?? []).some((e) => e.name?.endsWith(`/engines/${engineId}`))
+          ? projectId
+          : undefined;
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value) matches.push(r.value);
+    }
+    onProgress?.(Math.min(i + BATCH, candidates.length), candidates.length);
+  }
+  return matches;
+}
+
 async function fetchVertexJson<T>(url: string, token: string, timeoutMs: number): Promise<T> {
   const started = Date.now();
   emitWire("vertex", "→", `GET ${safeUrl(url)}`);

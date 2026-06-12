@@ -188,3 +188,33 @@ test("gcloudInvocation uses shell:true for the Windows .cmd shim (spawn EINVAL f
   assert.deepEqual(gcloudInvocation("linux"), { bin: "gcloud", shell: false });
   assert.deepEqual(gcloudInvocation("darwin"), { bin: "gcloud", shell: false });
 });
+
+test("findVertexProjectForEngine probes the hinted region across visible projects and matches the app", async () => {
+  const { findVertexProjectForEngine } = await import("../src/context/adapters/vertexSearch");
+  const urls: string[] = [];
+  const progress: Array<[number, number]> = [];
+  const matches = await withFetch(
+    (url) => {
+      urls.push(url);
+      if (url.includes("/projects/p-denied/")) return { status: 403, body: {} };
+      if (url.includes("/projects/p-other/")) {
+        return { body: { engines: [{ name: "projects/p-other/locations/us/collections/default_collection/engines/another-app" }] } };
+      }
+      return { body: { engines: [{ name: "projects/p-host/locations/us/collections/default_collection/engines/corp-search_17" }] } };
+    },
+    () =>
+      findVertexProjectForEngine(
+        "tok",
+        [{ projectId: "p-denied" }, { projectId: "p-other" }, { projectId: "p-host" }],
+        "corp-search_17",
+        "us",
+        5_000,
+        (checked, total) => progress.push([checked, total]),
+      ),
+  );
+  assert.deepEqual(matches, ["p-host"]);
+  // Only the hinted region's endpoint is probed (us → us-discoveryengine).
+  assert.ok(urls.every((u) => u.startsWith("https://us-discoveryengine.googleapis.com/") && u.includes("/locations/us/")), urls.join("\n"));
+  // A 403 on one project never aborts the scan; progress reports completion.
+  assert.deepEqual(progress.at(-1), [3, 3]);
+});

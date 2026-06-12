@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.1 — 2026-06-12
+
+### Changed — Vertex AI Search: the wizard finds the hosting project for you (pilot)
+- Pasting the corporate search URL identified the **app** and **region** but then asked a
+  standard (non-admin) user for the **hosting Google Cloud project** — information they rarely
+  have. The wizard now offers **"Find the project for me"**: with the app id and region already
+  known from the URL, it lists the projects your Google sign-in can see and probes which one
+  hosts that app (permission gaps skipped, progress shown, ~5 probes at a time). One match →
+  filled in automatically; several → pick; none → a clear explanation that your account uses
+  the app without a project role, plus manual entry.
+- The manual prompt now speaks to standard users: scan with *Find the project for me*, run
+  `gcloud projects list` (locally or at shell.cloud.google.com — no install), or ask whoever
+  shared the search page; the Cloud Console `?project=` hint is kept for those with console
+  access.
+
 ## 0.22.0 — 2026-06-12
 
 ### Changed — @sharepoint status: no more reflexive "Reading <site>", and results narrate back (pilot)

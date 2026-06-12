@@ -61,6 +61,7 @@ import {
   endpointForLocation,
   listVertexEngines,
   listGcloudProjects,
+  findVertexProjectForEngine,
   getVertexToken,
 } from "./context/adapters/vertexSearch";
 import {
@@ -1848,13 +1849,77 @@ export function activate(context: vscode.ExtensionContext): void {
           const isUrlish = /[/:]/.test(first.trim());
           const hint = isUrlish ? parseVertexHint(first) : {};
           let projectId = hint.projectId ?? (isUrlish ? undefined : first.trim());
+          // The corporate search page names the app (cid) and region but not
+          // the hosting project — and a standard user can rarely "ask the
+          // admin". With the app id + location known, the wizard can FIND the
+          // project itself: scan the projects the user's Google sign-in can
+          // already see and probe which one hosts this app.
+          if (!projectId && hint.engineId && hint.location) {
+            const how = await vscode.window.showQuickPick(
+              [
+                {
+                  label: "$(search) Find the project for me (recommended)",
+                  description: "scans the projects your gcloud sign-in can see for this app — no IDs to know",
+                  value: "auto" as const,
+                },
+                {
+                  label: "$(edit) Enter the project ID myself",
+                  description: "if you already know it",
+                  value: "manual" as const,
+                },
+              ],
+              {
+                ignoreFocusOut: true,
+                title: `Your search page names the app (${hint.engineId}) and region (${hint.location}) — only the hosting project is missing`,
+              },
+            );
+            if (!how) return;
+            if (how.value === "auto") {
+              try {
+                const token = await getVertexToken({ method: "gcloud-sso", secret: "gcloud-cli-session" });
+                const projects = await vscode.window.withProgress(
+                  { location: vscode.ProgressLocation.Notification, title: "Listing the projects your Google sign-in can see…" },
+                  () => listGcloudProjects(),
+                );
+                const matches = await vscode.window.withProgress(
+                  { location: vscode.ProgressLocation.Notification, title: `Searching ${projects.length} project(s) for app "${hint.engineId}"…` },
+                  (progress) =>
+                    findVertexProjectForEngine(token, projects, hint.engineId!, hint.location!, 15_000, (checked, total) =>
+                      progress.report({ message: `${checked}/${total} checked` }),
+                    ),
+                );
+                if (matches.length === 1) {
+                  projectId = matches[0];
+                  void vscode.window.showInformationMessage(
+                    `Found it: app "${hint.engineId}" lives in project "${projectId}".`,
+                  );
+                } else if (matches.length > 1) {
+                  const pick = await vscode.window.showQuickPick(
+                    matches.map((m) => ({ label: m })),
+                    { ignoreFocusOut: true, title: "This app id exists in several projects you can see — pick one" },
+                  );
+                  if (!pick) return;
+                  projectId = pick.label;
+                } else {
+                  void vscode.window.showWarningMessage(
+                    `None of the ${projects.length} project(s) visible to your Google sign-in host app "${hint.engineId}" in ${hint.location} — your account may use the app without a project role. Enter the project ID manually (the app owner has it).`,
+                  );
+                }
+              } catch (err) {
+                log.warn(`Vertex project auto-detection failed: ${err instanceof Error ? err.message : String(err)}`);
+                void vscode.window.showWarningMessage(
+                  `Could not auto-detect the project: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            }
+          }
           if (!projectId) {
             projectId = (
               await vscode.window.showInputBox({
                 ignoreFocusOut: true,
                 title: "Google Cloud project ID",
                 prompt: hint.engineId
-                  ? `Your search page identifies the app (cid ${hint.engineId}) and location (${hint.location ?? "?"}) but not the hosting Google Cloud project — the app owner (or the Cloud Console URL's ?project=…) has it.`
+                  ? `Three ways a standard user finds it: ① go back and pick "Find the project for me" (scans what your Google sign-in can see); ② run \`gcloud projects list\` in a terminal or at shell.cloud.google.com — one of those projects hosts app "${hint.engineId}"; ③ ask whoever shared the search page with you. (Admins also see it in the Cloud Console URL's ?project=… parameter.)`
                   : "That URL didn't carry a project ID — it's in the Cloud Console URL (?project=…) or available from the app owner.",
                 validateInput: (v) => (v.trim() ? undefined : "Enter the project ID"),
               })
