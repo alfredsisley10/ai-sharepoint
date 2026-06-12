@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.0 — 2026-06-12
+
+### Changed — database indexing is now two plainly-named options (pilot)
+- **Index Database Schema**: one action — reads every table and view the account can access,
+  then Copilot writes **descriptive summaries** (tags, synonyms, purposes) to aid search.
+  Only names and types are sent; never data.
+- **Index Database Content Types** (new): takes a bounded row sample per table, reduces it
+  **locally** to the top distinct values per column, and asks Copilot to **describe what the
+  values are** ("ISO country codes", "statuses: Active/Retired", "owner names") — so questions
+  route on content, not just column names. The consent dialog states plainly that sampled
+  values are sent for this option — and that **no database content is persisted**: samples
+  exist only for the request; only Copilot's descriptive summaries are stored. Value
+  descriptions are searchable and shown to the model alongside tags.
+- **Database indexes travel with Export/Import Reference Config**: the schema catalog and the
+  Copilot summaries are included per source, so one teammate's (metered) indexing run benefits
+  the whole team — recipients still sign in with their own credentials as always.
+
 ## 0.10.6 — 2026-06-12
 
 ### Fixed — schema indexing shows live progress (pilot)

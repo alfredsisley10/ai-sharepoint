@@ -22,7 +22,7 @@ import {
 } from "./adapters/jira";
 import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
-import { verifyDb, searchDb, browseDb, describeDb, DbTlsOptions } from "./db/dbAdapters";
+import { verifyDb, searchDb, browseDb, describeDb, sampleTableValues, DbTlsOptions } from "./db/dbAdapters";
 import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
 import {
   verifyPowerBi,
@@ -43,7 +43,7 @@ import {
   snowTokenExpired,
   refreshSnowTokens,
 } from "./adapters/servicenowAuth";
-import { SchemaCatalog } from "./db/schemaIndex";
+import { SchemaCatalog, TableDef } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
 
 /** AAD token acquisition for sources that reuse the extension's Microsoft
@@ -381,6 +381,18 @@ export class ContextService {
         "config",
       );
     });
+  }
+
+  /** Content-type indexing: bounded row sample for one table, reduced to
+   *  per-column distinct values locally (ADR-0024 amendment). */
+  async sampleTable(source: ContextSource, table: TableDef): Promise<Record<string, string[]>> {
+    if (!ContextService.DB_TYPES.has(source.type)) {
+      throw new AppError("Content sampling applies to database sources only.", "config");
+    }
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      sampleTableValues(source, credential, this.dbTls(), this.caps(), table),
+    );
   }
 
   /**

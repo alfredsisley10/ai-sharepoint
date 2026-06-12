@@ -43,6 +43,9 @@ export interface SemanticColumn {
   /** Words users actually say for this column, e.g. ["owner","CIO"]. */
   synonyms: string[];
   note?: string;
+  /** From content indexing: what the column's VALUES look like
+   *  ("ISO country codes", "statuses: Active/Retired/Pending"). */
+  contentSummary?: string;
 }
 
 export interface SemanticTable {
@@ -58,6 +61,8 @@ export interface SemanticIndex {
   tables: SemanticTable[];
   /** True when budget/parsing stopped indexing before all batches ran. */
   partial?: boolean;
+  /** Set when "Index Database Content Types" has run over this catalog. */
+  contentIndexedAt?: string;
 }
 
 export interface SourceSchema {
@@ -65,6 +70,8 @@ export interface SourceSchema {
   semantic?: SemanticIndex;
   /** "declined": the user said no — don't re-ask on every use. */
   semanticState: "none" | "indexed" | "declined";
+  /** Content-type indexing state (sampled values described by Copilot). */
+  contentState?: "none" | "indexed" | "declined";
 }
 
 // Caps keep catalogs, prompts, and tool output bounded on huge databases.
@@ -73,6 +80,12 @@ export const SCHEMA_MAX_COLUMNS_PER_TABLE = 80;
 export const MONGO_SAMPLE_DOCS = 5;
 export const MONGO_MAX_COLLECTIONS = 100;
 export const INDEX_TABLES_PER_BATCH = 40;
+// Content indexing: one sample query per table; distincts computed locally.
+export const CONTENT_SAMPLE_ROWS = 100;
+export const CONTENT_DISTINCT_PER_COLUMN = 10;
+export const CONTENT_VALUE_MAX_CHARS = 60;
+export const CONTENT_TABLES_PER_BATCH = 8;
+export const CONTENT_MAX_TABLES = 50;
 
 export function qualifiedName(t: Pick<TableDef, "schema" | "name">): string {
   return t.schema ? `${t.schema}.${t.name}` : t.name;
@@ -275,13 +288,20 @@ export function parseSemanticResponse(
       if (!columnsOf.has(name.toLowerCase())) continue; // hallucinated column
       const tags = clampList(c.tags, 6, true);
       const synonyms = clampList(c.synonyms, 8, false);
-      if (tags.length === 0 && synonyms.length === 0) continue;
+      const hasContent =
+        typeof (c as { contentSummary?: unknown }).contentSummary === "string" &&
+        ((c as { contentSummary: string }).contentSummary).trim().length > 0;
+      if (tags.length === 0 && synonyms.length === 0 && !hasContent) continue;
       columns.push({
         name,
         tags,
         synonyms,
         ...(typeof c.note === "string" && c.note.trim()
           ? { note: c.note.trim().slice(0, 160) }
+          : {}),
+        ...(typeof (c as { contentSummary?: unknown }).contentSummary === "string" &&
+        ((c as { contentSummary: string }).contentSummary).trim()
+          ? { contentSummary: (c as { contentSummary: string }).contentSummary.trim().slice(0, 160) }
           : {}),
       });
     }
@@ -392,6 +412,7 @@ export function searchSchema(
         if (colName.includes(w)) hit += 3;
         if (sem?.synonyms.some((s) => s.toLowerCase().includes(w) || w.includes(s.toLowerCase()))) hit += 4;
         if (sem?.note?.toLowerCase().includes(w)) hit += 2;
+        if (sem?.contentSummary?.toLowerCase().includes(w)) hit += 3;
       }
       for (const tag of sem?.tags ?? []) {
         if (wantedTags.has(tag)) hit += 5;
@@ -432,7 +453,7 @@ export function renderSchemaForModel(
     for (const c of cols) {
       const sem = e.semantic?.columns.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
       const extra = sem
-        ? ` [${sem.tags.join(",")}${sem.synonyms.length ? ` | aka: ${sem.synonyms.join(", ")}` : ""}]${sem.note ? ` — ${sem.note}` : ""}`
+        ? ` [${sem.tags.join(",")}${sem.synonyms.length ? ` | aka: ${sem.synonyms.join(", ")}` : ""}]${sem.note ? ` — ${sem.note}` : ""}${sem.contentSummary ? ` — values: ${sem.contentSummary}` : ""}`
         : "";
       lines.push(`  - ${c.name}: ${c.dataType}${extra}`);
     }
@@ -442,4 +463,106 @@ export function renderSchemaForModel(
     if (lines.join("\n").length > maxChars) break;
   }
   return lines.join("\n").slice(0, maxChars);
+}
+
+
+// --- content-type indexing (sampled values → Copilot descriptions) ------------
+
+/** One sample query per table (cheap); per-column distincts are computed
+ *  locally from the row sample, never with N-per-column queries. */
+export function buildSampleQuery(
+  engine: ContextSourceType,
+  table: TableDef,
+  rows = CONTENT_SAMPLE_ROWS,
+): string {
+  const cols = table.columns.slice(0, 16).map((c) => c.name);
+  const q = (c: string) =>
+    engine === "mssql" ? `[${c}]` : engine === "mysql" ? `\`${c}\`` : `"${c}"`;
+  const target = table.schema ? `${q(table.schema)}.${q(table.name)}` : q(table.name);
+  const list = cols.map(q).join(", ");
+  return engine === "mssql"
+    ? `SELECT TOP ${rows} ${list} FROM ${target}`
+    : `SELECT ${list} FROM ${target} LIMIT ${rows}`;
+}
+
+/** Sampled rows → top distinct values per column (truncated, deduped). */
+export function distinctValues(
+  rows: Array<Record<string, unknown>>,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const row of rows) {
+    for (const [k, v] of Object.entries(row)) {
+      if (v === null || v === undefined) continue;
+      const s = String(v).replace(/\s+/g, " ").trim().slice(0, CONTENT_VALUE_MAX_CHARS);
+      if (!s) continue;
+      (out[k] ??= []).includes(s) || out[k].length >= CONTENT_DISTINCT_PER_COLUMN || out[k].push(s);
+    }
+  }
+  return out;
+}
+
+export interface TableSample {
+  table: string;
+  values: Record<string, string[]>;
+}
+
+/** Prompt for one batch of table samples: describe what the VALUES are so a
+ *  search can route questions ("records owned by X" / "German customers"). */
+export function buildContentPrompt(
+  catalog: SchemaCatalog,
+  samples: TableSample[],
+): string {
+  const block = samples
+    .map(
+      (s) =>
+        `${s.table}:\n${Object.entries(s.values)
+          .map(([c, vals]) => `  - ${c}: ${vals.join(" | ")}`)
+          .join("\n")}`,
+    )
+    .join("\n\n");
+  return [
+    `You are indexing the CONTENT of a ${catalog.engine} database ("${catalog.database}").`,
+    "Below are top distinct sample values per column. For each column, describe in one short",
+    "phrase what the values ARE (format, vocabulary, meaning) so a search assistant can route",
+    "free-form questions to the right columns — e.g. values \"DE | FR | US\" → \"ISO country",
+    "codes\"; values \"Active | Retired\" → \"lifecycle status: Active/Retired\"; person-name",
+    "values on a column like group_cio → \"owner names (CIO)\". Also refine tags/synonyms when",
+    "the values clarify meaning.",
+    "",
+    "Return ONLY JSON, exactly:",
+    '{"tables":[{"table":"<as given>","columns":[{"name":"<col>","contentSummary":"<one phrase>",',
+    '"tags":["<concept>", ...],"synonyms":["<words>", ...]}]}]}',
+    "",
+    "Samples:",
+    block,
+  ].join("\n");
+}
+
+/** Merge a content pass into the existing semantic index without losing the
+ *  schema pass: tags union, synonyms union, contentSummary added/updated. */
+export function mergeContentIntoSemantic(
+  existing: SemanticTable[],
+  content: SemanticTable[],
+): SemanticTable[] {
+  const byTable = new Map(existing.map((t) => [t.table.toLowerCase(), t]));
+  for (const ct of content) {
+    const base = byTable.get(ct.table.toLowerCase());
+    if (!base) {
+      byTable.set(ct.table.toLowerCase(), ct);
+      continue;
+    }
+    const byCol = new Map(base.columns.map((c) => [c.name.toLowerCase(), c]));
+    for (const cc of ct.columns) {
+      const bc = byCol.get(cc.name.toLowerCase());
+      if (!bc) {
+        base.columns.push(cc);
+        continue;
+      }
+      bc.tags = [...new Set([...bc.tags, ...cc.tags])].slice(0, 8);
+      bc.synonyms = [...new Set([...bc.synonyms, ...cc.synonyms])].slice(0, 10);
+      if (cc.contentSummary) bc.contentSummary = cc.contentSummary;
+      if (cc.note && !bc.note) bc.note = cc.note;
+    }
+  }
+  return [...byTable.values()];
 }

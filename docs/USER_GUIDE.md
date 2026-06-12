@@ -341,15 +341,20 @@ reasons — ADR-0022):
   name/query later (inline pencil or right-click → *Edit Bookmark*; database queries stay
   validated read-only). The agent can propose query bookmarks after exploring
   (`#spSuggestBookmark`, approval required).
-- **Schema understanding (ADR-0024)**: after a database source connects, the extension
-  **preloads the full schema** it can see (table/column names + types only — never rows) and
-  asks once whether to **index it with Copilot**: batched metered requests return concept
-  tags and synonyms per column, so free-form questions work — e.g. a `group_cio` column is
-  tagged *ownership*, and *"show me all records owned by X"* searches it automatically.
-  Decline freely (asked once; re-run any time via right-click → *Index Database Schema with
-  Copilot*); admins can disable org-wide with `aiSharePoint.context.allowSchemaIndexing`.
-  *View Database Schema & Semantic Index* shows exactly what's stored; in chat, `#spDbSchema`
-  with a topic returns the matching tables/columns before the model writes its SELECT.
+- **Two indexing options (ADR-0024)**, both Copilot-powered, named for what they look at:
+  - **Index Database Schema** — reads every table/view your account can access, then Copilot
+    writes descriptive summaries (tags/synonyms/purposes). Sends **names and types only** —
+    e.g. `group_cio` gets tagged *ownership* so *"records owned by X"* finds it.
+  - **Index Database Content Types** — samples a bounded set of rows per table, reduces them
+    locally to top distinct values per column, and Copilot describes **what the values are**
+    ("ISO country codes", "statuses: Active/Retired"). This option does send sampled values
+    to Copilot (the consent dialog says so) — but **nothing from the database is ever
+    persisted**: the samples exist only for the request, and only Copilot's descriptive
+    summaries are stored to aid navigation and search.
+  Both honor `aiSharePoint.context.allowSchemaIndexing`; *View Database Schema & Semantic
+  Index* shows exactly what's stored; `#spDbSchema` gives the model the right columns before
+  it writes a SELECT. **Indexes are shared via Export/Import Reference Config**, so one
+  teammate's indexing run benefits everyone.
 - **TLS** trusts the OS store and the shared pinned CA bundle setting
   (`aiSharePoint.ldap.caCertificatesFile` — applies to all non-HTTP sources).
 

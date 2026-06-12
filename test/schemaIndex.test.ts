@@ -233,3 +233,66 @@ test("renderSchemaForModel reports the semantic state and respects the char cap"
   );
   assert.match(none, /No tables matched/);
 });
+
+// --- 0.11.0: content-type indexing + export sharing ---------------------------
+
+test("buildSampleQuery quotes per engine; distinctValues dedupes/truncates locally", async () => {
+  const { buildSampleQuery, distinctValues, CONTENT_DISTINCT_PER_COLUMN } = await import(
+    "../src/context/db/schemaIndex"
+  );
+  const t = cmdbCatalog().tables[0];
+  assert.equal(
+    buildSampleQuery("mssql", t, 100),
+    "SELECT TOP 100 [appl_id], [appl_name], [group_cio], [lst_upd_dt] FROM [dbo].[Applications]",
+  );
+  assert.match(buildSampleQuery("postgres", t, 50), /^SELECT "appl_id".*FROM "dbo"\."Applications" LIMIT 50$/);
+  assert.match(buildSampleQuery("mysql", t, 50), /FROM `dbo`\.`Applications` LIMIT 50$/);
+  const d = distinctValues([
+    { c: "Active", n: 1 },
+    { c: "Active", n: 2 },
+    { c: "Retired", n: null },
+    { c: "x".repeat(200) },
+  ]);
+  assert.deepEqual(d.c.slice(0, 2), ["Active", "Retired"]);
+  assert.ok(d.c[2].length <= 60);
+  assert.ok(d.c.length <= CONTENT_DISTINCT_PER_COLUMN);
+  assert.deepEqual(d.n, ["1", "2"]);
+});
+
+test("content prompt carries sampled values; parse keeps contentSummary; merge unions without losing tags", async () => {
+  const { buildContentPrompt, mergeContentIntoSemantic } = await import(
+    "../src/context/db/schemaIndex"
+  );
+  const catalog = cmdbCatalog();
+  const prompt = buildContentPrompt(catalog, [
+    { table: "dbo.Applications", values: { group_cio: ["J. Doe", "A. Smith"] } },
+  ]);
+  assert.match(prompt, /J\. Doe \| A\. Smith/);
+  assert.match(prompt, /contentSummary/);
+  const parsed = parseSemanticResponse(
+    JSON.stringify({
+      tables: [
+        {
+          table: "dbo.Applications",
+          columns: [{ name: "group_cio", contentSummary: "owner names (CIO)", tags: ["person"], synonyms: [] }],
+        },
+      ],
+    }),
+    catalog,
+  );
+  assert.equal(parsed[0].columns[0].contentSummary, "owner names (CIO)");
+  const merged = mergeContentIntoSemantic(indexedSchema().semantic!.tables, parsed);
+  const col = merged
+    .find((t) => t.table === "dbo.Applications")!
+    .columns.find((c) => c.name === "group_cio")!;
+  assert.ok(col.tags.includes("ownership") && col.tags.includes("person")); // union, nothing lost
+  assert.equal(col.contentSummary, "owner names (CIO)");
+});
+
+test("content summaries are searchable and rendered for the model", async () => {
+  const schema = indexedSchema();
+  schema.semantic!.tables[0].columns[0].contentSummary = "owner names like J. Doe";
+  const ranked = searchSchema(schema, "names");
+  assert.ok([...ranked[0].matchedColumns].includes("group_cio"));
+  assert.match(renderSchemaForModel(schema, "owned"), /values: owner names/);
+});

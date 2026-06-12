@@ -16,12 +16,16 @@ import { assertReadOnlySql, rowsToHits, parseMongoSpec } from "./readSafe";
 import { buildMssqlAuthentication, parseMssqlParams, resolveMssqlEndpoint } from "./mssqlAuth";
 import {
   SchemaCatalog,
+  TableDef,
   catalogFromRows,
   catalogFromMongoSamples,
+  buildSampleQuery,
+  distinctValues,
   SCHEMA_MAX_TABLES,
   SCHEMA_MAX_COLUMNS_PER_TABLE,
   MONGO_MAX_COLLECTIONS,
   MONGO_SAMPLE_DOCS,
+  CONTENT_SAMPLE_ROWS,
 } from "./schemaIndex";
 import { loadTrustedCAs } from "../ldap/osTrust";
 import { AppError } from "../../core/errors";
@@ -464,6 +468,36 @@ export async function describeDb(
     DESCRIBE_SQL[source.type as SqlEngine],
   );
   return catalogFromRows(source.type, database, rows, fetchedAt);
+}
+
+/** Content-type indexing sample: one bounded row sample per table, reduced
+ *  to top distinct values per column LOCALLY — only the distinct value
+ *  strings (already truncated) survive into the caller's hands. */
+export async function sampleTableValues(
+  source: ContextSource,
+  credential: ContextCredential,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+  table: TableDef,
+): Promise<Record<string, string[]>> {
+  if (source.type === "mongodb") {
+    const docs = await withMongo(source, credential, tls, caps, (client, dbName) =>
+      client
+        .db(dbName)
+        .collection(table.name)
+        .find({}, { limit: CONTENT_SAMPLE_ROWS, maxTimeMS: caps.timeoutMs })
+        .toArray(),
+    );
+    return distinctValues(docs as Array<Record<string, unknown>>);
+  }
+  const rows = await SQL_RUNNERS[source.type as SqlEngine](
+    source,
+    credential,
+    tls,
+    { ...caps, maxResults: CONTENT_SAMPLE_ROWS },
+    buildSampleQuery(source.type, table),
+  );
+  return distinctValues(rows);
 }
 
 /** Tables/collections → ready-made sample-query bookmark candidates. */

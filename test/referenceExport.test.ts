@@ -68,7 +68,17 @@ test("orphan bookmarks are excluded from export", () => {
 });
 
 test("round-trip: export → import regenerates ids and remaps bookmarks", () => {
-  const exp = buildReferenceExport(sources(), bookmarks(), T0);
+  const schemaFixture = {
+    catalog: { fetchedAt: T0, engine: "mssql" as const, database: "CMDB", tables: [{ name: "Applications", kind: "table" as const, columns: [] }] },
+    semanticState: "indexed" as const,
+  };
+  const exp = buildReferenceExport(
+    sources(),
+    bookmarks(),
+    T0,
+    new Map([["s1", schemaFixture]]),
+  );
+  assert.ok(exp.schemas && exp.schemas["Corp Wiki"]);
   let n = 0;
   const parsed = parseReferenceImport(JSON.stringify(exp), T0, () => `new-${n++}`);
   assert.equal(parsed.sources.length, 2);
@@ -83,6 +93,10 @@ test("round-trip: export → import regenerates ids and remaps bookmarks", () =>
   assert.equal(parsed.sources[0].alias, "Wiki");
   assert.equal(parsed.sources[0].description, "Engineering knowledge base");
   assert.equal(parsed.sources[1].alias, undefined);
+  // The schema index travels too, remapped to the regenerated id.
+  assert.equal(parsed.schemas.length, 1);
+  assert.equal(parsed.schemas[0].sourceId, parsed.sources[0].id);
+  assert.equal(parsed.schemas[0].schema.catalog.database, "CMDB");
 });
 
 test("import drops duplicate aliases within a file (first wins) with a warning", () => {

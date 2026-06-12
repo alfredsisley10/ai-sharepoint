@@ -8,11 +8,20 @@ import { Logger } from "../../core/log";
 import {
   SourceSchema,
   SemanticTable,
+  TableDef,
+  TableSample,
   chunkTables,
   buildIndexPrompt,
+  buildContentPrompt,
   parseSemanticResponse,
   mergeSemantic,
+  mergeContentIntoSemantic,
+  qualifiedName,
+  CONTENT_TABLES_PER_BATCH,
+  CONTENT_MAX_TABLES,
 } from "./schemaIndex";
+
+export type TableSampler = (table: TableDef) => Promise<Record<string, string[]>>;
 
 /**
  * Consent-gated Copilot indexing of a database schema (ADR-0024).
@@ -147,6 +156,135 @@ export class SchemaIndexer {
       indexed: String(tables.length),
       partial: String(partial),
     });
+    return indexed;
+  }
+
+  /** "Index Database Content Types": sample top distinct values per column
+   *  (one bounded query per table), then have Copilot describe the VALUES.
+   *  Consent is explicit that real data samples leave for Copilot. */
+  async indexContentInteractively(
+    source: ContextSource,
+    schema: SourceSchema,
+    sampler: TableSampler,
+  ): Promise<SourceSchema> {
+    if (!SchemaIndexer.enabledByPolicy()) {
+      void vscode.window.showWarningMessage(
+        "Indexing with Copilot is disabled by policy (aiSharePoint.context.allowSchemaIndexing).",
+      );
+      return schema;
+    }
+    const tables = schema.catalog.tables.slice(0, CONTENT_MAX_TABLES);
+    const pick = await vscode.window.showWarningMessage(
+      `Index "${source.displayName}" content types with Copilot? Unlike schema indexing, this sends SAMPLED DATA VALUES — the top distinct values per column (truncated), from a bounded row sample of ${tables.length} table(s) — to your Copilot model so it can describe what each column contains. NOTHING from the database is persisted: the samples exist only for the request, and only Copilot's descriptive summaries (e.g. "ISO country codes") are stored to aid search. Don't proceed if these tables hold regulated data.`,
+      { modal: true },
+      "Sample & Index Content",
+      "Don't Ask Again for This Source",
+    );
+    if (pick === "Don't Ask Again for This Source") {
+      const declined: SourceSchema = { ...schema, contentState: "declined" };
+      await this.schemas.set(source.id, declined);
+      return declined;
+    }
+    if (pick !== "Sample & Index Content") return schema;
+
+    const indexed = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Indexing "${source.displayName}" content types…`,
+        cancellable: true,
+      },
+      async (progress, token) => {
+        // Phase 1: sampling — one query per table, live per-table feedback.
+        const samples: TableSample[] = [];
+        for (let i = 0; i < tables.length; i++) {
+          if (token.isCancellationRequested) break;
+          const name = qualifiedName(tables[i]);
+          progress.report({
+            increment: 40 / tables.length,
+            message: `Sampling ${name} (${i + 1}/${tables.length})…`,
+          });
+          try {
+            const values = await sampler(tables[i]);
+            if (Object.keys(values).length > 0) samples.push({ table: name, values });
+          } catch (err) {
+            this.log.warn(`Content sample for ${name} failed: ${String(err)}`);
+          }
+        }
+        // Phase 2: Copilot description, batched + streamed like schema pass.
+        const batches: TableSample[][] = [];
+        for (let i = 0; i < samples.length; i += CONTENT_TABLES_PER_BATCH) {
+          batches.push(samples.slice(i, i + CONTENT_TABLES_PER_BATCH));
+        }
+        const results: SemanticTable[][] = [];
+        let partial = tables.length < schema.catalog.tables.length;
+        for (let i = 0; i < batches.length; i++) {
+          if (token.isCancellationRequested) {
+            partial = true;
+            break;
+          }
+          const label = `Describing batch ${i + 1}/${batches.length}`;
+          const startedAt = Date.now();
+          let received = 0;
+          let lastPaint = 0;
+          const ticker = setInterval(() => {
+            if (received === 0) {
+              progress.report({ message: `${label} — waiting for the model… ${Math.round((Date.now() - startedAt) / 1000)}s` });
+            }
+          }, 1000);
+          try {
+            const res = await this.copilot.ask(
+              {
+                prompt: buildContentPrompt(schema.catalog, batches[i]),
+                label: "contentIndex",
+                token,
+                onChunk: (t) => {
+                  received += t.length;
+                  if (Date.now() - lastPaint > 400) {
+                    lastPaint = Date.now();
+                    progress.report({ message: `${label} — model is writing… ${(received / 1024).toFixed(1)} KB` });
+                  }
+                },
+              },
+              this.now,
+            );
+            clearInterval(ticker);
+            results.push(parseSemanticResponse(res.text, schema.catalog));
+            progress.report({ increment: 60 / batches.length, message: `${label} done (${Math.round((Date.now() - startedAt) / 1000)}s)` });
+          } catch (err) {
+            clearInterval(ticker);
+            partial = true;
+            if (err instanceof BudgetBlockedError) break;
+            this.log.warn(`Content batch ${i + 1} failed: ${String(err)}`);
+          }
+        }
+        const merged = mergeContentIntoSemantic(
+          schema.semantic?.tables ?? [],
+          results.flat(),
+        );
+        const next: SourceSchema = {
+          catalog: schema.catalog,
+          semantic: {
+            indexedAt: schema.semantic?.indexedAt ?? this.now(),
+            modelId: schema.semantic?.modelId ?? "",
+            tables: merged,
+            ...(partial ? { partial: true } : {}),
+            contentIndexedAt: this.now(),
+          },
+          semanticState: merged.length > 0 ? "indexed" : schema.semanticState,
+          contentState: "indexed",
+        };
+        await this.schemas.set(source.id, next);
+        this.telemetry.record("schema.contentIndex", {
+          type: source.type,
+          tables: String(samples.length),
+          partial: String(partial),
+        });
+        return next;
+      },
+    );
+    void vscode.window.showInformationMessage(
+      `Content types indexed for "${source.displayName}" — only Copilot's descriptive summaries were stored (no database content persists); they now feed search. View them via "View Database Schema & Semantic Index".`,
+    );
     return indexed;
   }
 

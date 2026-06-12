@@ -1999,12 +1999,23 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   register("aiSharePoint.indexSourceSchema", async (arg) => {
+    // "Index Database Schema": one action — read every table/view the
+    // account can access, then Copilot writes descriptive summaries.
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    const schema = await loadSchemaWithProgress(source);
+    await schemaIndexer.indexInteractively(source, schema);
+  });
+
+  register("aiSharePoint.indexSourceContent", async (arg) => {
+    // "Index Database Content Types": sampled distinct values per column,
+    // described by Copilot — requires the schema pass first.
     const source = await resolveSourceArg(arg, contextSources);
     if (!source || !requireDbSource(source)) return;
     const schema = schemas.getSync(source.id) ?? (await loadSchemaWithProgress(source));
-    // Explicit command: asking again is correct even after an earlier
-    // "don't ask" — the user is the one initiating now.
-    await schemaIndexer.indexInteractively(source, schema);
+    await schemaIndexer.indexContentInteractively(source, schema, (table) =>
+      contextService.sampleTable(source, table),
+    );
   });
 
   // --- Catalog pre-cache (Confluence spaces / Jira projects+queues) --------
@@ -2472,7 +2483,13 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage("No reference sources or bookmarks to export.");
       return;
     }
-    const exportDoc = buildReferenceExport(all, bookmarks.list(), nowIso());
+    const schemasById = new Map(
+      all.flatMap((s) => {
+        const schema = schemas.getSync(s.id);
+        return schema ? [[s.id, schema] as const] : [];
+      }),
+    );
+    const exportDoc = buildReferenceExport(all, bookmarks.list(), nowIso(), schemasById);
     const json = JSON.stringify(exportDoc, null, 2);
     // Defense in depth (ADR-0013): the builder is secret-free by construction;
     // the scan refuses to write if anything credential-shaped slipped through.
@@ -2549,6 +2566,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     for (const b of freshBookmarks) {
       await bookmarks.add(b);
+    }
+    for (const entry of parsed.schemas) {
+      if (freshIds.has(entry.sourceId)) {
+        await schemas.set(entry.sourceId, entry.schema);
+      }
     }
     telemetry.record("context.importConfig", { sources: fresh.length, bookmarks: freshBookmarks.length });
     void vscode.window.showInformationMessage(

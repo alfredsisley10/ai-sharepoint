@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.10.6",
+  "version": "0.11.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -200,7 +200,7 @@
       },
       {
         "command": "aiSharePoint.indexSourceSchema",
-        "title": "Index Database Schema with Copilot…",
+        "title": "Index Database Schema (Copilot summaries)…",
         "category": "AI SharePoint",
         "icon": "$(sparkle)"
       },
@@ -361,6 +361,12 @@
         "title": "Toggle Verbose Wire Logging",
         "category": "AI SharePoint",
         "icon": "$(eye)"
+      },
+      {
+        "command": "aiSharePoint.indexSourceContent",
+        "title": "Index Database Content Types (sampled values)…",
+        "category": "AI SharePoint",
+        "icon": "$(beaker)"
       }
     ],
     "viewsContainers": {
@@ -1028,9 +1034,14 @@
           "group": "1_schema@2"
         },
         {
-          "command": "aiSharePoint.viewSourceSchema",
+          "command": "aiSharePoint.indexSourceContent",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
           "group": "1_schema@3"
+        },
+        {
+          "command": "aiSharePoint.viewSourceSchema",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
+          "group": "1_schema@4"
         },
         {
           "command": "aiSharePoint.clearErrorReports",

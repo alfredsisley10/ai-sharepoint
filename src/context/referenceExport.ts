@@ -1,5 +1,6 @@
 import { ContextSource, ContextBookmark, ContextAuthMethod } from "./types";
 import { normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./sourceRef";
+import { SourceSchema } from "./db/schemaIndex";
 
 /**
  * Secret-free reference-config sharing (ADR-0013 slice 1).
@@ -41,6 +42,10 @@ export interface ReferenceExport {
   notice: string;
   sources: ExportedSource[];
   bookmarks: ExportedBookmark[];
+  /** Database schema/semantic indexes keyed by source displayName —
+   *  non-secret metadata + AI summaries, shared so teammates skip the
+   *  (metered) indexing run. */
+  schemas?: Record<string, SourceSchema>;
 }
 
 export const EXPORT_NOTICE =
@@ -52,8 +57,16 @@ export function buildReferenceExport(
   sources: ContextSource[],
   bookmarks: ContextBookmark[],
   exportedAt: string,
+  schemasById?: Map<string, SourceSchema>,
 ): ReferenceExport {
   const byId = new Map(sources.map((s) => [s.id, s.displayName]));
+  const schemas: Record<string, SourceSchema> = {};
+  if (schemasById) {
+    for (const s of sources) {
+      const schema = schemasById.get(s.id);
+      if (schema) schemas[s.displayName] = schema;
+    }
+  }
   return {
     $schema: REFERENCE_EXPORT_SCHEMA,
     exportedAt,
@@ -78,6 +91,7 @@ export function buildReferenceExport(
         locator: b.locator,
         kind: b.kind,
       })),
+    ...(Object.keys(schemas).length > 0 ? { schemas } : {}),
   };
 }
 
@@ -85,6 +99,8 @@ export interface ParsedImport {
   sources: ContextSource[];
   bookmarks: ContextBookmark[];
   warnings: string[];
+  /** Schema indexes mapped onto the regenerated source ids. */
+  schemas: Array<{ sourceId: string; schema: SourceSchema }>;
 }
 
 const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai", "powerbi", "servicenow", "splunk"]);
@@ -97,7 +113,7 @@ export function parseReferenceImport(
   importedAt: string,
   newId: () => string,
 ): ParsedImport {
-  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [] };
+  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [] };
   let raw: ReferenceExport;
   try {
     raw = JSON.parse(json) as ReferenceExport;
@@ -171,6 +187,20 @@ export function parseReferenceImport(
       continue;
     }
     out.bookmarks.push({ id: newId(), sourceId, name: b.name, locator: b.locator, kind: b.kind });
+  }
+  if (raw.schemas && typeof raw.schemas === "object") {
+    for (const [name, schema] of Object.entries(raw.schemas)) {
+      const sourceId = idByName.get(name.toLowerCase());
+      if (!sourceId) {
+        out.warnings.push(`Schema index for unknown source "${name}" — skipped.`);
+        continue;
+      }
+      if (!schema || !Array.isArray(schema.catalog?.tables)) {
+        out.warnings.push(`Schema index for "${name}" was malformed — skipped.`);
+        continue;
+      }
+      out.schemas.push({ sourceId, schema });
+    }
   }
   return out;
 }
