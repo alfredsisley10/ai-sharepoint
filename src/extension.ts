@@ -76,6 +76,7 @@ import {
 } from "./context/catalogCache";
 import { setWireSink } from "./core/wireLog";
 import { setLdapDnsServers } from "./context/ldap/ldapClient";
+import { ProjectsStore, Project, INSTRUCTIONS_MAX_CHARS } from "./context/projectsStore";
 import { enumeratePowerBiDatasets, POWERBI_SCOPES } from "./context/adapters/powerbi";
 import { listSnowTables } from "./context/adapters/servicenow";
 import {
@@ -208,9 +209,17 @@ export function activate(context: vscode.ExtensionContext): void {
   void schemas.preload();
   const catalogs = new CatalogStore(context.globalStorageUri);
   void catalogs.preload();
+  const projects = new ProjectsStore(context.globalState);
 
   const sitesProvider = new SitesTreeProvider(sites);
-  const sourcesProvider = new SourcesTreeProvider(contextSources, bookmarks, schemas, catalogs, nowIso);
+  const sourcesProvider = new SourcesTreeProvider(
+    contextSources,
+    bookmarks,
+    schemas,
+    catalogs,
+    nowIso,
+    (all) => projects.scope(all),
+  );
   const usageProvider = new UsageTreeProvider(
     meter,
     budget,
@@ -361,6 +370,7 @@ export function activate(context: vscode.ExtensionContext): void {
       sources: contextSources,
       bookmarks,
       schemas,
+      projects,
       copilot,
       meter,
       budget,
@@ -387,9 +397,11 @@ export function activate(context: vscode.ExtensionContext): void {
       telemetry,
       errors,
       nowIso,
+      () => projects.scope(contextSources.list()),
     ),
     schemas,
     catalogs,
+    projects,
   );
 
   // --- Command wrapper: telemetry + central error UX ---------------------
@@ -1932,6 +1944,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await bookmarks.removeForSource(source.id);
       await schemas.remove(source.id);
       await catalogs.remove(source.id);
+      await projects.forgetSource(source.id);
       contextCache.invalidateSource(source.id);
       telemetry.record("context.remove");
     }
@@ -1953,6 +1966,129 @@ export function activate(context: vscode.ExtensionContext): void {
         ? `"${source.displayName}" answers to "${details.alias}" now — e.g. @sharepoint find … in the ${details.alias} database.`
         : `Alias cleared for "${source.displayName}".`,
     );
+  });
+
+  // --- Projects: named scopes for sources/bookmarks/instructions -----------
+  const promptProjectDetails = async (current?: Project): Promise<Project | undefined> => {
+    const name = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: current ? "Project — name" : "New project — name",
+      value: current?.name ?? "",
+      placeHolder: "AI Automation Initiative",
+      validateInput: (v) => (v.trim() ? undefined : "Enter a project name"),
+    });
+    if (!name) return undefined;
+    const description = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Project — description (optional, Enter to skip)",
+      value: current?.description ?? "",
+    });
+    if (description === undefined) return undefined;
+    const instructions = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Project — baseline agent instructions (optional, Enter to skip)",
+      value: current?.instructions ?? "",
+      placeHolder: "e.g. Prefer the CMDB for application questions; cite Confluence pages; answer in German.",
+      prompt: `Prepended to every @sharepoint turn while this project is active (max ${INSTRUCTIONS_MAX_CHARS} chars).`,
+      validateInput: (v) =>
+        v.length > INSTRUCTIONS_MAX_CHARS ? `Max ${INSTRUCTIONS_MAX_CHARS} characters.` : undefined,
+    });
+    if (instructions === undefined) return undefined;
+    const all = contextSources.list();
+    if (all.length === 0) {
+      void vscode.window.showWarningMessage("Add at least one reference source before scoping a project.");
+      return undefined;
+    }
+    const member = new Set(current?.sourceIds ?? []);
+    const picks = await vscode.window.showQuickPick(
+      all.map((s) => ({
+        label: s.displayName,
+        description: `${s.alias ? `“${s.alias}” · ` : ""}${s.type}`,
+        picked: member.has(s.id),
+        s,
+      })),
+      {
+        ignoreFocusOut: true,
+        canPickMany: true,
+        title: "Project — which sources belong to it? (bookmarks follow their sources)",
+      },
+    );
+    if (!picks) return undefined;
+    return {
+      id: current?.id ?? crypto.randomUUID(),
+      name: name.trim(),
+      ...(description.trim() ? { description: description.trim() } : {}),
+      ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
+      sourceIds: picks.map((x) => x.s.id),
+    };
+  };
+
+  register("aiSharePoint.createProject", async () => {
+    const project = await promptProjectDetails();
+    if (!project) return;
+    await projects.upsert(project);
+    await projects.setActive(project.id);
+    telemetry.record("project.create", { sources: String(project.sourceIds.length) });
+    void vscode.window.showInformationMessage(
+      `Project "${project.name}" created and activated — chat and the Reference Sources view are now scoped to its ${project.sourceIds.length} source(s).`,
+    );
+  });
+
+  register("aiSharePoint.switchProject", async () => {
+    const all = projects.list();
+    const pick = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(globe) All sources (no project)",
+          description: "disable scoping",
+          id: undefined as string | undefined,
+        },
+        ...all.map((pr) => ({
+          label: `$(folder) ${pr.name}`,
+          description: `${pr.sourceIds.length} source(s)${pr.instructions ? " · instructions" : ""}${pr.id === projects.activeId() ? " · active" : ""}`,
+          detail: pr.description,
+          id: pr.id as string | undefined,
+        })),
+      ],
+      { ignoreFocusOut: true, title: "Scope chat + views to which project?" },
+    );
+    if (!pick) return;
+    await projects.setActive(pick.id);
+    telemetry.record("project.switch");
+  });
+
+  register("aiSharePoint.editProject", async () => {
+    const all = projects.list();
+    if (all.length === 0) {
+      void vscode.window.showInformationMessage("No projects yet — run “Projects: Create Project”.");
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(
+      all.map((pr) => ({ label: pr.name, description: `${pr.sourceIds.length} source(s)`, pr })),
+      { ignoreFocusOut: true, title: "Edit which project?" },
+    );
+    if (!pick) return;
+    const edited = await promptProjectDetails(pick.pr);
+    if (!edited) return;
+    await projects.upsert(edited);
+    void vscode.window.showInformationMessage(`Project "${edited.name}" updated.`);
+  });
+
+  register("aiSharePoint.removeProject", async () => {
+    const all = projects.list();
+    if (all.length === 0) return;
+    const pick = await vscode.window.showQuickPick(
+      all.map((pr) => ({ label: pr.name, pr })),
+      { ignoreFocusOut: true, title: "Remove which project? (sources/bookmarks are NOT deleted)" },
+    );
+    if (!pick) return;
+    const confirm = await vscode.window.showWarningMessage(
+      `Remove project "${pick.pr.name}"? Its sources, bookmarks, and indexes remain — only the scope/instructions bundle is deleted.`,
+      { modal: true },
+      "Remove Project",
+    );
+    if (confirm !== "Remove Project") return;
+    await projects.remove(pick.pr.id);
   });
 
   // --- Database schema catalog + semantic index (ADR-0024) -----------------
@@ -2490,7 +2626,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return schema ? [[s.id, schema] as const] : [];
       }),
     );
-    const exportDoc = buildReferenceExport(all, bookmarks.list(), nowIso(), schemasById);
+    const exportDoc = buildReferenceExport(all, bookmarks.list(), nowIso(), schemasById, projects.list());
     const json = JSON.stringify(exportDoc, null, 2);
     // Defense in depth (ADR-0013): the builder is secret-free by construction;
     // the scan refuses to write if anything credential-shaped slipped through.
@@ -2571,6 +2707,14 @@ export function activate(context: vscode.ExtensionContext): void {
     for (const entry of parsed.schemas) {
       if (freshIds.has(entry.sourceId)) {
         await schemas.set(entry.sourceId, entry.schema);
+      }
+    }
+    const existingProjects = new Set(projects.list().map((pr) => pr.name.toLowerCase()));
+    for (const pr of parsed.projects) {
+      if (existingProjects.has(pr.name.toLowerCase())) continue;
+      const memberIds = pr.sourceIds.filter((id) => freshIds.has(id));
+      if (memberIds.length > 0) {
+        await projects.upsert({ ...pr, sourceIds: memberIds });
       }
     }
     telemetry.record("context.importConfig", { sources: fresh.length, bookmarks: freshBookmarks.length });

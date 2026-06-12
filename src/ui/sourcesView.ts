@@ -29,6 +29,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     private readonly schemas: SchemaStore,
     private readonly catalogs: CatalogStore,
     private readonly now: () => string = () => new Date().toISOString(),
+    private readonly scope: (all: ContextSource[]) => ContextSource[] = (all) => all,
   ) {
     sources.onDidChange(() => this.emitter.fire());
     bookmarks.onDidChange(() => this.emitter.fire());
@@ -45,7 +46,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   getChildren(node?: Node): Node[] {
-    if (!node) return this.sources.list();
+    if (!node) return this.scope(this.sources.list());
     if (isBookmark(node)) return [];
     return this.bookmarks.listForSource(node.id);
   }

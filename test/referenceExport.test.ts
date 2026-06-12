@@ -99,6 +99,26 @@ test("round-trip: export → import regenerates ids and remaps bookmarks", () =>
   assert.equal(parsed.schemas[0].schema.catalog.database, "CMDB");
 });
 
+test("projects travel with the export: memberships remapped, unknown members dropped", () => {
+  const exp = buildReferenceExport(sources(), bookmarks(), T0, undefined, [
+    {
+      id: "p1",
+      name: "AI Automation",
+      description: "Initiative scope",
+      instructions: "Prefer the Wiki; cite pages.",
+      sourceIds: ["s1", "ghost"],
+    },
+  ]);
+  assert.equal(exp.projects?.[0].name, "AI Automation");
+  assert.deepEqual(exp.projects?.[0].sources, ["Corp Wiki"]); // ghost dropped
+  let n = 0;
+  const parsed = parseReferenceImport(JSON.stringify(exp), T0, () => `new-${n++}`);
+  assert.equal(parsed.projects.length, 1);
+  assert.equal(parsed.projects[0].name, "AI Automation");
+  assert.equal(parsed.projects[0].instructions, "Prefer the Wiki; cite pages.");
+  assert.deepEqual(parsed.projects[0].sourceIds, [parsed.sources[0].id]);
+});
+
 test("import drops duplicate aliases within a file (first wins) with a warning", () => {
   const doc = {
     $schema: REFERENCE_EXPORT_SCHEMA,

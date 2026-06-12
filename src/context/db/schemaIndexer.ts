@@ -40,6 +40,10 @@ export class SchemaIndexer {
     private readonly now: () => string,
   ) {}
 
+  /** Premium units metered by the most recent indexing run — surfaced in
+   *  the completion toast (pilot: metering wasn't visible at point of use). */
+  lastRunUnits = 0;
+
   static enabledByPolicy(): boolean {
     return vscode.workspace
       .getConfiguration("aiSharePoint")
@@ -78,6 +82,7 @@ export class SchemaIndexer {
     const results: SemanticTable[][] = [];
     let modelId = "";
     let partial = false;
+    this.lastRunUnits = 0;
     for (let i = 0; i < batches.length; i++) {
       if (token?.isCancellationRequested) {
         partial = true;
@@ -117,6 +122,7 @@ export class SchemaIndexer {
         );
         clearInterval(ticker);
         modelId = res.modelId;
+        this.lastRunUnits += res.premiumUnits;
         const parsed = parseSemanticResponse(res.text, schema.catalog);
         results.push(parsed);
         progress?.report({
@@ -194,6 +200,7 @@ export class SchemaIndexer {
         cancellable: true,
       },
       async (progress, token) => {
+        this.lastRunUnits = 0;
         // Phase 1: sampling — one query per table, live per-table feedback.
         const samples: TableSample[] = [];
         for (let i = 0; i < tables.length; i++) {
@@ -248,6 +255,7 @@ export class SchemaIndexer {
               this.now,
             );
             clearInterval(ticker);
+            this.lastRunUnits += res.premiumUnits;
             results.push(parseSemanticResponse(res.text, schema.catalog));
             progress.report({ increment: 60 / batches.length, message: `${label} done (${Math.round((Date.now() - startedAt) / 1000)}s)` });
           } catch (err) {
@@ -283,7 +291,7 @@ export class SchemaIndexer {
       },
     );
     void vscode.window.showInformationMessage(
-      `Content types indexed for "${source.displayName}" — only Copilot's descriptive summaries were stored (no database content persists); they now feed search. View them via "View Database Schema & Semantic Index".`,
+      `Content types indexed for "${source.displayName}" — only Copilot's descriptive summaries were stored (no database content persists). ~${this.lastRunUnits} premium unit(s) metered (Usage view → By task → contentIndex).`,
     );
     return indexed;
   }
@@ -313,9 +321,10 @@ export class SchemaIndexer {
     );
     const n = indexed.semantic?.tables.length ?? 0;
     void vscode.window.showInformationMessage(
-      indexed.semantic?.partial
-        ? `Schema index for "${source.displayName}" is partial (${n} tables) — re-run "Index Database Schema with Copilot" to complete it.`
-        : `Schema indexed: ${n} tables of "${source.displayName}" now answer free-form questions (try: @sharepoint what's owned by …).`,
+      (indexed.semantic?.partial
+        ? `Schema index for "${source.displayName}" is partial (${n} tables) — re-run "Index Database Schema" to complete it.`
+        : `Schema indexed: ${n} tables of "${source.displayName}" now answer free-form questions.`) +
+        ` ~${this.lastRunUnits} premium unit(s) metered (Usage view → By task → schemaIndex).`,
     );
     return indexed;
   }

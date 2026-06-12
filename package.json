@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -367,6 +367,30 @@
         "title": "Index Database Content Types (sampled values)…",
         "category": "AI SharePoint",
         "icon": "$(beaker)"
+      },
+      {
+        "command": "aiSharePoint.createProject",
+        "title": "Projects: Create Project…",
+        "category": "AI SharePoint",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "aiSharePoint.switchProject",
+        "title": "Projects: Switch Project / All Sources",
+        "category": "AI SharePoint",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "aiSharePoint.editProject",
+        "title": "Projects: Edit Project…",
+        "category": "AI SharePoint",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "aiSharePoint.removeProject",
+        "title": "Projects: Remove Project…",
+        "category": "AI SharePoint",
+        "icon": "$(trash)"
       }
     ],
     "viewsContainers": {
@@ -875,6 +899,11 @@
           "command": "aiSharePoint.importReferenceConfig",
           "when": "view == aiSharePoint.sourcesView",
           "group": "1_share@2"
+        },
+        {
+          "command": "aiSharePoint.switchProject",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "navigation@0"
         }
       ],
       "view/item/context": [

@@ -104,3 +104,16 @@ export const DEFAULT_CAPS: ReadCaps = {
   maxBodyChars: 8_000,
   timeoutMs: 30_000,
 };
+
+/** Project scope (Pillar 7): a named bundle of sources (bookmarks follow
+ *  their sources) plus baseline agent instructions. Non-secret; travels
+ *  with the reference-config export. */
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  instructions?: string;
+  sourceIds: string[];
+}
+
+export const INSTRUCTIONS_MAX_CHARS = 2_000;

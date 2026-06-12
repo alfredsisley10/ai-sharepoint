@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.12.0 — 2026-06-12
+
+### Added — Projects: exportable scopes for sources, bookmarks, and agent instructions (pilot)
+- **Projects** bundle a set of reference sources (bookmarks follow their sources), an optional
+  description, and **baseline instructions** prepended to every `@sharepoint` turn while the
+  project is active. Commands: *Projects: Create / Switch / Edit / Remove* (switch also via the
+  Reference Sources title bar; the view header shows the active project). With a project
+  active, the view, `#spSources`, source resolution, bookmark listings, and the participant's
+  context are **scoped to its members** — "All sources" disables scoping. Removing a project
+  never deletes sources or bookmarks.
+- **Exportable**: projects ride the reference-config export (memberships linked by source
+  name, remapped on import; name collisions skipped) — so a team can share a complete,
+  scoped working set: sources + aliases + bookmarks + database indexes + project instructions
+  in one file.
+
+### Fixed — database indexing shows its metering (pilot)
+- Indexing requests were always metered (Usage view → **By task → `schemaIndex` /
+  `contentIndex`**), but invisibly. Completion toasts now state the premium units the run
+  consumed and where to see them. Note: on included **0× models** (the default-model policy
+  picks the cheapest) the unit count is legitimately 0 — requests still appear in By task.
+
 ## 0.11.1 — 2026-06-12
 
 ### Fixed — Communications failures now name the real cause (pilot: "can't connect to Outlook")

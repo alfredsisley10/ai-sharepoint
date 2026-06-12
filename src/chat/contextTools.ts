@@ -9,7 +9,7 @@ import { ContextSource } from "../context/types";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
-import { sourceChatLabel } from "../context/sourceRef";
+import { sourceChatLabel, resolveSourceRef } from "../context/sourceRef";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
@@ -32,6 +32,7 @@ export function registerContextTools(
   telemetry: TelemetryService,
   errors: ErrorReportStore,
   nowIso: () => string,
+  scopedSources: () => ContextSource[] = () => store.list(),
 ): vscode.Disposable[] {
   const guarded = <T>(
     name: string,
@@ -53,13 +54,13 @@ export function registerContextTools(
   });
 
   const resolveOrExplain = (ref?: string) => {
-    const source = store.resolve(ref);
+    const all = scopedSources();
+    const source = resolveSourceRef(all, ref);
     if (!source) {
-      const all = store.list();
       throw new Error(
         all.length === 0
           ? 'No reference sources configured. The user can add Confluence/Jira via "AI SharePoint: Add Context Source".'
-          : `Could not match "${ref ?? ""}" to a source. Available: ${all
+          : `Could not match "${ref ?? ""}" to a source in the active project scope. Available: ${all
               .map(sourceChatLabel)
               .join("; ")}. Aliases, display names, and types all work as the source argument.`,
       );
@@ -176,9 +177,9 @@ export function registerContextTools(
         "aisharepoint_list_sources",
         "Listing reference sources",
         async () => {
-          const all = store.list();
+          const all = scopedSources();
           if (all.length === 0) {
-            return 'No reference sources configured. The user can add Confluence or Jira via "AI SharePoint: Add Context Source". Reference-role SharePoint sites are available through the SharePoint tools instead.';
+            return 'No reference sources in the active project scope. The user can add sources via "AI SharePoint: Add Context Source" or switch projects ("Projects: Switch").';
           }
           return JSON.stringify(
             all.map((s) => ({
@@ -318,8 +319,9 @@ export function registerContextTools(
         "aisharepoint_list_bookmarks",
         "Listing bookmarks",
         async () => {
-          const all = bookmarks.list();
-          if (all.length === 0) return "No bookmarks saved.";
+          const visibleIds = new Set(scopedSources().map((s) => s.id));
+          const all = bookmarks.list().filter((b) => visibleIds.has(b.sourceId));
+          if (all.length === 0) return "No bookmarks saved in the active project scope.";
           return JSON.stringify(
             all.map((b) => ({
               name: b.name,

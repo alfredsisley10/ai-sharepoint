@@ -441,6 +441,21 @@ Have findings reach people — **without the assistant ever sending anything its
 - Send-capable permissions (`Chat.ReadWrite`, `Mail.Send`, …) are requested **only** by this
   flow, on first use (ADR-0025).
 
+### Projects: scope sources, bookmarks, and instructions per initiative
+
+Group what belongs together and switch contexts in one click:
+
+- **Create** (*Projects: Create Project…*): name, optional description, optional **baseline
+  agent instructions** (prepended to every `@sharepoint` turn while active — e.g. *"prefer the
+  CMDB for application questions; cite Confluence pages"*), then multi-pick the member sources;
+  bookmarks follow their sources automatically.
+- **Switch** via the Reference Sources title-bar button or *Projects: Switch* — the view header
+  shows the active project, and chat tools, source resolution, and bookmark listings are
+  scoped to its members. Pick **All sources** to disable scoping.
+- **Share**: projects are included in **Export/Import Reference Config**, so a teammate
+  importing your file gets the same scoped working set — sources, aliases, bookmarks, database
+  indexes, and the project instructions.
+
 ### Bookmarks: reusable pointers for your initiatives
 
 Save the queues, spaces, filters, and entries you use repeatedly — per source, by name:

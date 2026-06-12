@@ -8,6 +8,7 @@ import { BudgetGuard, BudgetBlockedError } from "../copilot/budget";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
+import { ProjectsStore } from "../context/projectsStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -53,6 +54,7 @@ interface ChatDeps {
   sources: ContextSourcesStore;
   bookmarks: BookmarksStore;
   schemas: SchemaStore;
+  projects: ProjectsStore;
   copilot: CopilotService;
   meter: UsageMeter;
   budget: BudgetGuard;
@@ -281,8 +283,12 @@ async function answerWithModel(
 
   const contextBlock = await buildSiteContext(deps, request, stream);
   const history = formatHistory(context);
+  const activeProject = deps.projects.active();
   const prompt = [
     INSTRUCTIONS,
+    activeProject?.instructions
+      ? `\n## Project instructions — ${activeProject.name}\n${activeProject.instructions}`
+      : "",
     contextBlock ? `\n## Connected context\n${contextBlock}` : "",
     history ? `\n## Conversation so far\n${history}` : "",
     `\n## User request\n${request.prompt}`,
@@ -421,9 +427,15 @@ async function buildSiteContext(
   request: vscode.ChatRequest,
   stream: vscode.ChatResponseStream,
 ): Promise<string> {
-  const referenceSources = deps.sources.list();
-  const bookmarkList = deps.bookmarks.list();
+  const activeProject = deps.projects.active();
+  const referenceSources = deps.projects.scope(deps.sources.list());
+  const scopedIds = new Set(referenceSources.map((s) => s.id));
+  const bookmarkList = deps.bookmarks.list().filter((b) => scopedIds.has(b.sourceId));
+  const projectLine = activeProject
+    ? `Active project: "${activeProject.name}"${activeProject.description ? ` — ${activeProject.description}` : ""}. Only its sources/bookmarks are listed below.\n`
+    : "";
   const referenceBlock = [
+    projectLine,
     referenceSources.length
       ? `Reference sources available to the search/get tools (alias in quotes — pass it as the source argument):\n${referenceSources
           .map((s) => {

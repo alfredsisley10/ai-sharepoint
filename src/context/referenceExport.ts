@@ -1,6 +1,7 @@
 import { ContextSource, ContextBookmark, ContextAuthMethod } from "./types";
 import { normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./sourceRef";
 import { SourceSchema } from "./db/schemaIndex";
+import { Project, INSTRUCTIONS_MAX_CHARS } from "./types";
 
 /**
  * Secret-free reference-config sharing (ADR-0013 slice 1).
@@ -46,6 +47,13 @@ export interface ReferenceExport {
    *  non-secret metadata + AI summaries, shared so teammates skip the
    *  (metered) indexing run. */
   schemas?: Record<string, SourceSchema>;
+  /** Project scopes: sources linked by displayName, remapped on import. */
+  projects?: Array<{
+    name: string;
+    description?: string;
+    instructions?: string;
+    sources: string[];
+  }>;
 }
 
 export const EXPORT_NOTICE =
@@ -58,6 +66,7 @@ export function buildReferenceExport(
   bookmarks: ContextBookmark[],
   exportedAt: string,
   schemasById?: Map<string, SourceSchema>,
+  projects?: Project[],
 ): ReferenceExport {
   const byId = new Map(sources.map((s) => [s.id, s.displayName]));
   const schemas: Record<string, SourceSchema> = {};
@@ -92,6 +101,18 @@ export function buildReferenceExport(
         kind: b.kind,
       })),
     ...(Object.keys(schemas).length > 0 ? { schemas } : {}),
+    ...(projects && projects.length > 0
+      ? {
+          projects: projects.map((pr) => ({
+            name: pr.name,
+            ...(pr.description ? { description: pr.description } : {}),
+            ...(pr.instructions ? { instructions: pr.instructions } : {}),
+            sources: pr.sourceIds
+              .map((id) => byId.get(id))
+              .filter((n): n is string => Boolean(n)),
+          })),
+        }
+      : {}),
   };
 }
 
@@ -101,6 +122,8 @@ export interface ParsedImport {
   warnings: string[];
   /** Schema indexes mapped onto the regenerated source ids. */
   schemas: Array<{ sourceId: string; schema: SourceSchema }>;
+  /** Projects with memberships remapped onto regenerated ids. */
+  projects: Project[];
 }
 
 const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai", "powerbi", "servicenow", "splunk"]);
@@ -113,7 +136,7 @@ export function parseReferenceImport(
   importedAt: string,
   newId: () => string,
 ): ParsedImport {
-  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [] };
+  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [] };
   let raw: ReferenceExport;
   try {
     raw = JSON.parse(json) as ReferenceExport;
@@ -201,6 +224,27 @@ export function parseReferenceImport(
       }
       out.schemas.push({ sourceId, schema });
     }
+  }
+  for (const pr of Array.isArray(raw.projects) ? raw.projects : []) {
+    if (!pr || typeof pr.name !== "string" || !pr.name.trim() || !Array.isArray(pr.sources)) {
+      out.warnings.push("A project entry was malformed and was skipped.");
+      continue;
+    }
+    const sourceIds = pr.sources
+      .filter((n): n is string => typeof n === "string")
+      .map((n) => idByName.get(n.toLowerCase()))
+      .filter((id): id is string => Boolean(id));
+    out.projects.push({
+      id: newId(),
+      name: pr.name.trim().slice(0, 80),
+      ...(typeof pr.description === "string" && pr.description.trim()
+        ? { description: pr.description.trim().slice(0, DESCRIPTION_MAX_LENGTH) }
+        : {}),
+      ...(typeof pr.instructions === "string" && pr.instructions.trim()
+        ? { instructions: pr.instructions.trim().slice(0, INSTRUCTIONS_MAX_CHARS) }
+        : {}),
+      sourceIds,
+    });
   }
   return out;
 }
