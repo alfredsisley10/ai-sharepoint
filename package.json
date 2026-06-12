@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -833,6 +833,93 @@
             "source": {
               "type": "string",
               "description": "Database source alias, display name, or type. Optional when exactly one source exists."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_write_site_files",
+        "displayName": "Write Site Spec Files",
+        "toolReferenceName": "spWriteSiteFiles",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Write lists/<name>.json and pages/<name>.json spec files into a managed site's local repository (the same format pull_site produces — mirror pulled files for structure). Local only: nothing reaches SharePoint until apply_site is approved. Use this to IMPLEMENT a site design you produced, then call apply_site. Requires the site to have a configured repository.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Managed site URL or display name. Optional when exactly one managed site exists."
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "lists/<name>.json or pages/<name>.json"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "JSON file content"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            },
+            "reason": {
+              "type": "string",
+              "description": "One line on what this implements (shown to the user)."
+            }
+          },
+          "required": [
+            "files"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_pull_site",
+        "displayName": "Pull Site to Repository",
+        "toolReferenceName": "spPullSite",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(cloud-download)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Launch the preview-first pull of a managed site's live state into its local repository (no SharePoint writes). Use before writing spec files when the repo may be stale, and to learn the exact file format. The user confirms the preview.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Managed site URL or display name. Optional when exactly one managed site exists."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_apply_site",
+        "displayName": "Apply Repository to SharePoint",
+        "toolReferenceName": "spApplySite",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(cloud-upload)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Launch the guarded write-back of a managed site's repository to SharePoint: the user sees the operation-level preview, deletions are opt-in, a safety snapshot is taken, and NOTHING changes until they approve the dialog. Call after write_site_files. Never state the site changed until the user's approval completed — verify with site_overview afterwards.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Managed site URL or display name. Optional when exactly one managed site exists."
             }
           }
         }

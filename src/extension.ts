@@ -102,6 +102,7 @@ import {
 } from "./comms/outbox";
 import { CommsTreeProvider } from "./ui/commsView";
 import { registerCommsTools } from "./chat/commsTools";
+import { registerSiteDevTools } from "./chat/siteDevTools";
 import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
@@ -210,6 +211,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const catalogs = new CatalogStore(context.globalStorageUri);
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
+  const syncConfigs = new SyncConfigStore(context.globalState);
 
   const sitesProvider = new SitesTreeProvider(sites);
   const sourcesProvider = new SourcesTreeProvider(
@@ -308,6 +310,7 @@ export function activate(context: vscode.ExtensionContext): void {
     commsProvider,
     outbox.onDidChange(syncCommsBadge),
     ...registerCommsTools(outbox, telemetry, errors, nowIso),
+    ...registerSiteDevTools(sites, access, syncConfigs, telemetry, errors),
   );
   for (const v of [sitesView, usageView, supportView, commsView]) {
     if (v) context.subscriptions.push(v);
@@ -800,7 +803,6 @@ export function activate(context: vscode.ExtensionContext): void {
   register("aiSharePoint.refreshSites", () => sitesProvider.refresh());
 
   // --- Site sync (Track B slice 1 — ADR-0019) -------------------------------
-  const syncConfigs = new SyncConfigStore(context.globalState);
   const syncEngine = new SyncEngine(access, log);
 
   const requireManaged = (conn: SiteConnection): void => {
