@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.23.1 — 2026-06-12
+
+### Fixed — Copilot entitlement refusals are not hammered (pilot)
+- Pilot saw `403 "unauthorized: not authorized to use this Copilot feature"` repeating in the
+  Copilot Chat output. Diagnosis: that specific `[CopilotCliSession] Failed to fetch models`
+  loop is **GitHub Copilot Chat's own CLI-session feature** being refused (lapsed
+  subscription/seat, or an org policy disabling the feature) and retried by Copilot Chat
+  itself — not this extension. But the same 403 family can surface through OUR model
+  requests, and nothing stopped a chat turn, model picker, or **a 40-batch indexing run**
+  from re-hitting the refusal over and over.
+- New **entitlement circuit breaker** in the Copilot service: an entitlement-shaped failure
+  (HTTP 403 / "unauthorized" / "not authorized" / the LM API's `NoPermissions`) **pauses all
+  Copilot calls for ~5 minutes** — subsequent calls fail *fast and locally* with the cause and
+  the fix (subscription/org policy → GitHub → Copilot → Policies). Any success closes the
+  pause; **Check Copilot Status** closes it immediately for an explicit retry. Schema/content
+  indexing runs now **stop at the first entitlement refusal** (marked partial) instead of
+  burning every remaining batch. New `copilot.entitlement` error code with actionable advice;
+  troubleshooting table entry distinguishing the benign Copilot-Chat-internal log noise.
+
 ## 0.23.0 — 2026-06-12
 
 ### Added — observability wave: Splunk Observability Cloud + Grafana connectors (ADR-0032/0033)

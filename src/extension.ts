@@ -521,6 +521,8 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   register("aiSharePoint.checkCopilotStatus", async () => {
+    // Explicit user retry: close the entitlement pause before re-probing.
+    copilot.resetEntitlementGate();
     await refreshCopilotState();
     if (!copilotState.chatInstalled) {
       const pick = await vscode.window.showWarningMessage(

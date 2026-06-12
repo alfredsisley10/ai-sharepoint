@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ContextSource } from "../types";
 import { CopilotService } from "../../copilot/copilotService";
 import { BudgetBlockedError } from "../../copilot/budget";
+import { AppError } from "../../core/errors";
 import { SchemaStore } from "../schemaStore";
 import { TelemetryService } from "../../diagnostics/telemetry";
 import { Logger } from "../../core/log";
@@ -138,6 +139,15 @@ export class SchemaIndexer {
           );
           break;
         }
+        if (err instanceof AppError && err.code === "copilot.entitlement") {
+          // "Not authorized for this Copilot feature" — every remaining
+          // batch would hit the same refusal. Stop the run (pilot).
+          partial = true;
+          this.log.warn(
+            `Schema indexing stopped at batch ${i + 1}/${batches.length}: ${err.message}`,
+          );
+          break;
+        }
         // One bad batch (unparseable JSON, transient model error) shouldn't
         // void the others — keep going, mark partial.
         partial = true;
@@ -262,6 +272,10 @@ export class SchemaIndexer {
             clearInterval(ticker);
             partial = true;
             if (err instanceof BudgetBlockedError) break;
+            if (err instanceof AppError && err.code === "copilot.entitlement") {
+              this.log.warn(`Content indexing stopped at batch ${i + 1}: ${err.message}`);
+              break;
+            }
             this.log.warn(`Content batch ${i + 1} failed: ${String(err)}`);
           }
         }

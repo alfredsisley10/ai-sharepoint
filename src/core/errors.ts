@@ -13,6 +13,7 @@ export type ErrorCode =
   | "graph.throttled"
   | "graph.error"
   | "copilot.unavailable"
+  | "copilot.entitlement"
   | "budget.blocked"
   | "network"
   | "config"
@@ -67,6 +68,8 @@ export function adviceFor(code: ErrorCode): string | undefined {
       return "Microsoft Graph is throttling requests. Wait a moment and retry.";
     case "copilot.unavailable":
       return "Install and sign in to GitHub Copilot, then retry.";
+    case "copilot.entitlement":
+      return "GitHub answered “not authorized for this Copilot feature” (403). Common causes: the Copilot subscription/seat lapsed, or an organization policy disables the feature (an org admin can check GitHub → Copilot → Policies). Requests are paused briefly so the refusal isn't hammered — run “Check Copilot Status” to retry once it's fixed.";
     case "budget.blocked":
       return "Your configured Copilot budget cap was reached. Adjust it in Settings → AI SharePoint.";
     case "network":
