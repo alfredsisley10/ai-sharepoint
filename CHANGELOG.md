@@ -12,6 +12,32 @@
   session — re-capture via *Test Context Source* (lockout-safe). Token and username/password
   remain as alternatives.
 
+## 0.14.0 — 2026-06-12
+
+### Changed — usage is measured, budgets are opt-in (pilot: "300 units" was misleading)
+- The monthly allowance **no longer defaults to 300** — it defaults to **not configured**,
+  because that number was a local guess, not authoritative. Without an allowance the extension
+  shows **only what it measures**: premium units used this month, today's activity, a **rate
+  line** (~units/day with a month-end consumption projection), and the by-model / by-task
+  breakdowns — **no gauge, no percentages, no caps** (nothing warns or blocks). Status bar,
+  Usage view, dashboard, and `/usage` all switch to this usage-only mode. Entering a budget
+  (*Set Copilot Budget*) restores the gauge and caps; the UI names your GitHub billing/plan
+  page as the authoritative source for the real allowance.
+
+## 0.13.0 — 2026-06-12
+
+### Added — @sharepoint implements sites itself, with you at every checkpoint (pilot)
+- The "agent drafts, human applies" gate is lifted by pilot direction: when you ask
+  `@sharepoint` to design or change a managed site, it now **does the work** — pulls a baseline
+  (`#spPullSite`), **writes the lists/pages spec files into the site repository**
+  (`#spWriteSiteFiles` — local only, path-restricted to `lists/*.json` / `pages/*.json`,
+  JSON-validated, size-capped), and **launches apply** (`#spApplySite`). Human checkpoints are
+  preserved twice over: every tool call needs your in-chat confirmation, and apply still runs
+  the full operation preview → freshness gate → safety snapshot → **modal approval** — nothing
+  reaches SharePoint until you approve, deletions stay opt-in, and the agent never claims
+  success until the approval completes (then verifies with a live read). List content
+  (items/documents) remains outside the pipeline and is said so.
+
 ## 0.12.0 — 2026-06-12
 
 ### Added — Projects: exportable scopes for sources, bookmarks, and agent instructions (pilot)
