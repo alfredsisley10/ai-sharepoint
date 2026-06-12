@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.23.2 — 2026-06-12
+
+### Fixed — @sharepoint no longer sends you hunting for a "preview dialog" (pilot)
+- Pilot: while staging site changes, @sharepoint said to look for the *"preview dialog"* — no
+  such element exists. The real apply UI is a **preview document** (a markdown editor tab
+  listing every operation) plus a **modal confirmation**; worse, several early exits (no repo,
+  empty repo, **uncommitted changes**) show only a toast and never open a preview at all,
+  while the tool always claimed the flow had launched.
+- `write_site_files` now **commits exactly the files it wrote** (scoped staging — your own
+  uncommitted edits stay untouched), so the agent pipeline no longer trips apply's clean-tree
+  guard with files the agent itself left dirty.
+- `apply_site` / `pull_site` now receive the flow's **actual outcome** (blocked: dirty/no
+  repo/empty repo · no changes · cancelled · applied N ops · failed at op) and relay it
+  truthfully — including "the user closed it WITHOUT applying; call apply_site again to
+  reopen". The assistant's instructions and tool texts now name the real UI elements and
+  explicitly forbid inventing ones.
+
 ## 0.23.1 — 2026-06-12
 
 ### Fixed — Copilot entitlement refusals are not hammered (pilot)

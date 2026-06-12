@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { SitesStore, SiteConnection } from "../auth/sitesStore";
 import { SiteAccess } from "../auth/siteAccess";
 import { SyncConfigStore } from "../sync/syncConfigStore";
+import { openOrInitRepository } from "../sync/vscodeGit";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -104,14 +105,34 @@ export function registerSiteDevTools(
             }
           }
           const root = vscode.Uri.file(config.folder);
+          const written: string[] = [];
           for (const f of files) {
             const target = vscode.Uri.joinPath(root, f.path);
             await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, f.path.split("/")[0]));
             await vscode.workspace.fs.writeFile(target, Buffer.from(f.content, "utf8"));
+            written.push(target.fsPath);
           }
           telemetry.record("siteDev.writeFiles", { count: String(files.length) });
+          // Commit exactly what was written (scoped staging — the user's own
+          // uncommitted edits are untouched): apply's clean-tree guard would
+          // otherwise block with files the AGENT left dirty (pilot: the user
+          // was then sent hunting for a preview that never opened).
+          try {
+            const repo = await openOrInitRepository(root);
+            await repo.add(written);
+            await repo.commit(
+              `@sharepoint drafted ${files.length} site spec file(s)${
+                options.input.reason ? ` — ${options.input.reason.slice(0, 72)}` : ""
+              }`,
+            );
+          } catch (err) {
+            errors.capture("tool:aisharepoint_write_site_files", err);
+            return text(
+              `Wrote ${files.length} file(s) into ${conn.displayName}'s repository but could NOT commit them (${redactError(err).message}). apply_site requires a clean tree — ask the user to commit these files in the Source Control view, then call apply_site.`,
+            );
+          }
           return text(
-            `Wrote ${files.length} file(s) into ${conn.displayName}'s repository. Next: call apply_site — the user reviews the full preview diff and approves before anything changes in SharePoint. (Tip: pull_site first if the repo might be stale.)`,
+            `Wrote and committed ${files.length} file(s) into ${conn.displayName}'s repository (local only — nothing reached SharePoint). Next: call apply_site — a PREVIEW DOCUMENT opens as an editor tab listing every operation, then a MODAL CONFIRMATION asks the user to apply. (Tip: pull_site first if the repo might be stale.)`,
           );
         } catch (err) {
           errors.capture("tool:aisharepoint_write_site_files", err);
@@ -133,10 +154,24 @@ export function registerSiteDevTools(
         telemetry.record("tool.invoke", { tool: "aisharepoint_pull_site" });
         try {
           const conn = resolveManaged(options.input.site);
-          await vscode.commands.executeCommand("aiSharePoint.pullSiteToRepo", conn);
-          return text(
-            `Pull launched for "${conn.displayName}" — the user completes it in the preview dialog. The repository now reflects the live site once they confirm.`,
+          const outcome = await vscode.commands.executeCommand<string | undefined>(
+            "aiSharePoint.pullSiteToRepo",
+            conn,
           );
+          // Relay what ACTUALLY happened — never describe UI that didn't open.
+          if (outcome === "up-to-date") {
+            return text(`"${conn.displayName}"'s repository already matches the live site — nothing to pull.`);
+          }
+          if (outcome === "no-repo") {
+            return text(`Pull did NOT run: "${conn.displayName}" has no repository configured yet (the user was offered "Configure Repository…"). Once configured, call pull_site again.`);
+          }
+          if (outcome === "blocked") {
+            return text("Pull was blocked by the safety scan (credential-shaped or oversize content) — the user saw the error; nothing was written.");
+          }
+          if (outcome === "cancelled" || outcome === undefined) {
+            return text("The user closed the pull preview without applying (or an error was already shown) — the repository is unchanged. Call pull_site again if they want to retry.");
+          }
+          return text(`Pull complete for "${conn.displayName}" — the user approved the preview and the changes are committed (${outcome.replace("committed:", "")} added+updated~removed). The repository now reflects the live site.`);
         } catch (err) {
           errors.capture("tool:aisharepoint_pull_site", err);
           return text(`Pull failed to start: ${redactError(err).message}`);
@@ -149,7 +184,7 @@ export function registerSiteDevTools(
         confirmationMessages: {
           title: `Apply the repository to "${options.input.site ?? "the site"}"?`,
           message: new vscode.MarkdownString(
-            "Opens the standard write-back flow: the user sees the **operation-level preview**, deletions stay opt-in, a safety snapshot is taken, and **nothing changes until they approve the dialog**. This is the binding human checkpoint.",
+            "Opens the write-back flow: a **preview document** (editor tab) lists every operation, deletions stay opt-in, a safety snapshot is taken, and a **modal confirmation** is the binding checkpoint — **nothing changes until the user clicks Apply**.",
           ),
         },
       }),
@@ -157,9 +192,39 @@ export function registerSiteDevTools(
         telemetry.record("tool.invoke", { tool: "aisharepoint_apply_site" });
         try {
           const conn = resolveManaged(options.input.site);
-          await vscode.commands.executeCommand("aiSharePoint.applyRepoToSharePoint", conn);
+          const outcome = await vscode.commands.executeCommand<string | undefined>(
+            "aiSharePoint.applyRepoToSharePoint",
+            conn,
+          );
+          // Relay what ACTUALLY happened (pilot: the flow can end before any
+          // preview exists — never send the user looking for one).
+          if (outcome?.startsWith("dirty:")) {
+            return text(
+              `Apply did NOT start — no preview opened: the site repository has ${outcome.slice(6)} uncommitted change(s) the user made themselves (a notification asked them to commit first). Files written via write_site_files are committed automatically, so these are other local edits. Ask the user to commit them (Source Control view), then call apply_site again.`,
+            );
+          }
+          if (outcome === "no-repo") {
+            return text(`Apply did NOT start: "${conn.displayName}" has no repository configured (the user saw guidance). Configure + pull first.`);
+          }
+          if (outcome === "empty-repo") {
+            return text("Apply did NOT start: the repository has no site files yet — call pull_site (or write_site_files) first.");
+          }
+          if (outcome === "no-changes") {
+            return text(`SharePoint already matches the repository for "${conn.displayName}" — there was nothing to apply (no preview needed).`);
+          }
+          if (outcome === "cancelled" || outcome === undefined) {
+            return text(
+              "The user closed the apply flow WITHOUT applying — nothing changed in SharePoint. (What they saw: a markdown PREVIEW DOCUMENT in an editor tab plus a modal confirmation — there is no separate 'preview dialog'.) If they dismissed it accidentally, call apply_site again to reopen it.",
+            );
+          }
+          if (outcome.startsWith("failed:")) {
+            const [, applied, op] = outcome.split(":");
+            return text(
+              `Apply stopped early after ${applied} operation(s) at "${op}" — the user saw the error; the repository was reconciled to the actual live state and the intended state is preserved in git history. Diagnose, fix the spec, and re-run apply_site.`,
+            );
+          }
           return text(
-            `Apply flow launched for "${conn.displayName}". The user reviews the preview and approves (or cancels) in the dialog — do NOT claim the site changed; the dialog's outcome decides. Offer to verify with site_overview afterwards.`,
+            `Apply COMPLETE for "${conn.displayName}": the user approved and ${outcome.replace("applied:", "")} operation(s) were applied. Verify with site_overview before describing the result.`,
           );
         } catch (err) {
           errors.capture("tool:aisharepoint_apply_site", err);

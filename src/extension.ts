@@ -1040,9 +1040,9 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   });
 
-  register("aiSharePoint.pullSiteToRepo", async (arg) => {
+  register("aiSharePoint.pullSiteToRepo", async (arg): Promise<string> => {
     const conn = await resolveConnArg(arg, sites, "Pull which site to its repository?");
-    if (!conn) return;
+    if (!conn) return "cancelled";
     requireManaged(conn);
     const config = syncConfigs.get(conn.siteUrl);
     if (!config) {
@@ -1051,7 +1051,7 @@ export function activate(context: vscode.ExtensionContext): void {
         "Configure Repository…",
       );
       if (go) await vscode.commands.executeCommand("aiSharePoint.configureSiteRepo", conn);
-      return;
+      return "no-repo";
     }
 
     const plan = await vscode.window.withProgress(
@@ -1069,14 +1069,14 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(
         `Pull blocked: ${plan.report.leakFindings.length} credential-shaped finding(s) and ${plan.report.oversize.length} oversize file(s). Nothing was written — see logs.`,
       );
-      return;
+      return "blocked";
     }
     if (!hasChanges(plan.report)) {
       await sites.markVerified(conn.siteUrl, nowIso());
       void vscode.window.showInformationMessage(
         `"${conn.displayName}" is already up to date (${plan.report.unchanged} files unchanged).`,
       );
-      return;
+      return "up-to-date";
     }
 
     const previewDoc = await vscode.workspace.openTextDocument({
@@ -1089,7 +1089,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { modal: true },
       "Apply & Commit",
     );
-    if (!confirm) return;
+    if (!confirm) return "cancelled";
 
     const staged = await syncEngine.apply(config.folder, plan.files, plan.report);
     const repo = await openOrInitRepository(vscode.Uri.file(config.folder));
@@ -1113,6 +1113,7 @@ export function activate(context: vscode.ExtensionContext): void {
     } else if (next === "Configure Remote…") {
       await vscode.commands.executeCommand("aiSharePoint.configureSiteRepo", conn);
     }
+    return `committed:${plan.report.added.length}+${plan.report.updated.length}~${plan.report.removed.length}-`;
   });
 
   register("aiSharePoint.pushSiteRepo", async (arg) => {
@@ -1173,7 +1174,7 @@ export function activate(context: vscode.ExtensionContext): void {
     repo: Awaited<ReturnType<typeof openOrInitRepository>>,
     desiredFiles: Map<string, string>,
     headline: string,
-  ): Promise<void> => {
+  ): Promise<string> => {
     const { snapshot, planBase, plan } = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Planning ${headline} for ${conn.displayName}…` },
       async (p) => {
@@ -1190,7 +1191,7 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage(
         `SharePoint already matches the target state for "${conn.displayName}"${plan.warnings.length ? ` (${plan.warnings.length} warning(s))` : ""}.`,
       );
-      return;
+      return "no-changes";
     }
 
     let includeDeletions = false;
@@ -1210,7 +1211,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ],
         { ignoreFocusOut: true, title: `${headline} — ${plan.deletions.length} deletion(s) detected` },
       );
-      if (!delPick) return;
+      if (!delPick) return "cancelled";
       includeDeletions = delPick.value;
     }
 
@@ -1225,7 +1226,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { modal: true },
       includeDeletions ? "Apply Including Deletions" : "Apply to SharePoint",
     );
-    if (!confirm) return;
+    if (!confirm) return "cancelled";
 
     const writer = new SharePointWriteClient(
       registry.create(conn.authProviderId, conn.cacheHandle),
@@ -1280,27 +1281,33 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(
         `${headline} stopped after ${outcome.applied.length} op(s) at "${outcome.failedAt.op}": ${outcome.failedAt.error.slice(0, 160)} — the repository now reflects the actual live state; the intended state is preserved in commit history. Fix and re-run.`,
       );
-    } else {
-      void vscode.window.showInformationMessage(
-        `✓ ${headline} complete: ${outcome.applied.length} operation(s) applied to "${conn.displayName}". Repository reconciled with live state.`,
-      );
+      return `failed:${outcome.applied.length}:${outcome.failedAt.op}`;
     }
+    void vscode.window.showInformationMessage(
+      `✓ ${headline} complete: ${outcome.applied.length} operation(s) applied to "${conn.displayName}". Repository reconciled with live state.`,
+    );
+    return `applied:${outcome.applied.length}`;
   };
 
-  /** Guards shared by the write-back entry points. Returns null when blocked. */
+  /** Guards shared by the write-back entry points. Blocked outcomes carry a
+   *  machine-readable reason so agent tools can relay what ACTUALLY happened
+   *  (pilot: "look for the preview dialog" after a flow that never opened one). */
   const writeBackPreflight = async (
     arg: unknown,
     title: string,
-  ): Promise<{ conn: SiteConnection; config: SiteSyncConfig; repo: Awaited<ReturnType<typeof openOrInitRepository>> } | null> => {
+  ): Promise<
+    | { ok: true; conn: SiteConnection; config: SiteSyncConfig; repo: Awaited<ReturnType<typeof openOrInitRepository>> }
+    | { ok: false; outcome: string }
+  > => {
     const conn = await resolveConnArg(arg, sites, title);
-    if (!conn) return null;
+    if (!conn) return { ok: false, outcome: "cancelled" };
     requireManaged(conn);
     const config = syncConfigs.get(conn.siteUrl);
     if (!config) {
       void vscode.window.showWarningMessage(
         "No repository configured for this site — run “Configure Site Repository…”, pull, then retry.",
       );
-      return null;
+      return { ok: false, outcome: "no-repo" };
     }
     // Clean-tree guard: every desired edit must be committed before write-back,
     // so the closing reconcile pull can never destroy unsaved work (ADR-0021).
@@ -1311,27 +1318,27 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showWarningMessage(
         `The site repository has ${dirty} uncommitted change(s). Commit them first — write-back reconciles the working tree with live SharePoint afterwards.`,
       );
-      return null;
+      return { ok: false, outcome: `dirty:${dirty}` };
     }
-    return { conn, config, repo };
+    return { ok: true, conn, config, repo };
   };
 
-  register("aiSharePoint.applyRepoToSharePoint", async (arg) => {
+  register("aiSharePoint.applyRepoToSharePoint", async (arg): Promise<string> => {
     const pre = await writeBackPreflight(arg, "Apply which site repository to SharePoint?");
-    if (!pre) return;
+    if (!pre.ok) return pre.outcome;
     const repoFiles = await syncEngine.readRepoFiles(pre.config.folder);
     if (repoFiles.size === 0) {
       void vscode.window.showWarningMessage(
         "The repository has no site files yet — run “Pull Site to Repository” first.",
       );
-      return;
+      return "empty-repo";
     }
-    await runWriteBackFlow(pre.conn, pre.config, pre.repo, repoFiles, "Write-back");
+    return runWriteBackFlow(pre.conn, pre.config, pre.repo, repoFiles, "Write-back");
   });
 
   register("aiSharePoint.revertSiteToCommit", async (arg) => {
     const pre = await writeBackPreflight(arg, "Revert which site to an earlier commit?");
-    if (!pre) return;
+    if (!pre.ok) return;
 
     const commits = await pre.repo.log({ maxEntries: 30 });
     if (commits.length === 0) {
