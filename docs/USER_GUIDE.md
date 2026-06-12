@@ -23,7 +23,7 @@ Navigation/theme and AI-autonomous provisioning remain on the roadmap (see `docs
 7. [Agent-mode tools](#agent-mode-tools)
 8. [Site repositories: SharePoint as code](#site-repositories-sharepoint-as-code-git) — pull, write-back, revert
 9. [Reference sources](#reference-sources-confluence--jira) — Confluence, Jira, LDAP/AD, sharing
-10. [Copilot usage, budget, and the dashboard](#copilot-usage-budget-and-the-dashboard)
+10. [Copilot activity and the dashboard](#copilot-activity-and-the-dashboard)
 11. [Getting help: diagnostics export](#getting-help-diagnostics-export)
 12. [All commands](#all-commands)
 13. [All settings](#all-settings)
@@ -62,8 +62,6 @@ like any marketplace extension.
 2. Enter your site URL, pick a **role** and a **sign-in method** (see next section), and
    complete the Microsoft sign-in.
 3. Open **Chat** and type `@sharepoint /site` — you'll get a live overview of your site.
-4. Run `AI SharePoint: Set Copilot Budget` and enter your plan's monthly premium-request
-   allowance so the status-bar gauge is accurate.
 
 The interactive walkthrough (`AI SharePoint: Open Getting Started Walkthrough`) repeats these
 steps with illustrations.
@@ -112,10 +110,11 @@ Context menu (right-click): **Test Site Connection** · **Copy Site URL** · **C
 Role** · **Sign Out** (wipes the tenant's cached tokens from the keychain) · **Remove
 Connection** (also wipes tokens unless another connection uses the same tenant).
 
-### Usage & Budget
-The live cost picture: headline gauge (% of allowance), today's requests, budget configuration,
-and expandable **By model** / **By task** breakdowns. The title-bar buttons open the dashboard
-and the budget editor.
+### Copilot Activity
+Factual, locally measured counts of the requests this extension made: today / this month, plus
+expandable **By model** / **By task** breakdowns (with token totals). The title-bar button opens
+the dashboard. Premium-request consumption against your plan is **not** estimated — your GitHub
+billing/plan page is the authoritative source.
 
 ### Support & Diagnostics
 Everything operational: **Export Diagnostics Bundle**, **Error Reports** (the view badge shows
@@ -154,14 +153,12 @@ Open the Chat view and address `@sharepoint`:
   about AI automation and aggregate what's relevant”_ — the assistant calls the same read-only
   tools available in agent mode (search, fetch item, run bookmark), shows each step, and can
   end by **proposing bookmarks** for the queries worth keeping (you approve in a confirmation
-  dialog). Each model round is metered and the budget hard cap is enforced mid-conversation.
+  dialog). Each model round is counted in the Copilot Activity view.
 - **Sign-in is never triggered from chat.** Context reads use cached credentials only; if the
   cache has expired, the assistant tells you to run *Test Site Connection* instead of popping a
   browser window mid-conversation.
-- **Budget-aware**: past your soft cap, responses begin with a warning; past your hard cap (in
-  `block` mode), the request is refused with a button to adjust the budget.
-- The model is whatever you've selected in the chat model picker; each answer is metered and
-  the footer shows the premium units charged (when > 0).
+- The model is whatever you've selected in the chat model picker; every request uses your own
+  Copilot subscription.
 
 Slash commands: `/site <url or name>` · `/sites` · `/usage` · `/help`.
 
@@ -175,7 +172,7 @@ automatically when relevant, or you can `#`-reference them in any chat prompt:
 | `#spConnections` | Your configured connections (name, URL, role, verified) |
 | `#spSiteOverview` | Site title/description + lists/libraries + pages |
 | `#spPages` | Modern pages with URLs and last-modified times |
-| `#spUsage` | This extension's metered usage vs. your budget |
+| `#spUsage` | This extension's request activity (local counts) |
 | `#spSources` | Your configured reference sources (Confluence/Jira) |
 | `#spSearchContext` | Search a reference source (text, CQL, or JQL) |
 | `#spContextItem` | One Confluence page (by id) or Jira issue (by key) |
@@ -517,35 +514,30 @@ Save the queues, spaces, filters, and entries you use repeatedly — per source,
   details in the Admin Guide. For plain `ldap://`, `aiSharePoint.ldap.useStartTls` upgrades the
   connection. LDAP traffic goes **directly** to the DC (not via the VS Code proxy).
 
-## Copilot usage, budget, and the dashboard
+## Copilot activity and the dashboard
 
-**How metering works.** The extension records every request it makes (model, input/output
-tokens) and prices it in **premium-request units** using a maintained model-multiplier table.
-This is an **estimate** — honest by design (see ADR-0003): VS Code's API exposes tokens, not
-your GitHub bill. Failed or cancelled requests are counted too, because GitHub charges at send
-time.
+**What is counted.** The extension records every request it makes (model, input/output tokens,
+success/failure) — factual, locally measured counts of its OWN activity. Failed or cancelled
+requests are counted too, because GitHub charges at send time.
 
-**The gauge.** The status-bar item shows `% of monthly allowance · requests today`. It turns
-<span>**yellow**</span> past your soft cap and **red** past your hard cap. Click it for the
-dashboard.
+**What is NOT tracked — by design.** Premium-request consumption against your plan's monthly
+allowance. There is no automated, authoritative way for the extension to read your real
+allowance or bill, and the earlier locally estimated gauge proved misleading. **Your GitHub
+billing/plan page is the only authoritative source**; the feature returns if an authoritative
+API becomes available.
 
-**Budget enforcement** (`aiSharePoint.budget.mode`):
+**The status-bar item** shows today's request count; click it for the dashboard.
 
-| Mode | Soft cap | Hard cap |
-|---|---|---|
-| `block` (default) | warn | **block** — palette requests offer a one-time “Proceed Once” override; chat refuses with guidance |
-| `warn` | warn | warn |
-| `off` | — | — (metering continues) |
+**The dashboard** (`AI SharePoint: Show Copilot Activity Dashboard`): 30-day daily request
+chart, per-model (with token totals) and per-task tables.
 
-**The dashboard** (`AI SharePoint: Show Usage Dashboard`): 30-day daily chart, budget bar with
-cap markers, per-model and per-task tables, and action buttons. All figures are local estimates.
+**Model policy.** By default the extension uses your cheapest entitled model (sorted by the
+published premium-request multiplier — `0×`, `1×`, `10×`). Run `AI SharePoint: List Copilot
+Models` to see each model's published multiplier and optionally pick a preferred default. In
+chat, the chat UI's model picker wins.
 
-**Model policy.** By default the extension uses your cheapest entitled model (multiplier-sorted).
-Run `AI SharePoint: List Copilot Models` to see relative costs (`0×`, `1×`, `10×`) and optionally
-pick a preferred default. In chat, the chat UI's model picker wins.
-
-**Resetting.** `AI SharePoint: Reset Copilot Usage Meter` clears the local history (it does not
-affect GitHub billing).
+**Resetting.** `AI SharePoint: Reset Copilot Activity Counters` clears the local history (it
+does not affect GitHub billing).
 
 ## Getting help: diagnostics export
 
@@ -592,11 +584,10 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Draft Teams Message / Draft Outlook Email · Review & Send / Edit / Discard Communication Draft | Approval-gated communications (ADR-0025) |
 | Edit Bookmark | Rename / modify a bookmark's saved query (SQL validated read-only) |
 | Remove Site Connection | Remove descriptor (+ tokens if last connection in tenant) |
-| Ask Copilot (metered) | One-shot prompt; streams into the “AI SharePoint — Copilot” output |
-| List Copilot Models | Models with relative cost; optionally set the preferred default |
-| Show Usage Dashboard | The webview dashboard |
-| Set Copilot Budget | Guided allowance / soft % / hard % editor |
-| Reset Copilot Usage Meter | Clear local usage history (confirmed) |
+| Ask Copilot | One-shot prompt; streams into the “AI SharePoint — Copilot” output |
+| List Copilot Models | Models with their published premium-request multiplier; optionally set the preferred default |
+| Show Copilot Activity Dashboard | The webview dashboard (local request counts) |
+| Reset Copilot Activity Counters | Clear local request history (confirmed) |
 | Export Diagnostics Bundle | The anonymized support bundle (previewed + scanned) |
 | Show / Delete Error Reports | Browse redacted error reports; open details; delete (also right-click **Error Reports** in Support & Diagnostics) |
 | Rotate Anonymous Install ID | New random ID + hash salt |
@@ -607,11 +598,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 
 | Setting | Default | Notes |
 |---|---|---|
-| `aiSharePoint.copilot.monthlyPremiumRequestAllowance` | `300` | Gauge denominator |
 | `aiSharePoint.copilot.preferredModelFamily` | `""` | Empty = cheapest entitled model |
-| `aiSharePoint.budget.mode` | `block` | `block` / `warn` / `off` |
-| `aiSharePoint.budget.softLimitPercent` | `80` | Warn threshold |
-| `aiSharePoint.budget.hardLimitPercent` | `100` | Block threshold |
 | `aiSharePoint.auth.tenantAuthority` | `…/common` | **Machine-scoped**; host must be a known Microsoft login endpoint |
 | `aiSharePoint.auth.clientId` | `""` | **Machine-scoped**; custom Entra app (see Admin Guide) |
 | `aiSharePoint.auth.additionalAuthorityHosts` | `[]` | **Machine-scoped** authority-host allowlist additions |
@@ -640,7 +627,6 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | 403 / “access denied” on a site | Your account lacks permission, or the tenant hasn't consented `Sites.Read.All` for the app → Admin Guide. |
 | Pages list shows “unavailable” | Some tenants restrict the Graph Pages API → lists still work; this is expected. |
 | 429 / throttled | Microsoft Graph throttling → the extension retries once automatically; wait a moment. |
-| Requests blocked by budget | You passed your hard cap → raise it (`Set Copilot Budget`), switch mode to `warn`, or use the one-time override. |
 | SQL Server "authentication rejected" but the login works in SSMS | Re-add the source with the guided wizard (it prompts for server, instance, port, database, certificate, and sign-in method separately — answer exactly as in SSMS) and read the appended **“server said: …”** detail: it is SQL Server's own message distinguishing a bad login, an inaccessible database, or a wrong instance. |
 | "Could not initialize a Git repository" / repo not detected | Folder outside the workspace, Restricted Mode, or git missing → accept the wizard's "Add to Workspace" offer (or File → Add Folder to Workspace…), trust the window, and check `git --version`. |
 | Network errors behind a proxy | VS Code's proxy settings apply (`http.proxy`) → see Admin Guide §Proxies. |

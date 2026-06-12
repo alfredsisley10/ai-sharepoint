@@ -10,7 +10,8 @@ documents: [SECURITY.md](SECURITY.md) (threat model / data flows) and [PRIVACY.m
 
 A VS Code extension that lets users connect to SharePoint Online sites they already have access
 to (delegated — their own permissions, never more) and ask a GitHub-Copilot-backed assistant
-about them, with local metering and budget caps on Copilot consumption. Site changes are
+about them, with local counting of the requests it makes (no estimated billing — GitHub is the
+authoritative usage source). Site changes are
 human-approved commands only (previewed, drift-checked, snapshot-guarded); the AI cannot write. It runs entirely client-side: **no
 vendor service, no telemetry transmission, no stored server-side state**. Credentials live in
 the OS keychain via VS Code SecretStorage; diagnostics never leave the machine except by
@@ -51,7 +52,7 @@ Allow these HTTPS (443) endpoints from developer machines:
 | GitHub Copilot service endpoints | AI requests — made by the **GitHub Copilot extension**, not by this extension directly | Chat / Ask Copilot |
 
 The extension itself opens **no other** connections: no update checks, no telemetry posts, no
-CDN fetches. The Usage Dashboard webview loads zero external resources (CSP `default-src
+CDN fetches. The Copilot Activity dashboard webview loads zero external resources (CSP `default-src
 'none'`).
 
 **Sovereign-cloud note:** sign-in authorities for GCC High / 21Vianet are configurable
@@ -142,12 +143,6 @@ defaults, or imaging):
   // Lock sign-in to your tenant + your app registration
   "aiSharePoint.auth.tenantAuthority": "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000",
   "aiSharePoint.auth.clientId": "11111111-1111-1111-1111-111111111111",
-
-  // Fit the gauge to your Copilot plan; keep hard-blocking on
-  "aiSharePoint.copilot.monthlyPremiumRequestAllowance": 300,
-  "aiSharePoint.budget.mode": "block",
-  "aiSharePoint.budget.softLimitPercent": 80,
-  "aiSharePoint.budget.hardLimitPercent": 100,
 
   // Diagnostics capture is local-only; followVSCode defers to your telemetry stance
   "aiSharePoint.diagnostics.usageCapture": "followVSCode",

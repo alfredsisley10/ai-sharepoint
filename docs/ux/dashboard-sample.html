@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-SAMPLENONCE'; script-src 'nonce-SAMPLENONCE';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI SharePoint — Usage Dashboard</title>
+<title>AI SharePoint — Copilot Activity</title>
 <style nonce="SAMPLENONCE">
   :root { color-scheme: light dark; }
   body {
@@ -19,12 +19,6 @@
   h1 { font-size: 1.35em; font-weight: 600; margin: 0; }
   h2 { font-size: 1em; font-weight: 600; margin: 22px 0 8px; }
   .muted { color: var(--vscode-descriptionForeground, #999); }
-  .pill {
-    font-size: 0.85em; padding: 1px 9px; border-radius: 999px;
-    border: 1px solid var(--vscode-charts-green, #3fb950); color: var(--vscode-charts-green, #3fb950);
-  }
-  .pill.warn { border-color: var(--vscode-charts-yellow, #d29922); color: var(--vscode-charts-yellow, #d29922); }
-  .pill.danger { border-color: var(--vscode-charts-red, #f85149); color: var(--vscode-charts-red, #f85149); }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 16px 0; }
   .card {
     background: var(--vscode-editorWidget-background, #252526);
@@ -33,20 +27,6 @@
   }
   .card .k { font-size: 1.5em; font-weight: 600; display: block; }
   .card .s { color: var(--vscode-descriptionForeground, #999); font-size: 0.9em; }
-  .gauge {
-    position: relative; height: 10px; border-radius: 999px; margin: 10px 0 4px;
-    background: var(--vscode-progressBar-background, #3a3d41); opacity: 0.95; overflow: visible;
-    border: 1px solid var(--vscode-widget-border, transparent);
-  }
-  .gauge .fill { height: 100%; border-radius: 999px; background: var(--vscode-charts-blue, #3794ff); }
-  .gauge .fill.warn { background: var(--vscode-charts-yellow, #d29922); }
-  .gauge .fill.danger { background: var(--vscode-charts-red, #f85149); }
-  .gauge .marker {
-    position: absolute; top: -3px; width: 2px; height: 16px;
-    background: var(--vscode-charts-yellow, #d29922);
-  }
-  .gauge .marker.hard { background: var(--vscode-charts-red, #f85149); }
-  .legend { display: flex; gap: 16px; font-size: 0.9em; color: var(--vscode-descriptionForeground, #999); }
   svg { width: 100%; height: auto; display: block; }
   svg .bar { fill: var(--vscode-charts-blue, #3794ff); }
   svg .bar.empty { fill: var(--vscode-progressBar-background, #3a3d41); }
@@ -77,51 +57,40 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Copilot Usage</h1>
-    <span class="pill ok">within budget</span>
-    <span class="muted">local estimate — not the GitHub bill</span>
+    <h1>Copilot Activity</h1>
+    <span class="muted">local request counts — billing lives in GitHub</span>
   </header>
 
   <div class="cards">
-    <div class="card"><span class="k">63%</span><span class="s">of 300 units this month</span></div>
-    <div class="card"><span class="k">189.5</span><span class="s">premium units used</span></div>
-    <div class="card"><span class="k">7</span><span class="s">requests today (~4.5 units)</span></div>
-    <div class="card"><span class="k">164</span><span class="s">requests this month · 3 failed</span></div>
+    <div class="card"><span class="k">7</span><span class="s">requests today</span></div>
+    <div class="card"><span class="k">164</span><span class="s">requests this month</span></div>
+    <div class="card"><span class="k">3</span><span class="s">failed / cancelled (still billed by GitHub)</span></div>
   </div>
 
-  <h2>Budget</h2>
-  <div class="gauge" role="img" aria-label="63% of allowance used">
-  <div class="fill" style="width:63.2%"></div>
-  <div class="marker" style="left:80%" title="Soft cap 80%"></div>
-  <div class="marker hard" style="left:100%" title="Hard cap 100%"></div>
-</div>
-  <div class="legend"><span>soft cap 80%</span><span>hard cap 100%</span><span>mode: block</span></div>
-
-  <h2>Last 30 days — premium units per day</h2>
-  <svg viewBox="0 0 660 170" role="img" aria-label="Daily premium units, last 30 days">
-  <text class="axis" x="24" y="16" text-anchor="end">11</text>
+  <h2>Last 30 days — requests per day</h2>
+  <svg viewBox="0 0 660 170" role="img" aria-label="Daily requests, last 30 days">
+  <text class="axis" x="24" y="16" text-anchor="end">22</text>
   <line class="grid" x1="30" y1="10" x2="652" y2="10"></line>
   <line class="grid" x1="30" y1="146" x2="652" y2="146"></line>
-  <rect class="bar" x="33.0" y="74.0" width="14.7" height="72.0" rx="2"><title>2026-05-13: 6 units · 12 request(s)</title></rect><rect class="bar" x="53.7" y="50.0" width="14.7" height="96.0" rx="2"><title>2026-05-14: 8 units · 16 request(s)</title></rect><rect class="bar" x="74.5" y="38.0" width="14.7" height="108.0" rx="2"><title>2026-05-15: 9 units · 18 request(s)</title></rect><rect class="bar" x="95.2" y="26.0" width="14.7" height="120.0" rx="2"><title>2026-05-16: 10 units · 20 request(s)</title></rect><rect class="bar" x="115.9" y="14.0" width="14.7" height="132.0" rx="2"><title>2026-05-17: 11 units · 22 request(s)</title></rect><rect class="bar" x="136.7" y="86.0" width="14.7" height="60.0" rx="2"><title>2026-05-18: 5 units · 10 request(s)</title></rect><rect class="bar" x="157.4" y="14.0" width="14.7" height="132.0" rx="2"><title>2026-05-19: 11 units · 22 request(s)</title></rect><rect class="bar" x="178.1" y="26.0" width="14.7" height="120.0" rx="2"><title>2026-05-20: 10 units · 20 request(s)</title></rect><rect class="bar" x="198.9" y="50.0" width="14.7" height="96.0" rx="2"><title>2026-05-21: 8 units · 16 request(s)</title></rect><rect class="bar" x="219.6" y="62.0" width="14.7" height="84.0" rx="2"><title>2026-05-22: 7 units · 14 request(s)</title></rect><rect class="bar" x="240.3" y="86.0" width="14.7" height="60.0" rx="2"><title>2026-05-23: 5 units · 10 request(s)</title></rect><rect class="bar" x="261.1" y="110.0" width="14.7" height="36.0" rx="2"><title>2026-05-24: 3 units · 6 request(s)</title></rect><rect class="bar empty" x="281.8" y="145.0" width="14.7" height="1.0" rx="2"><title>2026-05-25: 0 units · 0 request(s)</title></rect><rect class="bar" x="302.5" y="134.0" width="14.7" height="12.0" rx="2"><title>2026-05-26: 1 units · 2 request(s)</title></rect><rect class="bar" x="323.3" y="134.0" width="14.7" height="12.0" rx="2"><title>2026-05-27: 1 units · 2 request(s)</title></rect><rect class="bar" x="344.0" y="134.0" width="14.7" height="12.0" rx="2"><title>2026-05-28: 1 units · 2 request(s)</title></rect><rect class="bar" x="364.7" y="122.0" width="14.7" height="24.0" rx="2"><title>2026-05-29: 2 units · 4 request(s)</title></rect><rect class="bar" x="385.5" y="110.0" width="14.7" height="36.0" rx="2"><title>2026-05-30: 3 units · 6 request(s)</title></rect><rect class="bar" x="406.2" y="86.0" width="14.7" height="60.0" rx="2"><title>2026-05-31: 5 units · 10 request(s)</title></rect><rect class="bar empty" x="426.9" y="145.0" width="14.7" height="1.0" rx="2"><title>2026-06-01: 0 units · 0 request(s)</title></rect><rect class="bar" x="447.7" y="50.0" width="14.7" height="96.0" rx="2"><title>2026-06-02: 8 units · 16 request(s)</title></rect><rect class="bar" x="468.4" y="38.0" width="14.7" height="108.0" rx="2"><title>2026-06-03: 9 units · 18 request(s)</title></rect><rect class="bar empty" x="489.1" y="145.0" width="14.7" height="1.0" rx="2"><title>2026-06-04: 0 units · 20 request(s)</title></rect><rect class="bar" x="509.9" y="14.0" width="14.7" height="132.0" rx="2"><title>2026-06-05: 11 units · 22 request(s)</title></rect><rect class="bar" x="530.6" y="14.0" width="14.7" height="132.0" rx="2"><title>2026-06-06: 11 units · 22 request(s)</title></rect><rect class="bar" x="551.3" y="26.0" width="14.7" height="120.0" rx="2"><title>2026-06-07: 10 units · 20 request(s)</title></rect><rect class="bar" x="572.1" y="110.0" width="14.7" height="36.0" rx="2"><title>2026-06-08: 3 units · 6 request(s)</title></rect><rect class="bar" x="592.8" y="50.0" width="14.7" height="96.0" rx="2"><title>2026-06-09: 8 units · 16 request(s)</title></rect><rect class="bar" x="613.5" y="74.0" width="14.7" height="72.0" rx="2"><title>2026-06-10: 6 units · 12 request(s)</title></rect><rect class="bar" x="634.3" y="86.0" width="14.7" height="60.0" rx="2"><title>2026-06-11: 5 units · 10 request(s)</title></rect>
+  <rect class="bar" x="33.0" y="74.0" width="14.7" height="72.0" rx="2"><title>2026-05-13: 12 request(s)</title></rect><rect class="bar" x="53.7" y="50.0" width="14.7" height="96.0" rx="2"><title>2026-05-14: 16 request(s)</title></rect><rect class="bar" x="74.5" y="38.0" width="14.7" height="108.0" rx="2"><title>2026-05-15: 18 request(s)</title></rect><rect class="bar" x="95.2" y="26.0" width="14.7" height="120.0" rx="2"><title>2026-05-16: 20 request(s)</title></rect><rect class="bar" x="115.9" y="14.0" width="14.7" height="132.0" rx="2"><title>2026-05-17: 22 request(s) · 1 failed</title></rect><rect class="bar" x="136.7" y="86.0" width="14.7" height="60.0" rx="2"><title>2026-05-18: 10 request(s)</title></rect><rect class="bar" x="157.4" y="14.0" width="14.7" height="132.0" rx="2"><title>2026-05-19: 22 request(s)</title></rect><rect class="bar" x="178.1" y="26.0" width="14.7" height="120.0" rx="2"><title>2026-05-20: 20 request(s)</title></rect><rect class="bar" x="198.9" y="50.0" width="14.7" height="96.0" rx="2"><title>2026-05-21: 16 request(s)</title></rect><rect class="bar" x="219.6" y="62.0" width="14.7" height="84.0" rx="2"><title>2026-05-22: 14 request(s)</title></rect><rect class="bar" x="240.3" y="86.0" width="14.7" height="60.0" rx="2"><title>2026-05-23: 10 request(s)</title></rect><rect class="bar" x="261.1" y="110.0" width="14.7" height="36.0" rx="2"><title>2026-05-24: 6 request(s)</title></rect><rect class="bar empty" x="281.8" y="145.0" width="14.7" height="1.0" rx="2"><title>2026-05-25: 0 request(s)</title></rect><rect class="bar" x="302.5" y="134.0" width="14.7" height="12.0" rx="2"><title>2026-05-26: 2 request(s)</title></rect><rect class="bar" x="323.3" y="134.0" width="14.7" height="12.0" rx="2"><title>2026-05-27: 2 request(s)</title></rect><rect class="bar" x="344.0" y="134.0" width="14.7" height="12.0" rx="2"><title>2026-05-28: 2 request(s) · 1 failed</title></rect><rect class="bar" x="364.7" y="122.0" width="14.7" height="24.0" rx="2"><title>2026-05-29: 4 request(s)</title></rect><rect class="bar" x="385.5" y="110.0" width="14.7" height="36.0" rx="2"><title>2026-05-30: 6 request(s)</title></rect><rect class="bar" x="406.2" y="86.0" width="14.7" height="60.0" rx="2"><title>2026-05-31: 10 request(s)</title></rect><rect class="bar empty" x="426.9" y="145.0" width="14.7" height="1.0" rx="2"><title>2026-06-01: 0 request(s)</title></rect><rect class="bar" x="447.7" y="50.0" width="14.7" height="96.0" rx="2"><title>2026-06-02: 16 request(s)</title></rect><rect class="bar" x="468.4" y="38.0" width="14.7" height="108.0" rx="2"><title>2026-06-03: 18 request(s)</title></rect><rect class="bar empty" x="489.1" y="145.0" width="14.7" height="1.0" rx="2"><title>2026-06-04: 0 request(s)</title></rect><rect class="bar" x="509.9" y="14.0" width="14.7" height="132.0" rx="2"><title>2026-06-05: 22 request(s)</title></rect><rect class="bar" x="530.6" y="14.0" width="14.7" height="132.0" rx="2"><title>2026-06-06: 22 request(s)</title></rect><rect class="bar" x="551.3" y="26.0" width="14.7" height="120.0" rx="2"><title>2026-06-07: 20 request(s)</title></rect><rect class="bar" x="572.1" y="110.0" width="14.7" height="36.0" rx="2"><title>2026-06-08: 6 request(s) · 1 failed</title></rect><rect class="bar" x="592.8" y="50.0" width="14.7" height="96.0" rx="2"><title>2026-06-09: 16 request(s)</title></rect><rect class="bar" x="613.5" y="74.0" width="14.7" height="72.0" rx="2"><title>2026-06-10: 12 request(s)</title></rect><rect class="bar" x="634.3" y="86.0" width="14.7" height="60.0" rx="2"><title>2026-06-11: 10 request(s)</title></rect>
   <text class="axis" x="40.4" y="162" text-anchor="middle">05-13</text><text class="axis" x="185.5" y="162" text-anchor="middle">05-20</text><text class="axis" x="330.6" y="162" text-anchor="middle">05-27</text><text class="axis" x="475.8" y="162" text-anchor="middle">06-03</text><text class="axis" x="620.9" y="162" text-anchor="middle">06-10</text>
 </svg>
 
   <h2>By model (this month)</h2>
-  <table><thead><tr><th>Model</th><th>Requests</th><th>Premium units</th><th>Tokens in / out</th></tr></thead><tbody><tr><td>gpt-4.1</td><td class="num">96</td><td class="num">0</td><td class="num">182,400 / 96,100</td></tr><tr><td>claude-sonnet-4.5</td><td class="num">52</td><td class="num">52</td><td class="num">96,800 / 88,200</td></tr><tr><td>o4-mini</td><td class="num">12</td><td class="num">4.0</td><td class="num">9,100 / 14,800</td></tr><tr><td>claude-opus-4.1</td><td class="num">4</td><td class="num">40</td><td class="num">18,900 / 22,000</td></tr></tbody></table>
+  <table><thead><tr><th>Model</th><th>Requests</th><th>Tokens in / out</th></tr></thead><tbody><tr><td>gpt-4.1</td><td class="num">96</td><td class="num">182,400 / 96,100</td></tr><tr><td>claude-sonnet-4.5</td><td class="num">52</td><td class="num">96,800 / 88,200</td></tr><tr><td>o4-mini</td><td class="num">12</td><td class="num">9,100 / 14,800</td></tr><tr><td>claude-opus-4.1</td><td class="num">4</td><td class="num">18,900 / 22,000</td></tr></tbody></table>
 
   <h2>By task (this month)</h2>
-  <table><thead><tr><th>Task</th><th>Requests</th><th>Premium units</th></tr></thead><tbody><tr><td>chat</td><td class="num">121</td><td class="num">61.4</td></tr><tr><td>askCopilot</td><td class="num">31</td><td class="num">24.6</td></tr><tr><td>tool:site_overview</td><td class="num">12</td><td class="num">9.9</td></tr></tbody></table>
+  <table><thead><tr><th>Task</th><th>Requests</th></tr></thead><tbody><tr><td>chat</td><td class="num">121</td></tr><tr><td>askCopilot</td><td class="num">31</td></tr><tr><td>tool:site_overview</td><td class="num">12</td></tr></tbody></table>
 
   <div class="actions">
     <button id="btn-export">Export diagnostics bundle…</button>
-    <button id="btn-budget" class="secondary">Set budget…</button>
-    <button id="btn-reset" class="secondary">Reset meter…</button>
+    <button id="btn-reset" class="secondary">Reset counters…</button>
   </div>
 
   <footer>
-    Figures are this extension's own metered usage priced with a maintained multiplier table
-    (ADR-0003). They are an estimate to keep you in control of spend — always confirm billing in
-    GitHub. Generated 2026-06-11T12:00:00.000Z.
+    Counts are this extension's own requests, measured locally — factual, but they say nothing
+    about premium-request consumption against your plan. Your GitHub billing/plan page is the
+    only authoritative source for that. Generated 2026-06-11T12:00:00.000Z.
   </footer>
 </div>
 <script nonce="SAMPLENONCE">
@@ -134,7 +103,6 @@
     if (el) el.addEventListener("click", () => vscode.postMessage({ command }));
   };
   wire("btn-export", "export");
-  wire("btn-budget", "budget");
   wire("btn-reset", "reset");
 </script>
 </body>

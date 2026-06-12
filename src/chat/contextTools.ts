@@ -142,7 +142,7 @@ export function registerContextTools(
             title: `Index "${source?.displayName ?? options.input.source ?? "database"}" schema with Copilot?`,
             message: new vscode.MarkdownString(
               [
-                `Sends **table and column names only** — no data rows — to your Copilot model${tables !== undefined ? ` (${tables} tables)` : ""}, metered against your allowance.`,
+                `Sends **table and column names only** — no data rows — to your Copilot model${tables !== undefined ? ` (${tables} tables)` : ""}, using your Copilot subscription.`,
                 "",
                 "The resulting semantic index lets free-form questions find the right columns (e.g. `group_cio` → _owned by …_).",
               ].join("\n"),

@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { ContextSource } from "../types";
 import { CopilotService } from "../../copilot/copilotService";
-import { BudgetBlockedError } from "../../copilot/budget";
 import { SchemaStore } from "../schemaStore";
 import { TelemetryService } from "../../diagnostics/telemetry";
 import { Logger } from "../../core/log";
@@ -28,8 +27,8 @@ export type TableSampler = (table: TableDef) => Promise<Record<string, string[]>
  *
  * What leaves the machine: table/column NAMES and TYPES — by construction
  * (prompts are built from the catalog, which never contains row values).
- * Every request goes through CopilotService.ask → budget guardrails +
- * metering (task "schemaIndex"), batched so huge schemas stay bounded.
+ * Every request goes through CopilotService.ask → request counting (task
+ * "schemaIndex"), batched so huge schemas stay bounded.
  */
 export class SchemaIndexer {
   constructor(
@@ -40,9 +39,9 @@ export class SchemaIndexer {
     private readonly now: () => string,
   ) {}
 
-  /** Premium units metered by the most recent indexing run — surfaced in
-   *  the completion toast (pilot: metering wasn't visible at point of use). */
-  lastRunUnits = 0;
+  /** Copilot requests made by the most recent indexing run — surfaced in
+   *  the completion toast (pilot: cost wasn't visible at point of use). */
+  lastRunRequests = 0;
 
   static enabledByPolicy(): boolean {
     return vscode.workspace
@@ -59,7 +58,7 @@ export class SchemaIndexer {
     const columns = schema.catalog.tables.reduce((n, t) => n + t.columns.length, 0);
     const batches = chunkTables(schema.catalog.tables).length;
     const pick = await vscode.window.showInformationMessage(
-      `Index the "${source.displayName}" schema with Copilot? Table and column NAMES only — no data rows — are sent (${tables} tables, ${columns} columns ≈ ${batches} metered request${batches === 1 ? "" : "s"}). The semantic index lets free-form questions find the right columns (e.g. group_cio → "owned by …").`,
+      `Index the "${source.displayName}" schema with Copilot? Table and column NAMES only — no data rows — are sent (${tables} tables, ${columns} columns ≈ ${batches} Copilot request${batches === 1 ? "" : "s"}). The semantic index lets free-form questions find the right columns (e.g. group_cio → "owned by …").`,
       { modal: true },
       "Index with Copilot",
       "Not Now",
@@ -70,8 +69,8 @@ export class SchemaIndexer {
     return "later";
   }
 
-  /** Run the batched indexing and persist the result. Budget hard-caps and
-   *  per-batch parse failures degrade to a PARTIAL index, never data loss. */
+  /** Run the batched indexing and persist the result. Per-batch failures
+   *  degrade to a PARTIAL index, never data loss. */
   async runIndexing(
     source: ContextSource,
     schema: SourceSchema,
@@ -82,7 +81,7 @@ export class SchemaIndexer {
     const results: SemanticTable[][] = [];
     let modelId = "";
     let partial = false;
-    this.lastRunUnits = 0;
+    this.lastRunRequests = 0;
     for (let i = 0; i < batches.length; i++) {
       if (token?.isCancellationRequested) {
         partial = true;
@@ -122,7 +121,7 @@ export class SchemaIndexer {
         );
         clearInterval(ticker);
         modelId = res.modelId;
-        this.lastRunUnits += res.premiumUnits;
+        this.lastRunRequests += 1;
         const parsed = parseSemanticResponse(res.text, schema.catalog);
         results.push(parsed);
         progress?.report({
@@ -131,13 +130,6 @@ export class SchemaIndexer {
         });
       } catch (err) {
         clearInterval(ticker);
-        if (err instanceof BudgetBlockedError) {
-          partial = true;
-          this.log.warn(
-            `Schema indexing stopped at batch ${i + 1}/${batches.length}: Copilot budget cap.`,
-          );
-          break;
-        }
         // One bad batch (unparseable JSON, transient model error) shouldn't
         // void the others — keep going, mark partial.
         partial = true;
@@ -200,7 +192,7 @@ export class SchemaIndexer {
         cancellable: true,
       },
       async (progress, token) => {
-        this.lastRunUnits = 0;
+        this.lastRunRequests = 0;
         // Phase 1: sampling — one query per table, live per-table feedback.
         const samples: TableSample[] = [];
         for (let i = 0; i < tables.length; i++) {
@@ -255,13 +247,12 @@ export class SchemaIndexer {
               this.now,
             );
             clearInterval(ticker);
-            this.lastRunUnits += res.premiumUnits;
+            this.lastRunRequests += 1;
             results.push(parseSemanticResponse(res.text, schema.catalog));
             progress.report({ increment: 60 / batches.length, message: `${label} done (${Math.round((Date.now() - startedAt) / 1000)}s)` });
           } catch (err) {
             clearInterval(ticker);
             partial = true;
-            if (err instanceof BudgetBlockedError) break;
             this.log.warn(`Content batch ${i + 1} failed: ${String(err)}`);
           }
         }
@@ -291,7 +282,7 @@ export class SchemaIndexer {
       },
     );
     void vscode.window.showInformationMessage(
-      `Content types indexed for "${source.displayName}" — only Copilot's descriptive summaries were stored (no database content persists). ~${this.lastRunUnits} premium unit(s) metered (Usage view → By task → contentIndex).`,
+      `Content types indexed for "${source.displayName}" — only Copilot's descriptive summaries were stored (no database content persists). ${this.lastRunRequests} Copilot request(s) used (Copilot Activity view → By task → contentIndex).`,
     );
     return indexed;
   }
@@ -324,7 +315,7 @@ export class SchemaIndexer {
       (indexed.semantic?.partial
         ? `Schema index for "${source.displayName}" is partial (${n} tables) — re-run "Index Database Schema" to complete it.`
         : `Schema indexed: ${n} tables of "${source.displayName}" now answer free-form questions.`) +
-        ` ~${this.lastRunUnits} premium unit(s) metered (Usage view → By task → schemaIndex).`,
+        ` ${this.lastRunRequests} Copilot request(s) used (Copilot Activity view → By task → schemaIndex).`,
     );
     return indexed;
   }

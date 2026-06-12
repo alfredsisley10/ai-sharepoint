@@ -13,7 +13,6 @@ export type ErrorCode =
   | "graph.throttled"
   | "graph.error"
   | "copilot.unavailable"
-  | "budget.blocked"
   | "network"
   | "config"
   | "unknown";
@@ -45,7 +44,6 @@ export function classifyError(err: unknown): ErrorCode {
   if (/\b429\b|throttl|toomanyrequests|\b503\b/.test(text)) return "graph.throttled";
   if (/graph request failed/.test(text)) return "graph.error";
   if (/no copilot|language model|consent|copilot/.test(text)) return "copilot.unavailable";
-  if (/budget/.test(text)) return "budget.blocked";
   if (/fetch failed|enotfound|econnrefused|econnreset|etimedout|network|socket/.test(text)) return "network";
   return "unknown";
 }
@@ -68,8 +66,6 @@ export function adviceFor(code: ErrorCode): string | undefined {
       return "The service is rate-limiting requests. Wait a moment and retry.";
     case "copilot.unavailable":
       return "Install and sign in to GitHub Copilot, then retry.";
-    case "budget.blocked":
-      return "Your configured Copilot budget cap was reached. Adjust it in Settings → AI SharePoint.";
     case "network":
       return "Network request failed. Behind a corporate proxy or TLS-inspection appliance, check VS Code's proxy settings (http.proxy) and that login.microsoftonline.com / graph.microsoft.com are allowlisted — see the Admin Guide §3.";
     default:

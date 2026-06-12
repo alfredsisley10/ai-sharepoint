@@ -64,7 +64,7 @@ _Release 0.1.0. Audience: security reviewers and engineers. Companions:
 - Budget enforcement (soft warn / hard block with explicit override) bounds the financial
   blast radius of any runaway loop.
 
-## Webview (Usage Dashboard)
+## Webview (Copilot Activity Dashboard)
 
 - CSP: `default-src 'none'; style-src 'nonce-…'; script-src 'nonce-…'` — fresh nonce per
   render, zero external/local resources (`localResourceRoots: []`).

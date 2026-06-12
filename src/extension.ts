@@ -6,8 +6,6 @@ import { Logger } from "./core/log";
 import { AppError, adviceFor } from "./core/errors";
 import { redactError } from "./core/redaction";
 import { UsageMeter } from "./copilot/meter";
-import { BudgetGuard, BudgetBlockedError } from "./copilot/budget";
-import { readBudgetConfigFromSettings } from "./copilot/vscodeBudgetConfig";
 import { CopilotService } from "./copilot/copilotService";
 import { AuthProviderRegistry, AUTH_PROVIDERS } from "./auth/providerRegistry";
 import { tenantCacheHandle } from "./auth/msalCache";
@@ -146,8 +144,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const telemetry = new TelemetryService(context.globalState, nowIso);
   const errors = new ErrorReportStore(context.globalState, nowIso);
   const meter = new UsageMeter(context.globalState);
-  const budget = new BudgetGuard(meter, readBudgetConfigFromSettings);
-  const copilot = new CopilotService(meter, budget);
+  const copilot = new CopilotService(meter);
   const sites = new SitesStore(context.globalState, context.workspaceState);
   const registry = new AuthProviderRegistry(secrets, (info) => {
     void showDeviceCodePrompt(info.userCode, info.verificationUri);
@@ -163,8 +160,8 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
     nowIso,
   );
-  const dashboard = new UsageDashboard(meter, budget, nowIso);
-  const statusBar = new UsageStatusBar(meter, budget, nowIso);
+  const dashboard = new UsageDashboard(meter, nowIso);
+  const statusBar = new UsageStatusBar(meter, nowIso);
   const version = String(context.extension.packageJSON.version ?? "0.0.0");
 
   context.subscriptions.push(
@@ -239,7 +236,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const usageProvider = new UsageTreeProvider(
     meter,
-    budget,
     nowIso,
     () => copilotState.signedIn,
   );
@@ -422,7 +418,6 @@ export function activate(context: vscode.ExtensionContext): void {
       projects,
       copilot,
       meter,
-      budget,
       telemetry,
       errors,
       log,
@@ -432,7 +427,6 @@ export function activate(context: vscode.ExtensionContext): void {
       sites,
       access,
       meter,
-      budget,
       telemetry,
       errors,
       nowIso,
@@ -547,7 +541,7 @@ export function activate(context: vscode.ExtensionContext): void {
       })),
       {
         ignoreFocusOut: true,
-        title: "Copilot models — relative premium-request cost (estimate)",
+        title: "Copilot models — published premium-request multiplier",
         placeHolder: "Pick a model to set it as this extension's default (Esc to just browse)",
       },
     );
@@ -564,121 +558,56 @@ export function activate(context: vscode.ExtensionContext): void {
   register("aiSharePoint.askCopilot", async () => {
     const prompt = await vscode.window.showInputBox({
       ignoreFocusOut: true,
-      title: "Ask Copilot (metered)",
-      prompt: "Usage is metered against your premium-request allowance — watch the status-bar gauge.",
+      title: "Ask Copilot",
+      prompt: "Uses your Copilot subscription (your GitHub billing page is the authoritative usage source).",
       placeHolder: "e.g. Draft an outline for our team's SharePoint landing page",
     });
     if (!prompt) {
       return;
     }
     const model = await copilot.pickDefaultModel();
-    log.info(
-      `askCopilot: model=${model.family} (~${meter.multiplierFor(model.family || model.id)} premium unit(s) per request)`,
-    );
+    log.info(`askCopilot: model=${model.family}`);
 
     responses.show(true);
     responses.appendLine(`\n──────── ${nowIso()} · ${model.name} ────────`);
     responses.appendLine(`> ${prompt}\n`);
 
-    const run = (override: boolean) =>
-      vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: `Copilot (${model.name})…`,
-          cancellable: true,
-        },
-        (_p, token) =>
-          copilot.ask(
-            {
-              prompt,
-              label: "askCopilot",
-              model,
-              overrideBudget: override,
-              onChunk: (chunk) => responses.append(chunk),
-              token,
-            },
-            nowIso,
-          ),
-      );
-
-    try {
-      const result = await run(false);
-      responses.appendLine(
-        `\n\n[${result.modelId} · ~${result.premiumUnits} premium unit(s) · ${result.inputTokens}/${result.outputTokens} tokens]`,
-      );
-    } catch (err) {
-      if (err instanceof BudgetBlockedError) {
-        const proceed = await vscode.window.showWarningMessage(
-          `Copilot budget cap reached (~${err.verdict.usedPct.toFixed(0)}% of ${err.verdict.allowance} units; hard cap ${err.verdict.hardPct}%). Proceed with this one request anyway?`,
-          { modal: true },
-          "Proceed Once",
-        );
-        if (proceed === "Proceed Once") {
-          telemetry.record("budget.override");
-          const result = await run(true);
-          responses.appendLine(
-            `\n\n[${result.modelId} · ~${result.premiumUnits} premium unit(s) · budget override]`,
-          );
-          return;
-        }
-        return;
-      }
-      throw err;
-    }
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Copilot (${model.name})…`,
+        cancellable: true,
+      },
+      (_p, token) =>
+        copilot.ask(
+          {
+            prompt,
+            label: "askCopilot",
+            model,
+            onChunk: (chunk) => responses.append(chunk),
+            token,
+          },
+          nowIso,
+        ),
+    );
+    responses.appendLine(
+      `\n\n[${result.modelId} · ${result.inputTokens}/${result.outputTokens} tokens]`,
+    );
   });
 
   register("aiSharePoint.showUsage", () => dashboard.show());
 
   register("aiSharePoint.resetUsage", async () => {
     const confirm = await vscode.window.showWarningMessage(
-      "Reset the local Copilot usage meter? This clears the extension's usage history (it does not affect GitHub billing).",
+      "Reset the local Copilot activity counters? This clears the extension's request history (it does not affect GitHub billing).",
       { modal: true },
-      "Reset Meter",
+      "Reset Counters",
     );
-    if (confirm === "Reset Meter") {
+    if (confirm === "Reset Counters") {
       await meter.reset();
-      void vscode.window.showInformationMessage("Copilot usage meter reset.");
+      void vscode.window.showInformationMessage("Copilot activity counters reset.");
     }
   });
-
-  register("aiSharePoint.setBudget", async () => {
-    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
-    const allowance = await promptNumber(
-      "Monthly premium-request allowance (the gauge's denominator)",
-      cfg.get<number>("copilot.monthlyPremiumRequestAllowance", 0),
-      1,
-    );
-    if (allowance === undefined) return;
-    const soft = await promptNumber(
-      "Soft cap — warn at this % of the allowance",
-      cfg.get<number>("budget.softLimitPercent", 80),
-      0,
-    );
-    if (soft === undefined) return;
-    const hard = await promptNumber(
-      "Hard cap — block at this % (requests can be individually overridden)",
-      cfg.get<number>("budget.hardLimitPercent", 100),
-      soft,
-    );
-    if (hard === undefined) return;
-    await cfg.update(
-      "copilot.monthlyPremiumRequestAllowance",
-      allowance,
-      vscode.ConfigurationTarget.Global,
-    );
-    await cfg.update("budget.softLimitPercent", soft, vscode.ConfigurationTarget.Global);
-    await cfg.update("budget.hardLimitPercent", hard, vscode.ConfigurationTarget.Global);
-    void vscode.window.showInformationMessage(
-      `Budget updated: ${allowance} units/month, warn at ${soft}%, block at ${hard}%.`,
-    );
-  });
-
-  register("aiSharePoint.openBudgetSettings", () =>
-    vscode.commands.executeCommand(
-      "workbench.action.openSettings",
-      "aiSharePoint.budget",
-    ),
-  );
 
   // --- Site commands -------------------------------------------------------
   register("aiSharePoint.connectSite", async () => {
@@ -3460,25 +3389,6 @@ async function resolveConnArg(
     { title },
   );
   return pick?.conn;
-}
-
-async function promptNumber(
-  title: string,
-  current: number,
-  min: number,
-): Promise<number | undefined> {
-  const raw = await vscode.window.showInputBox({
-      ignoreFocusOut: true,
-    title,
-    value: String(current),
-    validateInput: (v) => {
-      const n = Number(v);
-      return Number.isFinite(n) && n >= min
-        ? undefined
-        : `Enter a number ≥ ${min}`;
-    },
-  });
-  return raw === undefined ? undefined : Number(raw);
 }
 
 /** ServiceNow browser sign-in: PKCE auth-code over a loopback redirect —

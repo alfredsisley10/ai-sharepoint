@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.20.0 — 2026-06-12
+
+### Removed — monthly premium-request allowance & estimated-cost tracking (pilot)
+- The estimated **premium-unit meter**, the **monthly-allowance gauge** (status bar % and
+  dashboard), and the **budget caps** (soft/hard limits, blocking, overrides) are gone: there is
+  no automated, authoritative way to read your real allowance or bill, so the locally estimated
+  numbers were misleading. The feature returns if an authoritative billing API becomes
+  available; until then **your GitHub billing/plan page is the only usage source**.
+- What remains is factual and locally measured: the **Copilot Activity** view, status-bar
+  counter, and dashboard now show **request counts** (today / this month, failures) with
+  per-model token totals and per-task breakdowns — counts of what this extension actually did,
+  never billing estimates. Diagnostics bundles carry the same counts.
+- Removed settings: `copilot.monthlyPremiumRequestAllowance`, `budget.mode`,
+  `budget.softLimitPercent`, `budget.hardLimitPercent`. Removed commands: *Set Copilot Budget*,
+  *Open Budget Settings*. *Reset Copilot Usage Meter* is now *Reset Copilot Activity Counters*.
+- The economy-first model policy is unchanged (cheapest entitled model by the published
+  multiplier table); *List Copilot Models* still shows each model's published multiplier.
+- Stored ledgers migrate automatically (estimates are dropped; request/token counts survive).
+  ADR-0003 is marked superseded.
+
 ## 0.19.1 — 2026-06-12
 
 ### Fixed — Splunk: searches no longer fail at the concurrency cap (pilot)

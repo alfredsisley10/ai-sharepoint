@@ -1,8 +1,8 @@
 {
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
-  "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.19.1",
+  "description": "Govern and explore SharePoint Online with GitHub Copilot — enterprise auth, read-only reference sources, and privacy-first diagnostics.",
+  "version": "0.20.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -286,30 +286,19 @@
       },
       {
         "command": "aiSharePoint.askCopilot",
-        "title": "Ask Copilot (metered)",
+        "title": "Ask Copilot",
         "category": "AI SharePoint",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "aiSharePoint.showUsage",
-        "title": "Show Usage Dashboard",
+        "title": "Show Copilot Activity Dashboard",
         "category": "AI SharePoint",
         "icon": "$(dashboard)"
       },
       {
         "command": "aiSharePoint.resetUsage",
-        "title": "Reset Copilot Usage Meter",
-        "category": "AI SharePoint"
-      },
-      {
-        "command": "aiSharePoint.setBudget",
-        "title": "Set Copilot Budget",
-        "category": "AI SharePoint",
-        "icon": "$(shield)"
-      },
-      {
-        "command": "aiSharePoint.openBudgetSettings",
-        "title": "Open Budget Settings",
+        "title": "Reset Copilot Activity Counters",
         "category": "AI SharePoint"
       },
       {
@@ -436,9 +425,9 @@
         },
         {
           "id": "aiSharePoint.usageView",
-          "name": "Usage & Budget",
+          "name": "Copilot Activity",
           "icon": "media/activity-icon.svg",
-          "contextualTitle": "Copilot Usage & Budget"
+          "contextualTitle": "Copilot Activity (local request counts)"
         },
         {
           "id": "aiSharePoint.commsView",
@@ -501,7 +490,7 @@
           },
           {
             "name": "usage",
-            "description": "This extension's Copilot usage vs. your budget"
+            "description": "This extension's Copilot request activity (local counts)"
           },
           {
             "name": "help",
@@ -568,7 +557,7 @@
       },
       {
         "name": "aisharepoint_copilot_usage",
-        "displayName": "Copilot Usage & Budget",
+        "displayName": "Copilot Activity",
         "toolReferenceName": "spUsage",
         "canBeReferencedInPrompt": true,
         "icon": "$(graph-line)",
@@ -576,7 +565,7 @@
           "sharepoint",
           "usage"
         ],
-        "modelDescription": "Report this extension's metered Copilot usage versus the user's configured monthly allowance and budget caps. Values are local estimates, not the GitHub bill.",
+        "modelDescription": "Report the requests this extension made through the user's Copilot subscription (factual local counts: today/this month, failures, by model with tokens). Premium-request consumption against the user's plan is NOT tracked — the GitHub billing page is the authoritative source.",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -989,11 +978,6 @@
           "group": "navigation@1"
         },
         {
-          "command": "aiSharePoint.setBudget",
-          "when": "view == aiSharePoint.usageView",
-          "group": "navigation@2"
-        },
-        {
           "command": "aiSharePoint.exportDiagnostics",
           "when": "view == aiSharePoint.supportView",
           "group": "navigation@1"
@@ -1344,15 +1328,15 @@
             ]
           },
           {
-            "id": "budget",
-            "title": "Stay in control of Copilot spend",
-            "description": "Every request is metered against your monthly premium-request allowance. The status-bar gauge turns yellow at the soft cap and red at the hard cap, which blocks further requests until you override or raise it.\n[Set Your Budget](command:aiSharePoint.setBudget)\n[Open Usage Dashboard](command:aiSharePoint.showUsage)",
+            "id": "activity",
+            "title": "See what the extension asked Copilot",
+            "description": "The Copilot Activity view and dashboard show factual, locally measured request counts (today, this month, by model and task). Premium-request consumption against your plan is **not** estimated — your GitHub billing page is the authoritative source.\n[Open Activity Dashboard](command:aiSharePoint.showUsage)",
             "media": {
               "image": "media/walkthrough/budget.svg",
-              "altText": "Budget gauge and caps"
+              "altText": "Copilot activity counters"
             },
             "completionEvents": [
-              "onCommand:aiSharePoint.setBudget"
+              "onCommand:aiSharePoint.showUsage"
             ]
           },
           {
@@ -1373,48 +1357,11 @@
     "configuration": {
       "title": "AI SharePoint",
       "properties": {
-        "aiSharePoint.copilot.monthlyPremiumRequestAllowance": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "order": 1,
-          "markdownDescription": "Your plan's monthly **premium-request allowance** — enter it only from an authoritative source (your GitHub billing/plan page). **0 (default) = not configured**: the extension shows measured usage only (units used, rate, by model/task) and shows **no gauge, percentages, or caps**, because inventing a denominator would mislead."
-        },
         "aiSharePoint.copilot.preferredModelFamily": {
           "type": "string",
           "default": "",
           "order": 2,
           "markdownDescription": "Model family this extension uses by default (set via **AI SharePoint: List Copilot Models**). Empty = cheapest entitled model (economy-first policy)."
-        },
-        "aiSharePoint.budget.mode": {
-          "type": "string",
-          "enum": [
-            "block",
-            "warn",
-            "off"
-          ],
-          "enumDescriptions": [
-            "Warn at the soft cap; block at the hard cap (per-request override available).",
-            "Warn at both caps; never block.",
-            "No budget enforcement (the meter still records usage)."
-          ],
-          "default": "block",
-          "order": 3,
-          "markdownDescription": "How budget caps are enforced (PLAN §4 guardrails)."
-        },
-        "aiSharePoint.budget.softLimitPercent": {
-          "type": "number",
-          "default": 80,
-          "minimum": 0,
-          "order": 4,
-          "markdownDescription": "Warn when projected usage passes this percentage of the monthly allowance."
-        },
-        "aiSharePoint.budget.hardLimitPercent": {
-          "type": "number",
-          "default": 100,
-          "minimum": 0,
-          "order": 5,
-          "markdownDescription": "Block requests past this percentage of the monthly allowance (individual requests can be explicitly overridden)."
         },
         "aiSharePoint.auth.tenantAuthority": {
           "type": "string",

@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import { UsageMeter } from "../copilot/meter";
-import { BudgetGuard } from "../copilot/budget";
 
 interface UsageNode {
   id: string;
@@ -13,9 +12,11 @@ interface UsageNode {
 }
 
 /**
- * Usage & Budget tree view (PLAN §4 "Cost view"): headline gauge, today's
- * activity, budget configuration state, and per-model / per-task breakdowns.
- * Everything is labeled as an estimate (ADR-0003).
+ * Copilot Activity tree view: factual, locally measured counts of the
+ * requests THIS extension made — requests today/this month, failures, and
+ * per-model / per-task breakdowns with token totals. No premium-unit
+ * estimates, no allowance gauge: there is no authoritative local source for
+ * either (GitHub billing is), and estimated numbers misled users.
  */
 export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
   private readonly emitter = new vscode.EventEmitter<void>();
@@ -23,17 +24,11 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
 
   constructor(
     private readonly meter: UsageMeter,
-    private readonly budget: BudgetGuard,
     private readonly now: () => string,
     /** False until Copilot Chat is installed AND signed in (models exist). */
     private readonly copilotAvailable: () => boolean = () => true,
   ) {
     meter.onDidChange(() => this.emitter.fire());
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("aiSharePoint")) {
-        this.emitter.fire();
-      }
-    });
   }
 
   refresh(): void {
@@ -60,163 +55,54 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
       return node.children ?? [];
     }
     const nowIso = this.now();
-    // No Copilot and nothing ever metered → empty tree, so the viewsWelcome
+    // No Copilot and nothing ever recorded → empty tree, so the viewsWelcome
     // guidance (install Copilot Chat / sign in) shows instead of zeros.
     if (!this.copilotAvailable() && this.meter.requestsThisMonth(nowIso) === 0) {
       return [];
     }
-    const verdict = this.budget.evaluate(0, nowIso);
-    const used = this.meter.premiumUnitsThisMonth(nowIso);
     const monthRequests = this.meter.requestsThisMonth(nowIso);
-    // The default-model policy prefers the cheapest entitled model, which is
-    // usually an INCLUDED (0×) one — real requests, zero premium units. Say
-    // so, or the static gauge reads as a broken meter (pilot feedback).
-    const allIncluded = monthRequests > 0 && used === 0;
-    const pct = Math.round(verdict.usedPct);
-    const stateIcon =
-      verdict.usedPct >= verdict.hardPct
-        ? new vscode.ThemeIcon("error", new vscode.ThemeColor("charts.red"))
-        : verdict.usedPct >= verdict.softPct
-          ? new vscode.ThemeIcon("warning", new vscode.ThemeColor("charts.yellow"))
-          : new vscode.ThemeIcon("pass", new vscode.ThemeColor("charts.green"));
-
+    const monthFailures = this.meter.failuresThisMonth(nowIso);
     const byModel = this.meter.byModelThisMonth(nowIso);
     const byLabel = this.meter.byLabelThisMonth(nowIso);
-    const dayOfMonth = Math.max(1, new Date(nowIso).getUTCDate());
-    const daysInMonth = new Date(
-      new Date(nowIso).getUTCFullYear(),
-      new Date(nowIso).getUTCMonth() + 1,
-      0,
-    ).getUTCDate();
-    const perDay = used / dayOfMonth;
-    const rateNode = {
-      id: "rate",
-      label: `Rate: ~${perDay.toFixed(1)} units/day`,
-      description: `projected ~${(perDay * daysInMonth).toFixed(0)} by month-end at this pace`,
-      icon: new vscode.ThemeIcon("graph-line"),
-      tooltip: "Measured usage rate (this extension's local meter) — a projection of consumption, not a comparison against any budget.",
-    };
-    if (!verdict.configured) {
-      return [
-        {
-          id: "usedOnly",
-          label: `~${used.toFixed(1)} premium units used this month`,
-          description: `${monthRequests} request(s)${allIncluded ? " · all on included 0× models" : ""}`,
-          icon: new vscode.ThemeIcon("dashboard"),
-          tooltip:
-            "Local measured usage only (ADR-0003 estimate — not the GitHub bill). No budget gauge is shown because no allowance has been configured: the extension will not invent one. If you know your plan's monthly premium-request allowance (from your GitHub billing/plan page), set it via “Set Copilot Budget”.",
-          command: { command: "aiSharePoint.showUsage", title: "Open usage dashboard" },
-        },
-        {
-          id: "today",
-          label: `Today: ${this.meter.requestsToday(nowIso)} request(s)`,
-          description: `~${this.meter.premiumUnitsToday(nowIso).toFixed(1)} units`,
-          icon: new vscode.ThemeIcon("calendar"),
-        },
-        rateNode,
-        {
-          id: "budget",
-          label: "Budget: not configured",
-          description: "usage shown without a gauge",
-          icon: new vscode.ThemeIcon("shield"),
-          tooltip:
-            "Set your plan's real monthly allowance (authoritative source: GitHub billing) to enable the % gauge and soft/hard caps. Without it, nothing is blocked or warned.",
-          command: { command: "aiSharePoint.setBudget", title: "Set Copilot Budget" },
-        },
-        {
-          id: "byModel",
-          label: "By model (this month)",
-          icon: new vscode.ThemeIcon("circuit-board"),
-          description: byModel.length === 0 ? "no usage yet" : undefined,
-          children: byModel.map((m) => {
-            const multiplier = this.meter.multiplierFor(m.key);
-            return {
-              id: `model:${m.key}`,
-              label: m.key,
-              description: `${m.requests} req · ~${m.premiumUnits.toFixed(1)} units · ${multiplier}×${multiplier === 0 ? " included" : ""}`,
-              icon: new vscode.ThemeIcon("symbol-misc"),
-              tooltip: `${m.inputTokens.toLocaleString()} tokens in / ${m.outputTokens.toLocaleString()} out${m.failures ? ` · ${m.failures} failed` : ""}`,
-            };
-          }),
-        },
-        {
-          id: "byLabel",
-          label: "By task (this month)",
-          icon: new vscode.ThemeIcon("tasklist"),
-          description: byLabel.length === 0 ? "no usage yet" : undefined,
-          children: byLabel.map((l) => ({
-            id: `label:${l.key}`,
-            label: l.key,
-            description: `${l.requests} req · ~${l.premiumUnits.toFixed(1)} units${l.premiumUnits === 0 ? " (0× models)" : ""}`,
-            icon: new vscode.ThemeIcon("symbol-event"),
-          })),
-        },
-      ];
-    }
 
     return [
       {
-        id: "gauge",
-        label: `${pct}% of monthly allowance used`,
-        description: `~${used.toFixed(1)} / ${verdict.allowance} units${allIncluded ? " · all on included 0× models" : ""}`,
-        icon: stateIcon,
-        tooltip: allIncluded
-          ? `${monthRequests} request(s) this month ran on included (0×) models — they cost no premium units, so the gauge stays at 0%. Premium models (e.g. Claude Sonnet 1×, Claude Opus 10×) consume the allowance; pick one via "List Copilot Models" or the chat model picker. Estimate per ADR-0003 — not the live GitHub bill.`
-          : "Estimate from this extension's local meter and the model multiplier table (ADR-0003) — not the live GitHub bill. Click for the dashboard.",
-        command: {
-          command: "aiSharePoint.showUsage",
-          title: "Open usage dashboard",
-        },
+        id: "month",
+        label: `${monthRequests} request(s) this month`,
+        description: monthFailures > 0 ? `${monthFailures} failed` : undefined,
+        icon: new vscode.ThemeIcon("dashboard"),
+        tooltip:
+          "Requests this extension made through your Copilot subscription — a factual local count. Premium-request consumption against your plan is NOT tracked here (there is no authoritative local source); check your GitHub billing/plan page for that.",
+        command: { command: "aiSharePoint.showUsage", title: "Open activity dashboard" },
       },
       {
         id: "today",
         label: `Today: ${this.meter.requestsToday(nowIso)} request(s)`,
-        description: `~${this.meter.premiumUnitsToday(nowIso).toFixed(1)} units`,
         icon: new vscode.ThemeIcon("calendar"),
-      },
-      rateNode,
-      {
-        id: "budget",
-        label: `Budget: soft ${verdict.softPct}% · hard ${verdict.hardPct}%`,
-        description: verdict.mode,
-        icon: new vscode.ThemeIcon("shield"),
-        tooltip:
-          "Soft cap warns; hard cap blocks (with explicit override). Configure via “AI SharePoint: Set Copilot Budget”.",
-        command: {
-          command: "aiSharePoint.setBudget",
-          title: "Set Copilot Budget",
-        },
       },
       {
         id: "byModel",
         label: "By model (this month)",
         icon: new vscode.ThemeIcon("circuit-board"),
-        description: byModel.length === 0 ? "no usage yet" : undefined,
-        children: byModel.map((m) => {
-          const multiplier = this.meter.multiplierFor(m.key);
-          return {
-            id: `model:${m.key}`,
-            label: m.key,
-            description: `${m.requests} req · ~${m.premiumUnits.toFixed(1)} units · ${multiplier}×${multiplier === 0 ? " included" : ""}`,
-            icon: new vscode.ThemeIcon("symbol-misc"),
-            tooltip: `${m.inputTokens.toLocaleString()} tokens in / ${m.outputTokens.toLocaleString()} out${m.failures ? ` · ${m.failures} failed` : ""}${multiplier === 0 ? "\nIncluded (0×) model: requests here never consume the premium allowance." : ""}`,
-          };
-        }),
+        description: byModel.length === 0 ? "no requests yet" : undefined,
+        children: byModel.map((m) => ({
+          id: `model:${m.key}`,
+          label: m.key,
+          description: `${m.requests} req · ${m.inputTokens.toLocaleString()} in / ${m.outputTokens.toLocaleString()} out`,
+          icon: new vscode.ThemeIcon("symbol-misc"),
+          tooltip: m.failures ? `${m.failures} failed` : undefined,
+        })),
       },
       {
         id: "byLabel",
         label: "By task (this month)",
         icon: new vscode.ThemeIcon("tasklist"),
-        description: byLabel.length === 0 ? "no usage yet" : undefined,
+        description: byLabel.length === 0 ? "no requests yet" : undefined,
         children: byLabel.map((l) => ({
           id: `label:${l.key}`,
           label: l.key,
-          description: `${l.requests} req · ~${l.premiumUnits.toFixed(1)} units${l.premiumUnits === 0 ? " (0× models)" : ""}`,
+          description: `${l.requests} req`,
           icon: new vscode.ThemeIcon("symbol-event"),
-          tooltip:
-            l.premiumUnits === 0
-              ? "These requests ran on included (0×) models — counted, but no premium units consumed."
-              : undefined,
         })),
       },
     ];

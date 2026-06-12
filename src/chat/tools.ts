@@ -2,7 +2,6 @@ import * as vscode from "vscode";
 import { SitesStore } from "../auth/sitesStore";
 import { SiteAccess } from "../auth/siteAccess";
 import { UsageMeter } from "../copilot/meter";
-import { BudgetGuard } from "../copilot/budget";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -30,7 +29,6 @@ export function registerLanguageModelTools(
   sites: SitesStore,
   access: SiteAccess,
   meter: UsageMeter,
-  budget: BudgetGuard,
   telemetry: TelemetryService,
   errors: ErrorReportStore,
   now: () => string,
@@ -152,20 +150,15 @@ export function registerLanguageModelTools(
 
     vscode.lm.registerTool(
       "aisharepoint_copilot_usage",
-      guarded<Record<string, never>>("aisharepoint_copilot_usage", "Checking Copilot usage and budget", async () => {
+      guarded<Record<string, never>>("aisharepoint_copilot_usage", "Checking Copilot activity", async () => {
         // One clock read so all figures come from the same month/day window.
         const at = now();
-        const verdict = budget.evaluate(0, at);
         return JSON.stringify(
           {
-            estimateDisclaimer:
-              "Local estimate from this extension's meter (ADR-0003), not the live GitHub bill.",
-            monthPremiumUnits: verdict.usedUnits,
-            monthlyAllowance: verdict.allowance,
-            usedPercent: Math.round(verdict.usedPct),
-            budgetMode: verdict.mode,
-            softLimitPercent: verdict.softPct,
-            hardLimitPercent: verdict.hardPct,
+            disclaimer:
+              "Factual local counts of the requests this extension made. Premium-request consumption against the user's plan is NOT tracked (no authoritative local source) — the GitHub billing/plan page is.",
+            requestsThisMonth: meter.requestsThisMonth(at),
+            failuresThisMonth: meter.failuresThisMonth(at),
             requestsToday: meter.requestsToday(at),
             byModel: meter.byModelThisMonth(at),
           },

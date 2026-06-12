@@ -18,7 +18,7 @@ function inputs(scope: BundleInputs["scope"] = "full"): BundleInputs {
       platform: "linux-x64",
       uiKind: "desktop",
     },
-    settings: { "budget.mode": "block" },
+    settings: { "copilot.preferredModelFamily": "(economy-first default)" },
     sites: [
       {
         tenant: "anon-1a2b3c4d5e.sharepoint.com",
@@ -28,17 +28,14 @@ function inputs(scope: BundleInputs["scope"] = "full"): BundleInputs {
       },
     ],
     usage: {
-      monthPremiumUnits: 12.5,
       monthRequests: 30,
       monthFailures: 1,
       todayRequests: 3,
-      allowance: 300,
-      usedPercent: 4.2,
       byModel: [
-        { key: "gpt-test", requests: 30, premiumUnits: 12.5, inputTokens: 100, outputTokens: 200 },
+        { key: "gpt-test", requests: 30, inputTokens: 100, outputTokens: 200 },
       ],
-      byLabel: [{ key: "chat", requests: 30, premiumUnits: 12.5 }],
-      daily: [{ day: "2026-06-11", premiumUnits: 1, requests: 3 }],
+      byLabel: [{ key: "chat", requests: 30 }],
+      daily: [{ day: "2026-06-11", requests: 3, failures: 0 }],
     },
     telemetry: {
       totalsByEvent: { command: 12 },
@@ -75,7 +72,7 @@ test("markdown rendering covers every section and the notice", () => {
     "diagnostics bundle",
     "anon-1a2b3c4d5e.sharepoint.com",
     "graph.forbidden",
-    "Copilot usage",
+    "Copilot activity",
     "Generated locally",
   ]) {
     assert.ok(md.includes(expected), `missing: ${expected}`);

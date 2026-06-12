@@ -12,36 +12,28 @@ const daily = Array.from({ length: 30 }, (_, i) => {
   const wave = Math.max(0, Math.round(6 + 5 * Math.sin(i / 3) - (i % 7 === 5 ? 6 : 0)));
   return {
     day: d.toISOString().slice(0, 10),
-    premiumUnits: i === 22 ? 0 : wave,
-    requests: wave * 2,
+    requests: i === 22 ? 0 : wave * 2,
+    failures: i % 11 === 4 ? 1 : 0,
   };
 });
 
 const html = renderDashboardHtml(
   {
-    configured: true,
     generatedAt: "2026-06-11T12:00:00.000Z",
-    usedUnits: 189.5,
-    allowance: 300,
-    usedPct: 63.2,
-    softPct: 80,
-    hardPct: 100,
-    mode: "block",
     todayRequests: 7,
-    todayUnits: 4.5,
     monthRequests: 164,
     monthFailures: 3,
     daily,
     byModel: [
-      { key: "gpt-4.1", requests: 96, premiumUnits: 0, inputTokens: 182_400, outputTokens: 96_100 },
-      { key: "claude-sonnet-4.5", requests: 52, premiumUnits: 52, inputTokens: 96_800, outputTokens: 88_200 },
-      { key: "o4-mini", requests: 12, premiumUnits: 3.96, inputTokens: 9_100, outputTokens: 14_800 },
-      { key: "claude-opus-4.1", requests: 4, premiumUnits: 40, inputTokens: 18_900, outputTokens: 22_000 },
+      { key: "gpt-4.1", requests: 96, inputTokens: 182_400, outputTokens: 96_100 },
+      { key: "claude-sonnet-4.5", requests: 52, inputTokens: 96_800, outputTokens: 88_200 },
+      { key: "o4-mini", requests: 12, inputTokens: 9_100, outputTokens: 14_800 },
+      { key: "claude-opus-4.1", requests: 4, inputTokens: 18_900, outputTokens: 22_000 },
     ],
     byLabel: [
-      { key: "chat", requests: 121, premiumUnits: 61.4 },
-      { key: "askCopilot", requests: 31, premiumUnits: 24.6 },
-      { key: "tool:site_overview", requests: 12, premiumUnits: 9.9 },
+      { key: "chat", requests: 121 },
+      { key: "askCopilot", requests: 31 },
+      { key: "tool:site_overview", requests: 12 },
     ],
   },
   "SAMPLENONCE",

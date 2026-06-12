@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { ModelCostTable } from "./modelCosts";
 import { UsageMeter } from "./meter";
-import { BudgetGuard, BudgetVerdict } from "./budget";
 import { AppError } from "../core/errors";
 import { wireEnabled, emitWire, capDetail } from "../core/wireLog";
 
@@ -23,32 +22,27 @@ export interface AskOptions {
   onChunk?: (text: string) => void;
   token?: vscode.CancellationToken;
   model?: vscode.LanguageModelChat;
-  /** Set after the user explicitly confirmed exceeding the hard cap. */
-  overrideBudget?: boolean;
 }
 
 export interface AskResult {
   text: string;
   modelId: string;
-  premiumUnits: number;
   inputTokens: number;
   outputTokens: number;
-  verdict: BudgetVerdict;
 }
 
 /**
  * Wraps the VS Code Language Model API (ADR-0001 — the only ToS-compliant way
- * to consume Copilot). Enumerates entitled models, enforces budget guardrails
- * (PLAN §4), and meters every request — including failed/cancelled ones, which
- * are still billed by GitHub at send time (REVIEW C8).
+ * to consume Copilot). Enumerates entitled models and counts every request —
+ * including failed/cancelled ones, which are still billed by GitHub at send
+ * time (REVIEW C8). The published multiplier table is used ONLY to prefer
+ * cheaper models (auto-downshift); the extension does not estimate or track
+ * premium-request consumption — GitHub billing is the authoritative source.
  */
 export class CopilotService {
   private readonly costs = new ModelCostTable();
 
-  constructor(
-    private readonly meter: UsageMeter,
-    private readonly budget: BudgetGuard,
-  ) {}
+  constructor(private readonly meter: UsageMeter) {}
 
   /** Models the signed-in user is entitled to, cheapest first. */
   async listModels(): Promise<ModelInfo[]> {
@@ -103,18 +97,13 @@ export class CopilotService {
   }
 
   /**
-   * Send one metered chat request. Streams via `onChunk` and returns the full
-   * text. Budget policy runs first (may throw BudgetBlockedError); usage is
-   * recorded in a `finally` so failures and cancellations are still counted.
+   * Send one counted chat request. Streams via `onChunk` and returns the full
+   * text. Usage is recorded in a `finally` so failures and cancellations are
+   * still counted.
    */
   async ask(opts: AskOptions, nowIso: () => string): Promise<AskResult> {
     const model = opts.model ?? (await this.pickDefaultModel());
     const modelKey = model.family || model.id;
-    const verdict = this.budget.enforce(
-      this.costs.multiplierFor(modelKey),
-      nowIso(),
-      opts.overrideBudget,
-    );
 
     const messages = [vscode.LanguageModelChatMessage.User(opts.prompt)];
     let inputTokens = 0;
@@ -139,7 +128,7 @@ export class CopilotService {
     try {
       const response = await model.sendRequest(
         messages,
-        { justification: "AI SharePoint request (metered against your Copilot allowance)" },
+        { justification: "AI SharePoint request (uses your Copilot subscription)" },
         opts.token,
       );
       for await (const fragment of response.text) {
@@ -152,7 +141,7 @@ export class CopilotService {
         emitWire(
           ok ? "copilot" : "copilot",
           ok ? "←" : "✗",
-          `${model.id} — ${text.length} chars (${Date.now() - started}ms)${ok ? "" : " — failed/cancelled (still metered)"}`,
+          `${model.id} — ${text.length} chars (${Date.now() - started}ms)${ok ? "" : " — failed/cancelled (still billed by GitHub)"}`,
           text ? capDetail(text) : undefined,
         );
       }
@@ -176,10 +165,8 @@ export class CopilotService {
     return {
       text,
       modelId: model.id,
-      premiumUnits: this.costs.multiplierFor(modelKey),
       inputTokens,
       outputTokens,
-      verdict,
     };
   }
 }

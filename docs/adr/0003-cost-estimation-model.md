@@ -1,6 +1,10 @@
 # ADR-0003 — Cost visibility is a percentage-of-allowance estimate, not precise billing
 
-- Status: Accepted
+- Status: **Superseded** (2026-06-12) — the estimated premium-unit meter, monthly-allowance
+  gauge, and budget caps were removed: without an automated, authoritative source for the real
+  allowance/bill the estimates misled users. The extension now records factual local request/
+  token counts only; GitHub billing is the authoritative usage source. This ADR returns to
+  consideration if an authoritative billing API becomes available.
 - Date: 2026-06-10
 
 ## Context

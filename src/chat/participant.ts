@@ -4,7 +4,6 @@ import { SiteAccess } from "../auth/siteAccess";
 import { SiteOverview } from "../auth/sharePointClient";
 import { CopilotService } from "../copilot/copilotService";
 import { UsageMeter } from "../copilot/meter";
-import { BudgetGuard, BudgetBlockedError } from "../copilot/budget";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
@@ -53,7 +52,7 @@ const INSTRUCTIONS = [
   "Prefer SharePoint's no-code, out-of-the-box features so sites stay maintainable. Be concise.",
 ].join(" ");
 
-/** Cap on tool-calling rounds per turn (each round is a metered request). */
+/** Cap on tool-calling rounds per turn (each round is its own request). */
 const MAX_TOOL_ROUNDS = 4;
 
 interface ChatDeps {
@@ -66,7 +65,6 @@ interface ChatDeps {
   projects: ProjectsStore;
   copilot: CopilotService;
   meter: UsageMeter;
-  budget: BudgetGuard;
   telemetry: TelemetryService;
   errors: ErrorReportStore;
   log: Logger;
@@ -101,10 +99,6 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
           return await answerWithModel(deps, request, context, stream, token);
       }
     } catch (err) {
-      if (err instanceof BudgetBlockedError) {
-        renderBudgetBlocked(stream, err);
-        return { errorDetails: { message: err.userSummary ?? err.message } };
-      }
       const code = deps.errors.capture("chat", err);
       const safe = redactError(err);
       const advice = adviceFor(code);
@@ -126,7 +120,7 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
       return [
         { prompt: "What lists and pages does my site have?", label: "Explore my site" },
         { prompt: "Suggest a structure for a product-management site", label: "Plan a site" },
-        { prompt: "/usage", label: "Check Copilot usage" },
+        { prompt: "/usage", label: "Check Copilot activity" },
       ];
     },
   };
@@ -142,7 +136,7 @@ function renderHelp(stream: vscode.ChatResponseStream): void {
       "|---|---|",
       "| `/sites` | List your configured site connections |",
       "| `/site <url or name>` | Live overview of a connected site (lists, pages) |",
-      "| `/usage` | This extension's Copilot usage vs. your budget |",
+      "| `/usage` | This extension's Copilot request activity (local counts) |",
       "| `/help` | This help |",
       "",
       "Ask anything else in natural language — I can **search your reference sources too**:",
@@ -154,36 +148,32 @@ function renderHelp(stream: vscode.ChatResponseStream): void {
       "I can propose saving it as a **bookmark** — you approve before anything persists.",
       "The same tools are `#`-referenceable in Copilot **agent mode** (`#spSearchContext`, …).",
       "",
-      "> Every model request is metered against your configured allowance — watch the gauge in the status bar.",
+      "> Every model request uses your Copilot subscription — your GitHub billing page is the authoritative usage source.",
     ].join("\n"),
   );
 }
 
 function renderUsage(deps: ChatDeps, stream: vscode.ChatResponseStream): void {
   const nowIso = deps.now();
-  const verdict = deps.budget.evaluate(0, nowIso);
   const byModel = deps.meter.byModelThisMonth(nowIso).slice(0, 5);
+  const failures = deps.meter.failuresThisMonth(nowIso);
   const lines = [
-    `**Copilot usage (this extension's estimate — not the live GitHub bill):**`,
+    `**Copilot activity (this extension's local request counts):**`,
     "",
-    verdict.configured
-      ? `- This month: **~${deps.meter.premiumUnitsThisMonth(nowIso).toFixed(1)}** of ${verdict.allowance} premium units (**${verdict.usedPct.toFixed(0)}%**)`
-      : `- This month: **~${deps.meter.premiumUnitsThisMonth(nowIso).toFixed(1)}** premium units used _(no budget configured — usage only)_`,
+    `- This month: **${deps.meter.requestsThisMonth(nowIso)}** request(s)${failures > 0 ? ` (${failures} failed)` : ""}`,
     `- Today: **${deps.meter.requestsToday(nowIso)}** request(s)`,
-    verdict.configured
-      ? `- Budget: soft ${verdict.softPct}% / hard ${verdict.hardPct}% (${verdict.mode})`
-      : `- Budget: not configured (set your plan's real allowance via "Set Copilot Budget" to enable caps)`,
+    `- Premium-request consumption is **not tracked** — there is no authoritative local source; check your GitHub billing/plan page.`,
   ];
   if (byModel.length > 0) {
-    lines.push("", "| Model | Requests | Premium units |", "|---|---|---|");
+    lines.push("", "| Model | Requests | Tokens in/out |", "|---|---|---|");
     for (const m of byModel) {
-      lines.push(`| ${m.key} | ${m.requests} | ${m.premiumUnits.toFixed(1)} |`);
+      lines.push(`| ${m.key} | ${m.requests} | ${m.inputTokens.toLocaleString()}/${m.outputTokens.toLocaleString()} |`);
     }
   }
   stream.markdown(lines.join("\n"));
   stream.button({
     command: "aiSharePoint.showUsage",
-    title: "Open usage dashboard",
+    title: "Open activity dashboard",
   });
 }
 
@@ -256,24 +246,6 @@ function formatOverview(o: SiteOverview, role: string): string {
   return lines.filter((l) => l !== "").join("\n");
 }
 
-function renderBudgetBlocked(
-  stream: vscode.ChatResponseStream,
-  err: BudgetBlockedError,
-): void {
-  stream.markdown(
-    [
-      `🛑 **Copilot budget cap reached.** ~${err.verdict.usedPct.toFixed(0)}% of your monthly allowance is used; the hard cap is ${err.verdict.hardPct}%.`,
-      "",
-      "Options: raise the cap in settings, switch `budget.mode` to `warn`, or wait for the next cycle.",
-      "_The palette command “Ask Copilot” also offers a confirmed one-time override._",
-    ].join("\n"),
-  );
-  stream.button({
-    command: "aiSharePoint.openBudgetSettings",
-    title: "Adjust budget settings",
-  });
-}
-
 async function answerWithModel(
   deps: ChatDeps,
   request: vscode.ChatRequest,
@@ -283,16 +255,6 @@ async function answerWithModel(
 ): Promise<vscode.ChatResult> {
   const model = request.model ?? (await deps.copilot.pickDefaultModel());
   const modelKey = model.family || model.id;
-  const multiplier = deps.meter.multiplierFor(modelKey);
-  const nowIso = deps.now();
-
-  // Hard cap throws (caught by the handler); soft cap warns once up front.
-  const verdict = deps.budget.enforce(multiplier, nowIso);
-  if (verdict.state === "soft") {
-    stream.markdown(
-      `> ⚠️ Heads-up: ~${verdict.usedPct.toFixed(0)}% of your monthly Copilot allowance is used (soft cap ${verdict.softPct}%).\n\n`,
-    );
-  }
 
   const contextBlock = await buildSiteContext(deps, request, stream);
   const history = formatHistory(context);
@@ -342,16 +304,8 @@ async function answerWithModel(
     // best-effort
   }
 
-  let totalUnits = 0;
   let sawText = false;
   for (let round = 0; ; round++) {
-    // Every round is its own premium request — re-check the budget so a tool
-    // loop cannot blast through the hard cap mid-turn.
-    if (round > 0 && deps.budget.evaluate(multiplier, deps.now()).state === "hard" && verdict.mode === "block") {
-      stream.markdown("\n\n_Stopped: the Copilot budget hard cap was reached mid-conversation._");
-      break;
-    }
-
     // Per-round status so the user can follow a multi-step turn (pilot).
     stream.progress(
       round === 0
@@ -366,7 +320,7 @@ async function answerWithModel(
       const response = await model.sendRequest(
         messages,
         {
-          justification: "AI SharePoint chat (metered against your Copilot allowance)",
+          justification: "AI SharePoint chat (uses your Copilot subscription)",
           ...(round < MAX_TOOL_ROUNDS ? { tools } : {}),
         },
         token,
@@ -398,7 +352,6 @@ async function answerWithModel(
         "chat",
         ok,
       );
-      totalUnits += multiplier;
     }
 
     if (toolCalls.length === 0) {
@@ -454,11 +407,6 @@ async function answerWithModel(
 
   if (!sawText) {
     stream.markdown("_(The model returned no text — try rephrasing.)_");
-  }
-  if (totalUnits > 0) {
-    stream.markdown(
-      `\n\n---\n_~${totalUnits} premium unit(s) metered this turn (estimate)._`,
-    );
   }
   return { metadata: { modelId: model.id } };
 }

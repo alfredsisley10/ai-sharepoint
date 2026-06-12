@@ -4,7 +4,6 @@ import {
   emptyLedger,
   migrateLedger,
   recordInto,
-  monthUnits,
   monthRequests,
   monthFailures,
   todayRequests,
@@ -23,7 +22,6 @@ function rec(partial: Partial<UsageRecord>): UsageRecord {
     modelId: "gpt-test",
     inputTokens: 100,
     outputTokens: 50,
-    premiumUnits: 1,
     ok: true,
     ...partial,
   };
@@ -32,25 +30,26 @@ function rec(partial: Partial<UsageRecord>): UsageRecord {
 test("records aggregate into month/day/model/label slices", () => {
   const l = emptyLedger();
   recordInto(l, rec({ label: "chat" }));
-  recordInto(l, rec({ label: "chat", premiumUnits: 10, modelId: "opus" }));
+  recordInto(l, rec({ label: "chat" }));
+  recordInto(l, rec({ label: "chat", modelId: "opus" }));
   recordInto(l, rec({ at: "2026-05-30T00:00:00Z", label: "old" }));
 
-  assert.equal(monthUnits(l, NOW), 11);
-  assert.equal(monthRequests(l, NOW), 2);
-  assert.equal(todayRequests(l, NOW), 2);
+  assert.equal(monthRequests(l, NOW), 3);
+  assert.equal(todayRequests(l, NOW), 3);
   const byModel = monthByModel(l, NOW);
-  assert.equal(byModel[0].key, "opus"); // sorted by spend desc
-  assert.equal(byModel[0].premiumUnits, 10);
+  assert.equal(byModel[0].key, "gpt-test"); // sorted by request count desc
+  assert.equal(byModel[0].requests, 2);
+  assert.equal(byModel[0].inputTokens, 200);
   const byLabel = monthByLabel(l, NOW);
   assert.equal(byLabel.length, 1);
   assert.equal(byLabel[0].key, "chat");
 });
 
-test("failures count separately and still cost units", () => {
+test("failures count separately and still count as requests", () => {
   const l = emptyLedger();
-  recordInto(l, rec({ ok: false, premiumUnits: 1 }));
+  recordInto(l, rec({ ok: false }));
   assert.equal(monthFailures(l, NOW), 1);
-  assert.equal(monthUnits(l, NOW), 1);
+  assert.equal(monthRequests(l, NOW), 1);
 });
 
 test("recent tail is capped", () => {
@@ -61,17 +60,46 @@ test("recent tail is capped", () => {
   assert.equal(l.recent.length, RECENT_CAP);
 });
 
-test("v1 ledgers migrate losslessly into aggregates", () => {
+test("v1 ledgers migrate into aggregates", () => {
   const v1 = {
     records: [
-      { at: NOW, modelId: "m", inputTokens: 1, outputTokens: 2, premiumUnits: 3 },
-      { at: NOW, modelId: "m", inputTokens: 1, outputTokens: 2, premiumUnits: 3, label: "x" },
+      { at: NOW, modelId: "m", inputTokens: 1, outputTokens: 2 },
+      { at: NOW, modelId: "m", inputTokens: 1, outputTokens: 2, label: "x" },
     ],
   };
   const l = migrateLedger(v1);
-  assert.equal(l.version, 2);
-  assert.equal(monthUnits(l, NOW), 6);
+  assert.equal(l.version, 3);
   assert.equal(monthRequests(l, NOW), 2);
+});
+
+test("v2 ledgers migrate: counts/tokens survive, premium-unit estimates are dropped", () => {
+  const v2 = {
+    version: 2,
+    days: [
+      {
+        day: "2026-06-11",
+        requests: 4,
+        failures: 1,
+        inputTokens: 40,
+        outputTokens: 80,
+        premiumUnits: 12.5,
+        byModel: { "gpt-test": { requests: 4, failures: 1, inputTokens: 40, outputTokens: 80, premiumUnits: 12.5 } },
+        byLabel: { chat: { requests: 4, failures: 1, inputTokens: 40, outputTokens: 80, premiumUnits: 12.5 } },
+      },
+    ],
+    recent: [
+      { at: NOW, modelId: "gpt-test", inputTokens: 10, outputTokens: 20, premiumUnits: 1, ok: true },
+    ],
+  };
+  const l = migrateLedger(v2);
+  assert.equal(l.version, 3);
+  assert.equal(monthRequests(l, NOW), 4);
+  assert.equal(monthFailures(l, NOW), 1);
+  const byModel = monthByModel(l, NOW);
+  assert.equal(byModel[0].inputTokens, 40);
+  assert.ok(!("premiumUnits" in byModel[0]), "premium-unit estimates must not survive migration");
+  assert.equal(l.recent.length, 1);
+  assert.ok(!("premiumUnits" in l.recent[0]));
 });
 
 test("migrate tolerates garbage", () => {
@@ -83,11 +111,13 @@ test("migrate tolerates garbage", () => {
 test("dailySeries returns exactly n days ending today", () => {
   const l = emptyLedger();
   recordInto(l, rec({}));
-  recordInto(l, rec({ at: "2026-06-10T01:00:00Z", premiumUnits: 5 }));
+  recordInto(l, rec({ at: "2026-06-10T01:00:00Z" }));
+  recordInto(l, rec({ at: "2026-06-10T02:00:00Z", ok: false }));
   const series = dailySeries(l, NOW, 7);
   assert.equal(series.length, 7);
   assert.equal(series[6].day, "2026-06-11");
-  assert.equal(series[6].premiumUnits, 1);
-  assert.equal(series[5].premiumUnits, 5);
-  assert.equal(series[0].premiumUnits, 0);
+  assert.equal(series[6].requests, 1);
+  assert.equal(series[5].requests, 2);
+  assert.equal(series[5].failures, 1);
+  assert.equal(series[0].requests, 0);
 });

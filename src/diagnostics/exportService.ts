@@ -149,11 +149,6 @@ export class DiagnosticsExportService {
   private assembleInputs(scope: BundleScope): BundleInputs {
     const identity = this.installIds.get();
     const nowIso = this.now();
-    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
-    const allowance = Math.max(
-      1,
-      cfg.get<number>("copilot.monthlyPremiumRequestAllowance", 300),
-    );
     const usage = this.meter.snapshot(nowIso);
 
     return {
@@ -176,23 +171,18 @@ export class DiagnosticsExportService {
         verified: Boolean(s.lastVerifiedAt),
       })),
       usage: {
-        monthPremiumUnits: usage.monthPremiumUnits,
         monthRequests: usage.monthRequests,
         monthFailures: usage.monthFailures,
         todayRequests: usage.todayRequests,
-        allowance,
-        usedPercent: (usage.monthPremiumUnits / allowance) * 100,
         byModel: usage.byModel.map((m) => ({
           key: m.key,
           requests: m.requests,
-          premiumUnits: m.premiumUnits,
           inputTokens: m.inputTokens,
           outputTokens: m.outputTokens,
         })),
         byLabel: usage.byLabel.map((l) => ({
           key: l.key,
           requests: l.requests,
-          premiumUnits: l.premiumUnits,
         })),
         daily: usage.daily,
       },
@@ -230,15 +220,8 @@ export class DiagnosticsExportService {
     }
     const clientId = cfg.get<string>("auth.clientId", "").trim();
     return {
-      "copilot.monthlyPremiumRequestAllowance": cfg.get<number>(
-        "copilot.monthlyPremiumRequestAllowance",
-        300,
-      ),
       "copilot.preferredModelFamily":
         cfg.get<string>("copilot.preferredModelFamily", "") || "(economy-first default)",
-      "budget.mode": cfg.get<string>("budget.mode", "block"),
-      "budget.softLimitPercent": cfg.get<number>("budget.softLimitPercent", 80),
-      "budget.hardLimitPercent": cfg.get<number>("budget.hardLimitPercent", 100),
       "auth.tenantAuthority": authorityView,
       "auth.clientId":
         !clientId || clientId === GRAPH_POWERSHELL_CLIENT_ID

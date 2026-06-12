@@ -21,15 +21,12 @@ export interface BundleEnvironment {
 }
 
 export interface BundleUsage {
-  monthPremiumUnits: number;
   monthRequests: number;
   monthFailures: number;
   todayRequests: number;
-  allowance: number;
-  usedPercent: number;
-  byModel: Array<{ key: string; requests: number; premiumUnits: number; inputTokens: number; outputTokens: number }>;
-  byLabel: Array<{ key: string; requests: number; premiumUnits: number }>;
-  daily: Array<{ day: string; premiumUnits: number; requests: number }>;
+  byModel: Array<{ key: string; requests: number; inputTokens: number; outputTokens: number }>;
+  byLabel: Array<{ key: string; requests: number }>;
+  daily: Array<{ day: string; requests: number; failures: number }>;
 }
 
 export interface BundleSiteSummary {
@@ -151,27 +148,27 @@ export function bundleToMarkdown(b: DiagnosticsBundle): string {
 
   if (b.usage) {
     const u = b.usage;
-    lines.push(`## Copilot usage (this extension's estimate — ADR-0003)`);
+    lines.push(`## Copilot activity (this extension's local request counts)`);
     lines.push("");
     lines.push(
-      `**This month:** ~${u.monthPremiumUnits.toFixed(1)} premium units of ${u.allowance} (${u.usedPercent.toFixed(0)}%), ${u.monthRequests} requests, ${u.monthFailures} failed. **Today:** ${u.todayRequests} requests.`,
+      `**This month:** ${u.monthRequests} requests, ${u.monthFailures} failed. **Today:** ${u.todayRequests} requests.`,
     );
     lines.push("");
     if (u.byModel.length > 0) {
-      lines.push(`| Model | Requests | Premium units | Tokens in/out |`);
-      lines.push(`|---|---|---|---|`);
+      lines.push(`| Model | Requests | Tokens in/out |`);
+      lines.push(`|---|---|---|`);
       for (const m of u.byModel) {
         lines.push(
-          `| ${m.key} | ${m.requests} | ${m.premiumUnits.toFixed(1)} | ${m.inputTokens}/${m.outputTokens} |`,
+          `| ${m.key} | ${m.requests} | ${m.inputTokens}/${m.outputTokens} |`,
         );
       }
       lines.push("");
     }
     if (u.byLabel.length > 0) {
-      lines.push(`| Task | Requests | Premium units |`);
-      lines.push(`|---|---|---|`);
+      lines.push(`| Task | Requests |`);
+      lines.push(`|---|---|`);
       for (const l of u.byLabel) {
-        lines.push(`| ${l.key} | ${l.requests} | ${l.premiumUnits.toFixed(1)} |`);
+        lines.push(`| ${l.key} | ${l.requests} |`);
       }
       lines.push("");
     }

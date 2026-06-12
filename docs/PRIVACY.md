@@ -16,7 +16,7 @@ finds anything secret-shaped.
 |---|---|---|---|
 | Site connection descriptors | VS Code extension storage (global) | Site URL, display name, role, auth method id, tenant host, your UPN as last-signed-in account, timestamps | Remove via *Remove Site Connection* |
 | Auth tokens / MSAL cache | **OS keychain** (via VS Code SecretStorage), one entry per tenant | Access/refresh tokens issued to you | Wipe via *Sign Out* / *Remove Connection* |
-| Usage ledger | Extension storage | Per-day aggregates + a short tail of recent records: model id, token counts, premium-unit estimates, task label (e.g. `chat`), success flag. **Never prompt or response text** | *Reset Copilot Usage Meter* |
+| Activity ledger | Extension storage | Per-day aggregates + a short tail of recent records: model id, token counts, task label (e.g. `chat`), success flag. **Never prompt or response text**, and no billing estimates | *Reset Copilot Activity Counters* |
 | Feature-usage counters | Extension storage | Event names (e.g. `command`, `chat.request`) with counts per day; tiny allowlisted properties | `diagnostics.usageCapture` setting; *defaults to following VS Code's telemetry setting* even though nothing is transmitted |
 | Error reports | Extension storage | Classified code (e.g. `graph.forbidden`), **redacted** message and stack (no tokens, emails, GUIDs, IPs, hostnames, or user paths; stack frames keep file basenames only), occurrence counts | `diagnostics.errorCapture` setting; *Clear Error Reports* |
 | Anonymous install identity | Extension storage | A random UUID + a random hash salt. **Not** `machineId`, not hardware-derived | *Rotate Anonymous Install ID* |
@@ -70,6 +70,6 @@ anonymous ID severs the link between future and past bundles.
 
 - `aiSharePoint.diagnostics.usageCapture`: `followVSCode` (default) / `on` / `off`
 - `aiSharePoint.diagnostics.errorCapture`: `true` / `false`
-- Commands: *Reset Copilot Usage Meter* · *Clear Error Reports* · *Rotate Anonymous Install ID*
+- Commands: *Reset Copilot Activity Counters* · *Clear Error Reports* · *Rotate Anonymous Install ID*
   · *Sign Out of Site* · *Remove Site Connection*
 - And the strongest control of all: the export simply never runs unless you run it.

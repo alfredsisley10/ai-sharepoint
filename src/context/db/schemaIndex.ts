@@ -59,7 +59,8 @@ export interface SemanticIndex {
   indexedAt: string;
   modelId: string;
   tables: SemanticTable[];
-  /** True when budget/parsing stopped indexing before all batches ran. */
+  /** True when cancellation/parse failures stopped indexing before all
+   *  batches ran. */
   partial?: boolean;
   /** Set when "Index Database Content Types" has run over this catalog. */
   contentIndexedAt?: string;

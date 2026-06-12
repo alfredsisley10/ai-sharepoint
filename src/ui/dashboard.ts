@@ -1,13 +1,12 @@
 import * as vscode from "vscode";
 import * as crypto from "node:crypto";
 import { UsageMeter } from "../copilot/meter";
-import { BudgetGuard } from "../copilot/budget";
 import { renderDashboardHtml, DashboardData } from "./dashboardHtml";
 
 /**
- * Usage Dashboard webview panel. Singleton; re-renders live while visible
- * (meter events). Webview options are locked down: no scripts beyond the
- * nonce'd button wiring, no local resource roots, no external content.
+ * Copilot Activity dashboard webview panel. Singleton; re-renders live while
+ * visible (meter events). Webview options are locked down: no scripts beyond
+ * the nonce'd button wiring, no local resource roots, no external content.
  */
 export class UsageDashboard {
   private panel: vscode.WebviewPanel | undefined;
@@ -15,7 +14,6 @@ export class UsageDashboard {
 
   constructor(
     private readonly meter: UsageMeter,
-    private readonly budget: BudgetGuard,
     private readonly now: () => string,
   ) {}
 
@@ -27,7 +25,7 @@ export class UsageDashboard {
     }
     this.panel = vscode.window.createWebviewPanel(
       "aiSharePoint.usageDashboard",
-      "Copilot Usage — AI SharePoint",
+      "Copilot Activity — AI SharePoint",
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -46,9 +44,6 @@ export class UsageDashboard {
         switch (msg?.command) {
           case "export":
             void vscode.commands.executeCommand("aiSharePoint.exportDiagnostics");
-            break;
-          case "budget":
-            void vscode.commands.executeCommand("aiSharePoint.setBudget");
             break;
           case "reset":
             void vscode.commands.executeCommand("aiSharePoint.resetUsage");
@@ -77,26 +72,21 @@ export class UsageDashboard {
 
   private collect(): DashboardData {
     const nowIso = this.now();
-    const verdict = this.budget.evaluate(0, nowIso);
     return {
       generatedAt: nowIso,
-      configured: verdict.configured,
-      usedUnits: this.meter.premiumUnitsThisMonth(nowIso),
-      allowance: verdict.allowance,
-      usedPct: verdict.usedPct,
-      softPct: verdict.softPct,
-      hardPct: verdict.hardPct,
-      mode: verdict.mode,
       todayRequests: this.meter.requestsToday(nowIso),
-      todayUnits: this.meter.premiumUnitsToday(nowIso),
       monthRequests: this.meter.requestsThisMonth(nowIso),
       monthFailures: this.meter.failuresThisMonth(nowIso),
       daily: this.meter.dailySeries(nowIso, 30),
-      byModel: this.meter.byModelThisMonth(nowIso),
+      byModel: this.meter.byModelThisMonth(nowIso).map((m) => ({
+        key: m.key,
+        requests: m.requests,
+        inputTokens: m.inputTokens,
+        outputTokens: m.outputTokens,
+      })),
       byLabel: this.meter.byLabelThisMonth(nowIso).map((l) => ({
         key: l.key,
         requests: l.requests,
-        premiumUnits: l.premiumUnits,
       })),
     };
   }

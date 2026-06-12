@@ -39,12 +39,13 @@ export it.
   the default first-party app. Auth settings are **machine-scoped** so a malicious workspace
   cannot redirect your sign-in.
 
-### 📊 Copilot cost governance
-- Every request is metered: model, tokens, and **premium-request units** from a maintained
-  multiplier table — clearly labeled an **estimate**, never presented as the GitHub bill.
-- **Status-bar gauge** (`% of monthly allowance`) turns yellow at your soft cap and red at the
-  hard cap, which **blocks** further requests (with per-request override).
-- **Usage Dashboard** webview: 30-day chart, per-model and per-task breakdowns, budget bar.
+### 📊 Copilot activity visibility
+- Every request the extension makes is counted locally: model, tokens, success/failure —
+  **factual counts only**. Premium-request consumption against your plan is **not estimated**:
+  without an authoritative source it would mislead; your GitHub billing page is that source.
+- **Status-bar counter** shows today's request count; the **Copilot Activity** view and
+  dashboard break the month down by model and task.
+- **Activity Dashboard** webview: 30-day request chart, per-model and per-task breakdowns.
 - Economy-first model policy: the cheapest entitled model is used unless you pick another.
 
 ### 🩺 Privacy-first diagnostics (built for secure environments)
@@ -83,7 +84,6 @@ logs, error reports, the user guide, and the privacy notice.
 3. Run **AI SharePoint: Connect SharePoint Site** (or use the SharePoint Sites view) — pick a role
    (*managed* or read-only *reference*) and a sign-in method.
 4. Open Chat and ask `@sharepoint /site` — or just ask a question about your site.
-5. Run **AI SharePoint: Set Copilot Budget** to fit the gauge to your plan.
 
 The in-product **walkthrough** (`AI SharePoint: Open Getting Started Walkthrough`) covers all of
 this interactively.
