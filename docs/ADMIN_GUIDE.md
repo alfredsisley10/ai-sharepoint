@@ -117,6 +117,10 @@ If your tenant requires admin consent for it, grant consent in Entra admin cente
      applies — messages send as the user.
    - **Power BI** (ADR-0027): *Power BI Service* API → Delegated → `Workspace.Read.All` +
      `Dataset.Read.All` (read-only; the user's Power BI licenses/roles/RLS govern access).
+     **No-consent alternative:** users can instead sign in through the **Azure CLI**
+     (`az login`) — a Microsoft first-party app already authorized for the Power BI service —
+     so no app registration or per-app approval is needed for Power BI reads; access remains
+     delegated and license/RLS-governed. Pasted short-lived tokens are the last resort.
 4. Distribute settings (machine scope — see §5):
    - `aiSharePoint.auth.clientId`: your app (client) ID.
    - `aiSharePoint.auth.tenantAuthority`: `https://login.microsoftonline.com/<your-tenant-id>`

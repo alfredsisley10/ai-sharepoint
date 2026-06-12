@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
   ContextSource,
   ContextSearchHit,
@@ -8,23 +9,92 @@ import { AppError } from "../../core/errors";
 import { wireEnabled, emitWire, safeJson, safeUrl } from "../../core/wireLog";
 
 /**
- * Power BI (cloud) connector (ADR-0027): list workspaces/datasets and run
- * read-only DAX queries (executeQueries) for analysis. Authentication is
- * the SAME Microsoft 365 sign-in used for SharePoint — an AAD token for the
- * Power BI service audience acquired through the existing MSAL provider
- * (method "aad-sso"; no separate credential to manage).
+ * Power BI (cloud) connector (ADR-0027, amended): list workspaces/datasets
+ * and run read-only DAX queries (executeQueries) for analysis. Three sign-in
+ * paths, all delegated (the user's own Power BI access, never more):
+ *  - "az-sso": a live token from the workstation's Azure CLI session
+ *    (`az login`). The Azure CLI is a Microsoft first-party app already
+ *    authorized for the Power BI service, so NO per-app admin approval is
+ *    involved — the recommended path when the tenant gates the shared
+ *    sign-in app ("Graph Command Line Tools needs admin approval", pilot).
+ *    Nothing is stored; every call asks the CLI (gcloud-SSO precedent).
+ *  - "aad-sso": the SAME Microsoft 365 sign-in used for SharePoint — an AAD
+ *    token for the Power BI audience through the existing MSAL provider.
+ *  - "pat": a pasted access token (~1 h lifetime).
  */
 
 export const POWERBI_BASE = "https://api.powerbi.com/v1.0/myorg";
 
+/** Resource audience for Power BI delegated tokens. */
+export const POWERBI_RESOURCE = "https://analysis.windows.net/powerbi/api";
+
 /** Delegated Power BI scopes (resource: analysis.windows.net/powerbi/api). */
 export const POWERBI_SCOPES = [
-  "https://analysis.windows.net/powerbi/api/Workspace.Read.All",
-  "https://analysis.windows.net/powerbi/api/Dataset.Read.All",
+  `${POWERBI_RESOURCE}/Workspace.Read.All`,
+  `${POWERBI_RESOURCE}/Dataset.Read.All`,
 ];
 
 /** Token access is injected: the MSAL provider lives in the extension layer. */
 export type PowerBiTokenGetter = (interactive: boolean) => Promise<string>;
+
+/** How to invoke the Azure CLI. On Windows az is `az.cmd` — Node's
+ *  batch-file hardening (CVE-2024-27980) requires shell:true for .cmd shims
+ *  (same fix as gcloud in vertexSearch). Only fixed, hard-coded argument
+ *  lists are ever passed, so the shell never sees untrusted input. */
+export function azInvocation(platform: NodeJS.Platform): { bin: string; shell: boolean } {
+  return platform === "win32" ? { bin: "az.cmd", shell: true } : { bin: "az", shell: false };
+}
+
+/** Pure parser for `az account get-access-token --output json`. */
+export function parseAzTokenOutput(stdout: string): string {
+  let token = "";
+  try {
+    token = String((JSON.parse(stdout) as { accessToken?: unknown }).accessToken ?? "");
+  } catch {
+    // non-JSON → handled below
+  }
+  if (!token) {
+    throw new AppError(
+      "The Azure CLI returned no access token.",
+      "auth.failed",
+      "Run `az login` (your corporate Microsoft SSO) and retry.",
+    );
+  }
+  return token;
+}
+
+/** Power BI token from the workstation's existing `az login` session. */
+export function getAzPowerBiToken(timeoutMs = 20_000): Promise<string> {
+  const { bin, shell } = azInvocation(process.platform);
+  return new Promise((resolve, reject) => {
+    execFile(
+      bin,
+      ["account", "get-access-token", "--resource", POWERBI_RESOURCE, "--output", "json"],
+      { timeout: timeoutMs, windowsHide: true, shell },
+      (err, stdout, stderr) => {
+        if (err) {
+          const notFound =
+            (err as NodeJS.ErrnoException).code === "ENOENT" || /not recognized|not found/i.test(stderr ?? "");
+          reject(
+            new AppError(
+              `Could not obtain a Power BI token from the Azure CLI: ${stderr?.trim() || err.message}`,
+              notFound ? "config" : "auth.failed",
+              notFound
+                ? "The Azure CLI (az) was not found on PATH — install it (aka.ms/azure-cli) or pick a different Power BI sign-in method."
+                : "Sign in once with `az login` (your corporate Microsoft SSO), then retry. Tokens are never stored — each call asks the CLI.",
+            ),
+          );
+          return;
+        }
+        try {
+          resolve(parseAzTokenOutput(stdout));
+        } catch (parseErr) {
+          reject(parseErr);
+        }
+      },
+    );
+  });
+}
 
 export interface PowerBiSpec {
   /** Dataset id (GUID) or name (resolved against the visible datasets). */
@@ -204,10 +274,11 @@ async function resolveDataset(
 export async function verifyPowerBi(
   getToken: PowerBiTokenGetter,
   caps: ReadCaps,
+  accountLabel = "Microsoft 365 (Power BI)",
 ): Promise<{ account: string }> {
   const token = await getToken(true);
   await pbiFetch<{ value?: PbiGroup[] }>("/groups?$top=1", token, caps.timeoutMs);
-  return { account: "Microsoft 365 (Power BI)" };
+  return { account: accountLabel };
 }
 
 /** Run a DAX query against a dataset (executeQueries — read-only API). */

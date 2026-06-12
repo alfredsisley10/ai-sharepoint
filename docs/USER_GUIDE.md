@@ -443,9 +443,19 @@ Search your logs and metrics **read-only** from chat:
 Analyze Power BI data without leaving chat — **read-only, with your existing sign-in**:
 
 - **Add** (Reference Sources → `+` → *Power BI (cloud)*): confirm the portal you use
-  (`https://app.powerbi.com`), pick your Microsoft 365 sign-in, and the wizard **lists every
-  dataset you can access** — pick a default for bare-DAX questions or "no default". Nothing to
-  type, **no new credential**, no GUIDs to know.
+  (`https://app.powerbi.com`), pick a sign-in, and the wizard **lists every dataset you can
+  access** — pick a default for bare-DAX questions or "no default". No GUIDs to know.
+- **Sign-in options** (all delegated — your own Power BI access, never more):
+  - **Azure CLI (az) SSO — recommended**: uses your existing `az login` session. The Azure CLI
+    is a Microsoft first-party app already authorized for the Power BI service, so it needs
+    **no tenant admin approval** — the path to use when the Microsoft 365 option ends in
+    *"Graph Command Line Tools needs admin approval"*. Tokens are never stored; every call
+    asks the CLI.
+  - **Microsoft 365 sign-in** (shared with SharePoint): zero extra setup where your tenant
+    permits the shared sign-in app to request Power BI scopes; some tenants require admin
+    approval for it.
+  - **Paste an access token**: for machines without the Azure CLI (~1 h lifetime; re-paste via
+    *Test Context Source*).
 - **Browse & Bookmark** lists every dataset you can see (My workspace + group workspaces),
   each with a starter `EVALUATE INFO.TABLES()` bookmark that reveals the model's tables.
 - **Analyze in chat**: *"@sharepoint run EVALUATE TOPN(20, 'Sales') against the Sales Model

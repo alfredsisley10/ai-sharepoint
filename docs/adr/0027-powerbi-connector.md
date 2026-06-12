@@ -1,8 +1,21 @@
 # ADR-0027: Power BI (cloud) connector
 
-- **Status:** Accepted (2026-06-11)
+- **Status:** Accepted (2026-06-11); amended 2026-06-12 (Azure CLI SSO)
 - **Context:** Pilots want to "connect and analyze data from Power BI"
   alongside the other reference sources.
+- **Amendment (2026-06-12):** requesting Power BI scopes through the
+  shared Microsoft 365 sign-in app ("Microsoft Graph Command Line
+  Tools") hit tenant admin-consent walls pilots cannot clear. New
+  default sign-in: **`az-sso`** — a live token from the workstation's
+  Azure CLI session (`az account get-access-token --resource
+  https://analysis.windows.net/powerbi/api`). The Azure CLI is a
+  Microsoft first-party app already authorized for the Power BI
+  service, so no per-app approval is involved; the gcloud-SSO pattern
+  applies (marker-only keychain entry, token fetched per call, never
+  stored; `shell: true` on Windows for the `.cmd` shim per
+  CVE-2024-27980). A pasted ~1 h access token (`pat`) is the fallback
+  for CLI-less machines; `aad-sso` remains for tenants where the shared
+  app is approved.
 
 ## Decision
 

@@ -157,3 +157,27 @@ test("401 maps to auth.failed with license/consent advice", async () => {
     /rejected the sign-in/,
   );
 });
+
+test("azInvocation uses shell:true for the Windows .cmd shim; parseAzTokenOutput extracts the token", async () => {
+  const { azInvocation, parseAzTokenOutput, POWERBI_RESOURCE } = await import(
+    "../src/context/adapters/powerbi"
+  );
+  // Same CVE-2024-27980 posture as gcloud: .cmd shims need a shell on Windows.
+  assert.deepEqual(azInvocation("win32"), { bin: "az.cmd", shell: true });
+  assert.deepEqual(azInvocation("linux"), { bin: "az", shell: false });
+  assert.equal(
+    parseAzTokenOutput(JSON.stringify({ accessToken: "tok123", expiresOn: "2026-06-12 13:00:00" })),
+    "tok123",
+  );
+  assert.throws(() => parseAzTokenOutput("ERROR: Please run 'az login'"), /no access token/);
+  assert.throws(() => parseAzTokenOutput("{}"), /no access token/);
+  assert.equal(POWERBI_RESOURCE, "https://analysis.windows.net/powerbi/api");
+});
+
+test("verify reports the sign-in path it actually used (az / token / Microsoft 365)", async () => {
+  const azLabelled = await withFetch(
+    () => ({ body: { value: [] } }),
+    () => verifyPowerBi(token, DEFAULT_CAPS, "Azure CLI SSO (Power BI)"),
+  );
+  assert.equal(azLabelled.account, "Azure CLI SSO (Power BI)");
+});

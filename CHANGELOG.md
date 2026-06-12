@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.21.0 — 2026-06-12
+
+### Added — Power BI without admin consent: Azure CLI SSO (+ pasted-token fallback) (pilot)
+- The Microsoft 365 sign-in path requests Power BI scopes through the shared first-party app
+  (**"Microsoft Graph Command Line Tools"**), and tenants that gate it demand an admin approval
+  pilots can't get. New **recommended** sign-in: **Azure CLI (az) SSO** — each call takes a live
+  token from your existing `az login` session (`az account get-access-token --resource
+  https://analysis.windows.net/powerbi/api`). The Azure CLI is a Microsoft first-party app
+  **already authorized for the Power BI service**, so **no app registration and no per-app
+  admin approval** are needed; access stays fully delegated (your licenses, workspace roles,
+  and RLS govern everything). Like the gcloud path on Vertex: tokens are never stored — the
+  keychain entry is only a marker (Windows `.cmd` shim spawned with a shell per
+  CVE-2024-27980; a missing CLI says so instead of failing cryptically).
+- **Pasted access token** is now also accepted for machines without the CLI (~1 h lifetime,
+  re-paste via *Test Context Source*). The Microsoft 365 path remains for tenants where the
+  shared app is approved. *Test Context Source* reports which sign-in path verified
+  (Azure CLI SSO / access token / Microsoft 365).
+
 ## 0.20.2 — 2026-06-12
 
 ### Fixed — Vertex AI Search: Windows gcloud crash + the corporate search-page URL (pilot)

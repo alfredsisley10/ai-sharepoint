@@ -28,6 +28,7 @@ import {
   verifyPowerBi,
   searchPowerBi,
   browsePowerBi,
+  getAzPowerBiToken,
   PowerBiTokenGetter,
   POWERBI_SCOPES,
 } from "./adapters/powerbi";
@@ -68,6 +69,14 @@ export class ContextService {
   ) {}
 
   private powerBiTokens(credential: ContextCredential): PowerBiTokenGetter {
+    // az-sso: live token from the user's `az login` session — the
+    // no-admin-consent path (no MSAL broker involved). pat: pasted token.
+    if (credential.method === "az-sso") {
+      return () => getAzPowerBiToken();
+    }
+    if (credential.method === "pat") {
+      return () => Promise.resolve(credential.secret);
+    }
     const broker = this.aadBroker;
     if (!broker) {
       throw new AppError(
@@ -76,6 +85,14 @@ export class ContextService {
       );
     }
     return (interactive) => broker(credential, interactive, POWERBI_SCOPES);
+  }
+
+  private static powerBiAccountLabel(credential: ContextCredential): string {
+    return credential.method === "az-sso"
+      ? "Azure CLI SSO (Power BI)"
+      : credential.method === "pat"
+        ? "access token (Power BI)"
+        : "Microsoft 365 (Power BI)";
   }
 
   /** snow-oauth credentials: refresh when near expiry (persisting the new
@@ -190,7 +207,11 @@ export class ContextService {
         case "vertexai":
           return verifyVertex(source, credential, caps);
         case "powerbi":
-          return verifyPowerBi(this.powerBiTokens(credential), caps);
+          return verifyPowerBi(
+            this.powerBiTokens(credential),
+            caps,
+            ContextService.powerBiAccountLabel(credential),
+          );
         case "servicenow":
           return this.snowCredential(source, credential).then((c) => verifyServiceNow(source, c, caps));
         case "splunk":

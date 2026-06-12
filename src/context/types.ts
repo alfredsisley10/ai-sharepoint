@@ -22,6 +22,8 @@ export type ContextDeployment = "cloud" | "datacenter";
  *  ldap-simple = LDAP simple bind; ntlm = Windows Authentication (MSSQL);
  *  gcloud-sso = live token from the gcloud CLI's Google SSO session
  *  (nothing persisted — the keychain entry is a marker);
+ *  az-sso = live token from the Azure CLI's `az login` session (same
+ *  marker-only pattern — the no-admin-consent Power BI path);
  *  aad-sso = Microsoft 365 sign-in reused from a connected site (the
  *  keychain entry stores only the provider/cache handles, no secret). */
 export type ContextAuthMethod =
@@ -30,6 +32,7 @@ export type ContextAuthMethod =
   | "ldap-simple"
   | "ntlm"
   | "gcloud-sso"
+  | "az-sso"
   | "aad-sso"
   | "snow-oauth"
   | "splunk-session"

@@ -83,7 +83,7 @@ import {
 } from "./context/projectsStore";
 import { ProjectsTreeProvider } from "./ui/projectsView";
 import { registerProjectTools } from "./chat/projectTools";
-import { enumeratePowerBiDatasets, POWERBI_SCOPES } from "./context/adapters/powerbi";
+import { enumeratePowerBiDatasets, getAzPowerBiToken, POWERBI_SCOPES } from "./context/adapters/powerbi";
 import { listSnowTables } from "./context/adapters/servicenow";
 import {
   buildSnowAuthUrl,
@@ -1300,13 +1300,52 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // --- Reference context sources (Track A — PLAN §9) -------------------------
-  /** Power BI credential = pointer to a connected site's Microsoft 365
-   *  sign-in (no secret of its own — ADR-0027). */
+  /** Power BI sign-in (ADR-0027 amendment). Azure CLI SSO leads: the shared
+   *  Microsoft 365 sign-in app ("Microsoft Graph Command Line Tools") needs
+   *  tenant admin approval for Power BI scopes, which pilots can't get — the
+   *  Azure CLI is a Microsoft first-party app already authorized for the
+   *  Power BI service, so `az login` works with no per-app approval. */
   const pickAadCredential = async (): Promise<ContextCredential | undefined> => {
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(terminal) Azure CLI (az) SSO — recommended",
+          description: "uses your existing `az login` session; no admin app-approval needed; tokens never stored",
+          value: "az" as const,
+        },
+        {
+          label: "$(account) Microsoft 365 sign-in (shared with SharePoint)",
+          description: "may require tenant admin approval of the sign-in app for Power BI scopes",
+          value: "aad" as const,
+        },
+        {
+          label: "$(key) Paste an access token",
+          description: "for machines without the Azure CLI — ~1 h lifetime",
+          value: "pat" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Power BI sign-in" },
+    );
+    if (!mode) return undefined;
+    if (mode.value === "az") {
+      // Marker only — nothing secret is stored; every call asks the CLI.
+      return { method: "az-sso", secret: "az-cli-session" };
+    }
+    if (mode.value === "pat") {
+      const token = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        password: true,
+        title: "Power BI access token",
+        prompt:
+          "From `az account get-access-token --resource https://analysis.windows.net/powerbi/api` on a machine where you can sign in, or your SSO portal. Stored only in your OS keychain; expires after ~1 h (re-paste via Test Context Source).",
+      });
+      if (!token?.trim()) return undefined;
+      return { method: "pat", secret: token.trim() };
+    }
     const all = sites.list();
     if (all.length === 0) {
       const add = await vscode.window.showInformationMessage(
-        "Power BI uses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
+        "This option reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it (or pick the Azure CLI option instead).",
         "Connect Site",
       );
       if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
@@ -1331,6 +1370,17 @@ export function activate(context: vscode.ExtensionContext): void {
     };
   };
 
+  /** Power BI token getter for a credential of any of the three methods —
+   *  the wizard-side mirror of ContextService's routing. */
+  const pbiTokenGetter =
+    (cred: ContextCredential) =>
+    (interactive: boolean): Promise<string> =>
+      cred.method === "az-sso"
+        ? getAzPowerBiToken()
+        : cred.method === "pat"
+          ? Promise.resolve(cred.secret)
+          : aadBroker(cred, interactive, POWERBI_SCOPES);
+
   register("aiSharePoint.addContextSource", async () => {
     const typePick = await vscode.window.showQuickPick(
       [
@@ -1346,7 +1396,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
         { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
         { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
-        { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
+        { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Azure CLI or Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
         { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
         { label: "$(pulse) Splunk", description: "read-only SPL searches (time-bounded)", value: "splunk" as ContextSourceType },
       ],
@@ -1670,7 +1720,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ignoreFocusOut: true,
         title: "Power BI — portal URL (just confirm)",
         value: "https://app.powerbi.com",
-        prompt: "The connector talks to the Power BI API with your Microsoft 365 sign-in; this is only a confirmation of which Power BI you use.",
+        prompt: "The connector talks to the Power BI API with the sign-in you pick next; this is only a confirmation of which Power BI you use.",
         validateInput: (v) => {
           try {
             return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
@@ -1687,7 +1737,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         const datasets = await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: "Listing the Power BI datasets you can access…" },
-          () => enumeratePowerBiDatasets((i) => aadBroker(cred, i, POWERBI_SCOPES), contextService.caps()),
+          () => enumeratePowerBiDatasets(pbiTokenGetter(cred), contextService.caps()),
         );
         if (datasets.length > 0) {
           const pick = await vscode.window.showQuickPick(
