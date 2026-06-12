@@ -161,3 +161,16 @@ export async function refreshSnowTokens(
   if (!next.refreshToken && tokens.refreshToken) next.refreshToken = tokens.refreshToken;
   return next;
 }
+
+/** Normalize a pasted ServiceNow cookie string: drop a leading "Cookie:"
+ *  header name and surrounding whitespace. The browser session's cookies
+ *  (JSESSIONID, glide_*, BIGipServer affinity) are replayed verbatim. */
+export function cleanCookieString(raw: string): string {
+  return raw.trim().replace(/^cookie:\s*/i, "").trim();
+}
+
+export function cookieStringIssue(raw: string): string | undefined {
+  const c = cleanCookieString(raw);
+  if (!c.includes("=")) return "That doesn't look like a cookie string (expected name=value pairs).";
+  return undefined;
+}

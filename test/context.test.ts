@@ -8,7 +8,7 @@ import {
   FailureState,
 } from "../src/context/authFailures";
 import { TtlCache } from "../src/context/cache";
-import { authHeader, htmlToText } from "../src/context/http";
+import { authHeader, htmlToText, fetchJson } from "../src/context/http";
 import {
   searchConfluence,
   listConfluenceSpaces,
@@ -355,4 +355,18 @@ test("catalog expiry: fresh within TTL, expired after; age renders humanely", ()
   assert.equal(catalogAge(built, "2026-06-11T02:00:00.000Z"), "2 h ago");
   assert.equal(catalogAge(built, "2026-06-14T00:00:00.000Z"), "3 d ago");
   assert.equal(catalogAge(built, "2026-06-11T00:10:00.000Z"), "10 min ago");
+});
+
+
+test("snow-session credentials authenticate by Cookie header, never Authorization", async () => {
+  let headers: Record<string, string> = {};
+  await withFetch(
+    (_url, init) => {
+      headers = (init?.headers as Record<string, string>) ?? {};
+      return { body: { result: [] } };
+    },
+    () => fetchJson("https://corp.service-now.com/api/now/table/incident", { method: "snow-session", secret: "JSESSIONID=abc; glide=1" }, 5_000),
+  );
+  assert.equal(headers["Cookie"], "JSESSIONID=abc; glide=1");
+  assert.equal(headers["Authorization"], undefined);
 });

@@ -127,7 +127,7 @@ export interface ParsedImport {
 }
 
 const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai", "powerbi", "servicenow", "splunk"]);
-const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple", "ntlm", "gcloud-sso", "aad-sso", "snow-oauth", "splunk-session"]);
+const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple", "ntlm", "gcloud-sso", "aad-sso", "snow-oauth", "splunk-session", "snow-session"]);
 const BOOKMARK_KINDS = new Set(["query", "item", "container"]);
 
 /** Parse + validate an export file; ids are regenerated via `newId`. */

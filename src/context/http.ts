@@ -13,6 +13,17 @@ export function authHeader(credential: ContextCredential): string {
   return `Basic ${Buffer.from(`${user}:${credential.secret}`).toString("base64")}`;
 }
 
+/** Build the auth header(s) for a credential. Cookie-session credentials
+ *  (ServiceNow browser SSO — `snow-session`) authenticate the REST API by
+ *  replaying the browser's session **cookies** for read requests, so they
+ *  send a `Cookie` header and no `Authorization`. */
+export function authHeaders(credential: ContextCredential): Record<string, string> {
+  if (credential.method === "snow-session") {
+    return { Cookie: credential.secret };
+  }
+  return { Authorization: authHeader(credential) };
+}
+
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export async function fetchJson<T>(
@@ -28,7 +39,7 @@ export async function fetchJson<T>(
       "→",
       `GET ${safeUrl(url)}`,
       safeHeaders({
-        Authorization: authHeader(credential),
+        ...authHeaders(credential),
         Accept: "application/json",
         ...extraHeaders,
       }),
@@ -38,7 +49,7 @@ export async function fetchJson<T>(
   try {
     res = await fetch(url, {
       headers: {
-        Authorization: authHeader(credential),
+        ...authHeaders(credential),
         Accept: "application/json",
         ...extraHeaders,
       },

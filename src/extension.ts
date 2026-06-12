@@ -82,6 +82,8 @@ import { listSnowTables } from "./context/adapters/servicenow";
 import {
   buildSnowAuthUrl,
   exchangeSnowCode,
+  cleanCookieString,
+  cookieStringIssue,
   SNOW_LOOPBACK_PORT,
 } from "./context/adapters/servicenowAuth";
 import { deriveSplunkApiCandidates, verifySplunk } from "./context/adapters/splunk";
@@ -296,12 +298,25 @@ export function activate(context: vscode.ExtensionContext): void {
   const outbox = new OutboxStore(context.globalState);
   const commsProvider = new CommsTreeProvider(outbox);
   const commsView = tryCreateTreeView("aiSharePoint.commsView", commsProvider);
+  // Setting .badge/.description on a view whose manifest entry is still
+  // mid-refresh after an in-place VSIX upgrade throws "No view is registered
+  // with id" even when createTreeView returned an object — swallow it; the
+  // view self-heals on reload (the tryCreateTreeView toast already advised it).
+  const safeViewOp = (fn: () => void): void => {
+    try {
+      fn();
+    } catch (err) {
+      log.warn(`Deferred view update skipped (pending reload?): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   const syncCommsBadge = () => {
     if (!commsView) return;
-    commsView.badge =
-      outbox.count() > 0
-        ? { value: outbox.count(), tooltip: `${outbox.count()} draft(s) awaiting your approval` }
-        : undefined;
+    safeViewOp(() => {
+      commsView.badge =
+        outbox.count() > 0
+          ? { value: outbox.count(), tooltip: `${outbox.count()} draft(s) awaiting your approval` }
+          : undefined;
+    });
   };
   syncCommsBadge();
   context.subscriptions.push(
@@ -322,16 +337,30 @@ export function activate(context: vscode.ExtensionContext): void {
       "aiSharePoint.hasSites",
       sites.list().length > 0,
     );
-    if (supportView) supportView.badge =
-      errors.count() > 0
-        ? { value: errors.count(), tooltip: `${errors.count()} error report(s)` }
-        : undefined;
+    if (supportView)
+      safeViewOp(() => {
+        supportView.badge =
+          errors.count() > 0
+            ? { value: errors.count(), tooltip: `${errors.count()} error report(s)` }
+            : undefined;
+      });
   };
   syncContext();
   context.subscriptions.push(
     sites.onDidChange(syncContext),
     errors.onDidChange(syncContext),
   );
+
+  // Reflect the active project in the Reference Sources view header.
+  const syncProjectBadge = () => {
+    if (!sourcesView) return;
+    safeViewOp(() => {
+      const active = projects.active();
+      sourcesView.description = active ? `Project: ${active.name}` : undefined;
+    });
+  };
+  syncProjectBadge();
+  context.subscriptions.push(projects.onDidChange(syncProjectBadge));
 
   // --- Copilot Chat presence/sign-in detection -----------------------------
   // Drives walkthrough auto-completion (onContext) and the Usage view's
@@ -3622,16 +3651,23 @@ async function promptContextCredential(
         ...(baseUrl
           ? [
               {
-                label: "$(globe) Browser sign-in (SSO — recommended)",
-                description: snowClientId
-                  ? "opens your browser; your existing ServiceNow session does the authenticating"
-                  : "requires aiSharePoint.servicenow.oauthClientId (one-time admin setup)",
+                label: "$(globe) Browser session (SSO — recommended, no admin setup)",
+                description: "sign in to ServiceNow in your browser, then paste your session cookies",
+                value: "session" as const,
+              },
+            ]
+          : []),
+        ...(baseUrl && snowClientId
+          ? [
+              {
+                label: "$(key) Browser OAuth sign-in",
+                description: "needs an admin-created OAuth client (aiSharePoint.servicenow.oauthClientId)",
                 value: "browser" as const,
               },
             ]
           : []),
         {
-          label: "$(key) Basic — integration user + password",
+          label: "$(account) Basic — integration user + password",
           description: "a least-privilege read-only service account is recommended",
           value: "basic" as const,
         },
@@ -3644,6 +3680,35 @@ async function promptContextCredential(
       { ignoreFocusOut: true, title: "ServiceNow sign-in" },
     );
     if (!mode) return undefined;
+    if (mode.value === "session") {
+      const origin = (() => {
+        try {
+          return new URL(baseUrl!).origin;
+        } catch {
+          return baseUrl!;
+        }
+      })();
+      const open = await vscode.window.showInformationMessage(
+        `Sign in to ServiceNow (${origin}) with your SSO in the browser, then return here to capture the session.`,
+        "Open ServiceNow",
+        "I'm already signed in",
+      );
+      if (!open) return undefined;
+      if (open === "Open ServiceNow") {
+        await vscode.env.openExternal(vscode.Uri.parse(origin));
+      }
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "ServiceNow session cookies (from your signed-in browser)",
+        password: true,
+        placeHolder: "JSESSIONID=…; glide_user_route=…; BIGipServer…=…",
+        prompt:
+          "In the tab where you're signed in to ServiceNow, open DevTools → Application → Cookies (or copy the whole Cookie request header from the Network tab) and paste the cookie string here. Read-only access only. Stored solely in your OS keychain, verified once (lockout-safe). It expires when your ServiceNow session does — re-capture via Test Context Source.",
+        validateInput: (v) => cookieStringIssue(v),
+      });
+      if (!secret) return undefined;
+      return { method: "snow-session", secret: cleanCookieString(secret) };
+    }
     if (mode.value === "browser") {
       if (!snowClientId) {
         void vscode.window.showWarningMessage(

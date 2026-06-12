@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.16.0 — 2026-06-12
+
+### Added — ServiceNow browser-session sign-in (no admin OAuth client) (pilot)
+- The previous browser sign-in needed an admin-created OAuth client (`servicenow.oauthClientId`)
+  that pilots can't get. New **recommended** option **Browser session** needs **no admin
+  setup**: sign in to ServiceNow with your SSO in the browser, then paste your session
+  **cookies** (`JSESSIONID`, `glide_*`, the `BIGipServer*` load-balancer affinity cookie). The
+  read-only Table API honors an active browser session via cookies for GET requests, so the
+  extension replays them as a `Cookie` header — your own browser session, nothing issued. Stored
+  only in the OS keychain, verified once (lockout-safe); it expires with your ServiceNow session
+  and is re-captured the same way via *Test Context Source*. The OAuth-client path remains for
+  instances that have one.
+
+### Fixed — "No view is registered with id" after in-place updates
+- Some VS Code versions return a live tree-view object for a view whose manifest entry is still
+  refreshing right after a VSIX upgrade, then throw when its **badge/description** is set —
+  surfacing the raw error. Those post-creation view updates are now swallowed (the view
+  self-heals on reload; the existing "reload to finish updating" toast still guides you). Also
+  wires the active-**project** name into the Reference Sources view header (the 0.12.0 badge
+  whose edit had silently not applied).
+
 ## 0.15.0 — 2026-06-12
 
 ### Added — Splunk browser-SSO sign-in (no token, no password) (pilot)

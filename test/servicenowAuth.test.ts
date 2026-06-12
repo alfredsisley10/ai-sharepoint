@@ -39,3 +39,11 @@ test("token responses parse with expiry; stored secrets round-trip; expiry has a
   assert.throws(() => parseSnowTokenResponse({}, "cid", undefined, now), /no access token/);
   assert.throws(() => snowTokensFromSecret("{}"), /unreadable/);
 });
+
+test("cleanCookieString strips a leading Cookie: header; cookieStringIssue validates pairs", async () => {
+  const { cleanCookieString, cookieStringIssue } = await import("../src/context/adapters/servicenowAuth");
+  assert.equal(cleanCookieString("  Cookie: JSESSIONID=abc; glide=1 "), "JSESSIONID=abc; glide=1");
+  assert.equal(cleanCookieString("JSESSIONID=abc"), "JSESSIONID=abc");
+  assert.equal(cookieStringIssue("JSESSIONID=abc; glide_user_route=g"), undefined);
+  assert.match(cookieStringIssue("not-a-cookie") ?? "", /cookie string/);
+});

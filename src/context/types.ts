@@ -32,7 +32,8 @@ export type ContextAuthMethod =
   | "gcloud-sso"
   | "aad-sso"
   | "snow-oauth"
-  | "splunk-session";
+  | "splunk-session"
+  | "snow-session";
 
 export interface ContextSource {
   /** Stable random id; also keys the keychain credential entry. */
