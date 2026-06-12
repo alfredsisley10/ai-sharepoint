@@ -460,16 +460,21 @@ Analyze Power BI data without leaving chat — **read-only, with your existing s
   (`https://app.powerbi.com`), pick a sign-in, and the wizard **lists every dataset you can
   access** — pick a default for bare-DAX questions or "no default". No GUIDs to know.
 - **Sign-in options** (all delegated — your own Power BI access, never more):
-  - **Azure CLI (az) SSO — recommended**: uses your existing `az login` session. The Azure CLI
-    is a Microsoft first-party app already authorized for the Power BI service, so it needs
-    **no tenant admin approval** — the path to use when the Microsoft 365 option ends in
-    *"Graph Command Line Tools needs admin approval"*. Tokens are never stored; every call
-    asks the CLI.
+  - **Microsoft sign-in — nothing to install (recommended)**: a normal browser or device-code
+    sign-in that authenticates **as the Azure CLI app** (a Microsoft first-party app already
+    authorized for the Power BI service), so it needs **no tenant admin approval, no app
+    registration, and no CLI on the machine** — the path for standard users when the
+    Microsoft 365 option ends in *"… needs admin approval"*. Sign in once; refresh happens
+    silently (the sign-in appears as "Microsoft Azure CLI" in your sign-in log).
+  - **Azure CLI (az) session**: same consent posture, using your existing `az login`; tokens
+    are never stored — every call asks the CLI.
   - **Microsoft 365 sign-in** (shared with SharePoint): zero extra setup where your tenant
     permits the shared sign-in app to request Power BI scopes; some tenants require admin
     approval for it.
-  - **Paste an access token**: for machines without the Azure CLI (~1 h lifetime; re-paste via
-    *Test Context Source*).
+  - **Paste an access token**: no CLI needed either — run
+    `az account get-access-token --resource https://analysis.windows.net/powerbi/api` at
+    **shell.azure.com** (browser-based, nothing to install) and paste the result (~1 h
+    lifetime; re-paste via *Test Context Source*).
 - **Browse & Bookmark** lists every dataset you can see (My workspace + group workspaces),
   each with a starter `EVALUATE INFO.TABLES()` bookmark that reveals the model's tables.
 - **Analyze in chat**: *"@sharepoint run EVALUATE TOPN(20, 'Sales') against the Sales Model

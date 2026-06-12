@@ -181,3 +181,13 @@ test("verify reports the sign-in path it actually used (az / token / Microsoft 3
   );
   assert.equal(azLabelled.account, "Azure CLI SSO (Power BI)");
 });
+
+test("the no-install sign-in pins the documented Azure CLI first-party app id and a private cache prefix", async () => {
+  const { AZURE_CLI_CLIENT_ID, POWERBI_AZCLI_CACHE_PREFIX } = await import(
+    "../src/context/adapters/powerbi"
+  );
+  // The well-known Microsoft Azure CLI public client — identical consent
+  // posture to running `az login`, with no CLI on the machine.
+  assert.equal(AZURE_CLI_CLIENT_ID, "04b07795-8ddb-461a-bbee-02f9e1bf7b46");
+  assert.match(POWERBI_AZCLI_CACHE_PREFIX, /^msal-cache:powerbi-azcli:$/);
+});

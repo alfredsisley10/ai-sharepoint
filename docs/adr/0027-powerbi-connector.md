@@ -13,9 +13,15 @@
   service, so no per-app approval is involved; the gcloud-SSO pattern
   applies (marker-only keychain entry, token fetched per call, never
   stored; `shell: true` on Windows for the `.cmd` shim per
-  CVE-2024-27980). A pasted ~1 h access token (`pat`) is the fallback
-  for CLI-less machines; `aad-sso` remains for tenants where the shared
-  app is approved.
+  CVE-2024-27980). For machines WITHOUT the CLI (standard users, no
+  install rights), the extension signs in **as the Azure CLI app
+  itself** via its MSAL browser/device-code providers (clientId
+  override `04b07795-8ddb-461a-bbee-02f9e1bf7b46`; refresh token in a
+  source-private keychain MSAL cache, wiped on source removal) —
+  identical consent posture, no binary. A pasted ~1 h access token
+  (`pat`, obtainable at shell.azure.com) is the fallback; `aad-sso`
+  through the shared sign-in app remains for tenants where it is
+  approved.
 
 ## Decision
 

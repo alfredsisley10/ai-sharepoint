@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.2 — 2026-06-12
+
+### Added — Power BI sign-in with nothing to install (pilot)
+- Standard users without the Azure CLI (and without install rights) hit *"The Azure CLI (az)
+  was not found on PATH"*. New **recommended** sign-in: **Microsoft sign-in — nothing to
+  install**. It's a normal browser or device-code sign-in that authenticates **as the Azure
+  CLI first-party app** (public client `04b07795-…`), which is already authorized for the
+  Power BI service — identical consent posture to `az login` with **no CLI, no app
+  registration, no admin approval**. Sign in once; MSAL refreshes silently from a
+  source-private keychain cache that is wiped when the source is removed. Conditional access
+  applies; sign-in logs attribute the session to "Microsoft Azure CLI" (documented for
+  admins).
+- The az-missing error and the paste-token prompt now point to **shell.azure.com** (the
+  browser-based Azure Cloud Shell, az preinstalled) with the exact
+  `az account get-access-token` command, so even the fallback path needs no local install.
+
 ## 0.22.1 — 2026-06-12
 
 ### Changed — Vertex AI Search: the wizard finds the hosting project for you (pilot)

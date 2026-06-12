@@ -84,7 +84,13 @@ import {
 } from "./context/projectsStore";
 import { ProjectsTreeProvider } from "./ui/projectsView";
 import { registerProjectTools } from "./chat/projectTools";
-import { enumeratePowerBiDatasets, getAzPowerBiToken, POWERBI_SCOPES } from "./context/adapters/powerbi";
+import {
+  enumeratePowerBiDatasets,
+  getAzPowerBiToken,
+  POWERBI_SCOPES,
+  AZURE_CLI_CLIENT_ID,
+  POWERBI_AZCLI_CACHE_PREFIX,
+} from "./context/adapters/powerbi";
 import { listSnowTables } from "./context/adapters/servicenow";
 import {
   buildSnowAuthUrl,
@@ -190,7 +196,9 @@ export function activate(context: vscode.ExtensionContext): void {
     interactive: boolean,
     scopes: string[],
   ): Promise<string> => {
-    let handles: { providerId?: string; cacheHandle?: string } = {};
+    // clientId (optional) = sign in as a specific public client: the Power BI
+    // no-install path stores the Azure CLI first-party app id here.
+    let handles: { providerId?: string; cacheHandle?: string; clientId?: string } = {};
     try {
       handles = JSON.parse(credential.secret) as typeof handles;
     } catch {
@@ -202,7 +210,7 @@ export function activate(context: vscode.ExtensionContext): void {
         "auth.failed",
       );
     }
-    const provider = registry.create(handles.providerId, handles.cacheHandle);
+    const provider = registry.create(handles.providerId, handles.cacheHandle, handles.clientId);
     if (!interactive) {
       const silent = provider.acquireTokenSilent
         ? await provider.acquireTokenSilent(scopes)
@@ -1310,24 +1318,48 @@ export function activate(context: vscode.ExtensionContext): void {
     const mode = await vscode.window.showQuickPick(
       [
         {
-          label: "$(terminal) Azure CLI (az) SSO — recommended",
-          description: "uses your existing `az login` session; no admin app-approval needed; tokens never stored",
+          label: "$(account) Microsoft sign-in — nothing to install (recommended)",
+          description: "signs in as the Azure CLI app (no admin approval, no CLI needed); browser or device code",
+          value: "noinstall" as const,
+        },
+        {
+          label: "$(terminal) Azure CLI (az) session",
+          description: "uses your existing `az login`; tokens never stored — same consent posture as above",
           value: "az" as const,
         },
         {
-          label: "$(account) Microsoft 365 sign-in (shared with SharePoint)",
+          label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
           description: "may require tenant admin approval of the sign-in app for Power BI scopes",
           value: "aad" as const,
         },
         {
           label: "$(key) Paste an access token",
-          description: "for machines without the Azure CLI — ~1 h lifetime",
+          description: "from shell.azure.com or another machine — ~1 h lifetime",
           value: "pat" as const,
         },
       ],
       { ignoreFocusOut: true, title: "Power BI sign-in" },
     );
     if (!mode) return undefined;
+    if (mode.value === "noinstall") {
+      // Sign in AS the Azure CLI first-party app via MSAL — no local CLI,
+      // no app registration, no per-app admin approval (it's pre-authorized
+      // for the Power BI service). The refresh token lives in its own
+      // keychain MSAL cache, deleted with the source.
+      const provider = await vscode.window.showQuickPick(
+        AUTH_PROVIDERS.map((p) => ({ label: p.label, detail: p.detail, id: p.id })),
+        { ignoreFocusOut: true, title: "Power BI Microsoft sign-in — browser or device code?" },
+      );
+      if (!provider) return undefined;
+      return {
+        method: "aad-sso",
+        secret: JSON.stringify({
+          providerId: provider.id,
+          cacheHandle: `${POWERBI_AZCLI_CACHE_PREFIX}${crypto.randomUUID()}`,
+          clientId: AZURE_CLI_CLIENT_ID,
+        }),
+      };
+    }
     if (mode.value === "az") {
       // Marker only — nothing secret is stored; every call asks the CLI.
       return { method: "az-sso", secret: "az-cli-session" };
@@ -1338,7 +1370,7 @@ export function activate(context: vscode.ExtensionContext): void {
         password: true,
         title: "Power BI access token",
         prompt:
-          "From `az account get-access-token --resource https://analysis.windows.net/powerbi/api` on a machine where you can sign in, or your SSO portal. Stored only in your OS keychain; expires after ~1 h (re-paste via Test Context Source).",
+          "No CLI installed? Open shell.azure.com (works in any browser, nothing to install) and run `az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv`, then paste the output. Stored only in your OS keychain; expires after ~1 h (re-paste via Test Context Source).",
       });
       if (!token?.trim()) return undefined;
       return { method: "pat", secret: token.trim() };
@@ -1346,7 +1378,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const all = sites.list();
     if (all.length === 0) {
       const add = await vscode.window.showInformationMessage(
-        "This option reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it (or pick the Azure CLI option instead).",
+        "This option reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it (or pick “Microsoft sign-in — nothing to install” instead).",
         "Connect Site",
       );
       if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
@@ -2138,6 +2170,19 @@ export function activate(context: vscode.ExtensionContext): void {
       "Remove Source",
     );
     if (confirm === "Remove Source") {
+      // The Power BI no-install sign-in keeps its MSAL refresh-token cache in
+      // a source-private keychain entry — wipe it with the source.
+      const cred = await contextSources.getCredential(source.id).catch(() => undefined);
+      if (cred?.method === "aad-sso") {
+        try {
+          const handles = JSON.parse(cred.secret) as { cacheHandle?: string };
+          if (handles.cacheHandle?.startsWith(POWERBI_AZCLI_CACHE_PREFIX)) {
+            await secrets.delete(handles.cacheHandle);
+          }
+        } catch {
+          // unreadable secret — nothing more to clean
+        }
+      }
       await contextSources.remove(source.id);
       await bookmarks.removeForSource(source.id);
       await schemas.remove(source.id);

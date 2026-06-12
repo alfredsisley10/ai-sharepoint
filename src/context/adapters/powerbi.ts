@@ -28,6 +28,19 @@ export const POWERBI_BASE = "https://api.powerbi.com/v1.0/myorg";
 /** Resource audience for Power BI delegated tokens. */
 export const POWERBI_RESOURCE = "https://analysis.windows.net/powerbi/api";
 
+/** The Microsoft Azure CLI's well-known first-party public client id. The
+ *  no-install sign-in authenticates AS this app via MSAL (browser or device
+ *  code): identical consent posture to running `az login` — pre-authorized
+ *  for the Power BI service, no app registration, no per-app admin approval
+ *  — without requiring the CLI on the machine. Sign-in logs show
+ *  "Microsoft Azure CLI" (documented in the admin guide), mirroring how the
+ *  extension's Graph sign-in uses the Graph PowerShell first-party app. */
+export const AZURE_CLI_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+
+/** Keychain prefix for the Power BI no-install sign-in's MSAL cache —
+ *  deleted with the source (it's not shared with site sign-ins). */
+export const POWERBI_AZCLI_CACHE_PREFIX = "msal-cache:powerbi-azcli:";
+
 /** Delegated Power BI scopes (resource: analysis.windows.net/powerbi/api). */
 export const POWERBI_SCOPES = [
   `${POWERBI_RESOURCE}/Workspace.Read.All`,
@@ -80,7 +93,7 @@ export function getAzPowerBiToken(timeoutMs = 20_000): Promise<string> {
               `Could not obtain a Power BI token from the Azure CLI: ${stderr?.trim() || err.message}`,
               notFound ? "config" : "auth.failed",
               notFound
-                ? "The Azure CLI (az) was not found on PATH — install it (aka.ms/azure-cli) or pick a different Power BI sign-in method."
+                ? "The Azure CLI (az) is not installed on this machine. No install needed: re-run Test Context Source and pick “Microsoft sign-in — nothing to install” (signs in as the same Azure CLI app via your browser), or run `az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv` at shell.azure.com and paste the token."
                 : "Sign in once with `az login` (your corporate Microsoft SSO), then retry. Tokens are never stored — each call asks the CLI.",
             ),
           );

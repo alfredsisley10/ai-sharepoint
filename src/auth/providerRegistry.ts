@@ -36,22 +36,28 @@ export class AuthProviderRegistry {
     private readonly onDeviceCodePrompt: (info: DeviceCodePrompt) => void,
   ) {}
 
-  create(id: string, cacheHandle: string): SharePointAuthProvider {
+  /** `clientIdOverride` lets a feature sign in as a DIFFERENT public client
+   *  than the Graph default — Power BI's no-install path authenticates as
+   *  the Azure CLI first-party app (pre-authorized for the Power BI service,
+   *  so no per-app admin approval). Authority still comes from the
+   *  machine-scoped settings, so tenant lockdown applies unchanged. */
+  create(id: string, cacheHandle: string, clientIdOverride?: string): SharePointAuthProvider {
     const { authority, clientId } = resolveAuthSettings();
+    const effectiveClientId = clientIdOverride?.trim() || clientId;
     switch (id) {
       case "msal-public-interactive":
         return new MsalPublicClientProvider(
           this.secrets,
           cacheHandle,
           authority,
-          clientId,
+          effectiveClientId,
         );
       case "msal-device-code":
         return new DeviceCodeProvider(
           this.secrets,
           cacheHandle,
           authority,
-          clientId,
+          effectiveClientId,
           this.onDeviceCodePrompt,
         );
       default:
