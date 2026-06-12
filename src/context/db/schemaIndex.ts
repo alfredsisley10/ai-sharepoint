@@ -88,6 +88,8 @@ export interface ProbedRelationship {
   /** "defined" = user-supplied join kept despite measuring below the
    *  automatic thresholds (chat's test_join, ADR-0030 amendment). */
   verdict: "strong" | "likely" | "defined";
+  /** Measured via the cast comparison (mismatched/LOB types). */
+  cast?: boolean;
   /** Containment reading — encodes the inner-vs-outer-join consequence
    *  ("from-side is a subset …"). */
   note?: string;
@@ -109,6 +111,8 @@ export interface TestedPair {
   sampledBackward: number;
   outcome: "strong" | "likely" | "defined" | "rejected" | "failed";
   reason: string;
+  /** Measured via the cast comparison. */
+  cast?: boolean;
 }
 
 /** Persisted ER model — travels with the schema (and reference exports). */
@@ -121,8 +125,9 @@ export interface ErModel {
   relationships: ProbedRelationship[];
   /** True when cancellation/per-pair failures stopped probing early. */
   partial?: boolean;
-  /** "thorough" also tested every type-compatible pair across small tables. */
-  mode?: "standard" | "ai" | "thorough";
+  /** "thorough" also tested every type-compatible pair across small tables;
+   *  "max" ran every escalation automatically (casts, large tables). */
+  mode?: "standard" | "ai" | "thorough" | "max";
   /** Approximate per-table row counts observed during the build. */
   rowEstimates?: Record<string, number>;
   /** When the latest run was scoped to a table subset, its size — the rest

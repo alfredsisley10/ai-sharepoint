@@ -413,13 +413,14 @@ export class ContextService {
     from: JoinProbeEnd,
     to: JoinProbeEnd,
     sample: number | "full",
+    cast = false,
   ): Promise<JoinProbeCounts> {
     if (!ContextService.DB_TYPES.has(source.type)) {
       throw new AppError("Join probing applies to database sources only.", "config");
     }
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
-      probeJoinRate(source, credential, this.dbTls(), this.caps(), from, to, sample),
+      probeJoinRate(source, credential, this.dbTls(), this.caps(), from, to, sample, cast),
     );
   }
 

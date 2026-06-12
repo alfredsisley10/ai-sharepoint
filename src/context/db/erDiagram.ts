@@ -119,6 +119,10 @@ export interface JoinCandidate {
   /** User-supplied join: persists as "defined" even when the measured rate
    *  falls below the automatic thresholds. */
   userDefined?: boolean;
+  /** Probe by casting both sides to a common text type: joins mismatched
+   *  type families AND rescues types `=` cannot compare at all (SQL Server
+   *  ntext/text — the silent killer on legacy AD exports). */
+  cast?: boolean;
 }
 
 export interface JoinProbeCounts {
@@ -135,7 +139,7 @@ export interface JoinProbeEnd {
 // --- candidate generation -----------------------------------------------------
 
 const NUMERIC_TYPE = /int|numeric|decimal|number|float|double|real|serial/i;
-const TEXTUAL_TYPE = /char|text|string|uuid|uniqueidentifier|objectid/i;
+const TEXTUAL_TYPE = /char|text|string|uuid|uniqueidentifier|objectid|sysname/i;
 
 /** Joins only make sense within a type family; dates/bools/blobs never
  *  define relationships. */
@@ -330,27 +334,46 @@ export function proposeExhaustivePairs(
   exclude: Set<string>,
   maxRows = ER_FULL_JOIN_MAX_ROWS,
   cap = ER_EXHAUSTIVE_PAIR_CAP,
+  opts: {
+    /** Also pair across type families (probed with casts). */
+    crossFamily?: boolean;
+    /** Also include tables KNOWN to exceed maxRows (bounded samples). */
+    includeLarge?: boolean;
+  } = {},
 ): JoinCandidate[] {
-  const small = schema.catalog.tables.filter((t) => {
-    const rows = rowEstimates[qualifiedName(t).toLowerCase()];
-    return rows === undefined || rows === 0 || rows <= maxRows;
+  const rowsOf = (t: TableDef) => rowEstimates[qualifiedName(t).toLowerCase()] ?? 0;
+  const eligible = schema.catalog.tables.filter((t) => {
+    const rows = rowsOf(t);
+    return opts.includeLarge || rows === 0 || rows <= maxRows;
   });
+  // Cheapest pairs first: small×small before anything touching a giant.
+  const tables = [...eligible].sort((a, b) => rowsOf(a) - rowsOf(b));
   const out: JoinCandidate[] = [];
-  for (let i = 0; i < small.length && out.length < cap; i++) {
-    for (let j = i + 1; j < small.length && out.length < cap; j++) {
-      for (const a of small[i].columns) {
+  for (let i = 0; i < tables.length && out.length < cap; i++) {
+    for (let j = i + 1; j < tables.length && out.length < cap; j++) {
+      for (const a of tables[i].columns) {
         const famA = joinFamily(a.dataType);
-        if (!famA) continue;
-        for (const b of small[j].columns) {
+        if (!famA && !opts.crossFamily) continue;
+        for (const b of tables[j].columns) {
           if (out.length >= cap) break;
-          if (joinFamily(b.dataType) !== famA) continue;
+          const famB = joinFamily(b.dataType);
+          const sameFamily = famA !== undefined && famA === famB;
+          // Cross-family sweep still requires both sides to be key-shaped
+          // (numbers or text) — casting dates/blobs to text only makes noise.
+          const castable = opts.crossFamily && famA !== undefined && famB !== undefined;
+          if (!sameFamily && !castable) continue;
           const candidate: JoinCandidate = {
-            fromTable: qualifiedName(small[i]),
+            fromTable: qualifiedName(tables[i]),
             fromColumn: a.name,
-            toTable: qualifiedName(small[j]),
+            toTable: qualifiedName(tables[j]),
             toColumn: b.name,
-            reason: "exhaustive (small tables)",
+            reason: sameFamily
+              ? opts.includeLarge
+                ? "exhaustive (incl. large tables)"
+                : "exhaustive (small tables)"
+              : "cast sweep (cross-type)",
             priority: 1,
+            ...(sameFamily ? {} : { cast: true }),
           };
           const key = pairKey(candidate);
           if (exclude.has(key)) continue;
@@ -359,6 +382,33 @@ export function proposeExhaustivePairs(
         }
       }
     }
+  }
+  return out;
+}
+
+/** Escalation: re-probe pairs that FAILED (or sampled nothing) with the
+ *  cast comparison — `=` rejecting a type (ntext/text) looks identical to
+ *  "no relationship" until retried with CAST. Pure. */
+export function buildCastRetryCandidates(
+  tested: TestedPair[],
+  exclude: Set<string>,
+): JoinCandidate[] {
+  const out: JoinCandidate[] = [];
+  for (const t of tested) {
+    if (t.outcome !== "failed" && !(t.sampledForward === 0 && t.sampledBackward === 0)) continue;
+    const candidate: JoinCandidate = {
+      fromTable: t.fromTable,
+      fromColumn: t.fromColumn,
+      toTable: t.toTable,
+      toColumn: t.toColumn,
+      reason: `cast retry (${t.outcome === "failed" ? "probe failed natively" : "sampled no values"})`,
+      priority: 2,
+      cast: true,
+    };
+    const key = `cast‖${pairKey(candidate)}`;
+    if (exclude.has(key)) continue;
+    exclude.add(key);
+    out.push(candidate);
   }
   return out;
 }
@@ -378,34 +428,60 @@ export function buildJoinProbeSql(
   from: JoinProbeEnd,
   to: JoinProbeEnd,
   sample: number | "full" = ER_SAMPLE_SIZE,
+  cast = false,
 ): string {
   const q = (c: string) => (engine === "mssql" ? `[${c}]` : engine === "mysql" ? `\`${c}\`` : `"${c}"`);
+  // Cast mode: compare on a common text type. Joins mismatched families
+  // (int ↔ varchar keys) and types `=` rejects outright (ntext/text).
+  const castExpr = (expr: string) =>
+    !cast
+      ? expr
+      : engine === "mssql"
+        ? `CAST(${expr} AS NVARCHAR(MAX))`
+        : engine === "mysql"
+          ? `CAST(${expr} AS CHAR)`
+          : `(${expr})::text`;
   const fromTarget = from.schema ? `${q(from.schema)}.${q(from.table)}` : q(from.table);
   const toTarget = to.schema ? `${q(to.schema)}.${q(to.table)}` : q(to.table);
   const top = sample === "full" ? "" : engine === "mssql" ? `TOP ${sample} ` : "";
   const limit = sample === "full" || engine === "mssql" ? "" : ` LIMIT ${sample}`;
-  const sub = `SELECT DISTINCT ${top}${q(from.column)} AS v FROM ${fromTarget} WHERE ${q(from.column)} IS NOT NULL${limit}`;
+  const sub = `SELECT DISTINCT ${top}${castExpr(q(from.column))} AS v FROM ${fromTarget} WHERE ${q(from.column)} IS NOT NULL${limit}`;
   return (
     `SELECT COUNT(*) AS sampled, ` +
-    `SUM(CASE WHEN EXISTS (SELECT 1 FROM ${toTarget} t WHERE t.${q(to.column)} = s.v) THEN 1 ELSE 0 END) AS matched ` +
+    `SUM(CASE WHEN EXISTS (SELECT 1 FROM ${toTarget} t WHERE ${castExpr(`t.${q(to.column)}`)} = s.v) THEN 1 ELSE 0 END) AS matched ` +
     `FROM (${sub}) s`
   );
 }
 
 /** MongoDB variant: distinct sample via $group, existence via $lookup;
- *  "full" omits the $limit stage (complete join test). */
+ *  "full" omits the $limit stage (complete join test). Cast mode compares
+ *  $toString on both sides (numbers ↔ strings, ObjectIds ↔ hex strings). */
 export function buildJoinProbeMongo(
   from: JoinProbeEnd,
   to: JoinProbeEnd,
   sample: number | "full" = ER_SAMPLE_SIZE,
+  cast = false,
 ): { collection: string; pipeline: object[] } {
+  const lookup = cast
+    ? {
+        $lookup: {
+          from: to.table,
+          let: { v: { $toString: "$_id" } },
+          pipeline: [
+            { $match: { $expr: { $eq: [{ $toString: `$${to.column}` }, "$$v"] } } },
+            { $limit: 1 },
+          ],
+          as: "m",
+        },
+      }
+    : { $lookup: { from: to.table, localField: "_id", foreignField: to.column, as: "m" } };
   return {
     collection: from.table,
     pipeline: [
       { $match: { [from.column]: { $ne: null } } },
       { $group: { _id: `$${from.column}` } },
       ...(sample === "full" ? [] : [{ $limit: sample }]),
-      { $lookup: { from: to.table, localField: "_id", foreignField: to.column, as: "m" } },
+      lookup,
       {
         $group: {
           _id: null,
@@ -813,7 +889,7 @@ export function renderErMermaid(model: ErModel): string {
       r.forwardRate >= ER_STRONG_RATE && r.backwardRate >= ER_STRONG_RATE ? "||--||" : "}o--||";
     const safe = (s: string) => s.replace(/"/g, "'");
     lines.push(
-      `  "${safe(r.fromTable)}" ${card} "${safe(r.toTable)}" : "${safe(r.fromColumn)} -> ${safe(r.toColumn)} (${pct(r.forwardRate)}/${pct(r.backwardRate)}${r.complete ? ", complete" : ""})"`,
+      `  "${safe(r.fromTable)}" ${card} "${safe(r.toTable)}" : "${safe(r.fromColumn)} -> ${safe(r.toColumn)} (${pct(r.forwardRate)}/${pct(r.backwardRate)}${r.complete ? ", complete" : ""}${r.cast ? ", cast" : ""})"`,
     );
   }
   return lines.join("\n");
@@ -828,7 +904,7 @@ export function renderErForModel(model: ErModel, maxLines = 25): string[] {
   ];
   for (const r of model.relationships.slice(0, maxLines)) {
     lines.push(
-      `- JOIN ${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn} (${pct(r.forwardRate)}/${pct(r.backwardRate)}${r.complete ? ", complete" : ""}, ${r.verdict}${r.note ? ` — ${r.note}` : ""})`,
+      `- JOIN ${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn} (${pct(r.forwardRate)}/${pct(r.backwardRate)}${r.complete ? ", complete" : ""}${r.cast ? ", cast — CAST both sides to text in queries" : ""}, ${r.verdict}${r.note ? ` — ${r.note}` : ""})`,
     );
   }
   lines.push("Use these columns when querying across tables; honor the subset notes when choosing INNER vs LEFT JOIN.");

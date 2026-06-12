@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.29.0 — 2026-06-12
+
+### Added — incremental escalation: cast comparisons, failed-probe retries, large tables (pilot)
+- The LDAP three-table test still produced zero joins in the real environment — which points
+  at the probes themselves failing invisibly: SQL Server's legacy `ntext`/`text` columns
+  (common in AD exports) **cannot be compared with `=` at all**, so every probe errors and
+  looks exactly like "no relationship"; and `int ↔ varchar` key pairs never formed under the
+  type-family gate.
+- Runs now **escalate through passes, with your say-so between each** (or automatically in the
+  new **Maximum** mode):
+  1. **Native pass** — everything as before.
+  2. **Cast pass** — pairs that *failed* or sampled nothing are **re-probed comparing both
+     sides as a common text type** (`NVARCHAR(MAX)` / `::text` / `CHAR` / `$toString`), plus a
+     cross-type sweep pairing key-shaped columns across families (your "dynamic type
+     conversion" requirement). This is the decisive pass for legacy exports.
+  3. **Large-table pass** — tables beyond the 50k-row cap join the sweep with strictly bounded
+     samples (never full scans), cheapest pairs first.
+- Relationships proven through casts are flagged **(cast)** in the diagram, the rate table,
+  and chat's JOIN paths — with explicit guidance to CAST both sides when writing such joins.
+  `test_join` in chat now probes cross-typed user joins with casts automatically. SQL Server's
+  `sysname` now counts as text. The escalation prompts state how many pairs each pass adds and
+  why ("N probes failed natively — often LOB/mismatched types").
+
 ## 0.28.0 — 2026-06-12
 
 ### Fixed — ER runs find junction tables: measurement-first sweeps (pilot)

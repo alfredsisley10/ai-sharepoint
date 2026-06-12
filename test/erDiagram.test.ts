@@ -578,3 +578,74 @@ test("the AI prompt teaches junction-table and key-domain reasoning", async () =
   assert.match(prompt, /member_dn → users\.distinguishedName/);
   assert.match(prompt, /LDAP DNs/);
 });
+
+// --- escalation ladder: casts, retries, large tables (0.29.0) ------------------
+
+test("cast probes compare both sides as a common text type, per dialect (rescues ntext and cross-type keys)", async () => {
+  const { buildJoinProbeSql, buildJoinProbeMongo } = await import("../src/context/db/erDiagram");
+  const from = { schema: "dbo", table: "A", column: "x" };
+  const to = { schema: "dbo", table: "B", column: "y" };
+  const mssql = buildJoinProbeSql("mssql", from, to, 100, true);
+  assert.match(mssql, /CAST\(\[x\] AS NVARCHAR\(MAX\)\) AS v/);
+  assert.match(mssql, /CAST\(t\.\[y\] AS NVARCHAR\(MAX\)\) = s\.v/);
+  const pg = buildJoinProbeSql("postgres", { table: "a", column: "x" }, { table: "b", column: "y" }, 100, true);
+  assert.match(pg, /\("x"\)::text AS v/);
+  assert.match(pg, /\(t\."y"\)::text = s\.v/);
+  const my = buildJoinProbeSql("mysql", { table: "a", column: "x" }, { table: "b", column: "y" }, 100, true);
+  assert.match(my, /CAST\(`x` AS CHAR\)/);
+  // Mongo cast mode: $toString on both sides via pipeline-form $lookup.
+  const mongo = buildJoinProbeMongo({ table: "a", column: "x" }, { table: "b", column: "y" }, 50, true);
+  const lookup = mongo.pipeline.find((s) => "$lookup" in (s as Record<string, unknown>)) as {
+    $lookup: { let?: unknown; pipeline?: unknown[] };
+  };
+  assert.ok(lookup.$lookup.let, "cast lookup uses let/$expr");
+  // Non-cast probes are unchanged.
+  assert.ok(!/CAST/.test(buildJoinProbeSql("mssql", from, to, 100)));
+});
+
+test("cross-family sweep pairs int↔text via cast; large-table inclusion orders cheap pairs first", async () => {
+  const { proposeExhaustivePairs } = await import("../src/context/db/erDiagram");
+  const schema = schemaWith(); // Invoices.customer_id is nvarchar; Customers.id int
+  const est = { "dbo.customers": 1_000, "dbo.orders": 2_000, "dbo.invoices": 9_000_000 };
+  // crossFamily without includeLarge: Invoices still excluded (known huge).
+  const crossSmall = proposeExhaustivePairs(schema, est, new Set(), undefined, undefined, { crossFamily: true });
+  assert.ok(crossSmall.some((p) => p.cast && p.reason === "cast sweep (cross-type)"), JSON.stringify(crossSmall.slice(0, 3)));
+  assert.ok(!crossSmall.some((p) => p.fromTable === "dbo.Invoices" || p.toTable === "dbo.Invoices"));
+  // includeLarge brings Invoices in — its nvarchar customer_id can now pair
+  // with Customers.id (int) through the cast.
+  const withLarge = proposeExhaustivePairs(schema, est, new Set(), undefined, undefined, { crossFamily: true, includeLarge: true });
+  assert.ok(
+    withLarge.some(
+      (p) =>
+        p.cast &&
+        [p.fromTable, p.toTable].includes("dbo.Invoices") &&
+        [p.fromColumn, p.toColumn].includes("customer_id") &&
+        [p.fromColumn, p.toColumn].includes("id"),
+    ),
+  );
+  // Small×small pairs come before pairs touching the 9M-row table.
+  const firstLargeIdx = withLarge.findIndex((p) => [p.fromTable, p.toTable].includes("dbo.Invoices"));
+  const lastSmallIdx = withLarge.map((p) => ![p.fromTable, p.toTable].includes("dbo.Invoices")).lastIndexOf(true);
+  assert.ok(firstLargeIdx === -1 || lastSmallIdx < firstLargeIdx || firstLargeIdx > 0, "cheap pairs lead");
+});
+
+test("buildCastRetryCandidates retries failed and zero-sample pairs with cast, once", async () => {
+  const { buildCastRetryCandidates } = await import("../src/context/db/erDiagram");
+  const tested = [
+    { fromTable: "dbo.A", fromColumn: "x", toTable: "dbo.B", toColumn: "y", forwardRate: 0, backwardRate: 0, sampledForward: 0, sampledBackward: 0, outcome: "failed" as const, reason: "exhaustive (small tables)" },
+    { fromTable: "dbo.A", fromColumn: "z", toTable: "dbo.B", toColumn: "y", forwardRate: 0, backwardRate: 0, sampledForward: 0, sampledBackward: 0, outcome: "rejected" as const, reason: "x" },
+    { fromTable: "dbo.A", fromColumn: "ok", toTable: "dbo.B", toColumn: "y", forwardRate: 0.2, backwardRate: 0.1, sampledForward: 100, sampledBackward: 100, outcome: "rejected" as const, reason: "x" },
+  ];
+  const exclude = new Set<string>();
+  const retries = buildCastRetryCandidates(tested, exclude);
+  // failed → retried; zero-sample rejected → retried; measured-rejected → not.
+  assert.equal(retries.length, 2);
+  assert.ok(retries.every((r) => r.cast));
+  assert.match(retries[0].reason, /probe failed natively/);
+  assert.equal(buildCastRetryCandidates(tested, exclude).length, 0, "dedupe on re-entry");
+});
+
+test("sysname (SQL Server) counts as a textual join family", async () => {
+  const { joinFamily } = await import("../src/context/db/erDiagram");
+  assert.equal(joinFamily("sysname"), "text");
+});

@@ -200,17 +200,22 @@ export function registerContextTools(
               schema.er?.rowEstimates?.[parsed.fromTable.toLowerCase()] ?? 0,
               schema.er?.rowEstimates?.[parsed.toTable.toLowerCase()] ?? 0,
             );
+            // Cross-family user joins probe with the cast comparison — the
+            // user asserted the join works, so test it the way it would run.
+            const cast = Boolean(parsed.warning);
             const forward = await service.probeJoin(
               source,
               endFor(parsed.fromTable, parsed.fromColumn),
               endFor(parsed.toTable, parsed.toColumn),
               sample,
+              cast,
             );
             const backward = await service.probeJoin(
               source,
               endFor(parsed.toTable, parsed.toColumn),
               endFor(parsed.fromTable, parsed.fromColumn),
               sample,
+              cast,
             );
             const graded = classifyJoin(forward, backward);
             const prior = schema.er?.report?.tested.find((t) => pairKey(t) === key);
@@ -224,6 +229,7 @@ export function registerContextTools(
               sampledForward: forward.sampled,
               sampledBackward: backward.sampled,
               ...(sample === "full" ? { complete: true } : {}),
+              ...(cast ? { cast: true } : {}),
               // A user-DEFINED join is kept even below the automatic
               // thresholds — the user asserted it; the measured rates stay
               // visible so a data-quality story is still tellable.

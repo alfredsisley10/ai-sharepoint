@@ -522,9 +522,10 @@ export async function probeJoinRate(
   from: JoinProbeEnd,
   to: JoinProbeEnd,
   sample: number | "full" = ER_SAMPLE_SIZE,
+  cast = false,
 ): Promise<JoinProbeCounts> {
   if (source.type === "mongodb") {
-    const spec = buildJoinProbeMongo(from, to, sample);
+    const spec = buildJoinProbeMongo(from, to, sample, cast);
     const docs = await withMongo(source, credential, tls, caps, (client, dbName) =>
       client
         .db(dbName)
@@ -539,7 +540,7 @@ export async function probeJoinRate(
     credential,
     tls,
     { ...caps, maxResults: 2 },
-    buildJoinProbeSql(source.type as SqlEngine, from, to, sample),
+    buildJoinProbeSql(source.type as SqlEngine, from, to, sample, cast),
   );
   return parseProbeCounts(rows);
 }

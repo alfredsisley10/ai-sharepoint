@@ -382,6 +382,13 @@ reasons — ADR-0022):
   nothing (`member_dn` → `distinguishedName`), so measurement, not naming, finds them. Tables
   without row statistics (fresh exports) are included with bounded samples; only tables known
   to be huge sit out of the sweep.
+- **The run escalates when it finds little — with your say-so**: after the native pass you're
+  offered the **cast pass** (failed probes are re-tested comparing both sides as text — the fix
+  for legacy `ntext`/`text` columns that `=` cannot compare at all, and for `int ↔ varchar`
+  keys), and then the **large-table pass** (big tables included with strictly bounded samples,
+  never full scans). Pick **Maximum** mode to run every escalation automatically. Joins proven
+  through casts are marked *(cast)* everywhere, and chat is told to CAST both sides when
+  writing them.
 - **Scope and seed the run**: the wizard first lets you **scope the tables** — type
   comma-separated prefixes/keywords (e.g. `fin_, gl_`; shared prefixes usually mean a shared
   objective) to pre-select, then search and multi-select by hand. A scoped run **merges** into

@@ -63,6 +63,7 @@ import {
   parseJoinCandidateResponse,
   parseJoinSpec,
   mergeRelationships,
+  buildCastRetryCandidates,
   initialSampleSize,
   nextSampleSize,
   pairKey,
@@ -2809,8 +2810,14 @@ export function activate(context: vscode.ExtensionContext): void {
           description: `adds all type-compatible pairs between the ${smallTables} eligible table(s) (≤ ${ER_FULL_JOIN_MAX_ROWS.toLocaleString()} rows or no statistics; capped at ${ER_EXHAUSTIVE_PAIR_CAP})`,
           value: "thorough" as const,
         },
+        {
+          label: "$(rocket) Maximum — every escalation, automatically",
+          description:
+            "thorough + cast comparison across MISMATCHED types, retries of failed probes, and large tables with bounded samples — no prompts between passes",
+          value: "max" as const,
+        },
       ],
-      { ignoreFocusOut: true, title: "Build ER Diagram — how exhaustively?" },
+      { ignoreFocusOut: true, title: "Build ER Diagram — how exhaustively? (escalations are also offered as the run progresses)" },
     );
     if (!mode) return;
     const aiEnabled = aiAvailable && mode.value !== "standard";
@@ -2900,7 +2907,9 @@ export function activate(context: vscode.ExtensionContext): void {
       ...userJoins,
       ...aiPairs,
       ...heuristic,
-      ...(mode.value === "thorough" || autoSweep ? proposeExhaustivePairs(scoped, rowEstimates, tried) : []),
+      ...(mode.value === "thorough" || mode.value === "max" || autoSweep
+        ? proposeExhaustivePairs(scoped, rowEstimates, tried)
+        : []),
     ];
     if (candidates.length === 0) {
       void vscode.window.showInformationMessage(
@@ -2986,8 +2995,8 @@ export function activate(context: vscode.ExtensionContext): void {
                 `${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn} (${sample === "full" ? "complete join" : `${sample}-value sample`})`,
               );
               const started = Date.now();
-              forward = await contextService.probeJoin(source, from, to, sample);
-              backward = await contextService.probeJoin(source, to, from, sample);
+              forward = await contextService.probeJoin(source, from, to, sample, c.cast === true);
+              backward = await contextService.probeJoin(source, to, from, sample, c.cast === true);
               const duration = Date.now() - started;
               if (duration >= ER_SLOW_PROBE_MS) {
                 slowStreak += 1;
@@ -3022,6 +3031,7 @@ export function activate(context: vscode.ExtensionContext): void {
               sampledBackward: backward.sampled,
               outcome: verdict ?? "rejected",
               reason: c.reason,
+              ...(c.cast ? { cast: true } : {}),
             });
             if (verdict) {
               relationships.push({
@@ -3034,6 +3044,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 sampledForward: forward.sampled,
                 sampledBackward: backward.sampled,
                 ...(complete ? { complete: true } : {}),
+                ...(c.cast ? { cast: true } : {}),
                 verdict,
                 ...(graded.note ? { note: graded.note } : {}),
                 reason: c.reason,
@@ -3061,7 +3072,74 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           progress.report({ increment: 100 / queue.length });
         };
-        let refinementDone = !aiEnabled;
+        // Escalation ladder: each stage runs when the queue drains and may
+        // append new candidates. Maximum mode escalates automatically; the
+        // other modes ASK between passes, so the user progresses to more
+        // thorough methods deliberately (pilot: a clean "zero joins" must
+        // never be the end of the road).
+        const maxMode = mode.value === "max";
+        const askEscalate = async (question: string): Promise<boolean> => {
+          if (maxMode) return true;
+          const pick = await vscode.window.showInformationMessage(question, "Escalate", "Stop here");
+          return pick === "Escalate";
+        };
+        const stages: Array<() => Promise<JoinCandidate[]>> = [];
+        if (aiEnabled) {
+          stages.push(async () => {
+            // Incremental refinement: little confirmed → show Copilot what
+            // was MEASURED (the near-misses) and probe its new hypotheses.
+            if (relationships.length >= 3) return [];
+            const rejected = testedLog
+              .filter((t) => t.outcome === "rejected" || t.outcome === "failed")
+              .sort((a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate));
+            if (rejected.length === 0) return [];
+            paint(queue.length, "asking Copilot to refine the hypotheses from the measured rates…", true);
+            const more = await aiPropose(rejected).catch((err) => {
+              log.warn(`AI refinement unavailable: ${err instanceof Error ? err.message : String(err)}`);
+              return [] as JoinCandidate[];
+            });
+            aiRefined = more.length;
+            return more;
+          });
+        }
+        stages.push(async () => {
+          // Cast pass: retry failed/zero-sample pairs with CAST comparison
+          // (types `=` rejects look exactly like "no relationship") and
+          // sweep cross-type pairs. The decisive pass for legacy exports.
+          const failures = testedLog.filter(
+            (t) => t.outcome === "failed" || (t.sampledForward === 0 && t.sampledBackward === 0),
+          ).length;
+          if (relationships.length >= 3 && failures === 0) return [];
+          const retries = buildCastRetryCandidates(testedLog, tried);
+          const crossType = proposeExhaustivePairs(scoped, rowEstimates, tried, ER_FULL_JOIN_MAX_ROWS, ER_EXHAUSTIVE_PAIR_CAP, { crossFamily: true });
+          const next = [...retries, ...crossType];
+          if (next.length === 0) return [];
+          if (
+            !(await askEscalate(
+              `${relationships.length} relationship(s) so far${failures > 0 ? `; ${failures} probe(s) failed or sampled nothing — often LOB/mismatched types that plain '=' cannot compare` : ""}. Escalate to the CAST pass? ${next.length} probe pair(s): failed pairs re-tested and cross-type pairs compared by casting both sides to text.`,
+            ))
+          ) {
+            return [];
+          }
+          paint(queue.length, "cast pass: comparing as text across mismatched/LOB types…", true);
+          return next;
+        });
+        stages.push(async () => {
+          // Large-table pass: bounded samples against tables the sweep
+          // normally leaves alone.
+          if (relationships.length >= 3) return [];
+          const large = proposeExhaustivePairs(scoped, rowEstimates, tried, ER_FULL_JOIN_MAX_ROWS, ER_EXHAUSTIVE_PAIR_CAP, { includeLarge: true, crossFamily: true });
+          if (large.length === 0) return [];
+          if (
+            !(await askEscalate(
+              `Still ${relationships.length} relationship(s). Escalate to LARGE tables? ${large.length} pair(s) involving big tables, probed with strictly bounded samples (${ER_SAMPLE_SIZE}+ values, never full scans).`,
+            ))
+          ) {
+            return [];
+          }
+          paint(queue.length, "large-table pass: bounded samples against the big tables…", true);
+          return large;
+        });
         let i = 0;
         for (;;) {
           if (token.isCancellationRequested) {
@@ -3069,23 +3147,10 @@ export function activate(context: vscode.ExtensionContext): void {
             break;
           }
           if (i >= queue.length) {
-            if (refinementDone) break;
-            refinementDone = true;
-            // Incremental refinement: little confirmed → show Copilot what
-            // was MEASURED (the near-misses) and probe its new hypotheses.
-            if (relationships.length >= 3) break;
-            const rejected = testedLog
-              .filter((t) => t.outcome === "rejected" || t.outcome === "failed")
-              .sort((a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate));
-            if (rejected.length === 0) break;
-            paint(i, "asking Copilot to refine the hypotheses from the measured rates…", true);
-            const more = await aiPropose(rejected).catch((err) => {
-              log.warn(`AI refinement unavailable: ${err instanceof Error ? err.message : String(err)}`);
-              return [] as JoinCandidate[];
-            });
-            aiRefined = more.length;
-            if (more.length === 0) break;
-            queue.push(...more);
+            const stage = stages.shift();
+            if (!stage) break;
+            const more = await stage();
+            if (more.length > 0) queue.push(...more);
             continue;
           }
           await probeOne(queue[i], i);
@@ -3175,7 +3240,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       for (const r of schema.er.relationships) {
         lines.push(
-          `| \`${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn}\` | ${Math.round(r.forwardRate * 100)}%${r.complete ? " (complete)" : ""} | ${Math.round(r.backwardRate * 100)}% | ${r.verdict} | ${r.note ?? r.reason} |`,
+          `| \`${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn}\` | ${Math.round(r.forwardRate * 100)}%${r.complete ? " (complete)" : ""}${r.cast ? " (cast)" : ""} | ${Math.round(r.backwardRate * 100)}% | ${r.verdict} | ${r.note ?? r.reason} |`,
         );
       }
       lines.push(...renderProbeReport(schema.er));

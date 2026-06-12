@@ -4,7 +4,22 @@
   amended 2026-06-12 (AI-assisted candidates, probe report, data-quality
   tier); amended 2026-06-12 (user-defined joins from chat); amended
   2026-06-12 (scoped runs, AI hints, known joins in the wizard); amended
-  2026-06-12 (measurement-first sweeps)
+  2026-06-12 (measurement-first sweeps); amended 2026-06-12 (escalation
+  ladder: casts, failed-pair retries, large tables)
+- **Amendment (escalation ladder):** zero joins despite the sweep means
+  the PROBES themselves can fail invisibly — SQL Server's legacy
+  ntext/text cannot be compared with `=` at all (common in AD exports),
+  and cross-typed keys (int ↔ varchar) never pair under the family
+  gate. Runs now escalate through passes: native probes → **cast pass**
+  (failed/zero-sample pairs RETRIED comparing both sides as a common
+  text type — NVARCHAR(MAX)/::text/CHAR/$toString — plus a cross-type
+  sweep over key-shaped columns) → **large-table pass** (tables beyond
+  the size cap included with strictly bounded samples, cheapest pairs
+  first). Between passes the user is ASKED before escalating —
+  incremental and deliberate — and the new **Maximum** mode runs every
+  pass automatically. Cast-measured relationships are flagged (`cast`)
+  everywhere, and the tool output tells the model to CAST both sides
+  when writing such joins. `sysname` joined the textual family.
 - **Amendment (measurement-first sweeps):** a 3-table AD export
   (users / groups / group-association) produced zero joins: name
   heuristics cannot bridge `member_dn` → `distinguishedName`, and the
