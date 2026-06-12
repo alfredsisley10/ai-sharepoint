@@ -51,3 +51,35 @@ test("long queries are truncated so the status line stays short", () => {
   assert.ok(out.length < 100, out);  // bounded, not the full 200-char query
   assert.ok(out.includes("…"));
 });
+
+test("describeToolResult counts what came back from JSON tool output", async () => {
+  const { describeToolResult } = await import("../src/chat/toolStatus");
+  assert.equal(
+    describeToolResult(
+      "aisharepoint_search_context",
+      { source: "CMDB", query: "x" },
+      JSON.stringify([{ title: "a" }, { title: "b" }, { title: "c" }]),
+    ),
+    "Search of CMDB: 3 result(s) — continuing…",
+  );
+  // Wrapped result arrays (run_bookmark envelope) count too.
+  assert.equal(
+    describeToolResult(
+      "aisharepoint_run_bookmark",
+      { name: "IT Help queue" },
+      JSON.stringify({ bookmark: "IT Help queue", source: "Jira", kind: "query", result: [1, 2] }),
+    ),
+    "Bookmark “IT Help queue”: 2 result(s) — continuing…",
+  );
+});
+
+test("describeToolResult handles prose results: no-results and plain text", async () => {
+  const { describeToolResult } = await import("../src/chat/toolStatus");
+  assert.equal(
+    describeToolResult("aisharepoint_search_context", { source: "Wiki" }, 'No results in "Wiki" for that query.'),
+    "Search of Wiki: no results — continuing…",
+  );
+  const big = describeToolResult("aisharepoint_get_context_item", {}, "x".repeat(5000));
+  assert.match(big, /KB of text — continuing…$/);
+  assert.equal(describeToolResult("aisharepoint_list_sources", {}, ""), "list sources: empty result — continuing…");
+});

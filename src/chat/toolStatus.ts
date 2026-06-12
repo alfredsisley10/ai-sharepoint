@@ -8,6 +8,62 @@
 const short = (s: string, n = 48): string => (s.length > n ? `${s.slice(0, n)}…` : s);
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 
+/** Compact completion line for a finished tool call — what came BACK, so a
+ *  multi-round turn narrates results ("Search of CMDB: 12 result(s)"), not
+ *  only intentions. Result text is the tool's own output (JSON or prose);
+ *  never assumed well-formed. */
+export function describeToolResult(name: string, input: unknown, resultText: string): string {
+  const i = (input ?? {}) as Record<string, unknown>;
+  const src = str(i.source);
+  const subject = (() => {
+    switch (name) {
+      case "aisharepoint_search_context":
+        return `Search${src ? ` of ${src}` : ""}`;
+      case "aisharepoint_run_bookmark":
+        return `Bookmark${str(i.name) ? ` “${short(String(i.name), 40)}”` : ""}`;
+      case "aisharepoint_get_context_item":
+        return "Item fetch";
+      case "aisharepoint_db_schema":
+        return `${src ?? "Database"} schema lookup`;
+      case "aisharepoint_vertex_answer":
+        return "Grounded answer";
+      case "aisharepoint_site_overview":
+        return "Site overview";
+      case "aisharepoint_list_pages":
+        return "Page listing";
+      default:
+        return name.replace(/^aisharepoint_/, "").replace(/_/g, " ");
+    }
+  })();
+  const text = resultText.trim();
+  if (!text) return `${subject}: empty result — continuing…`;
+  if (/^no (results|bookmarks|reference sources|visible)/i.test(text)) {
+    return `${subject}: no results — continuing…`;
+  }
+  let measure: string;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) {
+      measure = `${parsed.length} result(s)`;
+    } else if (parsed && typeof parsed === "object") {
+      const obj = parsed as Record<string, unknown>;
+      const arr = ["result", "results", "tables", "pages", "citations", "hits"]
+        .map((k) => obj[k])
+        .find(Array.isArray) as unknown[] | undefined;
+      measure = arr
+        ? `${arr.length} result(s)`
+        : typeof obj.answer === "string"
+          ? "answer ready"
+          : `${Object.keys(obj).length} field(s)`;
+    } else {
+      measure = "done";
+    }
+  } catch {
+    measure = text.length > 1024 ? `${(text.length / 1024).toFixed(1)} KB of text` : "done";
+  }
+  return `${subject}: ${measure} — continuing…`;
+}
+
 export function describeToolCall(name: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>;
   const src = str(i.source);

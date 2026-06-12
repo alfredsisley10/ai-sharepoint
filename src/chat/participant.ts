@@ -14,7 +14,7 @@ import { redactError } from "../core/redaction";
 import { AppError, adviceFor } from "../core/errors";
 import { Logger } from "../core/log";
 import { wireEnabled, emitWire, capDetail, safeJson } from "../core/wireLog";
-import { describeToolCall } from "./toolStatus";
+import { describeToolCall, describeToolResult } from "./toolStatus";
 
 export const PARTICIPANT_ID = "aiSharePoint.sharepoint";
 
@@ -308,11 +308,12 @@ async function answerWithModel(
 
   let sawText = false;
   for (let round = 0; ; round++) {
-    // Per-round status so the user can follow a multi-step turn (pilot).
+    // Per-round status so the user can follow a multi-step turn (pilot):
+    // name the model and the step so long turns read as a narrated plan.
     stream.progress(
       round === 0
-        ? "Working on your request…"
-        : "Reviewing what I found and continuing…",
+        ? `Asking ${model.name}…`
+        : `Step ${round + 1}: ${model.name} is reviewing the results…`,
     );
 
     let text = "";
@@ -384,12 +385,15 @@ async function answerWithModel(
           { input: call.input, toolInvocationToken: request.toolInvocationToken },
           token,
         );
+        const rendered = result.content
+          .map((p) => (p instanceof vscode.LanguageModelTextPart ? p.value : "[non-text part]"))
+          .join("\n");
         if (wireEnabled()) {
-          const rendered = result.content
-            .map((p) => (p instanceof vscode.LanguageModelTextPart ? p.value : "[non-text part]"))
-            .join("\n");
           emitWire("tool", "←", `${call.name} — ${rendered.length} chars`, capDetail(rendered));
         }
+        // Completion status: what came back, not just what was attempted —
+        // "Search of CMDB: 12 result(s) — continuing…" (pilot).
+        stream.progress(describeToolResult(call.name, call.input, rendered));
         resultParts.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
       } catch (err) {
         emitWire("tool", "✗", `${call.name} — ${redactError(err).message}`);
@@ -475,17 +479,21 @@ async function buildSiteContext(
     return `${referenceBlock}\nConfigured connections:\n${inventory}\n(No single site could be inferred for this question — ask the user to name one if needed.)`;
   }
 
-  // Read the live site ONLY when the question is actually about a site: one is
-  // explicitly referenced, OR SharePoint is the only context (no reference
-  // sources), OR the prompt uses SharePoint vocabulary. Otherwise skip the read
-  // entirely — no misleading "Reading <site>…" and no wasted Graph call when the
-  // user asked about Confluence/a database/etc. The model can still call
-  // site_overview itself, which shows its own accurate status (pilot).
+  // Read the live site ONLY on actual site evidence: one is explicitly
+  // referenced (URL or name), or the prompt uses SHAREPOINT-SPECIFIC
+  // vocabulary. The vocabulary is deliberately narrow — generic words like
+  // "list", "page", or "document" appear constantly in questions aimed at
+  // OTHER sources ("list the top Splunk errors"), and the old broad match
+  // (plus a no-reference-sources bypass) kept showing "Reading <site>…" on
+  // every turn regardless of what was being done (pilot, twice). Skipping
+  // costs nothing: the tools are declared on every request, so the model
+  // calls site_overview/list_pages itself — with its own accurate status —
+  // whenever the question turns out to concern the site.
   const siteVocab =
-    /\b(site|sites|page|pages|list|lists|librar|web ?part|sharepoint|subsite|navigation|home page|landing page)\b/i.test(
+    /\b(sharepoint|site|sites|subsite|web ?parts?|site ?(?:map|nav)|navigation|home ?page|landing ?page|librar(?:y|ies))\b/i.test(
       request.prompt,
     );
-  if (!explicitConn && referenceSources.length > 0 && !siteVocab) {
+  if (!explicitConn && !siteVocab) {
     return [
       referenceBlock,
       `Configured SharePoint connections (not read live — call site_overview / list_pages if the question turns out to concern a site):\n${inventory}`,

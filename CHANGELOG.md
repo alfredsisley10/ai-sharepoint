@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.0 — 2026-06-12
+
+### Changed — @sharepoint status: no more reflexive "Reading <site>", and results narrate back (pilot)
+- **"Reading <site>…" no longer appears regardless of the task.** The live site read now
+  requires actual site evidence: an explicitly referenced site (URL or name) or
+  SharePoint-specific vocabulary. The previous trigger matched generic words — *"**list** the
+  top Splunk errors"* read the SharePoint site — and fired on every turn when no reference
+  sources were configured. Skipping costs nothing: the model calls `site_overview`/`list_pages`
+  itself (with its own accurate status) whenever the question really concerns the site.
+- **Each processing step now reports outcomes, not just intentions**: rounds are labeled with
+  the model and step (*"Asking GPT-4.1…"*, *"Step 2: GPT-4.1 is reviewing the results…"*), and
+  every tool call is followed by a completion line saying what came back — *"Search of CMDB:
+  12 result(s) — continuing…"*, *"Bookmark "IT Help queue": 2 result(s)…"*, *"Search of Wiki:
+  no results…"* — so long multi-tool turns read as a narrated plan with visible progress.
+
 ## 0.21.2 — 2026-06-12
 
 ### Fixed — ServiceNow cookie sessions: evidence-based rejection diagnosis + gateway compatibility (pilot)

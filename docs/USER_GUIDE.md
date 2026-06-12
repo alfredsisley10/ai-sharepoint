@@ -146,9 +146,15 @@ Open the Chat view and address `@sharepoint`:
 @sharepoint /usage
 ```
 
-- **Site context is automatic**: if your question references a connected site (by URL or name),
-  or you have exactly one connection, the assistant reads the site's lists and pages live and
-  answers from real data.
+- **Site context is automatic — when the question is about a site**: if you reference a
+  connected site (by URL or name) or use SharePoint vocabulary, the assistant reads the site's
+  lists and pages live and answers from real data. Questions aimed elsewhere (Splunk, a
+  database, ServiceNow, …) skip the site read entirely — no reflexive *"Reading <site>…"* —
+  and the assistant fetches site data itself if the conversation turns to it.
+- **Every step narrates**: rounds show the model and step (*"Asking GPT-4.1…"*, *"Step 2: …
+  reviewing the results…"*), each tool call shows an input-aware line (*"Searching CMDB for
+  …"*), and each completed call reports what came back (*"Search of CMDB: 12 result(s) —
+  continuing…"*), so long multi-tool turns are followable end to end.
 - **Reference sources are searchable in chat**: ask things like _“search Confluence for content
   about AI automation and aggregate what's relevant”_ — the assistant calls the same read-only
   tools available in agent mode (search, fetch item, run bookmark), shows each step, and can
