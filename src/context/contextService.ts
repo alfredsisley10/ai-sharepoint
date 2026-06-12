@@ -38,6 +38,11 @@ import {
   browseServiceNowCandidates,
 } from "./adapters/servicenow";
 import { verifySplunk, searchSplunk, browseSplunkCandidates } from "./adapters/splunk";
+import {
+  snowTokensFromSecret,
+  snowTokenExpired,
+  refreshSnowTokens,
+} from "./adapters/servicenowAuth";
 import { SchemaCatalog } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
 
@@ -71,6 +76,24 @@ export class ContextService {
       );
     }
     return (interactive) => broker(credential, interactive, POWERBI_SCOPES);
+  }
+
+  /** snow-oauth credentials: refresh when near expiry (persisting the new
+   *  tokens) and hand adapters an ephemeral bearer credential. */
+  private async snowCredential(
+    source: ContextSource,
+    credential: ContextCredential,
+  ): Promise<ContextCredential> {
+    if (credential.method !== "snow-oauth") return credential;
+    let tokens = snowTokensFromSecret(credential.secret);
+    if (snowTokenExpired(tokens, Date.now())) {
+      tokens = await refreshSnowTokens(source.baseUrl, tokens, Date.now());
+      await this.store.setCredential(source.id, {
+        method: "snow-oauth",
+        secret: JSON.stringify(tokens),
+      });
+    }
+    return { method: "pat", secret: tokens.accessToken };
   }
 
   caps(): ReadCaps {
@@ -169,7 +192,7 @@ export class ContextService {
         case "powerbi":
           return verifyPowerBi(this.powerBiTokens(credential), caps);
         case "servicenow":
-          return verifyServiceNow(source, credential, caps);
+          return this.snowCredential(source, credential).then((c) => verifyServiceNow(source, c, caps));
         case "splunk":
           return verifySplunk(source, credential, caps);
         default:
@@ -211,7 +234,9 @@ export class ContextService {
             case "powerbi":
               return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
             case "servicenow":
-              return searchServiceNow(source, credential, query, caps);
+              return this.snowCredential(source, credential).then((c) =>
+                searchServiceNow(source, c, query, caps),
+              );
             case "splunk":
               return searchSplunk(source, credential, query, caps);
             default:
@@ -256,7 +281,9 @@ export class ContextService {
           }
           switch (source.type) {
             case "servicenow":
-              return getServiceNowItem(source, credential, id, caps);
+              return this.snowCredential(source, credential).then((c) =>
+                getServiceNowItem(source, c, id, caps),
+              );
             case "ldap":
               return getLdapEntry(source, credential, id, this.ldapTls(), caps);
             case "jira":
@@ -427,7 +454,9 @@ export class ContextService {
             return browsePowerBi(this.powerBiTokens(credential), caps);
           }
           if (source.type === "servicenow") {
-            return browseServiceNowCandidates(source, credential, caps);
+            return this.snowCredential(source, credential).then((c) =>
+              browseServiceNowCandidates(source, c, caps),
+            );
           }
           if (source.type === "splunk") {
             return browseSplunkCandidates(source, credential, caps);

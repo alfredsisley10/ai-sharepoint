@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -48,7 +48,8 @@
         "aiSharePoint.sync.allowedRemoteHosts",
         "aiSharePoint.ldap.caCertificatesFile",
         "aiSharePoint.context.allowSchemaIndexing",
-        "aiSharePoint.ldap.dnsServers"
+        "aiSharePoint.ldap.dnsServers",
+        "aiSharePoint.servicenow.oauthClientId"
       ]
     }
   },
@@ -1342,6 +1343,12 @@
           "default": [],
           "order": 16,
           "markdownDescription": "**Machine-scoped.** Internal DNS server IPs used for Active Directory **SRV lookups** (e.g. `[\"10.0.0.53\", \"10.0.1.53\"]`). Set this when LDAP works in the office but fails on VPN: Node's resolver bypasses Windows NRPT / VPN split-DNS rules, so pointing SRV queries directly at corporate DNS by IP makes discovery deterministic everywhere. Empty = system resolver."
+        },
+        "aiSharePoint.servicenow.oauthClientId": {
+          "type": "string",
+          "default": "",
+          "order": 17,
+          "markdownDescription": "**Machine-scoped.** OAuth client ID for **ServiceNow browser sign-in** — from a one-time Application Registry entry (System OAuth → *Create an OAuth API endpoint for external clients*) with redirect URL `http://localhost:51725/callback`. Users then sign in via their browser SSO session; no passwords or hand-issued tokens. Leave empty to hide the browser option."
         }
       }
     }

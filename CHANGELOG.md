@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.10.5 — 2026-06-12
+
+### Added — ServiceNow browser sign-in (SSO) — no passwords, no hand-issued tokens (pilot)
+- New first option in the ServiceNow sign-in picker: **Browser sign-in** — your browser opens,
+  your **existing ServiceNow SSO session** authenticates you, and the extension receives an
+  OAuth code on `localhost:51725` which it exchanges for access + refresh tokens (PKCE; client
+  secret optional). Tokens live in the OS keychain and **auto-refresh** near expiry; wire
+  logging withholds all token traffic. One-time admin setup: an Application Registry OAuth
+  client with redirect URL `http://localhost:51725/callback`, its ID distributed via the new
+  machine-scoped `aiSharePoint.servicenow.oauthClientId`.
+
+### Changed — Splunk setup from the URL you actually know (pilot)
+- Enter **the Splunk URL you open in your browser** (e.g. `https://acme.splunkcloud.com`) —
+  the wizard derives the management-API candidates (`:8089` on the stack, plus the
+  `api.<stack>` form), **verifies them with your sign-in**, and picks the one that answers;
+  the browser URL doubles as the pre-filled deep-link target. Manual API entry remains only
+  as the fallback (Splunk Cloud may require API access/IP allowlisting).
+
+### Fixed — Error Reports list can be dismissed (pilot)
+- The viewer no longer pins itself open on focus loss (that behavior is for data-entry
+  wizards, not viewers): click anywhere else or press Esc to close, and an explicit
+  **Close** item tops the list.
+
 ## 0.10.4 — 2026-06-12
 
 ### Changed — ServiceNow setup is "connect, then pick from what you can access" (pilot)

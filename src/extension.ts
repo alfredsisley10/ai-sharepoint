@@ -78,6 +78,14 @@ import { setWireSink } from "./core/wireLog";
 import { setLdapDnsServers } from "./context/ldap/ldapClient";
 import { enumeratePowerBiDatasets, POWERBI_SCOPES } from "./context/adapters/powerbi";
 import { listSnowTables } from "./context/adapters/servicenow";
+import {
+  buildSnowAuthUrl,
+  exchangeSnowCode,
+  SNOW_LOOPBACK_PORT,
+} from "./context/adapters/servicenowAuth";
+import { deriveSplunkApiCandidates, verifySplunk } from "./context/adapters/splunk";
+import * as http from "node:http";
+import * as nodeCrypto from "node:crypto";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
 import {
@@ -1464,7 +1472,7 @@ export function activate(context: vscode.ExtensionContext): void {
       baseUrl = url.trim().replace(/\/+$/, "");
       // Connect first, then enumerate what THIS account can read — no table
       // names to know (pilot). Falls back to typing one if listing fails.
-      presetCredential = await promptContextCredential("servicenow", "cloud");
+      presetCredential = await promptContextCredential("servicenow", "cloud", undefined, baseUrl);
       if (!presetCredential) return;
       const snowCred = presetCredential;
       let tables: Array<{ name: string; label: string }> = [];
@@ -1509,8 +1517,8 @@ export function activate(context: vscode.ExtensionContext): void {
       deployment = "datacenter";
       const url = await vscode.window.showInputBox({
         ignoreFocusOut: true,
-        title: "Splunk — management API URL (1/3)",
-        placeHolder: "https://splunk.corp.example:8089   (the REST port, usually 8089 — not Splunk Web)",
+        title: "Splunk — the URL you open in your browser (1/3)",
+        placeHolder: "https://acme.splunkcloud.com — the management API address is derived and verified for you",
         validateInput: (v) => {
           try {
             return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
@@ -1520,7 +1528,50 @@ export function activate(context: vscode.ExtensionContext): void {
         },
       });
       if (!url) return;
-      baseUrl = url.trim().replace(/\/+$/, "");
+      const webEntry = url.trim().replace(/\/+$/, "");
+      const candidates = deriveSplunkApiCandidates(webEntry);
+      presetCredential = await promptContextCredential("splunk", "datacenter");
+      if (!presetCredential) return;
+      const splunkCred = presetCredential;
+      baseUrl = "";
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Finding your Splunk management API…" },
+        async (progress) => {
+          for (const cand of candidates) {
+            progress.report({ message: cand });
+            try {
+              await verifySplunk(
+                { id: "probe", type: "splunk", displayName: "probe", baseUrl: cand, deployment: "datacenter", authMethod: splunkCred.method, addedAt: nowIso() },
+                splunkCred,
+                contextService.caps(),
+              );
+              baseUrl = cand;
+              return;
+            } catch (err) {
+              log.warn(`Splunk probe ${cand} failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        },
+      );
+      if (!baseUrl) {
+        const manual = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Couldn't reach the derived API address — enter the management API URL",
+          value: candidates[0] ?? "https://splunk.corp.example:8089",
+          prompt: "Usually the same host on port 8089. Splunk Cloud may need API access enabled / IP allowlisting — see the message in the log.",
+          validateInput: (v) => {
+            try {
+              return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+            } catch {
+              return "Enter a valid https:// URL";
+            }
+          },
+        });
+        if (!manual) return;
+        baseUrl = manual.trim().replace(/\/+$/, "");
+      }
+      // The browser URL doubles as the deep-link target.
+      const autoWeb = !webEntry.includes(":8089") ? webEntry : "";
       const index = await vscode.window.showInputBox({
         ignoreFocusOut: true,
         title: "Splunk — default index (2/3, optional)",
@@ -1531,8 +1582,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (index === undefined) return;
       const web = await vscode.window.showInputBox({
         ignoreFocusOut: true,
-        title: "Splunk — Splunk Web URL (3/3, optional)",
-        placeHolder: "https://splunk.corp.example:8000 — makes results deep-link into Splunk Web (Enter to skip)",
+        title: "Splunk — Splunk Web URL for deep links (3/3)",
+        value: autoWeb,
+        placeHolder: "https://acme.splunkcloud.com — pre-filled from what you entered (Enter to accept)",
         validateInput: (v) => {
           if (!v.trim()) return undefined;
           try {
@@ -1848,7 +1900,7 @@ export function activate(context: vscode.ExtensionContext): void {
       credential =
         source.type === "powerbi"
           ? await pickAadCredential()
-          : await promptContextCredential(source.type, source.deployment);
+          : await promptContextCredential(source.type, source.deployment, undefined, source.baseUrl);
       if (!credential) return;
       fresh = true;
     }
@@ -2800,6 +2852,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     const pick = await vscode.window.showQuickPick(
       [
+        {
+          label: "$(close) Close",
+          description: "dismiss this list (clicking elsewhere or Esc works too)",
+          detail: undefined as string | undefined,
+          report: undefined as undefined,
+          action: undefined as string | undefined,
+        },
         ...reports.map((r) => ({
           label: `$(bug) ${r.code}`,
           description: `${r.context} · ×${r.count} · ${r.lastAt.slice(0, 16)}Z`,
@@ -2822,7 +2881,7 @@ export function activate(context: vscode.ExtensionContext): void {
           action: "clear",
         },
       ],
-      { ignoreFocusOut: true, title: `Error reports (${reports.length})`, matchOnDetail: true },
+      {  title: `Error reports (${reports.length})`, matchOnDetail: true },
     );
     if (!pick) return;
     if (pick.action === "export") {
@@ -3017,6 +3076,78 @@ async function promptNumber(
   return raw === undefined ? undefined : Number(raw);
 }
 
+/** ServiceNow browser sign-in: PKCE auth-code over a loopback redirect —
+ *  the browser (and its existing SSO session) does the authenticating;
+ *  we only ever see the one-time code and the resulting tokens. */
+async function snowBrowserSignIn(
+  instanceUrl: string,
+  clientId: string,
+  clientSecret: string | undefined,
+): Promise<ContextCredential | undefined> {
+  const verifier = nodeCrypto.randomBytes(32).toString("base64url");
+  const challenge = nodeCrypto.createHash("sha256").update(verifier).digest("base64url");
+  const state = nodeCrypto.randomUUID();
+
+  const code = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Complete the ServiceNow sign-in in your browser…",
+      cancellable: true,
+    },
+    (_p, token) =>
+      new Promise<string | undefined>((resolve, reject) => {
+        const server = http.createServer((req, res) => {
+          const u = new URL(req.url ?? "/", `http://localhost:${SNOW_LOOPBACK_PORT}`);
+          if (u.pathname !== "/callback") {
+            res.writeHead(404).end();
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end("<html><body><h3>AI SharePoint: sign-in received.</h3>You can close this tab and return to VS Code.</body></html>");
+          const returnedState = u.searchParams.get("state");
+          const returnedCode = u.searchParams.get("code");
+          server.close();
+          if (!returnedCode || returnedState !== state) {
+            reject(new AppError("ServiceNow sign-in returned no valid code (state mismatch).", "auth.failed"));
+          } else {
+            resolve(returnedCode);
+          }
+        });
+        server.on("error", (err: NodeJS.ErrnoException) => {
+          reject(
+            new AppError(
+              err.code === "EADDRINUSE"
+                ? `Port ${SNOW_LOOPBACK_PORT} is busy — close the application using it and retry.`
+                : `Sign-in listener failed: ${err.message}`,
+              "auth.failed",
+            ),
+          );
+        });
+        server.listen(SNOW_LOOPBACK_PORT, "127.0.0.1", () => {
+          void vscode.env.openExternal(
+            vscode.Uri.parse(buildSnowAuthUrl(instanceUrl, clientId, state, challenge)),
+          );
+        });
+        const timer = setTimeout(() => {
+          server.close();
+          reject(new AppError("ServiceNow sign-in timed out after 3 minutes.", "auth.failed"));
+        }, 180_000);
+        token.onCancellationRequested(() => {
+          clearTimeout(timer);
+          server.close();
+          resolve(undefined);
+        });
+      }),
+  );
+  if (!code) return undefined;
+  const tokens = await exchangeSnowCode(
+    instanceUrl,
+    { code, clientId, clientSecret, codeVerifier: verifier },
+    Date.now(),
+  );
+  return { method: "snow-oauth", secret: JSON.stringify(tokens) };
+}
+
 /** Validate a bookmark locator at edit/save time. SQL bookmarks must stay
  *  read-only SELECTs (the runtime guard re-checks — this is early feedback);
  *  MongoDB bookmarks must be a valid query spec. */
@@ -3208,6 +3339,7 @@ async function promptContextCredential(
   type: ContextSourceType,
   deployment: ContextDeployment,
   defaultUpn?: string,
+  baseUrl?: string,
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
   if (type === "splunk") {
@@ -3253,8 +3385,23 @@ async function promptContextCredential(
     return { method: "basic", username: username.trim(), secret };
   }
   if (type === "servicenow") {
+    const snowClientId = vscode.workspace
+      .getConfiguration("aiSharePoint")
+      .get<string>("servicenow.oauthClientId", "")
+      .trim();
     const mode = await vscode.window.showQuickPick(
       [
+        ...(baseUrl
+          ? [
+              {
+                label: "$(globe) Browser sign-in (SSO — recommended)",
+                description: snowClientId
+                  ? "opens your browser; your existing ServiceNow session does the authenticating"
+                  : "requires aiSharePoint.servicenow.oauthClientId (one-time admin setup)",
+                value: "browser" as const,
+              },
+            ]
+          : []),
         {
           label: "$(key) Basic — integration user + password",
           description: "a least-privilege read-only service account is recommended",
@@ -3269,6 +3416,22 @@ async function promptContextCredential(
       { ignoreFocusOut: true, title: "ServiceNow sign-in" },
     );
     if (!mode) return undefined;
+    if (mode.value === "browser") {
+      if (!snowClientId) {
+        void vscode.window.showWarningMessage(
+          "Browser sign-in needs aiSharePoint.servicenow.oauthClientId — ask your ServiceNow admin to create an OAuth client (Application Registry) with redirect URL http://localhost:51725/callback, then set the ID in settings.",
+        );
+        return undefined;
+      }
+      const secretRaw = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "OAuth client secret — Enter to skip for PKCE/public clients",
+        password: true,
+        prompt: "Only needed when the Application Registry entry is confidential; PKCE-enabled clients need none.",
+      });
+      if (secretRaw === undefined) return undefined;
+      return snowBrowserSignIn(baseUrl!, snowClientId, secretRaw.trim() || undefined);
+    }
     if (mode.value === "pat") {
       const secret = await vscode.window.showInputBox({
         ignoreFocusOut: true,

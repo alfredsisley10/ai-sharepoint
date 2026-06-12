@@ -24,7 +24,14 @@ export type ContextDeployment = "cloud" | "datacenter";
  *  (nothing persisted — the keychain entry is a marker);
  *  aad-sso = Microsoft 365 sign-in reused from a connected site (the
  *  keychain entry stores only the provider/cache handles, no secret). */
-export type ContextAuthMethod = "basic" | "pat" | "ldap-simple" | "ntlm" | "gcloud-sso" | "aad-sso";
+export type ContextAuthMethod =
+  | "basic"
+  | "pat"
+  | "ldap-simple"
+  | "ntlm"
+  | "gcloud-sso"
+  | "aad-sso"
+  | "snow-oauth";
 
 export interface ContextSource {
   /** Stable random id; also keys the keychain credential entry. */

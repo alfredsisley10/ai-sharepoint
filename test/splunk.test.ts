@@ -179,3 +179,18 @@ test("browse: saved searches + non-internal indexes, each listing best-effort", 
   );
   assert.equal(partial.length, 1);
 });
+
+test("deriveSplunkApiCandidates maps browser URLs to management-API candidates", async () => {
+  const { deriveSplunkApiCandidates } = await import("../src/context/adapters/splunk");
+  assert.deepEqual(deriveSplunkApiCandidates("https://acme.splunkcloud.com/en-US/app/search"), [
+    "https://acme.splunkcloud.com:8089",
+    "https://acme.api.splunkcloud.com:8089",
+  ]);
+  assert.deepEqual(deriveSplunkApiCandidates("https://splunk.corp.example:8000/"), [
+    "https://splunk.corp.example:8089",
+  ]);
+  assert.deepEqual(deriveSplunkApiCandidates("https://splunk.corp.example:8089"), [
+    "https://splunk.corp.example:8089",
+  ]);
+  assert.deepEqual(deriveSplunkApiCandidates("not a url"), []);
+});

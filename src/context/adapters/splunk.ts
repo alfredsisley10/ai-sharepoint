@@ -65,6 +65,26 @@ function looksLikeSpl(q: string): boolean {
   );
 }
 
+/** Users know the URL they open in a browser, not the management port.
+ *  Derive REST-API candidates: Splunk Cloud web URLs map to :8089 on the
+ *  stack (and the api.<stack> form some stacks/trials use); on-prem web
+ *  (:8000 or bare) maps to the same host on :8089. Already-:8089 URLs pass
+ *  through. */
+export function deriveSplunkApiCandidates(input: string): string[] {
+  let u: URL;
+  try {
+    u = new URL(input.trim());
+  } catch {
+    return [];
+  }
+  if (u.port === "8089") return [`https://${u.hostname}:8089`];
+  const host = u.hostname;
+  const out = [`https://${host}:8089`];
+  const m = host.match(/^([^.]+)\.splunkcloud\.com$/i);
+  if (m) out.push(`https://${m[1]}.api.splunkcloud.com:8089`);
+  return out;
+}
+
 export function defaultSplunkIndex(source: Pick<ContextSource, "baseUrl">): string | undefined {
   try {
     return new URL(source.baseUrl).searchParams.get("index") ?? undefined;
