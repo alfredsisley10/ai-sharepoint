@@ -198,12 +198,14 @@ export function registerContextTools(
     ),
     vscode.lm.registerTool(
       "aisharepoint_search_context",
-      guarded<{ source?: string; query: string }>(
+      guarded<{ source?: string; query: string; allowExpensive?: boolean }>(
         "aisharepoint_search_context",
         "Searching reference sources",
         async (input) => {
           const source = resolveOrExplain(input.source);
-          const hits = await service.search(source, input.query);
+          const hits = await service.search(source, input.query, {
+            allowExpensive: input.allowExpensive === true,
+          });
           if (hits.length === 0) {
             return `No results in "${source.displayName}" for that query. (Confluence accepts raw CQL, Jira raw JQL, or plain text.)`;
           }

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.21.0 — 2026-06-12
+
+### Added — SQL Server cost guard: size first, sample when expensive (ADR-0030) (pilot)
+- Pilot: ER-diagram discovery aggregates over multi-million-row tables died at the 30s
+  query timeout. SQL Server statements are now **cost-gated before they run**: one cheap
+  catalog probe reads the referenced tables' **approximate row counts** and **leading index
+  columns** (metadata only, no scan), and a pure estimator decides whether the statement can
+  avoid scanning a big table (indexed `WHERE` → seek; bare `TOP n` → early-out; aggregates /
+  `DISTINCT` / `GROUP BY` / `ORDER BY` / unindexed `WHERE` on a ≥500k-row table → expensive).
+- **Expensive queries run on a performant subset instead**: each big table is read through a
+  bounded `TOP 10000` sample (small tables keep full data), and the **first result says so** —
+  including per-table `≈row` counts, so "how big is X" never needs a `COUNT(*)` scan again.
+  Statements that can't be rewritten safely (CTEs, derived tables, APPLY/PIVOT) are declined
+  *fast* with the same sizing guidance instead of burning the timeout.
+- **Explicit override**: `allowExpensive=true` on the search tool runs the original statement —
+  the assistant may set it only after you accept a potentially slow scan. The guard **fails
+  open** (no catalog visibility → previous behavior, unchanged).
+- Honest timeout errors: "SQL Server **query timed out**" with remediation — no longer the
+  misleading "connection failed: Timeout: Request failed to complete in 30000ms".
+
 ## 0.20.0 — 2026-06-12
 
 ### Added — Outlook channel test is its own transaction (pilot)

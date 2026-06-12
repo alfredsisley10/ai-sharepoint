@@ -213,16 +213,24 @@ export class ContextService {
     return credential;
   }
 
-  async search(source: ContextSource, query: string): Promise<ContextSearchHit[]> {
+  async search(
+    source: ContextSource,
+    query: string,
+    opts?: { allowExpensive?: boolean },
+  ): Promise<ContextSearchHit[]> {
     const caps = this.caps();
     return this.cache.getOrLoad(
-      TtlCache.key(source.id, "search", `${caps.maxResults}:${query}`),
+      TtlCache.key(
+        source.id,
+        "search",
+        `${caps.maxResults}:${opts?.allowExpensive ? "full:" : ""}${query}`,
+      ),
       this.ttlMs(),
       async () => {
         const credential = await this.storedCredential(source);
         return this.tracked(source, false, () => {
           if (ContextService.DB_TYPES.has(source.type)) {
-            return searchDb(source, credential, query, this.dbTls(), caps);
+            return searchDb(source, credential, query, this.dbTls(), caps, opts);
           }
           switch (source.type) {
             case "ldap":

@@ -336,6 +336,16 @@ reasons — ADR-0022):
   on top of server-side read-only sessions where the engine supports them); MongoDB takes a
   JSON spec `{"collection": "...", "filter": {...}, "limit": n}`. Results are row-capped
   (`context.maxResults`) and time-limited.
+- **SQL Server cost guard (ADR-0030)**: before a statement runs, the extension reads the
+  referenced tables' **approximate sizes and leading index columns from catalog stats**
+  (instant, metadata only). A statement that would scan a big (≥500k-row) table — aggregates,
+  `DISTINCT`/`GROUP BY`/`ORDER BY`, or a `WHERE` that no index can seek — runs against a
+  bounded **`TOP 10000` sample per big table instead**, and the first result clearly says so
+  (with per-table row counts, so "how big is X?" never needs a `COUNT(*)`). Refine the query
+  with an indexed `WHERE`/`TOP`, or explicitly accept a full run when asked — slow scans can
+  otherwise exceed the query timeout (the timeout error now says *query timed out*, with the
+  way out, instead of "connection failed"). The guard fails open: if your login can't see
+  catalog stats, queries behave exactly as before.
 - **Browse & Bookmark** lists the database's tables/collections and saves capped sample-row
   queries as bookmarks — **you can tailor the SQL before saving**, and edit any bookmark's
   name/query later (inline pencil or right-click → *Edit Bookmark*; database queries stay
