@@ -118,6 +118,9 @@ export interface TestedPair {
 /** Persisted ER model — travels with the schema (and reference exports). */
 export interface ErModel {
   builtAt: string;
+  /** Extension version whose CODE ran the build — torn installs made
+   *  "which build produced this result?" unanswerable (pilot). */
+  builtBy?: string;
   /** Baseline sample size; actual probes adapt per pair (row estimates,
    *  escalation while fast, complete joins on small tables). */
   sampleSize: number;

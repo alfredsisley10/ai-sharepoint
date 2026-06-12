@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.30.4 — 2026-06-12
+
+### Added — ER results are stamped with the build that produced them (pilot)
+- The torn-install episode made "which build produced this zero-join result?" unanswerable —
+  some ER test runs likely executed pre-fix code. Every ER model now records the **extension
+  version whose code ran the build** (`builtBy`), and the probe report header shows it
+  (*"42 pair(s) probed (ai mode) by v0.30.4 …"*), so a result can always be attributed to a
+  build when comparing runs across updates.
+
 ## 0.30.3 — 2026-06-12
 
 ### Fixed — torn installations are detected and named (pilot: "no option to enable Projects")

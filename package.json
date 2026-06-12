@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.30.3",
+  "version": "0.30.4",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",

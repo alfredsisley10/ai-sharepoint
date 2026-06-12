@@ -1122,7 +1122,7 @@ export function renderProbeReport(model: ErModel): string[] {
     "",
     "### Probe report",
     "",
-    `_${model.candidatesTested} pair(s) probed${model.mode ? ` (${model.mode} mode)` : ""}${model.scopeTables ? `, scoped to ${model.scopeTables} table(s)` : ""}: **${counts.strong} strong**, **${counts.likely} likely**${counts.defined > 0 ? `, **${counts.defined} user-defined** (kept despite the measured rate)` : ""}, ${counts.rejected} below thresholds, ${counts.failed} failed${report.aiProposed !== undefined ? ` · ${report.aiProposed} pair(s) proposed by Copilot${report.aiRefined ? ` + ${report.aiRefined} in the refinement round` : ""}` : ""}._`,
+    `_${model.candidatesTested} pair(s) probed${model.mode ? ` (${model.mode} mode)` : ""}${model.builtBy ? ` by v${model.builtBy}` : ""}${model.scopeTables ? `, scoped to ${model.scopeTables} table(s)` : ""}: **${counts.strong} strong**, **${counts.likely} likely**${counts.defined > 0 ? `, **${counts.defined} user-defined** (kept despite the measured rate)` : ""}, ${counts.rejected} below thresholds, ${counts.failed} failed${report.aiProposed !== undefined ? ` · ${report.aiProposed} pair(s) proposed by Copilot${report.aiRefined ? ` + ${report.aiRefined} in the refinement round` : ""}` : ""}._`,
   ];
   if (report.zeroSampleCount > 0 && report.zeroSampleCount >= Math.max(3, model.candidatesTested / 2)) {
     lines.push(

@@ -779,3 +779,17 @@ test("join + filtering logic mixes parse: qualified joins extracted, literal fil
   assert.equal(joins.length, 1);
   assert.equal(issues.length, 0, JSON.stringify(issues));
 });
+
+test("the probe report names the build that produced it (torn installs made results unattributable)", async () => {
+  const { renderProbeReport } = await import("../src/context/db/erDiagram");
+  const text = renderProbeReport({
+    builtAt: T0,
+    builtBy: "0.30.4",
+    sampleSize: 100,
+    candidatesTested: 3,
+    relationships: [],
+    mode: "ai",
+    report: { tested: [], zeroSampleCount: 0 },
+  }).join("\n");
+  assert.match(text, /probed \(ai mode\) by v0\.30\.4/);
+});

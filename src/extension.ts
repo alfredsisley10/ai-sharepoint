@@ -3255,6 +3255,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const previous = schemas.getSync(source.id)?.er;
     const er: ErModel = {
       builtAt: nowIso(),
+      builtBy: EXTENSION_VERSION,
       sampleSize: ER_SAMPLE_SIZE,
       candidatesTested: tested,
       relationships: mergeRelationships(previous?.relationships ?? [], relationships),
