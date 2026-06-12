@@ -133,3 +133,48 @@ test("describeSnowRejection: a hibernating-instance page is infrastructure, not 
   assert.equal(d.kind, "other");
   assert.match(d.message, /Instance Hibernating/);
 });
+
+test("snow-session secret: plain cookies round-trip; the JSON form carries the g_ck token", async () => {
+  const { buildSnowSessionSecret, parseSnowSessionSecret } = await import(
+    "../src/context/adapters/servicenowAuth"
+  );
+  // No token → plain string (backward compatible with stored captures).
+  assert.equal(buildSnowSessionSecret("JSESSIONID=a; glide=b"), "JSESSIONID=a; glide=b");
+  assert.deepEqual(parseSnowSessionSecret("JSESSIONID=a; glide=b"), { cookies: "JSESSIONID=a; glide=b" });
+  // With token → JSON form, parsed back out.
+  const secret = buildSnowSessionSecret("JSESSIONID=a", "TOK1234567890ABCDEF");
+  assert.deepEqual(parseSnowSessionSecret(secret), { cookies: "JSESSIONID=a", userToken: "TOK1234567890ABCDEF" });
+  // Firefox Copy-All JSON (array) is a cookie capture, not the secret form.
+  const ff = JSON.stringify([{ name: "JSESSIONID", value: "a" }]);
+  assert.deepEqual(parseSnowSessionSecret(ff), { cookies: ff });
+});
+
+test("userTokenIssue: empty is fine (optional); junk is rejected with g_ck guidance", async () => {
+  const { userTokenIssue } = await import("../src/context/adapters/servicenowAuth");
+  assert.equal(userTokenIssue(""), undefined);
+  assert.equal(userTokenIssue("0123456789abcdef0123456789abcdef"), undefined);
+  assert.match(userTokenIssue("short") ?? "", /g_ck/);
+  assert.match(userTokenIssue("has spaces in it which tokens never do") ?? "", /g_ck/);
+});
+
+test("describeSnowRejection: complete fresh cookies + 'User Not Authenticated' without a token points at g_ck", async () => {
+  const { describeSnowRejection } = await import("../src/context/adapters/servicenowAuth");
+  const noToken = describeSnowRejection({
+    status: 401,
+    bodyText: JSON.stringify({ error: { message: "User Not Authenticated", detail: "Required to provide Auth information" } }),
+    requestUrl: "https://corp.service-now.com/api/now/table/incident",
+    storedCookies: "JSESSIONID=a; glide_user_route=g; BIGipServerpool=1.2.3",
+    userTokenSent: false,
+  });
+  assert.match(noToken.summary, /X-UserToken/);
+  assert.match(noToken.summary, /g_ck/);
+  // Once a token IS sent, the g_ck hint must not fire as the primary cause.
+  const withToken = describeSnowRejection({
+    status: 401,
+    bodyText: JSON.stringify({ error: { message: "User Not Authenticated" } }),
+    requestUrl: "https://corp.service-now.com/api/now/table/incident",
+    storedCookies: "JSESSIONID=a; glide_user_route=g",
+    userTokenSent: true,
+  });
+  assert.ok(!withToken.summary.startsWith("Complete, fresh cookies"), withToken.summary);
+});

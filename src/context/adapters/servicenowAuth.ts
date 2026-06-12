@@ -293,6 +293,53 @@ export function cookieStringIssue(raw: string): string | undefined {
   return undefined;
 }
 
+/** Stored snow-session secret. Plain string = cookie capture only (the
+ *  original format, still written when no token is supplied). The JSON
+ *  object form adds the page CSRF token: some instances refuse cookie-
+ *  authenticated /api/now calls without the `X-UserToken` header — the
+ *  value of the page global `g_ck` in a signed-in tab. */
+export interface SnowSessionSecret {
+  cookies: string;
+  userToken?: string;
+}
+
+export function parseSnowSessionSecret(secret: string): SnowSessionSecret {
+  // Only the structured {cookies: "..."} object is the JSON form; Firefox
+  // Copy-All pastes (arrays / name-keyed objects) are cookie captures and
+  // fall through to be normalized as such.
+  try {
+    const p = JSON.parse(secret) as { cookies?: unknown; userToken?: unknown };
+    if (p && typeof p === "object" && !Array.isArray(p) && typeof p.cookies === "string") {
+      return {
+        cookies: p.cookies,
+        ...(typeof p.userToken === "string" && p.userToken.trim()
+          ? { userToken: p.userToken.trim() }
+          : {}),
+      };
+    }
+  } catch {
+    // not JSON — a raw cookie capture
+  }
+  return { cookies: secret };
+}
+
+/** Compose the stored secret: plain cookie string when there is no token
+ *  (backward compatible), the JSON form when there is. */
+export function buildSnowSessionSecret(cookies: string, userToken?: string): string {
+  const token = userToken?.trim();
+  return token ? JSON.stringify({ cookies, userToken: token }) : cookies;
+}
+
+/** Quick sanity check for a pasted g_ck value (long opaque token). */
+export function userTokenIssue(raw: string): string | undefined {
+  const t = raw.trim().replace(/^["']|["']$/g, "");
+  if (!t) return undefined; // optional — empty is fine
+  if (/\s/.test(t) || t.length < 16) {
+    return "That doesn't look like a g_ck token (a long opaque string, no spaces). In the signed-in tab: DevTools → Console → type g_ck → Enter → copy the printed value.";
+  }
+  return undefined;
+}
+
 /** Browser-compatibility User-Agent for cookie-session replay. Some SSO/WAF
  *  front-ends reject requests with non-browser user agents even when the
  *  session cookies are valid — the pilot saw freshly captured cookies fail
@@ -332,6 +379,8 @@ export function describeSnowRejection(args: {
   /** Final URL after redirects (fetch's res.url) when available. */
   finalUrl?: string;
   storedCookies: string;
+  /** Whether an X-UserToken (g_ck) accompanied the cookies. */
+  userTokenSent?: boolean;
 }): SnowRejection {
   const names = cookieNames(args.storedCookies);
   const lower = names.map((n) => n.toLowerCase());
@@ -375,15 +424,22 @@ export function describeSnowRejection(args: {
     `. Cookies replayed: ${names.length > 0 ? names.join(", ") : "none parseable from the stored capture"}.`;
 
   const recapture =
-    `Re-capture via Test Context Source: sign in to ServiceNow in the browser, open DevTools → Network, click any request to ${hostOf(args.requestUrl)}, and copy the WHOLE Cookie header.`;
+    `Re-capture via Test Context Source: sign in to ServiceNow in the browser, open DevTools → Network, click any request to ${hostOf(args.requestUrl)}, and copy the WHOLE Cookie header (the raw "Cookie: …" line or just its value — both work).`;
   let cause: string;
   if (missing.length > 0) {
     cause = `The capture is missing ${missing.join(" and ")} — the session cannot authenticate without them.`;
+  } else if (!args.userTokenSent && /not ?authenticated/i.test(serverSaid)) {
+    // Cookies present and fresh, yet "User Not Authenticated": the classic
+    // remaining cause — the instance requires the page CSRF token for
+    // cookie-authenticated API calls. No cookie capture can fix this; only
+    // g_ck can.
+    cause =
+      "Complete, fresh cookies that still get \"User Not Authenticated\" almost always mean this instance requires the page CSRF token (X-UserToken) for API calls. Get it from the signed-in tab: DevTools → Console → type g_ck → Enter → copy the printed value, then re-capture and paste it when the wizard asks for the optional X-UserToken.";
   } else if (redirectedTo) {
     cause = `An SSO/login front-end (${redirectedTo}) intercepted the call. Fresh cookies fail too when the gateway's own cookies are missing or it only accepts browser traffic — copying the full Cookie header (which includes the gateway's cookies) usually satisfies it.`;
   } else {
     cause =
-      "If these cookies were captured just now, the session is NOT expired — most often the paste missed some of the host's cookies (every cookie matters, including load-balancer/SSO ones like BIGipServer*), or a security gateway in front of the instance accepts only browser requests. If they were captured a while ago, the browser session has timed out.";
+      "If these cookies were captured just now, the session is NOT expired — most often the paste missed some of the host's cookies (every cookie matters, including load-balancer/SSO ones like BIGipServer*), the instance requires the page CSRF token (re-capture and supply the optional X-UserToken: DevTools Console → g_ck), or a security gateway in front of the instance accepts only browser requests. If they were captured a while ago, the browser session has timed out.";
   }
   return { message, summary: `${cause} ${recapture}`, kind };
 }

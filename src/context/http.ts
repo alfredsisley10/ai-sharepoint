@@ -3,6 +3,7 @@ import { ContextCredential } from "./types";
 import {
   cleanCookieString,
   describeSnowRejection,
+  parseSnowSessionSecret,
   SNOW_SESSION_USER_AGENT,
 } from "./adapters/servicenowAuth";
 import { wireEnabled, emitWire, capDetail, safeHeaders, safeUrl } from "../core/wireLog";
@@ -29,9 +30,13 @@ export function authHeaders(credential: ContextCredential): Record<string, strin
   if (credential.method === "snow-session") {
     // Browser-like UA: SSO/WAF front-ends commonly drop non-browser clients
     // even with valid session cookies (pilot: fresh captures rejected).
+    // X-UserToken (g_ck) rides along when captured — some instances refuse
+    // cookie-authenticated /api/now calls without the page CSRF token.
+    const session = parseSnowSessionSecret(credential.secret);
     return {
-      Cookie: cleanCookieString(credential.secret),
+      Cookie: cleanCookieString(session.cookies),
       "User-Agent": SNOW_SESSION_USER_AGENT,
+      ...(session.userToken ? { "X-UserToken": session.userToken } : {}),
     };
   }
   return { Authorization: authHeader(credential) };
@@ -84,12 +89,14 @@ export async function fetchJson<T>(
       // captures fail too): the server's own error body, any off-host
       // redirect, and the replayed cookie NAMES (values never appear).
       const body = await res.text().catch(() => "");
+      const session = parseSnowSessionSecret(credential.secret);
       const d = describeSnowRejection({
         status: res.status,
         bodyText: body,
         requestUrl: url,
         finalUrl: res.url || undefined,
-        storedCookies: credential.secret,
+        storedCookies: session.cookies,
+        userTokenSent: Boolean(session.userToken),
       });
       throw new AppError(d.message, "auth.failed", d.summary);
     }
@@ -134,11 +141,13 @@ export async function fetchJson<T>(
     // HTML page rather than a 401 — diagnose from the page itself (login
     // page? SSO gateway? hibernating instance?) instead of presuming expiry.
     if (credential.method === "snow-session") {
+      const session = parseSnowSessionSecret(credential.secret);
       const d = describeSnowRejection({
         bodyText: text,
         requestUrl: url,
         finalUrl: res.url || undefined,
-        storedCookies: credential.secret,
+        storedCookies: session.cookies,
+        userTokenSent: Boolean(session.userToken),
       });
       throw new AppError(d.message, d.kind === "auth" ? "auth.failed" : "network", d.summary);
     }

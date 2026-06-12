@@ -255,7 +255,11 @@ test("the 401 diagnosis quotes ServiceNow's own error body and never presumes ex
     ),
     (err: Error & { userSummary?: string }) => {
       assert.match(err.message, /User Not Authenticated — Required to provide Auth information/);
-      assert.match(err.userSummary ?? "", /captured just now, the session is NOT expired/);
+      // Complete cookies + "not authenticated" + no token sent = the CSRF
+      // token requirement — the guidance names g_ck, not expiry.
+      assert.match(err.userSummary ?? "", /X-UserToken/);
+      assert.match(err.userSummary ?? "", /g_ck/);
+      assert.ok(!/session has timed out/.test(err.userSummary ?? ""));
       return true;
     },
   );
@@ -307,4 +311,36 @@ test("snow-session requests send a browser-compatible User-Agent; other methods 
     () => searchServiceNow(SRC, CRED, "outage", DEFAULT_CAPS),
   );
   assert.equal(basicUa, undefined);
+});
+
+test("a captured g_ck rides as X-UserToken; cookie-only secrets send none", async () => {
+  let headers: Record<string, string> = {};
+  const respond = () =>
+    new Response(JSON.stringify({ result: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  await withFetchInit(
+    (_url, init) => {
+      headers = init?.headers as Record<string, string>;
+      return respond();
+    },
+    () =>
+      searchServiceNow(
+        SRC,
+        { method: "snow-session", secret: JSON.stringify({ cookies: SESSION_TABLE_PASTE, userToken: "TOK1234567890ABCDEF" }) },
+        "outage",
+        DEFAULT_CAPS,
+      ),
+  );
+  assert.equal(headers["X-UserToken"], "TOK1234567890ABCDEF");
+  assert.equal(headers.Cookie, "JSESSIONID=ABC123; glide_user_route=glide.x", "table paste inside the JSON form still normalizes");
+  await withFetchInit(
+    (_url, init) => {
+      headers = init?.headers as Record<string, string>;
+      return respond();
+    },
+    () => searchServiceNow(SRC, { method: "snow-session", secret: SESSION_TABLE_PASTE }, "outage", DEFAULT_CAPS),
+  );
+  assert.equal(headers["X-UserToken"], undefined);
 });

@@ -404,9 +404,14 @@ Reference your instance's ITSM and CMDB records **read-only**:
 - **Sign-in**: **Browser session** is recommended for SSO and needs **no admin OAuth setup** —
   sign in to ServiceNow in your browser, then paste your session cookies. Every paste shape is
   accepted and normalized to a proper cookie header: the **Cookie request header** (DevTools →
-  Network → any request — most reliable), the **Application/Storage → Cookies table** rows
-  (select the full set and copy; tab-separated is fine), **Firefox's Copy-All JSON**, or
-  one-`name=value`-per-line exports. After the paste the wizard confirms the **cookie names**
+  Network → any request — most reliable; **raw or parsed both work**: right-click the header →
+  *Copy value*, or toggle the *Raw* view and copy the whole `Cookie: …` line), the
+  **Application/Storage → Cookies table** rows (select the full set and copy; tab-separated is
+  fine), **Firefox's Copy-All JSON**, or one-`name=value`-per-line exports. Some instances
+  additionally require the **page CSRF token** for API calls — if complete, fresh cookies
+  still return *"User Not Authenticated"*, supply the optional **X-UserToken** when the wizard
+  asks: in the same signed-in tab, DevTools → **Console** → type `g_ck` → Enter → copy the
+  printed value. After the paste the wizard confirms the **cookie names**
   it captured (values are never shown) and warns if `JSESSIONID` is missing. If a session is
   rejected, the error shows **what ServiceNow actually returned** (its error message, the title
   of any HTML/login page, or the SSO gateway it redirected to) plus the replayed cookie names —

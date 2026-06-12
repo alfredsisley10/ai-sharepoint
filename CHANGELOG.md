@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.23.1 — 2026-06-12
+
+### Fixed — ServiceNow: the missing piece for cookie sessions is the page CSRF token (g_ck) (pilot)
+- Complete, fresh cookies from Edge **and** Chrome — raw or parsed — still failed to connect.
+  No cookie capture can fix that case: many instances require the **page CSRF token**
+  (`X-UserToken`) for cookie-authenticated `/api/now` calls. The wizard now asks for it as an
+  **optional step** after the cookie paste (signed-in tab → DevTools → **Console** → type
+  `g_ck` → Enter → copy the value); when supplied it is stored with the cookies (keychain) and
+  sent as `X-UserToken` on every request. The rejection diagnosis now recognizes the exact
+  signature — complete cookies + *"User Not Authenticated"* + no token sent — and points
+  straight at `g_ck` instead of generic causes.
+- **Capture-format question answered in the UI**: raw and parsed header captures both work and
+  the wizard now says so — right-click the Cookie header → *Copy value*, or toggle DevTools'
+  *Raw* view and copy the whole `Cookie: …` line; the label is stripped and the rest is
+  normalized either way (as are cookie-table rows and Firefox Copy-All JSON).
+- Stored secrets remain backward compatible (cookie-only captures stay plain strings; the
+  token uses a structured form), and cookie normalization still applies inside the new form.
+
 ## 0.23.0 — 2026-06-12
 
 ### Added — Build Database ER Diagram: relationships by probed join rates (ADR-0030) (pilot)

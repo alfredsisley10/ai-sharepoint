@@ -104,6 +104,8 @@ import {
   cleanCookieString,
   cookieStringIssue,
   cookieNames,
+  buildSnowSessionSecret,
+  userTokenIssue,
   SNOW_LOOPBACK_PORT,
 } from "./context/adapters/servicenowAuth";
 import {
@@ -4168,7 +4170,7 @@ async function promptContextCredential(
         password: true,
         placeHolder: "JSESSIONID=…; glide_user_route=…; BIGipServer…=…",
         prompt:
-          "In the tab where you're signed in to ServiceNow: DevTools → Network → any request → copy the whole **Cookie request header** (most reliable). Also accepted: the Application/Storage → Cookies table rows (full set, tab-separated) or Firefox's Copy-All JSON — pastes are normalized to a proper cookie header either way. Read-only access only. Stored solely in your OS keychain, verified once (lockout-safe). It expires when your ServiceNow session does — re-capture via Test Context Source.",
+          "In the tab where you're signed in to ServiceNow: DevTools → Network → any request → the **Cookie request header**. RAW or parsed both work: right-click the header → Copy value, OR toggle the Raw view and copy the whole `Cookie: …` line — the wizard normalizes either (plus the Application/Storage cookies table rows and Firefox's Copy-All JSON). Read-only access only. Stored solely in your OS keychain, verified once (lockout-safe). Re-capture any time via Test Context Source.",
         validateInput: (v) => cookieStringIssue(v),
       });
       if (!secret) return undefined;
@@ -4180,7 +4182,23 @@ async function promptContextCredential(
       void vscode.window.showInformationMessage(
         `Captured ${names.length} session cookie(s): ${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}${names.some((n) => n.toUpperCase() === "JSESSIONID") ? "" : " — note: no JSESSIONID found; if verification fails, copy the Cookie header from the Network tab instead"}.`,
       );
-      return { method: "snow-session", secret: cleaned };
+      // Optional page CSRF token: some instances refuse cookie-authenticated
+      // /api/now calls without X-UserToken — no cookie capture can fix that
+      // (pilot: complete fresh cookies from two browsers still rejected).
+      const userToken = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        password: true,
+        title: "Optional — X-UserToken (g_ck), if your instance requires it (Enter to skip)",
+        placeHolder: "Enter to skip — needed only when complete cookies still get “User Not Authenticated”",
+        prompt:
+          "Some instances require the page CSRF token for API calls even with valid session cookies. In the SAME signed-in tab: DevTools → **Console** → type `g_ck` → Enter → copy the printed value (no quotes). It rotates with the session and is re-captured the same way.",
+        validateInput: (v) => userTokenIssue(v),
+      });
+      if (userToken === undefined) return undefined;
+      return {
+        method: "snow-session",
+        secret: buildSnowSessionSecret(cleaned, userToken.trim().replace(/^["']|["']$/g, "")),
+      };
     }
     if (mode.value === "browser") {
       if (!snowClientId) {
