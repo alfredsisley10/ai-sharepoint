@@ -407,9 +407,18 @@ Search your logs and metrics **read-only** from chat:
   deep links. Sign in with an **authentication token** (Splunk Web → Settings → Tokens;
   recommended) or a least-privilege search account.
 - **Sign-in**: pick **Browser SSO session** (recommended for SAML/SSO — no token or password
-  needed): complete SSO in the browser, then paste your live session key (the `splunkd_*`
-  cookie value from your signed-in browser, via DevTools → Application → Cookies). It uses your
-  browser's own Splunk session and is re-captured the same way when it expires. An
+  needed). Complete SSO in your browser, then paste the **value of the `splunkd_<port>` cookie**
+  (commonly **`splunkd_8000`**) — your live session key. The wizard's *"How to find the cookie"*
+  button shows per-browser steps; in short:
+  - **Edge / Chrome:** `F12` → **Application** tab → **Storage → Cookies →** your Splunk host →
+    copy the **Value** of `splunkd_<port>`.
+  - **Firefox:** `F12` → **Storage** tab → **Cookies** → your Splunk host → copy the value of
+    `splunkd_<port>`.
+  - **Safari:** enable *Settings → Advanced → "Show features for web developers"*, then
+    **Develop → Show Web Inspector → Storage → Cookies** → copy the value of `splunkd_<port>`.
+
+  Copy the **value only** (a long opaque string), not the cookie name. It uses your browser's own
+  Splunk session and is re-captured the same way when it expires (via *Test Context Source*). An
   authentication **token** or **username/password** also work where permitted.
 - **Ask naturally**: *"@sharepoint search Splunk for smtp relay timeouts"* (keywords search the
   default index over the last 24 h), or use raw SPL — `search index=web error | stats count by

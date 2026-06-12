@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.1 — 2026-06-12
+
+### Changed — Splunk browser-SSO: clearer per-browser cookie instructions (pilot)
+- The session-cookie capture now names the exact cookie — **`splunkd_<port>`** (commonly
+  **`splunkd_8000`**, confirmed working in Edge) — and adds a **"How to find the cookie"** step
+  with copy-paste instructions for **Edge/Chrome, Firefox, and Safari** (which DevTools tab,
+  where Cookies live, copy the Value not the name). The input box and user guide carry the same
+  guidance.
+
 ## 0.16.0 — 2026-06-12
 
 ### Added — ServiceNow browser-session sign-in (no admin OAuth client) (pilot)

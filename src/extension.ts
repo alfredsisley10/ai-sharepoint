@@ -3594,24 +3594,60 @@ async function promptContextCredential(
     );
     if (!mode) return undefined;
     if (mode.value === "session") {
-      const open = await vscode.window.showInformationMessage(
-        splunkWebUrl
-          ? `Sign in to Splunk Web (${splunkWebUrl}) with your SSO in the browser, then return here to capture the session.`
-          : "Sign in to Splunk Web with your SSO in the browser, then return here to capture the session.",
-        "Open Splunk Web",
-        "I'm already signed in",
-      );
-      if (!open) return undefined;
-      if (open === "Open Splunk Web" && splunkWebUrl) {
-        await vscode.env.openExternal(vscode.Uri.parse(splunkWebUrl));
+      const cookieHelp = [
+        "# Splunk session cookie — how to find it",
+        "",
+        "After signing in to Splunk Web with your SSO, copy the **value** of the cookie named",
+        "**`splunkd_<port>`** — commonly **`splunkd_8000`** (this is exactly what worked in Edge",
+        "for the pilot). It is your live session key; the value is a long opaque string.",
+        "",
+        "## Microsoft Edge / Google Chrome (Chromium)",
+        "1. Press **F12** to open DevTools (or the **⋯** menu → *More tools → Developer tools*).",
+        "2. Open the **Application** tab.",
+        "3. Left sidebar: **Storage → Cookies →** click your Splunk host.",
+        "4. Find the row named **`splunkd_<port>`** (e.g. `splunkd_8000`) and copy its **Value** cell.",
+        "",
+        "## Mozilla Firefox",
+        "1. Press **F12**, then open the **Storage** tab (enable it via the DevTools **⋯** menu if hidden).",
+        "2. **Cookies →** your Splunk host.",
+        "3. Copy the **Value** of **`splunkd_<port>`**.",
+        "",
+        "## Safari",
+        "1. **Safari → Settings → Advanced →** tick **“Show features for web developers”**.",
+        "2. **Develop → Show Web Inspector → Storage** tab → **Cookies**.",
+        "3. Copy the **Value** of **`splunkd_<port>`**.",
+        "",
+        "_Copy the value only — not the cookie name — then paste it back into VS Code._",
+      ].join("\n");
+
+      for (;;) {
+        const choice = await vscode.window.showInformationMessage(
+          splunkWebUrl
+            ? `Sign in to Splunk Web (${splunkWebUrl}) with your SSO, then capture the splunkd_<port> session cookie (e.g. splunkd_8000).`
+            : "Sign in to Splunk Web with your SSO, then capture the splunkd_<port> session cookie (e.g. splunkd_8000).",
+          ...(splunkWebUrl ? ["Open Splunk Web"] : []),
+          "How to find the cookie",
+          "I have the cookie",
+        );
+        if (!choice) return undefined;
+        if (choice === "Open Splunk Web" && splunkWebUrl) {
+          await vscode.env.openExternal(vscode.Uri.parse(splunkWebUrl));
+          continue;
+        }
+        if (choice === "How to find the cookie") {
+          const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: cookieHelp });
+          await vscode.window.showTextDocument(doc, { preview: true });
+          continue;
+        }
+        break; // "I have the cookie"
       }
       const secret = await vscode.window.showInputBox({
         ignoreFocusOut: true,
-        title: "Splunk session key (from your signed-in browser)",
+        title: "Splunk session key — the splunkd_<port> cookie value",
         password: true,
-        placeHolder: "paste the splunkd_… session cookie value",
+        placeHolder: "value of splunkd_8000 (Edge/Chrome: F12 → Application → Cookies)",
         prompt:
-          "In the browser tab where you're signed in to Splunk Web, open DevTools → Application/Storage → Cookies → copy the value of the cookie named like \"splunkd_8000_<host>\" (your live SSO session key) and paste it here. Stored only in your OS keychain, verified once, and never auto-retried (lockout-safe). It expires when your Splunk session does — re-capture via Test Context Source.",
+          "Edge/Chrome: F12 → Application → Storage → Cookies → your Splunk host → copy the Value of splunkd_<port> (e.g. splunkd_8000). Firefox: F12 → Storage → Cookies. Safari: enable the Develop menu → Web Inspector → Storage → Cookies. Use “How to find the cookie” above for full steps. Stored only in your OS keychain, verified once (lockout-safe); re-capture via Test Context Source when your Splunk session expires.",
       });
       if (!secret) return undefined;
       return { method: "splunk-session", secret: secret.trim() };
