@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.30.0 — 2026-06-12
+
+### Added — paste a working SQL query and the ER run mines its joins (pilot)
+- The **Known joins** step of the ER wizard now accepts a **whole working SQL query or
+  snippet**: every join condition is extracted deterministically — table aliases resolved,
+  compound `ON a.x = b.y AND a.z = b.w` clauses split, repeats deduplicated, literal filters
+  ignored — and a toast confirms what was found. Unresolvable fragments become actionable
+  notes, never run-stoppers.
+- **Copilot summarizes the SQL when parsing falls short** (deep subqueries, dialect quirks,
+  derived tables): with your approval — the prompt says the pasted SQL plus table/column names
+  are sent — Copilot reads the query and returns the target join pairs, validated against the
+  catalog like every AI proposal.
+- Joins extracted from working SQL enter the run as **user-defined**: probed first, probed
+  **with casts when they cross types** (the working query is the evidence the join runs), and
+  persisted even below the automatic thresholds with their measured rates visible.
+
 ## 0.29.1 — 2026-06-12
 
 ### Fixed — the ER toast keeps its status text, names the pass, and escalations are real approvals (pilot)

@@ -670,6 +670,12 @@ export function parseJoinCandidateResponse(
   text: string,
   schema: SourceSchema,
   maxPairs = ER_AI_MAX_PAIRS,
+  opts: {
+    /** Keep cross-family pairs as cast probes instead of dropping them —
+     *  used for joins extracted from WORKING SQL, where the user's query
+     *  is the evidence that the join runs. */
+    allowCrossFamily?: boolean;
+  } = {},
 ): JoinCandidate[] {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -699,7 +705,9 @@ export function parseJoinCandidateResponse(
     const toCol = toDef.columns.find((c) => c.name.toLowerCase() === tc.toLowerCase());
     if (!fromCol || !toCol) continue;
     const famA = joinFamily(fromCol.dataType);
-    if (!famA || famA !== joinFamily(toCol.dataType)) continue;
+    const famB = joinFamily(toCol.dataType);
+    const sameFamily = famA !== undefined && famA === famB;
+    if (!sameFamily && !(opts.allowCrossFamily && famA !== undefined && famB !== undefined)) continue;
     const candidate: JoinCandidate = {
       fromTable: qualifiedName(fromDef),
       fromColumn: fromCol.name,
@@ -707,6 +715,7 @@ export function parseJoinCandidateResponse(
       toColumn: toCol.name,
       reason: `AI: ${typeof raw.why === "string" && raw.why.trim() ? raw.why.trim().slice(0, 120) : "proposed join"}`,
       priority: 5,
+      ...(sameFamily ? {} : { cast: true }),
     };
     const key = pairKey(candidate);
     if (seen.has(key)) continue;
@@ -734,35 +743,25 @@ const SQL_KEYWORDS = new Set([
   "group", "order", "select", "and", "or", "as", "using",
 ]);
 
-/**
- * Parse a user-supplied join — SQL syntax ("FROM Orders o JOIN Customers c
- * ON o.customer_id = c.id") or a bare equality ("dbo.Orders.customer_id =
- * dbo.Customers.id") — and resolve it against the catalog. Aliases from
- * FROM/JOIN clauses are honored; unqualified table names resolve when
- * unique; brackets/quotes/backticks are stripped. Returns an `issue` when
- * the text doesn't resolve, with enough detail to fix the input.
- */
-export function parseJoinSpec(
-  text: string,
-  schema: SourceSchema,
-): ParsedJoinSpec | { issue: string } {
-  const t = text.trim();
-  // Alias map from FROM/JOIN clauses (when SQL was pasted).
+const EQUALITY_RE = /([A-Za-z0-9_.[\]"`]+)\.([A-Za-z0-9_[\]"`]+)\s*=\s*([A-Za-z0-9_.[\]"`]+)\.([A-Za-z0-9_[\]"`]+)/g;
+
+function buildAliasMap(text: string): Map<string, string> {
   const aliases = new Map<string, string>();
-  for (const m of t.matchAll(/\b(?:from|join)\s+([A-Za-z0-9_.[\]"`]+)(?:\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*))?/gi)) {
+  for (const m of text.matchAll(/\b(?:from|join)\s+([A-Za-z0-9_.[\]"`]+)(?:\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*))?/gi)) {
     const tableRef = stripIdent(m[1]);
     aliases.set(tableRef.toLowerCase(), tableRef);
     if (m[2] && !SQL_KEYWORDS.has(m[2].toLowerCase())) {
       aliases.set(m[2].toLowerCase(), tableRef);
     }
   }
-  const eq = t.match(/([A-Za-z0-9_.[\]"`]+)\.([A-Za-z0-9_[\]"`]+)\s*=\s*([A-Za-z0-9_.[\]"`]+)\.([A-Za-z0-9_[\]"`]+)/);
-  if (!eq) {
-    return {
-      issue:
-        'Provide the join as SQL ("FROM Orders o JOIN Customers c ON o.customer_id = c.id") or a bare equality ("dbo.Orders.customer_id = dbo.Customers.id").',
-    };
-  }
+  return aliases;
+}
+
+function resolveEquality(
+  eq: RegExpMatchArray,
+  aliases: Map<string, string>,
+  schema: SourceSchema,
+): ParsedJoinSpec | { issue: string } {
   const resolveTable = (rawRef: string): TableDef | { issue: string } => {
     const ref = stripIdent(rawRef).toLowerCase();
     const target = (aliases.get(ref) ?? rawRef).toLowerCase();
@@ -812,6 +811,84 @@ export function parseJoinSpec(
             "The column types are in different join families — the probe (and real joins) will rely on implicit casts, which some engines reject.",
         }),
   };
+}
+
+/**
+ * Extract EVERY join from pasted SQL — a whole working query or snippet,
+ * multiple statements, compound ON clauses — and resolve each against the
+ * catalog. Aliases from FROM/JOIN clauses are honored; unqualified table
+ * names resolve when unique; brackets/quotes/backticks are stripped.
+ * Equalities that don't resolve become `issues` (with enough detail to
+ * fix), never run-stoppers.
+ */
+export function parseJoinSpecs(
+  text: string,
+  schema: SourceSchema,
+): { joins: ParsedJoinSpec[]; issues: string[] } {
+  const t = text.trim();
+  const aliases = buildAliasMap(t);
+  const joins: ParsedJoinSpec[] = [];
+  const issues: string[] = [];
+  const seen = new Set<string>();
+  let anyEquality = false;
+  for (const eq of t.matchAll(EQUALITY_RE)) {
+    anyEquality = true;
+    const resolved = resolveEquality(eq, aliases, schema);
+    if ("issue" in resolved) {
+      issues.push(`"${eq[0].slice(0, 60)}": ${resolved.issue}`);
+      continue;
+    }
+    const key = pairKey(resolved);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    joins.push(resolved);
+  }
+  if (!anyEquality) {
+    issues.push(
+      'No join condition found — paste SQL with ON clauses ("… JOIN Customers c ON o.customer_id = c.id") or bare equalities ("dbo.Orders.customer_id = dbo.Customers.id").',
+    );
+  }
+  return { joins, issues };
+}
+
+/** Single-join form (chat's test_join): the first join in the text, or the
+ *  first issue when nothing resolves. */
+export function parseJoinSpec(
+  text: string,
+  schema: SourceSchema,
+): ParsedJoinSpec | { issue: string } {
+  const { joins, issues } = parseJoinSpecs(text, schema);
+  if (joins.length > 0) return joins[0];
+  return { issue: issues[0] ?? "No join condition found." };
+}
+
+/** Ask Copilot to read a WORKING SQL query and summarize its joins as
+ *  target column pairs — the fallback when deterministic extraction can't
+ *  resolve the SQL (deep subqueries, dialect quirks, derived tables). The
+ *  pasted SQL itself is sent, plus table/column names; the user is told. */
+export function buildSqlJoinExtractionPrompt(sql: string, schema: SourceSchema): string {
+  const tableLines = schema.catalog.tables
+    .map(
+      (t) =>
+        `${qualifiedName(t)}: ${t.columns
+          .filter((c) => joinFamily(c.dataType))
+          .map((c) => c.name)
+          .join(", ")}`,
+    )
+    .join("\n")
+    .slice(0, 4_000);
+  return [
+    `You are extracting the JOIN relationships used by a WORKING SQL query against a ${schema.catalog.engine} database ("${schema.catalog.database}").`,
+    "Read the SQL, resolve table aliases (including derived tables when their source is clear), and list every join condition between TWO of the catalog tables below as column pairs. Use the qualified table names exactly as given. Ignore literal filters, self-joins, and tables not in the catalog.",
+    "",
+    'Return ONLY JSON, exactly: {"pairs":[{"fromTable":"<qualified table>","fromColumn":"<col>","toTable":"<qualified table>","toColumn":"<col>","why":"<the SQL fragment this came from>"}]}.',
+    "",
+    "Catalog tables (joinable columns):",
+    tableLines,
+    "",
+    "SQL:",
+    sql.slice(0, 4_000),
+  ].join("\n");
 }
 
 /** Add/replace one relationship in the persisted model (user-defined joins

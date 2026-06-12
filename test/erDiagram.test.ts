@@ -457,7 +457,7 @@ test("parseJoinSpec resolves SQL join syntax with aliases against the catalog", 
 test("parseJoinSpec returns actionable issues and flags cross-family joins", async () => {
   const { parseJoinSpec } = await import("../src/context/db/erDiagram");
   const schema = schemaWith();
-  assert.match((parseJoinSpec("just words", schema) as { issue: string }).issue, /Provide the join/);
+  assert.match((parseJoinSpec("just words", schema) as { issue: string }).issue, /No join condition found/);
   assert.match(
     (parseJoinSpec("dbo.Ghost.x = dbo.Customers.id", schema) as { issue: string }).issue,
     /not in the catalog/,
@@ -666,4 +666,56 @@ test("the status line names the active pass so the high-level process is visible
     renderProbeStatus({ done: 1, total: 220, found: 0, elapsedMs: 2_000 }),
     /^2\/220 · estimating… · 0 found$/,
   );
+});
+
+// --- pasted working SQL → all joins extracted (0.30.0) --------------------------
+
+test("parseJoinSpecs extracts EVERY join from a working query, alias-aware, deduped", async () => {
+  const { parseJoinSpecs } = await import("../src/context/db/erDiagram");
+  const schema = schemaWith();
+  const sql = `
+    SELECT c.name, o.id, o.placed_on
+    FROM dbo.Orders o
+    INNER JOIN dbo.Customers AS c
+      ON o.customer_id = c.id AND o.region_code = c.region_code
+    WHERE o.id > 100 AND o.customer_id = c.id
+  `;
+  const { joins, issues } = parseJoinSpecs(sql, schema);
+  // Both ON equalities found; the WHERE repeat of the first dedupes.
+  assert.equal(joins.length, 2, JSON.stringify(joins));
+  assert.deepEqual(joins[0], {
+    fromTable: "dbo.Orders",
+    fromColumn: "customer_id",
+    toTable: "dbo.Customers",
+    toColumn: "id",
+  });
+  assert.equal(joins[1].fromColumn, "region_code");
+  assert.equal(issues.length, 0);
+  // Unresolvable fragments become issues, never run-stoppers.
+  const partial = parseJoinSpecs("a.x = dbo.Customers.id; dbo.Orders.customer_id = dbo.Customers.id", schema);
+  assert.equal(partial.joins.length, 1);
+  assert.equal(partial.issues.length, 1);
+  assert.match(partial.issues[0], /not in the catalog/);
+  // No equality at all → a guiding issue.
+  assert.match(parseJoinSpecs("SELECT 1", schema).issues[0], /No join condition/);
+});
+
+test("the SQL-summarization prompt carries the catalog and the SQL; cross-family AI pairs survive as casts", async () => {
+  const { buildSqlJoinExtractionPrompt, parseJoinCandidateResponse } = await import(
+    "../src/context/db/erDiagram"
+  );
+  const schema = schemaWith();
+  const prompt = buildSqlJoinExtractionPrompt("SELECT * FROM Orders o JOIN Customers c ON o.customer_id = c.id", schema);
+  assert.match(prompt, /WORKING SQL query/);
+  assert.match(prompt, /dbo\.Customers: id, name, region_code/);
+  assert.match(prompt, /FROM Orders o JOIN Customers c/);
+  // allowCrossFamily keeps int↔nvarchar pairs as cast probes (the working
+  // query is the evidence the join runs).
+  const crossPair = JSON.stringify({
+    pairs: [{ fromTable: "dbo.Invoices", fromColumn: "customer_id", toTable: "dbo.Customers", toColumn: "id", why: "ON i.customer_id = c.id" }],
+  });
+  assert.equal(parseJoinCandidateResponse(crossPair, schema).length, 0, "dropped without the option");
+  const kept = parseJoinCandidateResponse(crossPair, schema, undefined, { allowCrossFamily: true });
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].cast, true);
 });

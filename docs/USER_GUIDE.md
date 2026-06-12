@@ -393,11 +393,15 @@ reasons — ADR-0022):
   comma-separated prefixes/keywords (e.g. `fin_, gl_`; shared prefixes usually mean a shared
   objective) to pre-select, then search and multi-select by hand. A scoped run **merges** into
   the model: findings outside the scope survive, re-probed pairs take the fresh measurement —
-  map a 100-table database one neighborhood at a time. You can also supply **known joins**
-  (semicolon-separated SQL or `table.column = table.column`; probed first, kept even when the
-  measured rate is low, marked *defined*) and — in the AI modes — **describe the data** for
-  Copilot (*"SAP FI tables — MANDT is the client key on every table"*), which is weighted into
-  its join hypotheses and remembered for the next run.
+  map a 100-table database one neighborhood at a time. You can also hand over **known joins by
+  pasting a working SQL query** — *every* join condition is extracted (aliases resolved,
+  compound `ON … AND …` clauses included), or paste bare `table.column = table.column`
+  equalities; when the SQL is too gnarly to parse, **Copilot summarizes it into target joins**
+  (you approve sending the pasted SQL first). Extracted joins are probed first, probed with
+  casts when they cross types, and kept even at low measured rates (marked *defined*). In the
+  AI modes you can also **describe the data** for Copilot (*"SAP FI tables — MANDT is the
+  client key on every table"*), which is weighted into its join hypotheses and remembered for
+  the next run.
 - **Refine the ER diagram from chat**: paste a join you know is right — *"@sharepoint test this
   join: `FROM Orders o JOIN Customers c ON o.customer_id = c.id`"* (SQL with aliases or a bare
   `table.column = table.column` both work). If it's already in the ER model you get the stored

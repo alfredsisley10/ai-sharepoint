@@ -61,7 +61,8 @@ import {
   renderProbeReport,
   buildJoinCandidatePrompt,
   parseJoinCandidateResponse,
-  parseJoinSpec,
+  parseJoinSpecs,
+  buildSqlJoinExtractionPrompt,
   mergeRelationships,
   buildCastRetryCandidates,
   initialSampleSize,
@@ -2822,42 +2823,86 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!mode) return;
     const aiEnabled = aiAvailable && mode.value !== "standard";
     const tried = new Set(heuristic.map((c) => pairKey(c)));
-    // Known joins, manually supplied: probed FIRST and kept even below the
-    // automatic thresholds (the user asserted them).
+    // Known joins: paste a WORKING SQL query/snippet (or bare equalities) —
+    // every join condition is extracted, alias-aware; Copilot summarizes
+    // when deterministic parsing falls short. Probed FIRST and kept even
+    // below the automatic thresholds (the working query is the evidence).
     const knownInput = await vscode.window.showInputBox({
       ignoreFocusOut: true,
-      title: "Known joins (optional) — semicolon-separated",
+      title: "Known joins (optional) — paste a working SQL query, snippet, or equalities",
       prompt:
-        'Joins you already know are right, e.g. "dbo.Orders.customer_id = dbo.Customers.id; FROM Invoices i JOIN Customers c ON i.cust_no = c.id". They are probed first and persist even if the measured rate is low (marked "defined").',
-      placeHolder: "table.column = table.column; …   (Enter to skip)",
+        "Paste SQL that already works (a whole SELECT with JOINs is ideal — ALL its join conditions are extracted, aliases resolved) or simple equalities like \"dbo.Orders.customer_id = dbo.Customers.id\". If parsing falls short, Copilot can summarize the SQL into target joins. Extracted joins are probed first and persist even at low measured rates (marked \"defined\").",
+      placeHolder: "SELECT … FROM Orders o JOIN Customers c ON o.customer_id = c.id …   (Enter to skip)",
     });
     if (knownInput === undefined) return;
     const userJoins: JoinCandidate[] = [];
-    const joinIssues: string[] = [];
-    for (const part of knownInput.split(/[;\n]/).map((s) => s.trim()).filter(Boolean)) {
-      const parsed = parseJoinSpec(part, schema); // FULL schema: known joins may cross the scope
-      if ("issue" in parsed) {
-        joinIssues.push(`"${part.slice(0, 60)}": ${parsed.issue}`);
-        continue;
-      }
+    const addUserJoin = (j: { fromTable: string; fromColumn: string; toTable: string; toColumn: string; warning?: string; cast?: boolean }, reason: string) => {
       const candidate: JoinCandidate = {
-        fromTable: parsed.fromTable,
-        fromColumn: parsed.fromColumn,
-        toTable: parsed.toTable,
-        toColumn: parsed.toColumn,
-        reason: "user-provided join",
+        fromTable: j.fromTable,
+        fromColumn: j.fromColumn,
+        toTable: j.toTable,
+        toColumn: j.toColumn,
+        reason,
         priority: 6,
         userDefined: true,
+        // Cross-typed joins from working SQL probe the way they run: cast.
+        ...(j.warning || j.cast ? { cast: true } : {}),
       };
       const k = pairKey(candidate);
-      if (tried.has(k)) continue;
+      if (tried.has(k)) return;
       tried.add(k);
       userJoins.push(candidate);
-    }
-    if (joinIssues.length > 0) {
-      void vscode.window.showWarningMessage(
-        `${joinIssues.length} known join(s) didn't resolve and will be skipped: ${joinIssues.join(" · ").slice(0, 400)}`,
-      );
+    };
+    let joinIssues: string[] = [];
+    if (knownInput.trim()) {
+      // FULL schema: known joins may cross the scope.
+      const extracted = parseJoinSpecs(knownInput, schema);
+      joinIssues = extracted.issues;
+      for (const j of extracted.joins) addUserJoin(j, "from pasted SQL");
+      if (userJoins.length > 0) {
+        void vscode.window.showInformationMessage(
+          `Extracted ${userJoins.length} join(s) from the SQL: ${userJoins
+            .slice(0, 4)
+            .map((j) => `${j.fromColumn}↔${j.toColumn}`)
+            .join(", ")}${userJoins.length > 4 ? ", …" : ""}.`,
+        );
+      }
+      // AI summarization fallback: messy SQL (deep subqueries, dialect
+      // quirks) that deterministic parsing couldn't fully resolve.
+      if (aiAvailable && (userJoins.length === 0 || joinIssues.length > 0)) {
+        const useAi = await vscode.window.showInformationMessage(
+          `${userJoins.length === 0 ? "No joins could be parsed from the SQL." : `${joinIssues.length} part(s) of the SQL didn't resolve.`} Let Copilot read the SQL and summarize the target joins? (Sends the pasted SQL plus table/column names to Copilot.)`,
+          "Summarize with Copilot",
+          "Skip",
+        );
+        if (useAi === "Summarize with Copilot") {
+          try {
+            const res = await vscode.window.withProgress(
+              { location: vscode.ProgressLocation.Notification, title: "Copilot is summarizing the SQL into target joins…" },
+              () =>
+                copilot.ask(
+                  { prompt: buildSqlJoinExtractionPrompt(knownInput, schema), label: "erSqlJoins" },
+                  nowIso,
+                ),
+            );
+            const aiExtracted = parseJoinCandidateResponse(res.text, schema, undefined, { allowCrossFamily: true });
+            for (const p of aiExtracted) {
+              addUserJoin(p, `from pasted SQL (Copilot): ${p.reason.replace(/^AI: /, "")}`);
+            }
+            void vscode.window.showInformationMessage(
+              aiExtracted.length > 0
+                ? `Copilot extracted ${aiExtracted.length} additional join(s) from the SQL.`
+                : "Copilot found no further joins it could map to the catalog.",
+            );
+          } catch (err) {
+            log.warn(`SQL join summarization unavailable: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      } else if (joinIssues.length > 0) {
+        void vscode.window.showWarningMessage(
+          `${joinIssues.length} part(s) of the SQL didn't resolve and will be skipped: ${joinIssues.join(" · ").slice(0, 400)}`,
+        );
+      }
     }
     // The user's description of the data — domain knowledge the catalog
     // can't carry — seeds the AI hypothesis pass (and persists for re-runs).
