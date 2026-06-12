@@ -218,3 +218,21 @@ test("findVertexProjectForEngine probes the hinted region across visible project
   // A 403 on one project never aborts the scan; progress reports completion.
   assert.deepEqual(progress.at(-1), [3, 3]);
 });
+
+test("parseVertexHint reads full resource names from the search page's own API traffic (Entra users)", async () => {
+  const { parseVertexHint } = await import("../src/context/adapters/vertexSearch");
+  // A request URL copied from the corporate page's Network tab — the
+  // standard-user source when there is no GCP/console access at all.
+  // Project NUMBERS work like IDs.
+  assert.deepEqual(
+    parseVertexHint(
+      "https://vertexaisearch.cloud.google/v1alpha/projects/123456789012/locations/us/collections/default_collection/engines/corp-search_17/servingConfigs/default_search:search?csesidx=S1",
+    ),
+    { projectId: "123456789012", location: "us", engineId: "corp-search_17" },
+  );
+  // A bare resource string (no scheme) parses too.
+  assert.deepEqual(
+    parseVertexHint("projects/123456789012/locations/eu/collections/default_collection/engines/kb/servingConfigs/s"),
+    { projectId: "123456789012", location: "eu", engineId: "kb" },
+  );
+});

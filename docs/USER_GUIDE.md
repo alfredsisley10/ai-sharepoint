@@ -393,6 +393,14 @@ Connect your organization's **Vertex AI Search** app (the enterprise Gemini sear
   `gcloud auth login` session** — your corporate Google SSO — and nothing is ever stored.
   No CLI? Paste an OAuth access token instead (kept in your OS keychain; ~1 h lifetime, the
   error message tells you when to refresh it).
+- **No GCP access at all?** (Common when the search page is reached via **Entra ID / Azure AD
+  SSO** federation.) Everything you need is in the **search page's own network traffic**: press
+  `F12` → **Network** on the page, run a search, click the request named `search`/`answer`/
+  `servingConfigs` — its **URL embeds `projects/<number>/locations/…/engines/…`** (paste it
+  into the wizard's project step; a project *number* works like an ID), and its **Request
+  Headers carry `Authorization: Bearer …`** — copy the token value (without the word `Bearer`)
+  as the pasted-token sign-in. The token is your own session's (~1 h); re-paste via *Test
+  Context Source* when it expires.
 - **Search and analysis in chat**: plain searches return enterprise hits; ask for analysis and
   the `#spVertexAnswer` tool returns a **Gemini-grounded answer with citations** from your
   corpus (*"@sharepoint ask Vertex what our data-retention policy says"*).

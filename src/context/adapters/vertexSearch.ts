@@ -328,11 +328,17 @@ export function parseVertexHint(input: string): Partial<VertexParts> {
     out.engineId = corp[2];
     return out;
   }
+  // Resource segments — from a Console URL, a serving-config URL, a bare
+  // resource string ("projects/123…", no scheme), or an API request URL
+  // copied from the corporate search page's OWN network traffic (the
+  // standard-user source when there is no GCP access at all: those calls
+  // embed the full resource name, and a project NUMBER works wherever a
+  // project ID does).
   const project =
     text.match(/[?&]project=([A-Za-z0-9-]+)/)?.[1] ??
-    text.match(/\/projects\/([A-Za-z0-9-]+)/)?.[1];
-  const location = text.match(/\/locations\/([A-Za-z0-9-]+)/)?.[1];
-  const engine = text.match(/\/engines\/([A-Za-z0-9_-]+)/)?.[1];
+    text.match(/(?:^|\/)projects\/([A-Za-z0-9-]+)/)?.[1];
+  const location = text.match(/(?:^|\/)locations\/([A-Za-z0-9-]+)/)?.[1];
+  const engine = text.match(/(?:^|\/)engines\/([A-Za-z0-9_-]+)/)?.[1];
   if (project) out.projectId = project;
   if (location) out.location = location;
   if (engine) out.engineId = engine;

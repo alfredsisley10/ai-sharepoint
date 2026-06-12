@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.23.2 — 2026-06-12
+
+### Fixed — Vertex AI Search for Entra-federated users with no GCP access (pilot)
+- Users who reach the corporate search page via **Entra ID / Azure AD SSO** hold no Google
+  Cloud roles: *Find the project for me* sees no projects, `gcloud` isn't an option, and the
+  project prompt was a dead end. The wizard now mines the **search page's own network
+  traffic** — the page's API calls embed the full resource name. Paste any `search`/`answer`
+  request URL from the page's Network tab into the project step and the wizard extracts
+  `projects/<number>` (a project **number** works like an ID), plus the location/engine when
+  present; bare `projects/…` resource strings parse too. Prompts walk through the F12 steps.
+- **Sign-in without gcloud**: the pasted-token prompt now explains capturing the page's own
+  `Authorization: Bearer` value from the same Network tab — your session's token, ~1 h,
+  re-pasted via *Test Context Source* (a leading "Bearer " is stripped automatically).
+- The zero-projects warning from auto-detection now routes to this path instead of "ask the
+  app owner".
+
 ## 0.23.1 — 2026-06-12
 
 ### Fixed — ServiceNow: the missing piece for cookie sessions is the page CSRF token (g_ck) (pilot)

@@ -1942,7 +1942,7 @@ export function activate(context: vscode.ExtensionContext): void {
                   projectId = pick.label;
                 } else {
                   void vscode.window.showWarningMessage(
-                    `None of the ${projects.length} project(s) visible to your Google sign-in host app "${hint.engineId}" in ${hint.location} — your account may use the app without a project role. Enter the project ID manually (the app owner has it).`,
+                    `None of the ${projects.length} project(s) visible to your Google sign-in host app "${hint.engineId}" in ${hint.location} — your account likely uses the app without any project role (common with Entra/Azure AD SSO). Continue to manual entry and paste a request URL from the search page's Network tab — it embeds the project number.`,
                   );
                 }
               } catch (err) {
@@ -1954,17 +1954,24 @@ export function activate(context: vscode.ExtensionContext): void {
             }
           }
           if (!projectId) {
-            projectId = (
+            const entered = (
               await vscode.window.showInputBox({
                 ignoreFocusOut: true,
-                title: "Google Cloud project ID",
+                title: "Google Cloud project — ID, number, or a pasted request from your search page",
                 prompt: hint.engineId
-                  ? `Three ways a standard user finds it: ① go back and pick "Find the project for me" (scans what your Google sign-in can see); ② run \`gcloud projects list\` in a terminal or at shell.cloud.google.com — one of those projects hosts app "${hint.engineId}"; ③ ask whoever shared the search page with you. (Admins also see it in the Cloud Console URL's ?project=… parameter.)`
-                  : "That URL didn't carry a project ID — it's in the Cloud Console URL (?project=…) or available from the app owner.",
-                validateInput: (v) => (v.trim() ? undefined : "Enter the project ID"),
+                  ? `No GCP access at all (e.g. you reach the search page via Entra/Azure AD SSO)? The page's OWN traffic carries it: on the search page press F12 → Network → run a search → click the request named search/answer/servingConfigs → copy its full URL and paste it here — it embeds projects/<number>/… and the project NUMBER works like an ID. Otherwise: "Find the project for me" (previous step), \`gcloud projects list\` (terminal or shell.cloud.google.com), or ask whoever shared the page.`
+                  : "That URL didn't carry a project ID — paste a request URL from the search page's Network tab (it embeds projects/<number>/…), or get the ID from the Cloud Console URL (?project=…) / the app owner.",
+                validateInput: (v) => (v.trim() ? undefined : "Enter a project ID/number, or paste a request URL containing projects/…"),
               })
             )?.trim();
-            if (!projectId) return;
+            if (!entered) return;
+            // A pasted request URL / resource string carries the project —
+            // and often a more precise location/engine; the fuller capture
+            // wins over the page-URL hint.
+            const pastedHint = /projects\//i.test(entered) ? parseVertexHint(entered) : {};
+            projectId = pastedHint.projectId ?? entered;
+            if (pastedHint.location) hint.location = pastedHint.location;
+            if (pastedHint.engineId) hint.engineId = pastedHint.engineId;
           }
           const location = await vscode.window.showInputBox({
             ignoreFocusOut: true,
@@ -4267,10 +4274,12 @@ async function promptContextCredential(
       ignoreFocusOut: true,
       title: "Google OAuth access token",
       password: true,
-      prompt: "From `gcloud auth print-access-token` or your SSO portal. Stored only in your OS keychain.",
+      prompt:
+        "From `gcloud auth print-access-token` — or, with NO gcloud/GCP access (Entra/Azure AD SSO users): on your corporate search page press F12 → Network → run a search → click the search request → Request Headers → copy the `Authorization: Bearer …` value WITHOUT the word Bearer. It's your own session's token (~1 h; re-paste via Test Context Source). Stored only in your OS keychain.",
+      validateInput: (v) => (v.trim().replace(/^bearer\s+/i, "") ? undefined : "Paste the token value"),
     });
     if (!secret) return undefined;
-    return { method: "pat", secret: secret.trim() };
+    return { method: "pat", secret: secret.trim().replace(/^bearer\s+/i, "") };
   }
   if (type === "mssql" || type === "postgres" || type === "mysql" || type === "mongodb") {
     let dbMethod: ContextCredential["method"] = "basic";
