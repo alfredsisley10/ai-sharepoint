@@ -231,25 +231,38 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     { dispose: () => setWireSink(undefined) },
   );
-  const sitesView = vscode.window.createTreeView("aiSharePoint.sitesView", {
-    treeDataProvider: sitesProvider,
-  });
-  const sourcesView = vscode.window.createTreeView("aiSharePoint.sourcesView", {
-    treeDataProvider: sourcesProvider,
-  });
-  context.subscriptions.push(sourcesView, contextSources, bookmarks);
-  const usageView = vscode.window.createTreeView("aiSharePoint.usageView", {
-    treeDataProvider: usageProvider,
-  });
-  const supportView = vscode.window.createTreeView("aiSharePoint.supportView", {
-    treeDataProvider: supportProvider,
-  });
+  // In-place VSIX upgrades can run the new extension.js against a stale
+  // cached manifest until the window reloads — createTreeView then throws
+  // "No view is registered with id". One missing view must not abort the
+  // whole activation: degrade to a warning and self-heal on reload.
+  const tryCreateTreeView = <T>(
+    id: string,
+    provider: vscode.TreeDataProvider<T>,
+  ): vscode.TreeView<T> | undefined => {
+    try {
+      return vscode.window.createTreeView(id, { treeDataProvider: provider });
+    } catch (err) {
+      log.warn(
+        `View ${id} could not be registered (${err instanceof Error ? err.message : String(err)}) — usually a pending window reload after a VSIX upgrade. Run "Developer: Reload Window".`,
+      );
+      void vscode.window.showWarningMessage(
+        "AI SharePoint updated — reload the window to finish (Developer: Reload Window).",
+      );
+      return undefined;
+    }
+  };
+
+  const sitesView = tryCreateTreeView("aiSharePoint.sitesView", sitesProvider);
+  const sourcesView = tryCreateTreeView("aiSharePoint.sourcesView", sourcesProvider);
+  context.subscriptions.push(contextSources, bookmarks);
+  if (sourcesView) context.subscriptions.push(sourcesView);
+  const usageView = tryCreateTreeView("aiSharePoint.usageView", usageProvider);
+  const supportView = tryCreateTreeView("aiSharePoint.supportView", supportProvider);
   const outbox = new OutboxStore(context.globalState);
   const commsProvider = new CommsTreeProvider(outbox);
-  const commsView = vscode.window.createTreeView("aiSharePoint.commsView", {
-    treeDataProvider: commsProvider,
-  });
+  const commsView = tryCreateTreeView("aiSharePoint.commsView", commsProvider);
   const syncCommsBadge = () => {
+    if (!commsView) return;
     commsView.badge =
       outbox.count() > 0
         ? { value: outbox.count(), tooltip: `${outbox.count()} draft(s) awaiting your approval` }
@@ -257,16 +270,15 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   syncCommsBadge();
   context.subscriptions.push(
-    sitesView,
-    usageView,
-    supportView,
     supportProvider,
     outbox,
     commsProvider,
-    commsView,
     outbox.onDidChange(syncCommsBadge),
     ...registerCommsTools(outbox, telemetry, errors, nowIso),
   );
+  for (const v of [sitesView, usageView, supportView, commsView]) {
+    if (v) context.subscriptions.push(v);
+  }
 
   const syncContext = () => {
     void vscode.commands.executeCommand(
@@ -274,7 +286,7 @@ export function activate(context: vscode.ExtensionContext): void {
       "aiSharePoint.hasSites",
       sites.list().length > 0,
     );
-    supportView.badge =
+    if (supportView) supportView.badge =
       errors.count() > 0
         ? { value: errors.count(), tooltip: `${errors.count()} error report(s)` }
         : undefined;
