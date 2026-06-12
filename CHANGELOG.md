@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.0 — 2026-06-12
+
+### Added — Splunk browser-SSO sign-in (no token, no password) (pilot)
+- New **recommended** Splunk sign-in option for SAML/SSO enterprises where users can't create
+  authentication tokens or use a password: **Browser SSO session**. The wizard opens Splunk
+  Web for you to complete SSO in your browser, then you paste your live **session key** (the
+  value of the `splunkd_*` session cookie) — the extension uses it against the REST API with
+  Splunk's `Authorization: Splunk <key>` scheme, i.e. **your browser's own session**. Stored
+  only in the OS keychain, verified once, never auto-retried; it expires with your Splunk
+  session — re-capture via *Test Context Source* (lockout-safe). Token and username/password
+  remain as alternatives.
+
 ## 0.12.0 — 2026-06-12
 
 ### Added — Projects: exportable scopes for sources, bookmarks, and agent instructions (pilot)

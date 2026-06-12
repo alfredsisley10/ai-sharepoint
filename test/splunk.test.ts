@@ -194,3 +194,25 @@ test("deriveSplunkApiCandidates maps browser URLs to management-API candidates",
   ]);
   assert.deepEqual(deriveSplunkApiCandidates("not a url"), []);
 });
+
+test("splunkAuthHeader: Bearer for token, Splunk scheme for browser session, Basic otherwise", async () => {
+  const { splunkAuthHeader } = await import("../src/context/adapters/splunk");
+  assert.equal(splunkAuthHeader({ method: "pat", secret: "jwt123" }), "Bearer jwt123");
+  assert.equal(splunkAuthHeader({ method: "splunk-session", secret: "SESSIONKEY" }), "Splunk SESSIONKEY");
+  assert.equal(
+    splunkAuthHeader({ method: "basic", username: "u", secret: "p" }),
+    `Basic ${Buffer.from("u:p").toString("base64")}`,
+  );
+});
+
+test("a browser-SSO session credential reaches Splunk as the Splunk auth scheme", async () => {
+  let auth = "";
+  await withFetch(
+    (_url, init) => {
+      auth = (init?.headers as Record<string, string>)?.Authorization ?? "";
+      return { body: { results: [] } };
+    },
+    () => searchSplunk(SRC, { method: "splunk-session", secret: "SESSIONKEY" }, "errors", DEFAULT_CAPS),
+  );
+  assert.equal(auth, "Splunk SESSIONKEY");
+});

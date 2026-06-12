@@ -8,6 +8,7 @@ import {
 
 function data(over: Partial<DashboardData> = {}): DashboardData {
   return {
+    configured: true,
     generatedAt: "2026-06-11T12:00:00.000Z",
     usedUnits: 190,
     allowance: 300,

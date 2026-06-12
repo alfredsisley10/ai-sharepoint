@@ -19,6 +19,7 @@ const daily = Array.from({ length: 30 }, (_, i) => {
 
 const html = renderDashboardHtml(
   {
+    configured: true,
     generatedAt: "2026-06-11T12:00:00.000Z",
     usedUnits: 189.5,
     allowance: 300,

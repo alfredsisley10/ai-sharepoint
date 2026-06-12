@@ -4,7 +4,7 @@ import {
   ContextSearchHit,
   ReadCaps,
 } from "../types";
-import { authHeader } from "../http";
+
 import { AppError } from "../../core/errors";
 import { wireEnabled, emitWire, capDetail, safeUrl } from "../../core/wireLog";
 
@@ -17,6 +17,16 @@ import { wireEnabled, emitWire, capDetail, safeUrl } from "../../core/wireLog";
  */
 
 export const SPLUNK_DEFAULT_EARLIEST = "-24h";
+
+/** Splunk REST accepts three credential schemes: a JWT authentication token
+ *  (Bearer), a session key (the `Splunk` scheme — what a browser SSO session
+ *  yields, the value of the `splunkd_*` cookie), or HTTP Basic. */
+export function splunkAuthHeader(credential: ContextCredential): string {
+  if (credential.method === "pat") return `Bearer ${credential.secret}`;
+  if (credential.method === "splunk-session") return `Splunk ${credential.secret}`;
+  const user = credential.username ?? "";
+  return `Basic ${Buffer.from(`${user}:${credential.secret}`).toString("base64")}`;
+}
 
 export interface SplunkSpec {
   spl: string;
@@ -164,14 +174,15 @@ async function postSplunk<T>(
     const safeForm = Object.entries(form)
       .map(([k, v]) => `${k}=${v}`)
       .join("&");
-    emitWire("splunk", "→", `POST ${safeUrl(url)}`, `Authorization: ${credential.method === "pat" ? "Bearer" : "Basic"} ***\n${capDetail(safeForm)}`);
+    const scheme = credential.method === "pat" ? "Bearer" : credential.method === "splunk-session" ? "Splunk" : "Basic";
+    emitWire("splunk", "→", `POST ${safeUrl(url)}`, `Authorization: ${scheme} ***\n${capDetail(safeForm)}`);
   }
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: authHeader(credential),
+        Authorization: splunkAuthHeader(credential),
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
       },
@@ -223,7 +234,7 @@ async function getSplunk<T>(
   let res: Response;
   try {
     res = await fetch(url, {
-      headers: { Authorization: authHeader(credential), Accept: "application/json" },
+      headers: { Authorization: splunkAuthHeader(credential), Accept: "application/json" },
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {

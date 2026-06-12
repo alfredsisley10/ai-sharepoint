@@ -1545,7 +1545,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!url) return;
       const webEntry = url.trim().replace(/\/+$/, "");
       const candidates = deriveSplunkApiCandidates(webEntry);
-      presetCredential = await promptContextCredential("splunk", "datacenter");
+      presetCredential = await promptContextCredential("splunk", "datacenter", undefined, webEntry);
       if (!presetCredential) return;
       const splunkCred = presetCredential;
       baseUrl = "";
@@ -3529,22 +3529,64 @@ async function promptContextCredential(
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
   if (type === "splunk") {
+    // Splunk Web URL to open for SSO: the ?web= param if present, else the
+    // typed browser URL, else the mgmt host on the default web port 8000.
+    const splunkWebUrl = (() => {
+      if (!baseUrl) return undefined;
+      try {
+        const u = new URL(baseUrl);
+        const web = u.searchParams.get("web");
+        if (web) return web;
+        if (u.port === "8089") return `${u.protocol}//${u.hostname}:8000`;
+        return `${u.protocol}//${u.host}`;
+      } catch {
+        return undefined;
+      }
+    })();
     const mode = await vscode.window.showQuickPick(
       [
         {
-          label: "$(shield) Authentication token (recommended)",
-          description: "Splunk Web → Settings → Tokens — scoped, revocable",
+          label: "$(globe) Browser SSO session (recommended for SAML/SSO)",
+          description: "sign in to Splunk Web in your browser; no token or password needed",
+          value: "session" as const,
+        },
+        {
+          label: "$(shield) Authentication token",
+          description: "Splunk Web → Settings → Tokens — if you're allowed to create one",
           value: "pat" as const,
         },
         {
           label: "$(key) Username + password",
-          description: "a least-privilege search-only account is recommended",
+          description: "a least-privilege search-only account",
           value: "basic" as const,
         },
       ],
       { ignoreFocusOut: true, title: "Splunk sign-in" },
     );
     if (!mode) return undefined;
+    if (mode.value === "session") {
+      const open = await vscode.window.showInformationMessage(
+        splunkWebUrl
+          ? `Sign in to Splunk Web (${splunkWebUrl}) with your SSO in the browser, then return here to capture the session.`
+          : "Sign in to Splunk Web with your SSO in the browser, then return here to capture the session.",
+        "Open Splunk Web",
+        "I'm already signed in",
+      );
+      if (!open) return undefined;
+      if (open === "Open Splunk Web" && splunkWebUrl) {
+        await vscode.env.openExternal(vscode.Uri.parse(splunkWebUrl));
+      }
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Splunk session key (from your signed-in browser)",
+        password: true,
+        placeHolder: "paste the splunkd_… session cookie value",
+        prompt:
+          "In the browser tab where you're signed in to Splunk Web, open DevTools → Application/Storage → Cookies → copy the value of the cookie named like \"splunkd_8000_<host>\" (your live SSO session key) and paste it here. Stored only in your OS keychain, verified once, and never auto-retried (lockout-safe). It expires when your Splunk session does — re-capture via Test Context Source.",
+      });
+      if (!secret) return undefined;
+      return { method: "splunk-session", secret: secret.trim() };
+    }
     if (mode.value === "pat") {
       const secret = await vscode.window.showInputBox({
         ignoreFocusOut: true,
