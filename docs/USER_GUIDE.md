@@ -463,20 +463,29 @@ Have findings reach people — **without the assistant ever sending anything its
 - Send-capable permissions (`Chat.ReadWrite`, `Mail.Send`, …) are requested **only** by this
   flow, on first use (ADR-0025).
 
-### Projects: scope sources, bookmarks, and instructions per initiative
+### Projects: scope sources/bookmarks and give @sharepoint goals + memory
 
-Group what belongs together and switch contexts in one click:
+The **Projects** view (activity bar) is the home for this. A project groups reference sources
+(bookmarks follow their sources) and carries context for the assistant:
 
-- **Create** (*Projects: Create Project…*): name, optional description, optional **baseline
-  agent instructions** (prepended to every `@sharepoint` turn while active — e.g. *"prefer the
-  CMDB for application questions; cite Confluence pages"*), then multi-pick the member sources;
-  bookmarks follow their sources automatically.
-- **Switch** via the Reference Sources title-bar button or *Projects: Switch* — the view header
-  shows the active project, and chat tools, source resolution, and bookmark listings are
-  scoped to its members. Pick **All sources** to disable scoping.
-- **Share**: projects are included in **Export/Import Reference Config**, so a teammate
-  importing your file gets the same scoped working set — sources, aliases, bookmarks, database
-  indexes, and the project instructions.
+- **Create** (Projects view → **+**, or *Projects: Create Project…*): name, description,
+  **goals** (what the project is for), **instructions & common reference context** (your
+  baseline guidance — e.g. *"prefer the CMDB for application questions; cite Confluence pages"*),
+  then pick the member sources.
+- **Activate** by clicking a project in the view (or *Projects: Switch*). The active project is
+  marked, the Reference Sources header shows it, and chat tools / source resolution / bookmark
+  listings are scoped to its members. Activating again offers to show **All sources**.
+- **Two kinds of context, kept separate:**
+  - **Yours** — goals + instructions, edited via *Edit Project*; shown to @sharepoint as
+    user-authored.
+  - **AI-managed** — as you teach @sharepoint durable behavior ("answer in German", "owners come
+    from the CMDB"), it can **save that** into the project's AI context (you approve each note).
+    It persists across sessions, is never mixed with your instructions, and you can **view,
+    edit, or clear** it via the **AI-managed context** row or *Projects: Manage AI Context*.
+- **Share**: goals, instructions, AND the AI-learned context travel with **Export/Import
+  Reference Config** — one teammate sets up and teaches a project, the whole team imports it
+  (sources, aliases, bookmarks, database indexes, and project context) and signs in with their
+  own credentials.
 
 ### Bookmarks: reusable pointers for your initiatives
 

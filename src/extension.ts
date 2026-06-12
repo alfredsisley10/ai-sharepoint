@@ -76,7 +76,15 @@ import {
 } from "./context/catalogCache";
 import { setWireSink } from "./core/wireLog";
 import { setLdapDnsServers } from "./context/ldap/ldapClient";
-import { ProjectsStore, Project, INSTRUCTIONS_MAX_CHARS } from "./context/projectsStore";
+import {
+  ProjectsStore,
+  Project,
+  INSTRUCTIONS_MAX_CHARS,
+  GOALS_MAX_CHARS,
+  AI_CONTEXT_MAX_CHARS,
+} from "./context/projectsStore";
+import { ProjectsTreeProvider } from "./ui/projectsView";
+import { registerProjectTools } from "./chat/projectTools";
 import { enumeratePowerBiDatasets, POWERBI_SCOPES } from "./context/adapters/powerbi";
 import { listSnowTables } from "./context/adapters/servicenow";
 import {
@@ -331,7 +339,11 @@ export function activate(context: vscode.ExtensionContext): void {
     outbox.onDidChange(syncCommsBadge),
     ...registerCommsTools(outbox, telemetry, errors, nowIso),
     ...registerSiteDevTools(sites, access, syncConfigs, telemetry, errors),
+    ...registerProjectTools(projects, telemetry, errors),
   );
+  const projectsProvider = new ProjectsTreeProvider(projects, contextSources);
+  const projectsView = tryCreateTreeView("aiSharePoint.projectsView", projectsProvider);
+  if (projectsView) context.subscriptions.push(projectsView, projectsProvider);
   for (const v of [sitesView, usageView, supportView, commsView]) {
     if (v) context.subscriptions.push(v);
   }
@@ -2090,12 +2102,21 @@ export function activate(context: vscode.ExtensionContext): void {
       value: current?.description ?? "",
     });
     if (description === undefined) return undefined;
+    const goals = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Project — goals / objectives (optional, Enter to skip)",
+      value: current?.goals ?? "",
+      placeHolder: "e.g. Build an AI-automation knowledge base; identify owners of legacy apps.",
+      prompt: `What this project is for. Shown to @sharepoint as your goals (max ${GOALS_MAX_CHARS} chars).`,
+      validateInput: (v) => (v.length > GOALS_MAX_CHARS ? `Max ${GOALS_MAX_CHARS} characters.` : undefined),
+    });
+    if (goals === undefined) return undefined;
     const instructions = await vscode.window.showInputBox({
       ignoreFocusOut: true,
-      title: "Project — baseline agent instructions (optional, Enter to skip)",
+      title: "Project — instructions & reference context (optional, Enter to skip)",
       value: current?.instructions ?? "",
       placeHolder: "e.g. Prefer the CMDB for application questions; cite Confluence pages; answer in German.",
-      prompt: `Prepended to every @sharepoint turn while this project is active (max ${INSTRUCTIONS_MAX_CHARS} chars).`,
+      prompt: `Your baseline instructions + common reference context, prepended to every @sharepoint turn while active (max ${INSTRUCTIONS_MAX_CHARS} chars). Separate from the AI-managed context.`,
       validateInput: (v) =>
         v.length > INSTRUCTIONS_MAX_CHARS ? `Max ${INSTRUCTIONS_MAX_CHARS} characters.` : undefined,
     });
@@ -2124,7 +2145,10 @@ export function activate(context: vscode.ExtensionContext): void {
       id: current?.id ?? crypto.randomUUID(),
       name: name.trim(),
       ...(description.trim() ? { description: description.trim() } : {}),
+      ...(goals.trim() ? { goals: goals.trim() } : {}),
       ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
+      // Preserve AI-managed context across user edits — it is never set here.
+      ...(current?.aiContext ? { aiContext: current.aiContext } : {}),
       sourceIds: picks.map((x) => x.s.id),
     };
   };
@@ -2195,6 +2219,97 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (confirm !== "Remove Project") return;
     await projects.remove(pick.pr.id);
+  });
+
+  // Click-to-activate from the Projects view (arg = project id).
+  register("aiSharePoint.activateProject", async (arg) => {
+    const id = typeof arg === "string" ? arg : undefined;
+    if (!id) return;
+    const project = projects.get(id);
+    if (!project) return;
+    if (projects.activeId() === id) {
+      const off = await vscode.window.showInformationMessage(
+        `"${project.name}" is already active. Deactivate (show all sources)?`,
+        "Show All Sources",
+      );
+      if (off) await projects.setActive(undefined);
+      return;
+    }
+    await projects.setActive(id);
+    telemetry.record("project.switch", { via: "view" });
+    void vscode.window.showInformationMessage(`Project "${project.name}" is now active.`);
+  });
+
+  // View / reset the AI-managed context (kept separate from user instructions).
+  register("aiSharePoint.manageProjectAiContext", async (arg) => {
+    const id =
+      typeof arg === "string"
+        ? arg
+        : (arg as Project | undefined)?.id ?? projects.active()?.id;
+    let project = id ? projects.get(id) : undefined;
+    if (!project) {
+      const all = projects.list();
+      if (all.length === 0) {
+        void vscode.window.showInformationMessage("No projects yet — create one in the Projects view.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        all.map((pr) => ({ label: pr.name, pr })),
+        { ignoreFocusOut: true, title: "Manage AI context for which project?" },
+      );
+      if (!pick) return;
+      project = pick.pr;
+    }
+    const notes = project.aiContext?.split("\n").filter(Boolean).length ?? 0;
+    const action = await vscode.window.showQuickPick(
+      [
+        { label: "$(eye) View saved AI context", value: "view" as const },
+        { label: "$(edit) Edit AI context", value: "edit" as const },
+        ...(notes > 0 ? [{ label: "$(clear-all) Clear AI context", value: "clear" as const }] : []),
+      ],
+      {
+        ignoreFocusOut: true,
+        title: `"${project.name}" — AI-managed context (${notes} note${notes === 1 ? "" : "s"})`,
+      },
+    );
+    if (!action) return;
+    if (action.value === "view") {
+      const doc = await vscode.workspace.openTextDocument({
+        language: "markdown",
+        content: [
+          `# ${project.name} — AI-managed context`,
+          "",
+          "_Learnings @sharepoint saved as you taught it. This is **separate** from your own",
+          "goals/instructions; edit those via **Edit Project**._",
+          "",
+          project.aiContext || "_(empty — nothing learned yet)_",
+        ].join("\n"),
+      });
+      await vscode.window.showTextDocument(doc, { preview: true });
+      return;
+    }
+    if (action.value === "edit") {
+      const edited = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: `${project.name} — AI-managed context`,
+        value: project.aiContext ?? "",
+        prompt: `Edit the AI-managed learnings (max ${AI_CONTEXT_MAX_CHARS} chars). Clear the box to remove all.`,
+        validateInput: (v) =>
+          v.length > AI_CONTEXT_MAX_CHARS ? `Max ${AI_CONTEXT_MAX_CHARS} characters.` : undefined,
+      });
+      if (edited === undefined) return;
+      await projects.setAiContext(project.id, edited);
+      void vscode.window.showInformationMessage(`AI context for "${project.name}" updated.`);
+      return;
+    }
+    const confirm = await vscode.window.showWarningMessage(
+      `Clear the AI-managed context for "${project.name}"? Your goals/instructions are not affected.`,
+      { modal: true },
+      "Clear AI Context",
+    );
+    if (confirm === "Clear AI Context") {
+      await projects.setAiContext(project.id, undefined);
+    }
   });
 
   // --- Database schema catalog + semantic index (ADR-0024) -----------------

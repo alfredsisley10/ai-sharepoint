@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.19.0 — 2026-06-12
+
+### Added — Projects view + goals, reference context, and a separate AI-managed memory (pilot)
+- **Discoverable Projects view** in the activity bar: create, switch (click a project to
+  activate), edit, and remove — each project expands to show its **goals**, **instructions**,
+  **AI-managed context** (note count), and member sources, with the active project marked. The
+  Reference Sources header still shows the active project; switching scopes chat and that view.
+- **User-defined project context**: a project now carries **goals** (what it's for) and
+  **instructions & common reference context** — both shown to @sharepoint while the project is
+  active, as clearly-labeled *user-authored* blocks.
+- **Separate AI-managed context**: @sharepoint can persist durable learnings — "answer in
+  German", "get app ownership from the CMDB" — via the new `#spRemember` tool (you approve each
+  note). They're kept in a **distinct AI-managed block** (never mixed with your own
+  instructions), carried across sessions, and you can **view, edit, or clear** them via
+  *Projects: Manage AI Context* / the AI-context row in the view.
+- All of it — goals, instructions, and AI context — travels with **Export/Import Reference
+  Config**, so a team shares a complete project (scope + context + learned behavior).
+
 ## 0.18.0 — 2026-06-12
 
 ### Changed — @sharepoint status reflects what you actually asked (pilot)

@@ -108,14 +108,44 @@ export const DEFAULT_CAPS: ReadCaps = {
 };
 
 /** Project scope (Pillar 7): a named bundle of sources (bookmarks follow
- *  their sources) plus baseline agent instructions. Non-secret; travels
- *  with the reference-config export. */
+ *  their sources) plus context for AI interactions. Non-secret; travels with
+ *  the reference-config export. USER-DEFINED context (goals, instructions) is
+ *  kept strictly separate from AI-MANAGED context (aiContext), which the
+ *  assistant appends to as the user teaches it expected behavior. */
 export interface Project {
   id: string;
   name: string;
   description?: string;
+  /** User-defined goals/objectives for the project. */
+  goals?: string;
+  /** User-defined baseline instructions & common reference context. */
   instructions?: string;
+  /** AI-managed saved context: learnings the assistant persists (via the
+   *  remember tool) across sessions. Never written by the user-edit flow;
+   *  managed separately and resettable. */
+  aiContext?: string;
   sourceIds: string[];
 }
 
 export const INSTRUCTIONS_MAX_CHARS = 2_000;
+export const GOALS_MAX_CHARS = 1_000;
+export const AI_CONTEXT_MAX_CHARS = 4_000;
+
+/** Append one AI-learned note to a project's AI context (a bulleted log),
+ *  trimming the oldest entries when it would exceed the cap. Pure. */
+export function appendAiNote(
+  existing: string | undefined,
+  note: string,
+  max = AI_CONTEXT_MAX_CHARS,
+): string {
+  const clean = note.trim().replace(/\s+/g, " ").slice(0, 400);
+  if (!clean) return existing ?? "";
+  const lines = (existing ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  lines.push(`- ${clean}`);
+  let out = lines.join("\n");
+  while (out.length > max && lines.length > 1) {
+    lines.shift();
+    out = lines.join("\n");
+  }
+  return out.slice(-max);
+}

@@ -35,6 +35,10 @@ const INSTRUCTIONS = [
   "For research tasks (e.g. aggregating content about a topic), run one or",
   "more searches, synthesize the findings with links, and — when a query looks reusable — call",
   "suggest_bookmark to propose saving it; the user approves in a confirmation dialog.",
+  "When the user teaches you durable, project-specific behavior (a preference, a rule, where to",
+  "look), and a project is active, you may call remember_project_context to save it (they",
+  "approve) — it persists in the project's AI-managed context, separate from their own goals/",
+  "instructions, across sessions. Use it sparingly for lasting guidance, not per-turn detail.",
   "When the user wants findings SHARED with someone, use draft_communication to prepare a Teams",
   "message or Outlook email — it only queues a draft the user must approve in the Communications",
   "view; never imply anything was sent.",
@@ -293,11 +297,31 @@ async function answerWithModel(
   const contextBlock = await buildSiteContext(deps, request, stream);
   const history = formatHistory(context);
   const activeProject = deps.projects.active();
+  // Project context: USER-DEFINED (goals + instructions) and AI-MANAGED
+  // (learned across sessions) are presented as separate, clearly-labeled
+  // blocks so the model never conflates them — and is told it may persist new
+  // learnings via remember_project_context (user-approved).
+  const projectBlock =
+    activeProject &&
+    (activeProject.goals || activeProject.instructions || activeProject.aiContext)
+      ? [
+          `\n## Project: ${activeProject.name}${activeProject.description ? ` — ${activeProject.description}` : ""}`,
+          activeProject.goals ? `\n### Goals (set by the user)\n${activeProject.goals}` : "",
+          activeProject.instructions
+            ? `\n### Instructions & reference context (set by the user)\n${activeProject.instructions}`
+            : "",
+          activeProject.aiContext
+            ? `\n### AI-managed context — learnings you saved in earlier sessions (NOT user-authored; you may add to it via remember_project_context when the user teaches you durable, project-specific behavior, with their approval)\n${activeProject.aiContext}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : activeProject
+        ? `\n## Project: ${activeProject.name} (no goals/instructions/AI context set yet — you may propose saving durable learnings via remember_project_context)`
+        : "";
   const prompt = [
     INSTRUCTIONS,
-    activeProject?.instructions
-      ? `\n## Project instructions — ${activeProject.name}\n${activeProject.instructions}`
-      : "",
+    projectBlock,
     contextBlock ? `\n## Connected context\n${contextBlock}` : "",
     history ? `\n## Conversation so far\n${history}` : "",
     `\n## User request\n${request.prompt}`,

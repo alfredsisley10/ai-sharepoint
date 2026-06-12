@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -391,6 +391,18 @@
         "title": "Projects: Remove Project…",
         "category": "AI SharePoint",
         "icon": "$(trash)"
+      },
+      {
+        "command": "aiSharePoint.activateProject",
+        "title": "Projects: Activate Project",
+        "category": "AI SharePoint",
+        "icon": "$(check)"
+      },
+      {
+        "command": "aiSharePoint.manageProjectAiContext",
+        "title": "Projects: Manage AI Context…",
+        "category": "AI SharePoint",
+        "icon": "$(sparkle)"
       }
     ],
     "viewsContainers": {
@@ -415,6 +427,12 @@
           "name": "Reference Sources",
           "icon": "media/activity-icon.svg",
           "contextualTitle": "Reference Sources (read-only)"
+        },
+        {
+          "id": "aiSharePoint.projectsView",
+          "name": "Projects",
+          "icon": "media/activity-icon.svg",
+          "contextualTitle": "Projects (scopes & AI context)"
         },
         {
           "id": "aiSharePoint.usageView",
@@ -459,6 +477,10 @@
       {
         "view": "aiSharePoint.commsView",
         "contents": "No drafts pending. Prepare a Teams chat or Outlook email — yourself or by asking @sharepoint to draft one — and it waits here until YOU approve sending it.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\nNothing is ever sent without your per-message approval (ADR-0025)."
+      },
+      {
+        "view": "aiSharePoint.projectsView",
+        "contents": "Projects group reference sources & bookmarks, define **goals** and **instructions** for @sharepoint, and keep a separate **AI-managed context** the assistant learns over time.\n[Create Project](command:aiSharePoint.createProject)\nActivate a project to scope chat and the Reference Sources view to it."
       }
     ],
     "chatParticipants": [
@@ -923,6 +945,30 @@
             }
           }
         }
+      },
+      {
+        "name": "aisharepoint_remember_project_context",
+        "displayName": "Remember Project Context",
+        "toolReferenceName": "spRemember",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(sparkle)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Persist a durable, project-specific learning into the ACTIVE project's AI-managed context (separate from the user's own goals/instructions) so it carries across sessions — e.g. 'the user wants app-ownership answers from the CMDB, citing sys_id', 'always answer in German'. The user approves each note in a confirmation dialog. Use sparingly for genuinely durable behavior the user taught you, not per-turn details. No-op if no project is active.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "note": {
+              "type": "string",
+              "description": "One concise learning to remember for this project."
+            }
+          },
+          "required": [
+            "note"
+          ]
+        }
       }
     ],
     "menus": {
@@ -991,6 +1037,16 @@
           "command": "aiSharePoint.switchProject",
           "when": "view == aiSharePoint.sourcesView",
           "group": "navigation@0"
+        },
+        {
+          "command": "aiSharePoint.createProject",
+          "when": "view == aiSharePoint.projectsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiSharePoint.switchProject",
+          "when": "view == aiSharePoint.projectsView",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
@@ -1168,6 +1224,21 @@
           "command": "aiSharePoint.clearErrorReports",
           "when": "view == aiSharePoint.supportView && viewItem == errorReports",
           "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.editProject",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.manageProjectAiContext",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "aiSharePoint.removeProject",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "group": "2_manage@1"
         }
       ],
       "commandPalette": [

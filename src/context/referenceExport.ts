@@ -1,7 +1,7 @@
 import { ContextSource, ContextBookmark, ContextAuthMethod } from "./types";
 import { normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./sourceRef";
 import { SourceSchema } from "./db/schemaIndex";
-import { Project, INSTRUCTIONS_MAX_CHARS } from "./types";
+import { Project, INSTRUCTIONS_MAX_CHARS, GOALS_MAX_CHARS, AI_CONTEXT_MAX_CHARS } from "./types";
 
 /**
  * Secret-free reference-config sharing (ADR-0013 slice 1).
@@ -51,7 +51,9 @@ export interface ReferenceExport {
   projects?: Array<{
     name: string;
     description?: string;
+    goals?: string;
     instructions?: string;
+    aiContext?: string;
     sources: string[];
   }>;
 }
@@ -106,7 +108,9 @@ export function buildReferenceExport(
           projects: projects.map((pr) => ({
             name: pr.name,
             ...(pr.description ? { description: pr.description } : {}),
+            ...(pr.goals ? { goals: pr.goals } : {}),
             ...(pr.instructions ? { instructions: pr.instructions } : {}),
+            ...(pr.aiContext ? { aiContext: pr.aiContext } : {}),
             sources: pr.sourceIds
               .map((id) => byId.get(id))
               .filter((n): n is string => Boolean(n)),
@@ -240,8 +244,14 @@ export function parseReferenceImport(
       ...(typeof pr.description === "string" && pr.description.trim()
         ? { description: pr.description.trim().slice(0, DESCRIPTION_MAX_LENGTH) }
         : {}),
+      ...(typeof pr.goals === "string" && pr.goals.trim()
+        ? { goals: pr.goals.trim().slice(0, GOALS_MAX_CHARS) }
+        : {}),
       ...(typeof pr.instructions === "string" && pr.instructions.trim()
         ? { instructions: pr.instructions.trim().slice(0, INSTRUCTIONS_MAX_CHARS) }
+        : {}),
+      ...(typeof pr.aiContext === "string" && pr.aiContext.trim()
+        ? { aiContext: pr.aiContext.trim().slice(0, AI_CONTEXT_MAX_CHARS) }
         : {}),
       sourceIds,
     });

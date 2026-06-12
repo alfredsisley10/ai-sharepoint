@@ -1,8 +1,13 @@
 import * as vscode from "vscode";
-import { ContextSource, Project } from "./types";
+import { ContextSource, Project, appendAiNote } from "./types";
 
 export type { Project } from "./types";
-export { INSTRUCTIONS_MAX_CHARS } from "./types";
+export {
+  INSTRUCTIONS_MAX_CHARS,
+  GOALS_MAX_CHARS,
+  AI_CONTEXT_MAX_CHARS,
+  appendAiNote,
+} from "./types";
 
 
 const PROJECTS_KEY = "aiSharePoint.projects";
@@ -58,6 +63,23 @@ export class ProjectsStore {
     if (!active) return sources;
     const ids = new Set(active.sourceIds);
     return sources.filter((s) => ids.has(s.id));
+  }
+
+  /** AI-managed: append one learned note to the active (or named) project's
+   *  AI context — kept separate from the user-defined fields. */
+  async appendAiContext(projectId: string, note: string): Promise<boolean> {
+    const project = this.get(projectId);
+    if (!project) return false;
+    const aiContext = appendAiNote(project.aiContext, note);
+    await this.upsert({ ...project, aiContext });
+    return true;
+  }
+
+  /** Replace/clear a project's AI-managed context (user reset). */
+  async setAiContext(projectId: string, aiContext: string | undefined): Promise<void> {
+    const project = this.get(projectId);
+    if (!project) return;
+    await this.upsert({ ...project, aiContext: aiContext?.trim() || undefined });
   }
 
   /** Drop a removed source from every project's membership. */
