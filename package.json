@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.30.5",
+  "version": "0.31.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -197,6 +197,12 @@
         "title": "Discard Communication Draft",
         "category": "AI SharePoint",
         "icon": "$(trash)"
+      },
+      {
+        "command": "aiSharePoint.configureTeamsWebhook",
+        "title": "Configure Teams Webhook (no admin consent)…",
+        "category": "AI SharePoint",
+        "icon": "$(plug)"
       },
       {
         "command": "aiSharePoint.indexSourceSchema",
@@ -1029,6 +1035,11 @@
           "command": "aiSharePoint.draftOutlookEmail",
           "when": "view == aiSharePoint.commsView",
           "group": "navigation@2"
+        },
+        {
+          "command": "aiSharePoint.configureTeamsWebhook",
+          "when": "view == aiSharePoint.commsView",
+          "group": "1_config@1"
         },
         {
           "command": "aiSharePoint.addContextSource",

@@ -581,9 +581,20 @@ Have findings reach people — **without the assistant ever sending anything its
   exact addresses). Only your explicit approval sends — from your account, so tenant
   compliance/DLP applies as always.
 - **Outlook safety valve**: *Save to Outlook Drafts* puts the draft in your mailbox without
-  sending — finish and send from Outlook itself.
-- Send-capable permissions (`Chat.ReadWrite`, `Mail.Send`, …) are requested **only** by this
-  flow, on first use (ADR-0025).
+  sending — finish and send from Outlook itself. (Teams has no equivalent: Microsoft Graph has
+  no “unsent Teams message” — direct Teams messaging always posts live, which is why it needs
+  `Chat.ReadWrite` consent. Outlook drafts use `Mail.ReadWrite`, separate from `Mail.Send`.)
+- **Teams without admin consent — Incoming Webhooks.** If your tenant won't grant
+  `Chat.ReadWrite`, a channel owner can create a **Teams Incoming Webhook** (channel ••• →
+  Connectors → Incoming Webhook, or a Power Automate “Workflows” webhook) — **no app
+  registration, no admin consent, no Graph**. Run *AI SharePoint: Configure Teams Webhook…*
+  (Communications view title bar), paste the URL (stored only in your OS keychain), and name
+  it. Teams drafts then gain a **“Post to <name>”** button in the approval dialog that delivers
+  a card to that **channel**. The trade-off: a webhook posts to a channel, not a 1:1/group
+  chat, and can’t @-mention individuals — your recipient list appears as a **“For:”** line in
+  the card. Approval, preview, and discard work exactly as for the Graph path.
+- Send-capable Graph permissions (`Chat.ReadWrite`, `Mail.Send`, …) are requested **only** by
+  this flow, on first use (ADR-0025); the webhook path needs none of them.
 
 ### Projects: scope sources/bookmarks and give @sharepoint goals + memory
 
@@ -710,6 +721,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases/Vertex AI Search) |
 | Load/Refresh / Index / View Database Schema · Pre-cache Source Catalog | Schema understanding (ADR-0024) and catalog pre-cache per source |
 | Draft Teams Message / Draft Outlook Email · Review & Send / Edit / Discard Communication Draft | Approval-gated communications (ADR-0025) |
+| Configure Teams Webhook (no admin consent)… | Add/remove channel Incoming Webhooks so Teams drafts can post without `Chat.ReadWrite` |
 | Edit Bookmark | Rename / modify a bookmark's saved query (SQL validated read-only) |
 | Remove Site Connection | Remove descriptor (+ tokens if last connection in tenant) |
 | Ask Copilot | One-shot prompt; streams into the “AI SharePoint — Copilot” output |

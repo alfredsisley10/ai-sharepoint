@@ -66,7 +66,7 @@ accordingly.
 | Reference sources (optional) | Your Atlassian hosts: `*.atlassian.net` (Cloud) and/or internal Confluence/Jira Data Center hosts — read-only REST |
 | Site repository push (optional) | `github.com` and/or your GitHub Enterprise Server host — via the user's own git |
 | Database sources (optional) | Your SQL Server (1433), PostgreSQL (5432), MySQL (3306), MongoDB (27017) hosts — direct TCP, read-only (ADR-0022) |
-| Communications (optional) | `graph.microsoft.com` (same host as site reads) — Teams chats / Outlook mail, send-capable scopes only on first use (ADR-0025) |
+| Communications (optional) | `graph.microsoft.com` (same host as site reads) — Teams chats / Outlook mail, send-capable scopes only on first use (ADR-0025). Teams **Incoming Webhook** alternative posts to `*.webhook.office.com` (or the Power Automate `*.logic.azure.com` host of the configured webhook) — no Graph, no consent |
 | Vertex AI Search (optional) | `discoveryengine.googleapis.com` (or regional `*-discoveryengine.googleapis.com`); SSO tokens come from the local gcloud CLI — no Google endpoints are contacted for auth by the extension itself (ADR-0026) |
 | Power BI (optional) | `api.powerbi.com` — read-only Table/executeQueries REST (ADR-0027) |
 | ServiceNow (optional) | Your instance host (`*.service-now.com` or custom) — read-only Table API (ADR-0028) |
@@ -114,7 +114,12 @@ If your tenant requires admin consent for it, grant consent in Entra admin cente
    - **Communications** (ADR-0025 — Teams/Outlook drafts the user approves per message):
      `User.ReadBasic.All` (recipient resolution), `Chat.ReadWrite` (create chat + post),
      `Mail.ReadWrite` (mailbox draft), `Mail.Send` (send on approval). Tenant DLP/compliance
-     applies — messages send as the user.
+     applies — messages send as the user. **No-consent Teams alternative:** if you won't grant
+     `Chat.ReadWrite`, users can deliver to a Teams **channel** via an **Incoming Webhook**
+     (channel-owner-created connector or a Power Automate “Workflows” webhook) — no app
+     registration, no admin consent, no Graph token; the webhook URL is stored in the user's OS
+     keychain. Posts go to the channel (not 1:1 chats) and can't @-mention. Outlook drafts
+     (`Mail.ReadWrite`, no `Mail.Send`) are the other no-send-consent path.
    - **Power BI** (ADR-0027): *Power BI Service* API → Delegated → `Workspace.Read.All` +
      `Dataset.Read.All` (read-only; the user's Power BI licenses/roles/RLS govern access).
      **No-consent alternative:** users can instead sign in **as the Azure CLI first-party

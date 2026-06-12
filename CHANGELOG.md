@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.31.0 — 2026-06-12
+
+### Added — Teams delivery without admin consent: Incoming Webhooks (pilot)
+- Direct Teams messaging needs `Chat.ReadWrite` admin consent (Microsoft Graph has no “unsent
+  Teams message” — it always posts live, unlike Outlook, whose draft scope `Mail.ReadWrite` is
+  separate from `Mail.Send`). When that consent is pending or denied, you can now deliver to a
+  Teams **channel** via an **Incoming Webhook** — **no app registration, no admin consent, no
+  Graph**.
+- **Configure Teams Webhook…** (Communications view title bar): a channel owner creates the
+  webhook (channel ••• → Connectors → Incoming Webhook, or a Power Automate “Workflows”
+  webhook); paste the URL — stored only in your **OS keychain**, never settings or logs — and
+  name it. Add/remove multiple channel webhooks.
+- Teams drafts then show a **“Post to <name>”** button in the same approval dialog (full
+  preview, modal confirmation, discard) that posts a MessageCard to that channel. Trade-off,
+  stated in the dialog: a webhook targets a channel, not a 1:1/group chat, and can’t @-mention
+  — the recipient list appears as a **“For:”** line in the card. The Graph “Send via Teams”
+  path is unchanged and still offered.
+- Webhook posts go only to `*.webhook.office.com` / the configured Power-Automate host; revoked
+  or rotated webhooks (404/410) are reported with re-configuration guidance.
+
 ## 0.30.5 — 2026-06-12
 
 ### Fixed — switching projects now re-scopes the Reference Sources view immediately (pilot)

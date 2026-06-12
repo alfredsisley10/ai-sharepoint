@@ -98,7 +98,7 @@ import {
   CatalogEntry,
   LoadCheckpoint,
 } from "./context/catalogCache";
-import { setWireSink } from "./core/wireLog";
+import { setWireSink, safeUrl } from "./core/wireLog";
 import { setLdapDnsServers } from "./context/ldap/ldapClient";
 import {
   ProjectsStore,
@@ -137,6 +137,13 @@ import * as http from "node:http";
 import * as nodeCrypto from "node:crypto";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
+import {
+  TeamsWebhook,
+  teamsWebhookUrlIssue,
+  isKnownWebhookHost,
+  buildTeamsWebhookPayload,
+  postTeamsWebhook,
+} from "./comms/teamsWebhook";
 import {
   CommDraft,
   CommChannel,
@@ -3846,6 +3853,80 @@ export function activate(context: vscode.ExtensionContext): void {
     return new CommsClient(provider, false);
   };
 
+  // Teams Incoming Webhooks (ADR-0025 amendment): the no-admin-consent
+  // delivery path. URLs embed a token, so they live in the keychain (never
+  // settings/logs), behind one JSON handle.
+  const TEAMS_WEBHOOKS_HANDLE = "teams:webhooks";
+  const getTeamsWebhooks = async (): Promise<TeamsWebhook[]> => {
+    const raw = await secrets.get(TEAMS_WEBHOOKS_HANDLE);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw) as TeamsWebhook[];
+      return Array.isArray(parsed) ? parsed.filter((w) => w?.name && w?.url) : [];
+    } catch {
+      return [];
+    }
+  };
+  const setTeamsWebhooks = (hooks: TeamsWebhook[]): Thenable<void> =>
+    hooks.length > 0
+      ? secrets.set(TEAMS_WEBHOOKS_HANDLE, JSON.stringify(hooks))
+      : secrets.delete(TEAMS_WEBHOOKS_HANDLE);
+
+  register("aiSharePoint.configureTeamsWebhook", async () => {
+    const hooks = await getTeamsWebhooks();
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: "$(add) Add a Teams channel webhook…", value: "add" as const },
+        ...(hooks.length > 0
+          ? [{ label: "$(trash) Remove a webhook…", value: "remove" as const }]
+          : []),
+      ],
+      {
+        ignoreFocusOut: true,
+        title: `Teams webhooks (${hooks.length} configured) — no admin consent needed`,
+      },
+    );
+    if (!pick) return;
+    if (pick.value === "remove") {
+      const target = await vscode.window.showQuickPick(
+        hooks.map((w) => ({ label: w.name, description: safeUrl(w.url), w })),
+        { ignoreFocusOut: true, title: "Remove which webhook?" },
+      );
+      if (!target) return;
+      await setTeamsWebhooks(hooks.filter((w) => w !== target.w));
+      void vscode.window.showInformationMessage(`Removed Teams webhook "${target.w.name}".`);
+      return;
+    }
+    const url = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      password: true,
+      title: "Teams Incoming Webhook URL",
+      prompt:
+        "In the Teams channel: ••• → Connectors → Incoming Webhook (or a Power Automate “Workflows” webhook). Create it, copy the URL, and paste it here. Stored only in your OS keychain. No app registration or admin consent required.",
+      placeHolder: "https://<tenant>.webhook.office.com/webhookb2/…",
+      validateInput: (v) => teamsWebhookUrlIssue(v),
+    });
+    if (!url?.trim()) return;
+    if (!isKnownWebhookHost(url)) {
+      const proceed = await vscode.window.showWarningMessage(
+        "That host doesn't look like a standard Teams/Power-Automate webhook. Add it anyway?",
+        "Add Anyway",
+      );
+      if (proceed !== "Add Anyway") return;
+    }
+    const name = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Name this channel webhook",
+      placeHolder: "IT Ops · Alerts",
+      value: "Teams channel",
+    });
+    if (!name?.trim()) return;
+    await setTeamsWebhooks([...hooks.filter((w) => w.name !== name.trim()), { name: name.trim(), url: url.trim() }]);
+    void vscode.window.showInformationMessage(
+      `Teams webhook "${name.trim()}" saved. Teams drafts can now be posted to it from the approval dialog — no admin consent needed.`,
+    );
+  });
+
   const promptCommDraft = async (
     channel: CommChannel,
     current?: CommDraft,
@@ -3990,16 +4071,28 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     await vscode.window.showTextDocument(previewDoc, { preview: true });
 
-    const sendLabel = draft.channel === "teams" ? "Send via Teams" : "Send Email";
+    // Teams has no Graph "draft" — Chat.ReadWrite posts live (admin consent).
+    // Incoming Webhooks are the no-consent alternative: offer each configured
+    // channel webhook as its own send button.
+    const webhooks = draft.channel === "teams" ? await getTeamsWebhooks() : [];
+    const WEBHOOK_PREFIX = "Post to ";
+    const sendLabel = draft.channel === "teams" ? "Send via Teams (Graph)" : "Send Email";
+    const webhookButtons = webhooks.map((w) => `${WEBHOOK_PREFIX}${w.name}`);
     const buttons =
       draft.channel === "outlook"
         ? [sendLabel, "Save to Outlook Drafts", "Discard Draft"]
-        : [sendLabel, "Discard Draft"];
+        : [...webhookButtons, sendLabel, "Discard Draft"];
     const choice = await vscode.window.showWarningMessage(
       `Approve this ${draft.channel === "teams" ? "Teams message" : "email"}?`,
       {
         modal: true,
-        detail: `To: ${draft.to.join(", ")}${draft.subject ? `\nSubject: ${draft.subject}` : ""}\n\nIt is sent from YOUR account${draft.origin === "agent" ? " (content was prepared by the assistant — review it)" : ""}. The full text is open in the editor behind this dialog.`,
+        detail:
+          `To: ${draft.to.join(", ")}${draft.subject ? `\nSubject: ${draft.subject}` : ""}\n\nIt is sent from YOUR account${draft.origin === "agent" ? " (content was prepared by the assistant — review it)" : ""}. The full text is open in the editor behind this dialog.` +
+          (draft.channel === "teams"
+            ? webhooks.length > 0
+              ? `\n\n“Post to …” delivers to a Teams CHANNEL via webhook (no admin consent; recipients are listed in the card, not messaged directly). “Send via Teams (Graph)” needs Chat.ReadWrite consent and messages recipients directly.`
+              : `\n\nDirect Teams messaging needs Chat.ReadWrite admin consent. No consent? Configure a channel Incoming Webhook (“AI SharePoint: Configure Teams Webhook”) to post without it.`
+            : ""),
       },
       ...buttons,
     );
@@ -4007,6 +4100,28 @@ export function activate(context: vscode.ExtensionContext): void {
     if (choice === "Discard Draft") {
       await outbox.remove(draft.id);
       telemetry.record("comms.discard", { channel: draft.channel, origin: draft.origin });
+      return;
+    }
+    // Webhook delivery: no Graph, no recipient resolution — post the card.
+    if (choice.startsWith(WEBHOOK_PREFIX)) {
+      const hook = webhooks.find((w) => `${WEBHOOK_PREFIX}${w.name}` === choice);
+      if (!hook) return;
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Posting to “${hook.name}”…` },
+        () =>
+          postTeamsWebhook(
+            hook.url,
+            buildTeamsWebhookPayload({
+              body: draft!.body,
+              title: draft!.subject,
+              to: draft!.to,
+              origin: draft!.origin,
+            }),
+          ),
+      );
+      await outbox.remove(draft.id);
+      telemetry.record("comms.send", { channel: "teams", origin: draft.origin, via: "webhook" });
+      void vscode.window.showInformationMessage(`Posted to the “${hook.name}” Teams channel.`);
       return;
     }
     const maybeCommsClient = await commsClientFor();
