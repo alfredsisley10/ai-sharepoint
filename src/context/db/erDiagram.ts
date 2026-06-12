@@ -485,6 +485,45 @@ export function classifyJoin(
 
 const pct = (r: number) => `${Math.round(r * 100)}%`;
 
+/** Repaint cadence for the probe toast: frequent enough to feel alive,
+ *  slow enough to be readable (pilot: per-pair repaints drowned the big
+ *  picture). */
+export const ER_STATUS_REFRESH_MS = 2_000;
+
+/** ETA from measured pace; coarse on purpose (a toast, not a stopwatch). */
+export function formatEta(ms: number): string {
+  if (ms < 50_000) return `~${Math.max(5, Math.round(ms / 5_000) * 5)}s`;
+  const min = Math.round(ms / 60_000);
+  return min <= 1 ? "~1 min" : `~${min} min`;
+}
+
+/** Big-picture status line for the probe run: "pair 37 of 220 · 12
+ *  relationship(s) · ~3 min left · now: …". The ETA appears once enough
+ *  pairs have completed for the pace to mean something; the current pair
+ *  is a truncated trailer, never the headline. Pure — the caller throttles
+ *  repaints to ER_STATUS_REFRESH_MS. */
+export function renderProbeStatus(p: {
+  /** Pairs fully completed. */
+  done: number;
+  total: number;
+  found: number;
+  elapsedMs: number;
+  current?: string;
+}): string {
+  const head = `pair ${Math.min(p.done + 1, p.total)} of ${p.total}`;
+  const found = `${p.found} relationship(s)`;
+  const eta =
+    p.done >= 3 && p.elapsedMs >= 5_000
+      ? ` · ${formatEta((p.elapsedMs / p.done) * (p.total - p.done))} left`
+      : p.done < p.total
+        ? " · estimating time…"
+        : "";
+  const current = p.current
+    ? ` · now: ${p.current.length > 70 ? `${p.current.slice(0, 70)}…` : p.current}`
+    : "";
+  return `${head} · ${found}${eta}${current}`;
+}
+
 /** Mermaid erDiagram (renders natively in VS Code's markdown preview). */
 export function renderErMermaid(model: ErModel): string {
   const lines = ["erDiagram"];

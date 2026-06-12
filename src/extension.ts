@@ -57,6 +57,7 @@ import {
   proposeExhaustivePairs,
   classifyJoin,
   renderErMermaid,
+  renderProbeStatus,
   initialSampleSize,
   nextSampleSize,
   pairKey,
@@ -64,6 +65,7 @@ import {
   ER_FULL_JOIN_MAX_ROWS,
   ER_SLOW_PROBE_MS,
   ER_EXHAUSTIVE_PAIR_CAP,
+  ER_STATUS_REFRESH_MS,
 } from "./context/db/erDiagram";
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { CatalogStore } from "./context/catalogStore";
@@ -2738,6 +2740,27 @@ export function activate(context: vscode.ExtensionContext): void {
         cancellable: true,
       },
       async (progress, token) => {
+        // Big-picture status, throttled: "pair X of Y · N relationship(s) ·
+        // ~M min left · now: …" — per-pair/per-tier detail must not drown
+        // the run's shape (pilot).
+        const runStarted = Date.now();
+        let lastPaint = 0;
+        const paint = (done: number, current?: string, force = false) => {
+          const now = Date.now();
+          if (!force && now - lastPaint < ER_STATUS_REFRESH_MS) return;
+          lastPaint = now;
+          progress.report({
+            increment: 0,
+            message: renderProbeStatus({
+              done,
+              total: candidates.length,
+              found: relationships.length,
+              elapsedMs: now - runStarted,
+              current,
+            }),
+          });
+        };
+        paint(0, undefined, true);
         for (let i = 0; i < candidates.length; i++) {
           if (token.isCancellationRequested) {
             partial = true;
@@ -2758,10 +2781,10 @@ export function activate(context: vscode.ExtensionContext): void {
             let backward = { sampled: 0, matched: 0 };
             let complete = sample === "full";
             for (;;) {
-              progress.report({
-                increment: 0,
-                message: `${i + 1}/${candidates.length}: ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn} (${sample === "full" ? "complete join" : `${sample}-value sample`})`,
-              });
+              paint(
+                i,
+                `${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn} (${sample === "full" ? "complete join" : `${sample}-value sample`})`,
+              );
               const started = Date.now();
               forward = await contextService.probeJoin(source, from, to, sample);
               backward = await contextService.probeJoin(source, to, from, sample);

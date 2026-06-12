@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.24.2 — 2026-06-12
+
+### Changed — ER build status shows the big picture, at a readable refresh rate (pilot)
+- Thorough ER runs repainted the toast on every pair and every escalation tier with pair-level
+  detail only — impossible to track overall progress. The status line now leads with the run's
+  shape: **"pair 37 of 220 · 12 relationship(s) · ~3 min left · now: dbo.Orders.customer_id ↔
+  …"**. The **ETA comes from the measured pace** (elapsed ÷ completed × remaining) and only
+  appears once a few pairs have finished ("estimating time…" before that); the current pair is
+  a truncated trailer, never the headline; and repaints are **throttled to every 2 seconds**
+  so the numbers are actually readable. The progress bar still advances per pair.
+
 ## 0.24.1 — 2026-06-12
 
 ### Fixed — one friendly prompt after updates instead of a pile of "no view registered" warnings (pilot)

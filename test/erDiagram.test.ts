@@ -296,3 +296,30 @@ test("thorough mode: exhaustive pairs only across small tables, deduped against 
     assert.equal(/int/.test(a), /int/.test(b), `${p.fromColumn}↔${p.toColumn}`);
   }
 });
+
+test("probe status reads big-picture: X of Y, found count, ETA from measured pace, truncated detail", async () => {
+  const { renderProbeStatus, formatEta } = await import("../src/context/db/erDiagram");
+  // Early in the run: no pace yet → "estimating", never a silly ETA.
+  assert.equal(
+    renderProbeStatus({ done: 1, total: 220, found: 0, elapsedMs: 2_000 }),
+    "pair 2 of 220 · 0 relationship(s) · estimating time…",
+  );
+  // 20 pairs in 60s → 3s/pair → 180s remaining over 60 pairs → ~3 min.
+  const mid = renderProbeStatus({
+    done: 20,
+    total: 80,
+    found: 12,
+    elapsedMs: 60_000,
+    current: "dbo.Orders.customer_id ↔ dbo.Customers.id (500-value sample)",
+  });
+  assert.match(mid, /^pair 21 of 80 · 12 relationship\(s\) · ~3 min left · now: dbo\.Orders/);
+  // The trailing detail is capped so the headline stays readable.
+  const long = renderProbeStatus({ done: 5, total: 10, found: 1, elapsedMs: 30_000, current: "x".repeat(200) });
+  assert.ok(long.length < 160, long);
+  assert.match(long, /…$/);
+  // ETA formatting: seconds round to 5s steps; minutes stay coarse.
+  assert.equal(formatEta(12_000), "~10s");
+  assert.equal(formatEta(49_000), "~50s");
+  assert.equal(formatEta(60_000), "~1 min");
+  assert.equal(formatEta(170_000), "~3 min");
+});
