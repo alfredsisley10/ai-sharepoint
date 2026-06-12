@@ -891,3 +891,20 @@ test("diagnoseSqlAgainstCatalog names the missing tables and the catalog it has"
   assert.ok(d.referenced.includes("dbo.LDAP_USERS"));
   assert.ok(d.catalogTables.includes("dbo.LDAP_USERS"));
 });
+
+test("probe SQL aggregates a per-row flag, never SUM over an EXISTS subquery (SQL Server rejects that)", async () => {
+  const { buildJoinProbeSql } = await import("../src/context/db/erDiagram");
+  for (const engine of ["mssql", "postgres", "mysql"] as const) {
+    const sql = buildJoinProbeSql(engine, { table: "A", column: "x" }, { table: "B", column: "y" });
+    // The aggregate operand is a plain column (SUM(m)), and EXISTS sits in an
+    // inner SELECT list — not inside SUM(...).
+    assert.match(sql, /SUM\(m\) AS matched/, sql);
+    assert.ok(!/SUM\(CASE WHEN EXISTS/i.test(sql), `aggregate must not wrap EXISTS: ${sql}`);
+    assert.match(sql, /CASE WHEN EXISTS \(SELECT 1 FROM/, sql);
+    assert.match(sql, /COUNT\(\*\) AS sampled/, sql);
+  }
+  // Cast + full variants keep the structure.
+  const castFull = buildJoinProbeSql("mssql", { table: "A", column: "x" }, { table: "B", column: "y" }, "full", true);
+  assert.match(castFull, /SUM\(m\) AS matched/);
+  assert.ok(!/SUM\(CASE WHEN EXISTS/i.test(castFull));
+});

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.32.1 — 2026-06-12
+
+### Fixed — ER probe rejected by SQL Server ("aggregate function on … a subquery")
+- Every join probe failed on SQL Server with *"Cannot perform an aggregate function on an
+  expression containing an aggregate or subquery."* The probe computed
+  `SUM(CASE WHEN EXISTS (subquery) …)` — and SQL Server forbids a subquery inside an
+  aggregate's argument. The probe now computes the per-value match flag in an inner query and
+  aggregates a plain column (`SUM(m)` over a derived table), which is valid on SQL Server,
+  PostgreSQL, and MySQL. Counts and behavior are unchanged.
+
+### Changed — Outlook verification creates a draft, never sends (pilot)
+- The Outlook test no longer sends a message. It **creates a coded draft in your Outlook
+  Drafts** and asks you to confirm the code from it — proving the path end to end with only
+  `Mail.ReadWrite`, in keeping with approve-and-release (you release every message yourself).
+  This reconciles the earlier confusion where the test reported failure (at the `Mail.Send`
+  consent step) even though the draft had been created: there is no send step now, so an
+  admin-gated `Mail.Send` no longer blocks verification, and no orphaned test message is left
+  behind. The approval dialog still gates on verification and shows only verified options.
+
 ## 0.32.0 — 2026-06-12
 
 ### Added — communications methods must pass an end-to-end test before they're offered (pilot)

@@ -446,11 +446,15 @@ export function buildJoinProbeSql(
   const top = sample === "full" ? "" : engine === "mssql" ? `TOP ${sample} ` : "";
   const limit = sample === "full" || engine === "mssql" ? "" : ` LIMIT ${sample}`;
   const sub = `SELECT DISTINCT ${top}${castExpr(q(from.column))} AS v FROM ${fromTarget} WHERE ${q(from.column)} IS NOT NULL${limit}`;
-  return (
-    `SELECT COUNT(*) AS sampled, ` +
-    `SUM(CASE WHEN EXISTS (SELECT 1 FROM ${toTarget} t WHERE ${castExpr(`t.${q(to.column)}`)} = s.v) THEN 1 ELSE 0 END) AS matched ` +
-    `FROM (${sub}) s`
-  );
+  // The EXISTS flag is computed PER ROW in an inner query, then aggregated as
+  // a plain column. Putting EXISTS(...) directly inside SUM(CASE …) makes SQL
+  // Server reject the statement ("Cannot perform an aggregate function on an
+  // expression containing an aggregate or subquery") — so the match flag must
+  // not live inside the aggregate's argument. Valid on mssql/postgres/mysql.
+  const flagged =
+    `SELECT CASE WHEN EXISTS (SELECT 1 FROM ${toTarget} t WHERE ${castExpr(`t.${q(to.column)}`)} = s.v) THEN 1 ELSE 0 END AS m ` +
+    `FROM (${sub}) s`;
+  return `SELECT COUNT(*) AS sampled, SUM(m) AS matched FROM (${flagged}) x`;
 }
 
 /** MongoDB variant: distinct sample via $group, existence via $lookup;

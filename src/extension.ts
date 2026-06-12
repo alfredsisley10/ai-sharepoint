@@ -3980,13 +3980,17 @@ export function activate(context: vscode.ExtensionContext): void {
         const client = await commsClientFor();
         if (!client) return false;
         if (kind === "outlook") {
+          // The test only CREATES a draft (Mail.ReadWrite) — it does NOT send.
+          // The draft landing in the user's Drafts, with a code they read
+          // back, proves the path end-to-end, and matches the approve-and-
+          // release principle (the user releases every message themselves).
+          // No Mail.Send needed, so admin-gated Send never blocks the test.
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: "Sending a test email to yourself…" },
+            { location: vscode.ProgressLocation.Notification, title: "Creating a test draft in your Outlook Drafts…" },
             async () => {
               const me = await client.myAddress();
               if (!me.address) throw new AppError("Could not determine your mailbox address.", "config");
-              const created = await client.createMailDraft([me], subject, body);
-              await client.sendMailDraft(created.id);
+              await client.createMailDraft([me], subject, body);
             },
           );
         } else {
@@ -4012,16 +4016,20 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       }
     } catch (err) {
-      const hint = explainCommsError(err instanceof Error ? err.message : String(err));
-      void vscode.window.showErrorMessage(
-        `Test ${label} send failed: ${err instanceof Error ? err.message : String(err)}${hint ? ` — ${hint}` : ""}`,
+      const raw = err instanceof Error ? err.message : String(err);
+      // The AppError's own summary (e.g. the draft-created/send-failed
+      // reconciliation) is the most specific explanation; fall back to the
+      // scope-consent hint otherwise.
+      const detail = err instanceof AppError && err.userSummary ? err.userSummary : explainCommsError(raw);
+      void vscode.window.showWarningMessage(
+        `${label} test didn't complete: ${raw}${detail ? ` — ${detail}` : ""}`,
       );
       return false;
     }
     const entered = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: `Confirm the ${label} test`,
-      prompt: `Check ${kind === "teams-webhook" ? "the channel" : kind === "outlook" ? "your inbox" : "the Teams chat"} and enter the verification code from the message.`,
+      prompt: `Open ${kind === "teams-webhook" ? "the Teams channel" : kind === "outlook" ? "your Outlook Drafts folder" : "the Teams chat"}, find the test message, and enter the verification code from it.`,
       placeHolder: "e.g. ABC-D29",
     });
     if (entered === undefined) return false;
@@ -4033,7 +4041,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     await markVerified(verificationKey(kind, webhook?.name));
     telemetry.record("comms.verify", { kind });
-    void vscode.window.showInformationMessage(`✓ ${label} verified end-to-end — it's now available for sending.`);
+    void vscode.window.showInformationMessage(
+      kind === "outlook"
+        ? "✓ Outlook verified — drafts will be placed in your Outlook Drafts for you to review and send."
+        : `✓ ${label} verified end-to-end — it's now available for sending.`,
+    );
     return true;
   };
 
@@ -4237,43 +4249,49 @@ export function activate(context: vscode.ExtensionContext): void {
     const WEBHOOK_PREFIX = "Post to ";
     const sendLabel = draft.channel === "teams" ? "Send via Teams (Graph)" : "Send Email";
     const webhookButtons = webhooks.map((w) => `${WEBHOOK_PREFIX}${w.name}`);
+    // Outlook is verified by a DRAFT test (no send), matching approve-and-
+    // release: once verified, both "Save to Outlook Drafts" and one-click
+    // "Send Email" are offered (Send still needs Mail.Send at click time;
+    // the runtime hint guides if it's not granted). Teams: verified webhooks
+    // and/or a verified Graph path.
     const sendButtons =
       draft.channel === "outlook"
-        ? [...(graphVerified ? [sendLabel] : []), "Save to Outlook Drafts"]
+        ? graphVerified
+          ? ["Save to Outlook Drafts", sendLabel]
+          : []
         : [...webhookButtons, ...(graphVerified ? [sendLabel] : [])];
     if (sendButtons.length === 0) {
       // Nothing verified for this channel — don't offer a dead send button.
       const go = await vscode.window.showWarningMessage(
-        `No verified ${draft.channel === "teams" ? "Teams" : "Outlook"} method to send this. Test one end-to-end first (a coded message you confirm).`,
-        { modal: true, detail: "The draft stays pending. Outlook can still be saved to your mailbox Drafts." },
+        `No verified ${draft.channel === "teams" ? "Teams" : "Outlook"} method yet. Test one end-to-end first — a coded message you confirm.`,
+        {
+          modal: true,
+          detail:
+            draft.channel === "outlook"
+              ? "The Outlook test places a coded draft in your Drafts folder (nothing is sent); confirm the code to enable it. The draft stays pending until then."
+              : "The draft stays pending until a Teams method is verified.",
+        },
         "Test a Method",
-        ...(draft.channel === "outlook" ? ["Save to Outlook Drafts"] : []),
         "Keep Pending",
       );
-      if (go === "Test a Method") {
-        await vscode.commands.executeCommand("aiSharePoint.testCommsMethod");
-        return;
-      }
-      if (go !== "Save to Outlook Drafts") return;
+      if (go === "Test a Method") await vscode.commands.executeCommand("aiSharePoint.testCommsMethod");
+      return;
     }
-    const choice =
-      sendButtons.length === 0
-        ? "Save to Outlook Drafts"
-        : await vscode.window.showWarningMessage(
-            `Approve this ${draft.channel === "teams" ? "Teams message" : "email"}?`,
-            {
-              modal: true,
-              detail:
-                `To: ${draft.to.join(", ")}${draft.subject ? `\nSubject: ${draft.subject}` : ""}\n\nIt is sent from YOUR account${draft.origin === "agent" ? " (content was prepared by the assistant — review it)" : ""}. The full text is open in the editor behind this dialog.` +
-                (draft.channel === "teams"
-                  ? webhooks.length > 0
-                    ? `\n\n“Post to …” delivers to a Teams CHANNEL via webhook (recipients are listed in the card, not messaged directly). ${graphVerified ? "“Send via Teams (Graph)” messages recipients directly." : ""}`
-                    : ``
-                  : ""),
-            },
-            ...sendButtons,
-            "Discard Draft",
-          );
+    const choice = await vscode.window.showWarningMessage(
+      `Approve this ${draft.channel === "teams" ? "Teams message" : "email"}?`,
+      {
+        modal: true,
+        detail:
+          `To: ${draft.to.join(", ")}${draft.subject ? `\nSubject: ${draft.subject}` : ""}\n\nIt is sent from YOUR account${draft.origin === "agent" ? " (content was prepared by the assistant — review it)" : ""}. The full text is open in the editor behind this dialog.` +
+          (draft.channel === "teams"
+            ? webhooks.length > 0
+              ? `\n\n“Post to …” delivers to a Teams CHANNEL via webhook (recipients are listed in the card, not messaged directly). ${graphVerified ? "“Send via Teams (Graph)” messages recipients directly." : ""}`
+              : ``
+            : ""),
+      },
+      ...sendButtons,
+      "Discard Draft",
+    );
     if (!choice) return; // stays pending
     if (choice === "Discard Draft") {
       await outbox.remove(draft.id);
