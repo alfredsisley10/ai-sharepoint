@@ -172,3 +172,50 @@ test("entryToItem truncates an over-long body", () => {
   assert.ok(item.body.length <= 21);
   assert.ok(item.body.endsWith("…"));
 });
+
+// --- 0.10.2: VPN DNS-settling resilience (pilot) ------------------------------
+
+test("orderCandidates puts the last-good DC first without duplicating it", async () => {
+  const { orderCandidates } = await import("../src/context/ldap/ldapClient");
+  assert.deepEqual(
+    orderCandidates(["ldaps://a:636", "ldaps://b:636"], "ldaps://b:636"),
+    ["ldaps://b:636", "ldaps://a:636"],
+  );
+  assert.deepEqual(orderCandidates(["ldaps://a:636"], undefined), ["ldaps://a:636"]);
+  // A remembered DC that vanished from SRV is still tried first.
+  assert.deepEqual(
+    orderCandidates(["ldaps://a:636"], "ldaps://gone:636"),
+    ["ldaps://gone:636", "ldaps://a:636"],
+  );
+});
+
+test("resolveSrvWithRetry backs off through the settling window, then succeeds", async () => {
+  const { resolveSrvWithRetry } = await import("../src/context/ldap/ldapClient");
+  let calls = 0;
+  const waits: number[] = [];
+  const urls = await resolveSrvWithRetry(
+    { baseUrl: "ldaps+srv://_gc._tcp.corp.example" },
+    {
+      resolveSrv: async () => {
+        calls += 1;
+        if (calls < 3) throw new Error("ENOTFOUND (VPN DNS not ready)");
+        return [{ name: "gc1.corp.example", port: 3269, priority: 0, weight: 100 }];
+      },
+    },
+    async (ms) => {
+      waits.push(ms);
+    },
+  );
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [2000, 4000]);
+  assert.match(urls[0], /^ldaps:\/\/gc1\.corp\.example:3269/);
+  // Permanent failure: retries exhaust and the last error surfaces.
+  await assert.rejects(
+    resolveSrvWithRetry(
+      { baseUrl: "ldaps+srv://_gc._tcp.corp.example" },
+      { resolveSrv: async () => { throw new Error("NXDOMAIN"); } },
+      async () => {},
+    ),
+    /SRV lookup failed/,
+  );
+});

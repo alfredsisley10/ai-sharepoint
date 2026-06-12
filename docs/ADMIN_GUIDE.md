@@ -253,6 +253,11 @@ user's own git** — the extension holds no Git credentials and never force-push
   root+intermediate chain for a deterministic result on any runtime. A failure surfaces as
   "LDAPS certificate not trusted" with these options in the message.
   `aiSharePoint.ldap.tlsRejectUnauthorized` defaults to **true**; only disable for isolated labs.
+- **Remote/VPN users:** Node's resolver bypasses Windows NRPT / VPN split-DNS, and VPN clients
+  apply corporate DNS with a delay after connect. The extension retries SRV lookups with
+  backoff and remembers the last-good DC per source; for determinism, distribute
+  `aiSharePoint.ldap.dnsServers` (machine-scoped) with your internal DNS server IPs —
+  reachable by IP over the tunnel regardless of split-DNS rules.
 - **Durable endpoints:** DNS-discovered sources store the SRV lookup itself
   (`ldaps+srv://_gc._tcp.<domain>`), re-resolved per connection with ranked failover — rotating
   or replacing DCs requires **no client reconfiguration**. Failover never re-sends a rejected

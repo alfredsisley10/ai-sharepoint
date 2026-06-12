@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.2 — 2026-06-12
+
+### Fixed — LDAP over VPN: DNS settling window + split-DNS (pilot)
+- **Last-good DC memory + SRV retry/backoff**: SRV resolution now retries (2 s, 4 s) before
+  failing — bridging the window where a VPN tunnel is up but corporate DNS isn't applied yet —
+  and the last domain controller that accepted a connection is remembered per source: tried
+  first on every reconnect (faster on slow links) and used as the direct fallback when
+  resolution still fails mid-settling. Wire logging shows each retry and fallback.
+- **`aiSharePoint.ldap.dnsServers` (machine-scoped)**: pin internal DNS server IPs for SRV
+  lookups. Node's resolver bypasses Windows NRPT / VPN split-DNS rules entirely, so pointing
+  AD discovery straight at corporate DNS by IP makes it deterministic in office and on VPN.
+
 ## 0.10.0 — 2026-06-11
 
 ### Added — Splunk connector (read-only SPL, ADR-0029)

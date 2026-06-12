@@ -28,9 +28,63 @@ export interface LdapTlsOptions {
   caBundlePath?: string;
 }
 
-const defaultResolver: DnsResolver = {
-  resolveSrv: (name) => dnsPromises.resolveSrv(name),
-};
+/** Admin-pinned DNS servers (aiSharePoint.ldap.dnsServers): when set, SRV
+ *  queries go straight to the corporate resolvers by IP — immune to VPN
+ *  split-DNS rules and adapter settling that Node's c-ares resolver cannot
+ *  see (it bypasses NRPT/scoped resolvers entirely). */
+let pinnedDnsServers: string[] = [];
+export function setLdapDnsServers(servers: string[]): void {
+  pinnedDnsServers = servers.map((s) => s.trim()).filter(Boolean);
+}
+
+function defaultResolver(): DnsResolver {
+  if (pinnedDnsServers.length > 0) {
+    const r = new dnsPromises.Resolver({ timeout: 5_000, tries: 2 });
+    try {
+      r.setServers(pinnedDnsServers);
+      return { resolveSrv: (name) => r.resolveSrv(name) };
+    } catch {
+      // Malformed setting — fall through to the system resolver.
+    }
+  }
+  return { resolveSrv: (name) => dnsPromises.resolveSrv(name) };
+}
+
+/** Last DC that actually accepted a connection, per SRV target — tried
+ *  first on later connections, and used as the fallback when resolution
+ *  fails inside a VPN's DNS settling window (pilot finding). */
+const lastGoodUrl = new Map<string, string>();
+
+/** Pure candidate ordering: last-good first, the rest in SRV order. */
+export function orderCandidates(urls: string[], lastGood?: string): string[] {
+  if (!lastGood) return urls;
+  return [lastGood, ...urls.filter((u) => u !== lastGood)];
+}
+
+const SRV_RETRY_DELAYS_MS = [2_000, 4_000];
+
+/** SRV resolution with bounded retry/backoff: VPN clients can take a while
+ *  to apply corporate DNS after the tunnel opens — failing instantly during
+ *  that settling window turned out to be the main remote failure mode. */
+export async function resolveSrvWithRetry(
+  source: Pick<ContextSource, "baseUrl">,
+  resolver: DnsResolver,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<string[]> {
+  let lastErr: unknown;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await resolveConnectUrls(source, resolver);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= SRV_RETRY_DELAYS_MS.length) break;
+      const wait = SRV_RETRY_DELAYS_MS[attempt];
+      emitWire("ldap", "✗", `SRV resolution attempt ${attempt + 1} failed — retrying in ${wait / 1000}s (VPN DNS may still be settling)`);
+      await sleep(wait);
+    }
+  }
+  throw lastErr;
+}
 
 /** LDAP result code 49 — invalid credentials (feeds the ADR-0009 breaker). */
 const LDAP_INVALID_CREDENTIALS = 49;
@@ -76,7 +130,7 @@ function toAppError(err: unknown): AppError {
  */
 export async function resolveConnectUrls(
   source: Pick<ContextSource, "baseUrl">,
-  resolver: DnsResolver = defaultResolver,
+  resolver: DnsResolver = defaultResolver(),
 ): Promise<string[]> {
   const target = parseLdapTarget(source.baseUrl);
   if (target.kind === "static") {
@@ -155,12 +209,26 @@ async function withClient<T>(
   run: (client: Client) => Promise<T>,
   resolver?: DnsResolver,
 ): Promise<T> {
-  const urls = await resolveConnectUrls(source, resolver);
+  const targetKey = source.baseUrl;
+  let urls: string[];
+  try {
+    urls = await resolveSrvWithRetry(source, resolver ?? defaultResolver());
+  } catch (err) {
+    const remembered = lastGoodUrl.get(targetKey);
+    if (!remembered) throw err;
+    // Resolution failed even after backoff, but a DC accepted us before —
+    // try it directly rather than failing inside the DNS settling window.
+    emitWire("ldap", "→", `SRV resolution failed — falling back to last-good ${remembered}`);
+    urls = [remembered];
+  }
+  urls = orderCandidates(urls, lastGoodUrl.get(targetKey));
   let client: Client | undefined;
+  let connectedUrl: string | undefined;
   let lastErr: AppError | undefined;
   for (const url of urls) {
     try {
       client = await connectAndBind(url, credential, tls, caps);
+      connectedUrl = url;
       break;
     } catch (err) {
       const mapped = toAppError(err);
@@ -175,6 +243,9 @@ async function withClient<T>(
   }
   if (!client) {
     throw lastErr ?? new AppError("No LDAP server reachable.", "network");
+  }
+  if (connectedUrl) {
+    lastGoodUrl.set(targetKey, connectedUrl);
   }
   try {
     return await run(client);

@@ -71,6 +71,7 @@ import {
   LoadCheckpoint,
 } from "./context/catalogCache";
 import { setWireSink } from "./core/wireLog";
+import { setLdapDnsServers } from "./context/ldap/ldapClient";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
 import {
@@ -221,8 +222,16 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   };
   applyWireLogging();
+  const applyLdapDnsServers = () =>
+    setLdapDnsServers(
+      vscode.workspace.getConfiguration("aiSharePoint").get<string[]>("ldap.dnsServers", []),
+    );
+  applyLdapDnsServers();
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("aiSharePoint.ldap.dnsServers")) {
+        applyLdapDnsServers();
+      }
       if (e.affectsConfiguration("aiSharePoint.logging.verboseWire")) {
         applyWireLogging();
         log.info(`Verbose wire logging ${verboseWireOn() ? "ENABLED" : "disabled"}.`);

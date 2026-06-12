@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -47,7 +47,8 @@
         "aiSharePoint.auth.additionalAuthorityHosts",
         "aiSharePoint.sync.allowedRemoteHosts",
         "aiSharePoint.ldap.caCertificatesFile",
-        "aiSharePoint.context.allowSchemaIndexing"
+        "aiSharePoint.context.allowSchemaIndexing",
+        "aiSharePoint.ldap.dnsServers"
       ]
     }
   },
@@ -1332,6 +1333,15 @@
           "default": false,
           "order": 30,
           "markdownDescription": "Log the **full request/response detail of every integration** — Microsoft Graph (SharePoint, Teams, Outlook), Confluence/Jira, LDAP/Active Directory, SQL Server/PostgreSQL/MySQL/MongoDB, Vertex AI Search, Power BI, MSAL sign-in traffic, and Copilot prompts/responses — to the *AI SharePoint* output channel. **Secrets are redacted in layers**: authorization headers are reduced to their scheme, token-endpoint bodies are withheld entirely, credential-shaped fields are masked, and every line passes the global redaction filter. Database/LDAP **result data is summarized (counts/columns), not dumped**. Local only; never included in diagnostics exports. Expect large output — enable only while debugging."
+        },
+        "aiSharePoint.ldap.dnsServers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "order": 16,
+          "markdownDescription": "**Machine-scoped.** Internal DNS server IPs used for Active Directory **SRV lookups** (e.g. `[\"10.0.0.53\", \"10.0.1.53\"]`). Set this when LDAP works in the office but fails on VPN: Node's resolver bypasses Windows NRPT / VPN split-DNS rules, so pointing SRV queries directly at corporate DNS by IP makes discovery deterministic everywhere. Empty = system resolver."
         }
       }
     }
