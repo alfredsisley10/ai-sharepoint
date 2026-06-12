@@ -649,3 +649,21 @@ test("sysname (SQL Server) counts as a textual join family", async () => {
   const { joinFamily } = await import("../src/context/db/erDiagram");
   assert.equal(joinFamily("sysname"), "text");
 });
+
+test("the status line names the active pass so the high-level process is visible", async () => {
+  const { renderProbeStatus } = await import("../src/context/db/erDiagram");
+  const line = renderProbeStatus({
+    done: 20,
+    total: 80,
+    found: 2,
+    elapsedMs: 60_000,
+    phase: "cast pass",
+    current: "dbo.A.x ↔ dbo.B.y (cast)",
+  });
+  assert.match(line, /^cast pass · 21\/80 · ~3 min left · 2 found · dbo\.A/);
+  // No phase → unchanged compact form (back-compat with earlier asserts).
+  assert.match(
+    renderProbeStatus({ done: 1, total: 220, found: 0, elapsedMs: 2_000 }),
+    /^2\/220 · estimating… · 0 found$/,
+  );
+});

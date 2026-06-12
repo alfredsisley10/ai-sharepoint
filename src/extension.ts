@@ -2958,21 +2958,27 @@ export function activate(context: vscode.ExtensionContext): void {
         // appends new hypotheses).
         const queue = [...candidates];
         const runStarted = Date.now();
-        let lastPaint = 0;
-        const paint = (done: number, current?: string, force = false) => {
+        let passLabel = "native pass";
+        let lastMessage = "";
+        let lastStatusAt = 0;
+        const paint = (done: number, current?: string, force = false, increment = 0) => {
           const now = Date.now();
-          if (!force && now - lastPaint < ER_STATUS_REFRESH_MS) return;
-          lastPaint = now;
-          progress.report({
-            increment: 0,
-            message: renderProbeStatus({
+          // Recompute the line at the throttle cadence — but EVERY report
+          // carries a message: an increment-only report CLEARS the toast
+          // text, which is why users saw a bare "ER model" with detail
+          // flashing in and instantly vanishing (pilot).
+          if (force || !lastMessage || now - lastStatusAt >= ER_STATUS_REFRESH_MS) {
+            lastStatusAt = now;
+            lastMessage = renderProbeStatus({
               done,
               total: queue.length,
               found: relationships.length,
               elapsedMs: now - runStarted,
               current,
-            }),
-          });
+              phase: passLabel,
+            });
+          }
+          progress.report({ increment, message: lastMessage });
         };
         paint(0, undefined, true);
         const probeOne = async (c: JoinCandidate, i: number): Promise<void> => {
@@ -3070,7 +3076,7 @@ export function activate(context: vscode.ExtensionContext): void {
               `ER probe failed for ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn}: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
-          progress.report({ increment: 100 / queue.length });
+          paint(i, undefined, false, 100 / queue.length);
         };
         // Escalation ladder: each stage runs when the queue drains and may
         // append new candidates. Maximum mode escalates automatically; the
@@ -3078,9 +3084,17 @@ export function activate(context: vscode.ExtensionContext): void {
         // thorough methods deliberately (pilot: a clean "zero joins" must
         // never be the end of the road).
         const maxMode = mode.value === "max";
-        const askEscalate = async (question: string): Promise<boolean> => {
+        const askEscalate = async (passName: string, question: string): Promise<boolean> => {
           if (maxMode) return true;
-          const pick = await vscode.window.showInformationMessage(question, "Escalate", "Stop here");
+          // The progress toast says what we're waiting for, and the
+          // approval itself is MODAL — an escalation gate must not be a
+          // missable toast behind the spinner (pilot).
+          paint(queue.length, `awaiting your approval for the ${passName}…`, true);
+          const pick = await vscode.window.showInformationMessage(
+            `Build ER Diagram — escalate to the ${passName}?`,
+            { modal: true, detail: question },
+            "Escalate",
+          );
           return pick === "Escalate";
         };
         const stages: Array<() => Promise<JoinCandidate[]>> = [];
@@ -3093,6 +3107,7 @@ export function activate(context: vscode.ExtensionContext): void {
               .filter((t) => t.outcome === "rejected" || t.outcome === "failed")
               .sort((a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate));
             if (rejected.length === 0) return [];
+            passLabel = "AI refinement";
             paint(queue.length, "asking Copilot to refine the hypotheses from the measured rates…", true);
             const more = await aiPropose(rejected).catch((err) => {
               log.warn(`AI refinement unavailable: ${err instanceof Error ? err.message : String(err)}`);
@@ -3116,12 +3131,14 @@ export function activate(context: vscode.ExtensionContext): void {
           if (next.length === 0) return [];
           if (
             !(await askEscalate(
-              `${relationships.length} relationship(s) so far${failures > 0 ? `; ${failures} probe(s) failed or sampled nothing — often LOB/mismatched types that plain '=' cannot compare` : ""}. Escalate to the CAST pass? ${next.length} probe pair(s): failed pairs re-tested and cross-type pairs compared by casting both sides to text.`,
+              "cast pass",
+              `${relationships.length} relationship(s) so far${failures > 0 ? `; ${failures} probe(s) failed or sampled nothing — often LOB/mismatched types that plain '=' cannot compare` : ""}.\n\n${next.length} pair(s) would be probed: failed pairs re-tested and cross-type pairs compared by casting both sides to text.`,
             ))
           ) {
             return [];
           }
-          paint(queue.length, "cast pass: comparing as text across mismatched/LOB types…", true);
+          passLabel = "cast pass";
+          paint(queue.length, "comparing as text across mismatched/LOB types…", true);
           return next;
         });
         stages.push(async () => {
@@ -3132,12 +3149,14 @@ export function activate(context: vscode.ExtensionContext): void {
           if (large.length === 0) return [];
           if (
             !(await askEscalate(
-              `Still ${relationships.length} relationship(s). Escalate to LARGE tables? ${large.length} pair(s) involving big tables, probed with strictly bounded samples (${ER_SAMPLE_SIZE}+ values, never full scans).`,
+              "large-table pass",
+              `Still ${relationships.length} relationship(s).\n\n${large.length} pair(s) involving big tables would be probed with strictly bounded samples (${ER_SAMPLE_SIZE}+ values, never full scans).`,
             ))
           ) {
             return [];
           }
-          paint(queue.length, "large-table pass: bounded samples against the big tables…", true);
+          passLabel = "large tables";
+          paint(queue.length, "bounded samples against the big tables…", true);
           return large;
         });
         let i = 0;

@@ -864,6 +864,9 @@ export function renderProbeStatus(p: {
   found: number;
   elapsedMs: number;
   current?: string;
+  /** High-level pass name ("native pass", "cast pass", "large tables") so
+   *  the toast narrates the PROCESS, not only the counter. */
+  phase?: string;
 }): string {
   const head = `${Math.min(p.done + 1, p.total)}/${p.total}`;
   const eta =
@@ -875,7 +878,7 @@ export function renderProbeStatus(p: {
   const current = p.current
     ? ` · ${p.current.length > 40 ? `${p.current.slice(0, 40)}…` : p.current}`
     : "";
-  return `${head}${eta} · ${p.found} found${current}`;
+  return `${p.phase ? `${p.phase} · ` : ""}${head}${eta} · ${p.found} found${current}`;
 }
 
 /** Mermaid erDiagram (renders natively in VS Code's markdown preview). */

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.29.1 — 2026-06-12
+
+### Fixed — the ER toast keeps its status text, names the pass, and escalations are real approvals (pilot)
+- **Why the toast kept reverting to a bare "ER model":** the per-pair progress-bar update was
+  sent without a message, and VS Code **clears the toast text on any message-less report** — so
+  every completed pair wiped the status, and the next throttled repaint "flashed" detail for a
+  moment before the cycle repeated. Every report now carries the current (sticky) status line;
+  the text only *changes* at the readable 2-second cadence but never disappears.
+- **The high-level process is visible**: the status line now leads with the active pass —
+  *"native pass · 37/220 · ~3 min left · 12 found · …"*, then *"cast pass · …"*, *"large
+  tables · …"*, *"AI refinement · …"* — so the user can monitor where the run is in the
+  escalation ladder, not just the counter.
+- **Escalation approval is a modal dialog**, not a missable toast behind the spinner: each gate
+  states the pass, why it's warranted (e.g. "14 probe(s) failed natively — often LOB/mismatched
+  types") and how many pairs it adds; while the dialog is up, the progress toast reads
+  *"awaiting your approval for the cast pass…"*. Maximum mode still skips the prompts.
+
 ## 0.29.0 — 2026-06-12
 
 ### Added — incremental escalation: cast comparisons, failed-probe retries, large tables (pilot)
