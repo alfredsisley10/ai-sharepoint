@@ -25,6 +25,8 @@ export function describeToolResult(name: string, input: unknown, resultText: str
         return "Item fetch";
       case "aisharepoint_db_schema":
         return `${src ?? "Database"} schema lookup`;
+      case "aisharepoint_test_join":
+        return "Join probe";
       case "aisharepoint_vertex_answer":
         return "Grounded answer";
       case "aisharepoint_site_overview":
@@ -79,6 +81,10 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Reading ${src ?? "database"} schema${str(i.topic) ? ` for “${short(String(i.topic), 40)}”` : ""}…`;
     case "aisharepoint_index_db_schema":
       return `Indexing ${src ?? "database"} schema with Copilot…`;
+    case "aisharepoint_test_join":
+      return i.save
+        ? `Saving join ${str(i.join) ? `“${short(String(i.join), 50)}” ` : ""}to the ER model…`
+        : `Probing join ${str(i.join) ? `“${short(String(i.join), 50)}”` : ""}…`;
     case "aisharepoint_vertex_answer":
       return `Asking ${src ?? "Vertex AI Search"}${query ? ` “${short(query)}”` : ""}…`;
     case "aisharepoint_list_sources":

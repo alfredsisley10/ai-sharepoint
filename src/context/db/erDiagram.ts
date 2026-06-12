@@ -3,6 +3,7 @@ import {
   TableDef,
   ErModel,
   TestedPair,
+  ProbedRelationship,
   qualifiedName,
 } from "./schemaIndex";
 
@@ -598,6 +599,124 @@ export function parseJoinCandidateResponse(
   return out;
 }
 
+// --- user-defined joins from chat (incremental refinement) ---------------------
+
+export interface ParsedJoinSpec {
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  /** Non-fatal caveat (e.g. join across type families relies on casts). */
+  warning?: string;
+}
+
+const stripIdent = (s: string) => s.replace(/[[\]"`]/g, "").trim();
+
+const SQL_KEYWORDS = new Set([
+  "on", "inner", "left", "right", "full", "outer", "cross", "join", "where",
+  "group", "order", "select", "and", "or", "as", "using",
+]);
+
+/**
+ * Parse a user-supplied join — SQL syntax ("FROM Orders o JOIN Customers c
+ * ON o.customer_id = c.id") or a bare equality ("dbo.Orders.customer_id =
+ * dbo.Customers.id") — and resolve it against the catalog. Aliases from
+ * FROM/JOIN clauses are honored; unqualified table names resolve when
+ * unique; brackets/quotes/backticks are stripped. Returns an `issue` when
+ * the text doesn't resolve, with enough detail to fix the input.
+ */
+export function parseJoinSpec(
+  text: string,
+  schema: SourceSchema,
+): ParsedJoinSpec | { issue: string } {
+  const t = text.trim();
+  // Alias map from FROM/JOIN clauses (when SQL was pasted).
+  const aliases = new Map<string, string>();
+  for (const m of t.matchAll(/\b(?:from|join)\s+([A-Za-z0-9_.[\]"`]+)(?:\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*))?/gi)) {
+    const tableRef = stripIdent(m[1]);
+    aliases.set(tableRef.toLowerCase(), tableRef);
+    if (m[2] && !SQL_KEYWORDS.has(m[2].toLowerCase())) {
+      aliases.set(m[2].toLowerCase(), tableRef);
+    }
+  }
+  const eq = t.match(/([A-Za-z0-9_.[\]"`]+)\.([A-Za-z0-9_[\]"`]+)\s*=\s*([A-Za-z0-9_.[\]"`]+)\.([A-Za-z0-9_[\]"`]+)/);
+  if (!eq) {
+    return {
+      issue:
+        'Provide the join as SQL ("FROM Orders o JOIN Customers c ON o.customer_id = c.id") or a bare equality ("dbo.Orders.customer_id = dbo.Customers.id").',
+    };
+  }
+  const resolveTable = (rawRef: string): TableDef | { issue: string } => {
+    const ref = stripIdent(rawRef).toLowerCase();
+    const target = (aliases.get(ref) ?? rawRef).toLowerCase();
+    const cleaned = stripIdent(target);
+    const matches = schema.catalog.tables.filter(
+      (x) => qualifiedName(x).toLowerCase() === cleaned || x.name.toLowerCase() === cleaned,
+    );
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      return { issue: `"${stripIdent(rawRef)}" is ambiguous (${matches.map((x) => qualifiedName(x)).join(", ")}) — qualify it with the schema.` };
+    }
+    return { issue: `Table "${stripIdent(rawRef)}" is not in the catalog (load/refresh the schema first?).` };
+  };
+  const sides: Array<{ table: TableDef; column: string }> = [];
+  for (const [refIdx, colIdx] of [
+    [1, 2],
+    [3, 4],
+  ] as const) {
+    const table = resolveTable(eq[refIdx]);
+    if ("issue" in table) return table;
+    const colName = stripIdent(eq[colIdx]);
+    const column = table.columns.find((c) => c.name.toLowerCase() === colName.toLowerCase());
+    if (!column) {
+      return {
+        issue: `Column "${colName}" is not in ${qualifiedName(table)} (has: ${table.columns
+          .slice(0, 12)
+          .map((c) => c.name)
+          .join(", ")}${table.columns.length > 12 ? ", …" : ""}).`,
+      };
+    }
+    sides.push({ table, column: column.name });
+  }
+  if (sides[0].table === sides[1].table) {
+    return { issue: "Both sides resolve to the same table — a relationship needs two tables." };
+  }
+  const famA = joinFamily(sides[0].table.columns.find((c) => c.name === sides[0].column)!.dataType);
+  const famB = joinFamily(sides[1].table.columns.find((c) => c.name === sides[1].column)!.dataType);
+  return {
+    fromTable: qualifiedName(sides[0].table),
+    fromColumn: sides[0].column,
+    toTable: qualifiedName(sides[1].table),
+    toColumn: sides[1].column,
+    ...(famA && famB && famA === famB
+      ? {}
+      : {
+          warning:
+            "The column types are in different join families — the probe (and real joins) will rely on implicit casts, which some engines reject.",
+        }),
+  };
+}
+
+/** Add/replace one relationship in the persisted model (user-defined joins
+ *  from chat extend the diagram incrementally). Pure. */
+export function upsertRelationship(
+  er: ErModel | undefined,
+  rel: ProbedRelationship,
+  builtAt: string,
+): ErModel {
+  const base: ErModel = er ?? {
+    builtAt,
+    sampleSize: ER_SAMPLE_SIZE,
+    candidatesTested: 0,
+    relationships: [],
+  };
+  const key = pairKey(rel);
+  const relationships = [...base.relationships.filter((r) => pairKey(r) !== key), rel].sort(
+    (a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate),
+  );
+  return { ...base, relationships };
+}
+
 // --- rendering --------------------------------------------------------------------
 
 const pct = (r: number) => `${Math.round(r * 100)}%`;
@@ -614,11 +733,13 @@ export function formatEta(ms: number): string {
   return min <= 1 ? "~1 min" : `~${min} min`;
 }
 
-/** Big-picture status line for the probe run: "pair 37 of 220 · 12
- *  relationship(s) · ~3 min left · now: …". The ETA appears once enough
- *  pairs have completed for the pace to mean something; the current pair
- *  is a truncated trailer, never the headline. Pure — the caller throttles
- *  repaints to ER_STATUS_REFRESH_MS. */
+/** Big-picture status line for the probe run: "37/220 · ~3 min left · 12
+ *  found · dbo.Orders…". VS Code renders the toast's title and message on
+ *  ONE truncating line, so the vitals (x of y, ETA) come FIRST in compact
+ *  form and the current pair is a short trailer (pilot: a long title plus
+ *  verbose message meant users saw neither counts nor minutes). The ETA
+ *  appears once enough pairs have completed for the pace to mean something.
+ *  Pure — the caller throttles repaints to ER_STATUS_REFRESH_MS. */
 export function renderProbeStatus(p: {
   /** Pairs fully completed. */
   done: number;
@@ -627,18 +748,17 @@ export function renderProbeStatus(p: {
   elapsedMs: number;
   current?: string;
 }): string {
-  const head = `pair ${Math.min(p.done + 1, p.total)} of ${p.total}`;
-  const found = `${p.found} relationship(s)`;
+  const head = `${Math.min(p.done + 1, p.total)}/${p.total}`;
   const eta =
     p.done >= 3 && p.elapsedMs >= 5_000
       ? ` · ${formatEta((p.elapsedMs / p.done) * (p.total - p.done))} left`
       : p.done < p.total
-        ? " · estimating time…"
+        ? " · estimating…"
         : "";
   const current = p.current
-    ? ` · now: ${p.current.length > 70 ? `${p.current.slice(0, 70)}…` : p.current}`
+    ? ` · ${p.current.length > 40 ? `${p.current.slice(0, 40)}…` : p.current}`
     : "";
-  return `${head} · ${found}${eta}${current}`;
+  return `${head}${eta} · ${p.found} found${current}`;
 }
 
 /** Mermaid erDiagram (renders natively in VS Code's markdown preview). */

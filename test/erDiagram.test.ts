@@ -297,14 +297,15 @@ test("thorough mode: exhaustive pairs only across small tables, deduped against 
   }
 });
 
-test("probe status reads big-picture: X of Y, found count, ETA from measured pace, truncated detail", async () => {
+test("probe status is compact with the vitals leftmost: X/Y, ETA, found count, short detail", async () => {
   const { renderProbeStatus, formatEta } = await import("../src/context/db/erDiagram");
   // Early in the run: no pace yet → "estimating", never a silly ETA.
   assert.equal(
     renderProbeStatus({ done: 1, total: 220, found: 0, elapsedMs: 2_000 }),
-    "pair 2 of 220 · 0 relationship(s) · estimating time…",
+    "2/220 · estimating… · 0 found",
   );
   // 20 pairs in 60s → 3s/pair → 180s remaining over 60 pairs → ~3 min.
+  // The toast truncates from the RIGHT, so counts and ETA must lead.
   const mid = renderProbeStatus({
     done: 20,
     total: 80,
@@ -312,10 +313,10 @@ test("probe status reads big-picture: X of Y, found count, ETA from measured pac
     elapsedMs: 60_000,
     current: "dbo.Orders.customer_id ↔ dbo.Customers.id (500-value sample)",
   });
-  assert.match(mid, /^pair 21 of 80 · 12 relationship\(s\) · ~3 min left · now: dbo\.Orders/);
-  // The trailing detail is capped so the headline stays readable.
+  assert.match(mid, /^21\/80 · ~3 min left · 12 found · dbo\.Orders/);
+  // The trailing detail is capped hard so the vitals always survive.
   const long = renderProbeStatus({ done: 5, total: 10, found: 1, elapsedMs: 30_000, current: "x".repeat(200) });
-  assert.ok(long.length < 160, long);
+  assert.ok(long.length < 90, long);
   assert.match(long, /…$/);
   // ETA formatting: seconds round to 5s steps; minutes stay coarse.
   assert.equal(formatEta(12_000), "~10s");
@@ -402,4 +403,75 @@ test("the probe report surfaces near-misses and flags systemic zero-sample runs"
   assert.match(text, /8 probe\(s\) sampled zero values/);
   assert.match(text, /64% \| 10%/);
   assert.deepEqual(renderProbeReport({ builtAt: T0, sampleSize: 100, candidatesTested: 0, relationships: [] }), []);
+});
+
+// --- user-defined joins from chat (test_join) ----------------------------------
+
+test("parseJoinSpec resolves SQL join syntax with aliases against the catalog", async () => {
+  const { parseJoinSpec } = await import("../src/context/db/erDiagram");
+  const schema = schemaWith();
+  const parsed = parseJoinSpec(
+    "SELECT * FROM dbo.Orders o INNER JOIN dbo.Customers AS c ON o.customer_id = c.id WHERE o.id > 5",
+    schema,
+  );
+  assert.deepEqual(parsed, {
+    fromTable: "dbo.Orders",
+    fromColumn: "customer_id",
+    toTable: "dbo.Customers",
+    toColumn: "id",
+  });
+  // Bare equality, bracketed identifiers, unqualified-but-unique tables.
+  assert.deepEqual(parseJoinSpec("[Orders].[customer_id] = Customers.id", schema), {
+    fromTable: "dbo.Orders",
+    fromColumn: "customer_id",
+    toTable: "dbo.Customers",
+    toColumn: "id",
+  });
+});
+
+test("parseJoinSpec returns actionable issues and flags cross-family joins", async () => {
+  const { parseJoinSpec } = await import("../src/context/db/erDiagram");
+  const schema = schemaWith();
+  assert.match((parseJoinSpec("just words", schema) as { issue: string }).issue, /Provide the join/);
+  assert.match(
+    (parseJoinSpec("dbo.Ghost.x = dbo.Customers.id", schema) as { issue: string }).issue,
+    /not in the catalog/,
+  );
+  assert.match(
+    (parseJoinSpec("dbo.Orders.nope = dbo.Customers.id", schema) as { issue: string }).issue,
+    /Column "nope" is not in dbo\.Orders \(has: id, customer_id/,
+  );
+  assert.match(
+    (parseJoinSpec("dbo.Orders.id = dbo.Orders.customer_id", schema) as { issue: string }).issue,
+    /same table/,
+  );
+  // nvarchar ↔ int: allowed for user-defined joins, but flagged.
+  const cross = parseJoinSpec("dbo.Invoices.customer_id = dbo.Customers.id", schema);
+  assert.ok(!("issue" in cross));
+  assert.match((cross as { warning?: string }).warning ?? "", /implicit casts/);
+});
+
+test("upsertRelationship creates a model when absent and replaces by pair, keeping rate order", async () => {
+  const { upsertRelationship, pairKey } = await import("../src/context/db/erDiagram");
+  const rel = (over: Partial<import("../src/context/db/schemaIndex").ProbedRelationship>) => ({
+    fromTable: "dbo.Orders", fromColumn: "customer_id", toTable: "dbo.Customers", toColumn: "id",
+    forwardRate: 0.5, backwardRate: 0.2, sampledForward: 100, sampledBackward: 100,
+    verdict: "defined" as const, reason: "user-defined join (chat)",
+    ...over,
+  });
+  const created = upsertRelationship(undefined, rel({}), T0);
+  assert.equal(created.relationships.length, 1);
+  assert.equal(created.builtAt, T0);
+  // Replacing the same pair (re-probed) keeps one entry with the new rates;
+  // an unrelated stronger pair sorts first.
+  const other = rel({ fromTable: "dbo.Orders", fromColumn: "region_code", toTable: "dbo.Customers", toColumn: "region_code", forwardRate: 0.99, verdict: "strong" as const });
+  const merged = upsertRelationship(upsertRelationship(created, other, T0), rel({ forwardRate: 0.97 }), T0);
+  assert.equal(merged.relationships.length, 2);
+  assert.equal(merged.relationships[0].forwardRate, 0.99);
+  assert.equal(
+    merged.relationships.filter((r) => pairKey(r) === pairKey(rel({}))).length,
+    1,
+    "same pair never duplicates",
+  );
+  assert.equal(merged.relationships[1].forwardRate, 0.97, "re-probe replaced the rates");
 });

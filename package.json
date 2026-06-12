@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -852,6 +852,38 @@
               "description": "Database source alias, display name, or type. Optional when exactly one source exists."
             }
           }
+        }
+      },
+      {
+        "name": "aisharepoint_test_join",
+        "displayName": "Test / Save a Database Join",
+        "toolReferenceName": "spTestJoin",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(type-hierarchy)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Validate a user-supplied database join against the persisted ER model, or probe its real join rate (both directions; counts only, never row data). Accepts SQL join syntax (\"FROM Orders o JOIN Customers c ON o.customer_id = c.id\") or a bare equality (\"dbo.Orders.customer_id = dbo.Customers.id\"). If the join is already in the ER model, returns the stored relationship. Set save=true ONLY when the user wants the ER diagram extended with this join — they approve in a confirmation dialog; user-defined joins persist even below the automatic thresholds, with measured rates kept visible.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Database source alias, display name, or type. Optional when exactly one source exists."
+            },
+            "join": {
+              "type": "string",
+              "description": "The join — SQL fragment with ON clause, or table.column = table.column."
+            },
+            "save": {
+              "type": "boolean",
+              "description": "true = persist the join into the ER model after probing (user confirms)."
+            }
+          },
+          "required": [
+            "join"
+          ]
         }
       },
       {

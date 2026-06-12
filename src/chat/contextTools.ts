@@ -4,8 +4,15 @@ import { ContextService } from "../context/contextService";
 import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { SchemaIndexer } from "../context/db/schemaIndexer";
-import { SourceSchema, renderSchemaForModel } from "../context/db/schemaIndex";
-import { renderErForModel } from "../context/db/erDiagram";
+import { SourceSchema, renderSchemaForModel, ProbedRelationship, qualifiedName } from "../context/db/schemaIndex";
+import {
+  renderErForModel,
+  parseJoinSpec,
+  pairKey,
+  classifyJoin,
+  initialSampleSize,
+  upsertRelationship,
+} from "../context/db/erDiagram";
 import { ContextSource } from "../context/types";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
@@ -132,6 +139,138 @@ export function registerContextTools(
           return JSON.stringify(result, null, 2);
         },
       ),
+    ),
+    // User-defined joins from chat (ADR-0030 amendment): validate against
+    // the persisted ER model, probe the live join rate when unknown, and —
+    // with the user's confirmation via the tool-approval UI — extend the
+    // model. save=true is the only state-changing path and is gated.
+    vscode.lm.registerTool<{ source?: string; join: string; save?: boolean }>(
+      "aisharepoint_test_join",
+      {
+        prepareInvocation(options) {
+          if (!options.input.save) {
+            return { invocationMessage: "Testing a user-defined join" };
+          }
+          return {
+            invocationMessage: "Saving a join to the ER model",
+            confirmationMessages: {
+              title: "Extend the ER model with this join?",
+              message: new vscode.MarkdownString(
+                [
+                  `Adds \`${options.input.join.slice(0, 160)}\` to the persisted ER model of **${store.resolve(options.input.source)?.displayName ?? options.input.source ?? "the database"}**.`,
+                  "",
+                  "The join rate is re-probed first (counts only — no row data). The model is used by chat for multi-table JOINs and travels with reference-config exports.",
+                ].join("\n"),
+              ),
+            },
+          };
+        },
+        async invoke(options, token) {
+          void token;
+          telemetry.record("tool.invoke", { tool: "aisharepoint_test_join" });
+          try {
+            const input = options.input;
+            const source = resolveDbOrExplain(input.source);
+            const schema = await schemaFor(source);
+            const parsed = parseJoinSpec(input.join, schema);
+            if ("issue" in parsed) return text(parsed.issue);
+            const key = pairKey(parsed);
+            const existing = schema.er?.relationships.find((r) => pairKey(r) === key);
+            if (existing && !input.save) {
+              return text(
+                JSON.stringify(
+                  {
+                    status: "already-in-er-model",
+                    relationship: existing,
+                    hint: "This join is already part of the ER diagram — no probe needed.",
+                  },
+                  null,
+                  2,
+                ),
+              );
+            }
+            // Probe fresh (adaptive sample from the model's row estimates).
+            const endFor = (qualified: string, column: string) => {
+              const t = schema.catalog.tables.find(
+                (x) => qualifiedName(x).toLowerCase() === qualified.toLowerCase(),
+              )!;
+              return { ...(t.schema ? { schema: t.schema } : {}), table: t.name, column };
+            };
+            const sample = initialSampleSize(
+              schema.er?.rowEstimates?.[parsed.fromTable.toLowerCase()] ?? 0,
+              schema.er?.rowEstimates?.[parsed.toTable.toLowerCase()] ?? 0,
+            );
+            const forward = await service.probeJoin(
+              source,
+              endFor(parsed.fromTable, parsed.fromColumn),
+              endFor(parsed.toTable, parsed.toColumn),
+              sample,
+            );
+            const backward = await service.probeJoin(
+              source,
+              endFor(parsed.toTable, parsed.toColumn),
+              endFor(parsed.fromTable, parsed.fromColumn),
+              sample,
+            );
+            const graded = classifyJoin(forward, backward);
+            const prior = schema.er?.report?.tested.find((t) => pairKey(t) === key);
+            const rel: ProbedRelationship = {
+              fromTable: parsed.fromTable,
+              fromColumn: parsed.fromColumn,
+              toTable: parsed.toTable,
+              toColumn: parsed.toColumn,
+              forwardRate: graded.forwardRate,
+              backwardRate: graded.backwardRate,
+              sampledForward: forward.sampled,
+              sampledBackward: backward.sampled,
+              ...(sample === "full" ? { complete: true } : {}),
+              // A user-DEFINED join is kept even below the automatic
+              // thresholds — the user asserted it; the measured rates stay
+              // visible so a data-quality story is still tellable.
+              verdict: graded.verdict ?? "defined",
+              ...(graded.note ? { note: graded.note } : {}),
+              reason: "user-defined join (chat)",
+            };
+            let saved = false;
+            if (input.save) {
+              const er = upsertRelationship(schema.er, rel, nowIso());
+              await schemas.set(source.id, { ...(schemas.getSync(source.id) ?? schema), er });
+              saved = true;
+            }
+            return text(
+              JSON.stringify(
+                {
+                  status: saved
+                    ? "saved-to-er-model"
+                    : graded.verdict
+                      ? "confirmed-by-probe"
+                      : "below-thresholds",
+                  join: `${parsed.fromTable}.${parsed.fromColumn} = ${parsed.toTable}.${parsed.toColumn}`,
+                  measured: {
+                    forwardRate: graded.forwardRate,
+                    backwardRate: graded.backwardRate,
+                    sample: sample === "full" ? "complete join" : sample,
+                  },
+                  verdict: rel.verdict,
+                  note: rel.note ?? null,
+                  typeWarning: parsed.warning ?? null,
+                  priorProbe: prior
+                    ? { forwardRate: prior.forwardRate, backwardRate: prior.backwardRate, outcome: prior.outcome }
+                    : null,
+                  hint: saved
+                    ? "Persisted — the ER diagram and chat's JOIN paths now include this join."
+                    : "To add it to the ER diagram, call this tool again with save=true (the user approves in chat).",
+                },
+                null,
+                2,
+              ),
+            );
+          } catch (err) {
+            errors.capture("tool:aisharepoint_test_join", err);
+            return text(`The test_join tool failed: ${redactError(err).message}`);
+          }
+        },
+      },
     ),
     // In-chat indexing: VS Code's tool-confirmation UI is the consent gate —
     // the user sees exactly what will be sent (names only) and must approve.

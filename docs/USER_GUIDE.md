@@ -377,6 +377,13 @@ reasons — ADR-0022):
   diagram** plus a rate table in *View Database Schema & Semantic Index*, travels with
   reference-config exports, and is fed to chat so multi-table questions JOIN on the right
   columns.
+- **Refine the ER diagram from chat**: paste a join you know is right — *"@sharepoint test this
+  join: `FROM Orders o JOIN Customers c ON o.customer_id = c.id`"* (SQL with aliases or a bare
+  `table.column = table.column` both work). If it's already in the ER model you get the stored
+  relationship; otherwise the **live join rate is probed** on the spot and reported. Ask to
+  **save** it and — after your confirmation in chat — the diagram is extended; user-defined
+  joins are kept even below the automatic thresholds (marked *defined*, measured rates still
+  shown), so known-but-messy joins stay on the map.
 - **TLS** trusts the OS store and the shared pinned CA bundle setting
   (`aiSharePoint.ldap.caCertificatesFile` — applies to all non-HTTP sources).
 

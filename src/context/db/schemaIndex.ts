@@ -85,7 +85,9 @@ export interface ProbedRelationship {
   /** True when the winning test covered EVERY distinct value (complete
    *  join, not a sample) — small tables, or escalation reached full. */
   complete?: boolean;
-  verdict: "strong" | "likely";
+  /** "defined" = user-supplied join kept despite measuring below the
+   *  automatic thresholds (chat's test_join, ADR-0030 amendment). */
+  verdict: "strong" | "likely" | "defined";
   /** Containment reading — encodes the inner-vs-outer-join consequence
    *  ("from-side is a subset …"). */
   note?: string;

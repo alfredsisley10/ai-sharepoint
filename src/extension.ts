@@ -2782,14 +2782,18 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: `Building ER model for "${source.displayName}"…`,
+        // The toast shows title + message on ONE truncating line — a long
+        // title starved the message of space and users saw neither counts
+        // nor the ETA (pilot). Keep the title minimal; the vitals live in
+        // the message, compact-form, leftmost.
+        title: "ER model",
         cancellable: true,
       },
       async (progress, token) => {
-        // Big-picture status, throttled: "pair X of Y · N relationship(s) ·
-        // ~M min left · now: …" — per-pair/per-tier detail must not drown
-        // the run's shape (pilot). The queue can GROW mid-run (the AI
-        // refinement round appends new hypotheses).
+        // Big-picture status, throttled: "37/220 · ~3 min left · 12 found ·
+        // …" — per-pair/per-tier detail must not drown the run's shape
+        // (pilot). The queue can GROW mid-run (the AI refinement round
+        // appends new hypotheses).
         const queue = [...candidates];
         const runStarted = Date.now();
         let lastPaint = 0;

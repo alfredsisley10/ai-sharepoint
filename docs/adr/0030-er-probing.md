@@ -1,7 +1,21 @@
 # ADR-0030: ER model by join-rate probing
 
 - **Status:** Accepted (2026-06-12); amended 2026-06-12 (adaptive sizing);
-  amended 2026-06-12 (AI-assisted candidates, probe report, data-quality tier)
+  amended 2026-06-12 (AI-assisted candidates, probe report, data-quality
+  tier); amended 2026-06-12 (user-defined joins from chat)
+- **Amendment (user-defined joins):** the ER model is refinable
+  incrementally from chat. `test_join` parses a supplied join (SQL
+  syntax with aliases, or `table.column = table.column`), resolves it
+  against the catalog, returns the stored relationship when the pair is
+  already in the model, and otherwise probes the live join rate (both
+  directions, adaptive sample from the model's row estimates).
+  `save=true` — gated by the chat tool-confirmation UI — persists it via
+  `upsertRelationship` (replace-by-pair, rate-ordered). User-defined
+  joins persist with verdict **"defined"** even when they measure below
+  the automatic thresholds (the user asserted them; the measured rates
+  stay visible so data-quality stories remain tellable), and
+  cross-type-family joins are allowed with an implicit-cast warning
+  rather than rejected.
 - **Amendment (AI + report):** a pilot run probed 800 pairs and confirmed
   nothing, with no way to see why. Three additions: (1) **probe report** —
   every tested pair persists with its measured rates and outcome (capped),

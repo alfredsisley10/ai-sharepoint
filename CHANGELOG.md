@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.26.0 — 2026-06-12
+
+### Added — refine the ER diagram from chat with your own joins (pilot)
+- Paste a join you know into **@sharepoint** — SQL syntax with aliases (*"FROM Orders o JOIN
+  Customers c ON o.customer_id = c.id"*) or a bare `table.column = table.column` — and the new
+  `test_join` tool **validates it against the ER model** (already there → the stored
+  relationship comes back) or **probes the live join rate** in both directions, with the same
+  counts-only posture as the batch build. Ask to save it and, after your confirmation in chat,
+  the ER diagram is **extended incrementally**: user-defined joins persist even when they
+  measure below the automatic thresholds (verdict *defined*, measured rates kept visible), and
+  joins across type families are allowed with an implicit-cast warning instead of being
+  rejected. Aliases, brackets/quotes/backticks, and unqualified-but-unique table names all
+  resolve; unknown tables/columns return actionable errors listing what exists.
+
+### Fixed — the ER build toast no longer hides the counts and ETA (pilot)
+- VS Code renders the progress toast's title and message on **one truncating line** — the long
+  *"Building ER model for "DB (mssql)"…"* title left no room, so users saw no counts and no
+  minutes-remaining. The title is now minimal ("ER model") and the status message is compact
+  with the vitals leftmost: **"37/220 · ~3 min left · 12 found · dbo.Orders…"** — the
+  current-pair detail is a hard-capped trailer that truncates first.
+
 ## 0.25.0 — 2026-06-12
 
 ### Added — ER builds: AI-proposed joins, a probe report that explains zero results, and a data-quality tier (pilot)
