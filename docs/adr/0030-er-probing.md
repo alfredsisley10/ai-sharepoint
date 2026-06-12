@@ -1,6 +1,23 @@
 # ADR-0030: ER model by join-rate probing
 
-- **Status:** Accepted (2026-06-12); amended 2026-06-12 (adaptive sizing)
+- **Status:** Accepted (2026-06-12); amended 2026-06-12 (adaptive sizing);
+  amended 2026-06-12 (AI-assisted candidates, probe report, data-quality tier)
+- **Amendment (AI + report):** a pilot run probed 800 pairs and confirmed
+  nothing, with no way to see why. Three additions: (1) **probe report** —
+  every tested pair persists with its measured rates and outcome (capped),
+  the view shows outcome counts + the closest misses, and a systemic
+  warning fires when most probes sampled zero values (a sampling/permission
+  problem, not absent relationships); the zero-result toast leads with the
+  best measured rate. (2) **AI-assisted candidates** — Copilot proposes
+  join hypotheses from the indexed names/types/tags/content summaries
+  (validated against the catalog: hallucinated tables/columns and
+  join-incompatible types are dropped; proposals probe first), and when a
+  run confirms little, ONE refinement round shows Copilot the measured
+  near-miss rates and probes its revised hypotheses (consent posture of
+  ADR-0024: names/tags/summaries to Copilot, never row data). (3)
+  **Data-quality tier** — a 98–99% join classifies as a designed join whose
+  unmatched remainder is flagged as a likely upstream data-quality issue
+  (orphaned keys), not a different relationship.
 - **Amendment (2026-06-12):** the fixed 40-candidate × 100-value plan was
   arbitrary. The run is now sized by the database itself: a SIZING PASS
   reads approximate row counts from catalog statistics (never COUNT(*)),

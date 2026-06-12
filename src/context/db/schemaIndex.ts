@@ -93,6 +93,22 @@ export interface ProbedRelationship {
   reason: string;
 }
 
+/** Every probed pair, kept (capped) whether it confirmed or not — the
+ *  "big picture" when a run finds little: near-misses with their MEASURED
+ *  rates are how "zero relationships" becomes diagnosable. */
+export interface TestedPair {
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  forwardRate: number;
+  backwardRate: number;
+  sampledForward: number;
+  sampledBackward: number;
+  outcome: "strong" | "likely" | "rejected" | "failed";
+  reason: string;
+}
+
 /** Persisted ER model — travels with the schema (and reference exports). */
 export interface ErModel {
   builtAt: string;
@@ -104,9 +120,17 @@ export interface ErModel {
   /** True when cancellation/per-pair failures stopped probing early. */
   partial?: boolean;
   /** "thorough" also tested every type-compatible pair across small tables. */
-  mode?: "standard" | "thorough";
+  mode?: "standard" | "ai" | "thorough";
   /** Approximate per-table row counts observed during the build. */
   rowEstimates?: Record<string, number>;
+  /** Probe report: outcome counts ride in `tested`; zero-sample probes
+   *  signal a systemic sampling problem rather than absent relationships. */
+  report?: {
+    tested: TestedPair[];
+    zeroSampleCount: number;
+    aiProposed?: number;
+    aiRefined?: number;
+  };
 }
 
 export interface SourceSchema {

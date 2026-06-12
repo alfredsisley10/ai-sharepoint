@@ -2,6 +2,7 @@ import {
   SourceSchema,
   TableDef,
   ErModel,
+  TestedPair,
   qualifiedName,
 } from "./schemaIndex";
 
@@ -477,8 +478,124 @@ export function classifyJoin(
     } else if (b >= ER_STRONG_RATE && f < ER_LIKELY_RATE) {
       note = "target-side is a subset of the from-side; LEFT JOIN from the from-side to keep unmatched rows";
     }
+    // A 98–99% join is a DESIGNED join with a residue: the unmatched keys
+    // are usually an upstream data-quality problem (orphans) to fix in the
+    // source system, not evidence of a different relationship.
+    if (best >= 0.98 && best < 1) {
+      const dq =
+        "≈98–99% match: treat as a designed join — the unmatched remainder usually indicates an upstream data-quality issue (orphaned keys) worth resolving, not a different relationship.";
+      note = note ? `${note}. ${dq}` : dq;
+    }
   }
   return { forwardRate: f, backwardRate: b, verdict, note };
+}
+
+// --- AI-assisted candidates (consent posture of ADR-0024 indexing: names,
+// types, tags, and content SUMMARIES go to Copilot — never row data) ---------
+
+export const ER_AI_MAX_PAIRS = 40;
+
+/** Prompt Copilot for join hypotheses from everything the indexes know —
+ *  names, types, semantic tags/synonyms, content-type summaries. With
+ *  `rejected` present this is the REFINEMENT round: the model sees what was
+ *  measured (and how it failed) and proposes different hypotheses. */
+export function buildJoinCandidatePrompt(
+  schema: SourceSchema,
+  rejected?: TestedPair[],
+  maxPairs = ER_AI_MAX_PAIRS,
+): string {
+  const semBy = new Map((schema.semantic?.tables ?? []).map((t) => [t.table.toLowerCase(), t]));
+  const tableLines: string[] = [];
+  for (const t of schema.catalog.tables) {
+    const sem = semBy.get(qualifiedName(t).toLowerCase());
+    const cols = t.columns
+      .filter((c) => joinFamily(c.dataType))
+      .map((c) => {
+        const sc = sem?.columns.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
+        const extra = sc
+          ? ` [${sc.tags.join(",")}${sc.contentSummary ? ` | values: ${sc.contentSummary}` : ""}]`
+          : "";
+        return `  - ${c.name}: ${c.dataType}${extra}`;
+      });
+    tableLines.push(`${qualifiedName(t)}:\n${cols.join("\n")}`);
+    if (tableLines.join("\n").length > 6_000) break;
+  }
+  const rejectedBlock =
+    rejected && rejected.length > 0
+      ? [
+          "",
+          "These candidate pairs were ALREADY probed and fell below the relationship thresholds (match rate forward/backward shown) — propose DIFFERENT hypotheses, informed by why these failed:",
+          ...rejected
+            .slice(0, 20)
+            .map(
+              (r) =>
+                `- ${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn}: ${Math.round(r.forwardRate * 100)}%/${Math.round(r.backwardRate * 100)}%`,
+            ),
+        ]
+      : [];
+  return [
+    `You are inferring JOIN relationships for a ${schema.catalog.engine} database ("${schema.catalog.database}") that declares no foreign keys.`,
+    "From the tables below (column types, semantic tags, and content-type summaries of actual values), propose the column pairs MOST LIKELY to join — keys referencing other tables, shared business identifiers, matching code domains. Only pairs whose types can join. No same-table pairs.",
+    "",
+    `Return ONLY JSON, exactly: {"pairs":[{"fromTable":"<qualified table>","fromColumn":"<col>","toTable":"<qualified table>","toColumn":"<col>","why":"<one short line>"}]} — at most ${maxPairs} pairs, most confident first.`,
+    ...rejectedBlock,
+    "",
+    "Tables:",
+    tableLines.join("\n\n"),
+  ].join("\n");
+}
+
+/** Validate the model's proposals against the catalog: hallucinated tables/
+ *  columns are dropped, join-incompatible types are dropped, duplicates are
+ *  deduped. Survivors become top-priority candidates ("AI: <why>"). */
+export function parseJoinCandidateResponse(
+  text: string,
+  schema: SourceSchema,
+  maxPairs = ER_AI_MAX_PAIRS,
+): JoinCandidate[] {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return [];
+  let parsed: { pairs?: unknown };
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1)) as { pairs?: unknown };
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed.pairs)) return [];
+  const byName = new Map(
+    schema.catalog.tables.map((t) => [qualifiedName(t).toLowerCase(), t]),
+  );
+  const out: JoinCandidate[] = [];
+  const seen = new Set<string>();
+  for (const raw of parsed.pairs as Array<Record<string, unknown>>) {
+    if (out.length >= maxPairs) break;
+    const ft = typeof raw?.fromTable === "string" ? raw.fromTable.trim() : "";
+    const fc = typeof raw?.fromColumn === "string" ? raw.fromColumn.trim() : "";
+    const tt = typeof raw?.toTable === "string" ? raw.toTable.trim() : "";
+    const tc = typeof raw?.toColumn === "string" ? raw.toColumn.trim() : "";
+    const fromDef = byName.get(ft.toLowerCase());
+    const toDef = byName.get(tt.toLowerCase());
+    if (!fromDef || !toDef || fromDef === toDef) continue;
+    const fromCol = fromDef.columns.find((c) => c.name.toLowerCase() === fc.toLowerCase());
+    const toCol = toDef.columns.find((c) => c.name.toLowerCase() === tc.toLowerCase());
+    if (!fromCol || !toCol) continue;
+    const famA = joinFamily(fromCol.dataType);
+    if (!famA || famA !== joinFamily(toCol.dataType)) continue;
+    const candidate: JoinCandidate = {
+      fromTable: qualifiedName(fromDef),
+      fromColumn: fromCol.name,
+      toTable: qualifiedName(toDef),
+      toColumn: toCol.name,
+      reason: `AI: ${typeof raw.why === "string" && raw.why.trim() ? raw.why.trim().slice(0, 120) : "proposed join"}`,
+      priority: 5,
+    };
+    const key = pairKey(candidate);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+  }
+  return out;
 }
 
 // --- rendering --------------------------------------------------------------------
@@ -554,5 +671,46 @@ export function renderErForModel(model: ErModel, maxLines = 25): string[] {
     );
   }
   lines.push("Use these columns when querying across tables; honor the subset notes when choosing INNER vs LEFT JOIN.");
+  return lines;
+}
+
+/** Markdown probe report for the schema view — the big picture, ESPECIALLY
+ *  when a run confirms little: outcome counts, near-misses with their
+ *  measured rates, and a systemic-failure warning when sampling itself
+ *  returned nothing (which means "fix the probe", not "no relationships"). */
+export function renderProbeReport(model: ErModel): string[] {
+  const report = model.report;
+  if (!report) return [];
+  const counts = { strong: 0, likely: 0, rejected: 0, failed: 0 };
+  for (const t of report.tested) counts[t.outcome] += 1;
+  const lines = [
+    "",
+    "### Probe report",
+    "",
+    `_${model.candidatesTested} pair(s) probed${model.mode ? ` (${model.mode} mode)` : ""}: **${counts.strong} strong**, **${counts.likely} likely**, ${counts.rejected} below thresholds, ${counts.failed} failed${report.aiProposed !== undefined ? ` · ${report.aiProposed} pair(s) proposed by Copilot${report.aiRefined ? ` + ${report.aiRefined} in the refinement round` : ""}` : ""}._`,
+  ];
+  if (report.zeroSampleCount > 0 && report.zeroSampleCount >= Math.max(3, model.candidatesTested / 2)) {
+    lines.push(
+      "",
+      `> ⚠️ **${report.zeroSampleCount} probe(s) sampled zero values.** That is a systemic signal — the sampling query may not fit this database (permissions on the tables? unusual identifiers?) — and would make every pair look unrelated. Check the extension log (wire logging shows the exact SQL) before concluding there are no relationships.`,
+    );
+  }
+  const nearMisses = report.tested
+    .filter((t) => t.outcome === "rejected")
+    .sort((a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate))
+    .slice(0, 15);
+  if (nearMisses.length > 0) {
+    lines.push(
+      "",
+      "Closest misses (measured rates below the 70% threshold — judge for yourself whether any is a real join with poor data quality):",
+      "",
+      "| Pair | Match fwd | Match back | Proposed by |",
+      "|---|---|---|---|",
+      ...nearMisses.map(
+        (t) =>
+          `| \`${t.fromTable}.${t.fromColumn} = ${t.toTable}.${t.toColumn}\` | ${Math.round(t.forwardRate * 100)}% | ${Math.round(t.backwardRate * 100)}% | ${t.reason} |`,
+      ),
+    );
+  }
   return lines;
 }

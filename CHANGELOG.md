@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.25.0 — 2026-06-12
+
+### Added — ER builds: AI-proposed joins, a probe report that explains zero results, and a data-quality tier (pilot)
+- **A run that finds nothing is now diagnosable.** Every probed pair persists with its measured
+  rates and outcome; the schema view gains a **Probe report** (outcome counts, the closest
+  misses with their forward/backward rates, which proposer suggested each pair) and the
+  end-of-run toast leads with the **best measured rate** instead of a bare zero. When most
+  probes sampled **zero values**, the report says so explicitly — that's a sampling/permissions
+  problem to fix, not proof of no relationships (the wire log shows the exact SQL).
+- **AI-assisted candidates (recommended mode).** Copilot proposes likely joins from everything
+  the indexes know — names, types, semantic tags, and content-type summaries — so columns that
+  the heuristics can't connect by name still get tested. Proposals are validated against the
+  catalog (hallucinated tables/columns and type-incompatible pairs are dropped) and probe
+  first. If little confirms, **one refinement round** shows Copilot the measured near-miss
+  rates and probes its revised hypotheses. Same data posture as schema indexing: names, tags,
+  and summaries go to Copilot — never row data.
+- **98–99% joins are designed joins.** A best-direction rate in the 98–99% band now carries an
+  explicit reading: treat it as the intended relationship — the unmatched remainder usually
+  means an upstream **data-quality issue (orphaned keys)** to resolve in the source system,
+  not a different join.
+
 ## 0.24.2 — 2026-06-12
 
 ### Changed — ER build status shows the big picture, at a readable refresh rate (pilot)

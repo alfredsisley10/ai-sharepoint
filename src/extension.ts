@@ -51,16 +51,20 @@ import { buildReferenceExport, parseReferenceImport } from "./context/referenceE
 import { aliasIssue, normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
-import { SourceSchema, ErModel, ProbedRelationship, qualifiedName } from "./context/db/schemaIndex";
+import { SourceSchema, ErModel, ProbedRelationship, TestedPair, qualifiedName } from "./context/db/schemaIndex";
 import {
   proposeJoinCandidates,
   proposeExhaustivePairs,
   classifyJoin,
   renderErMermaid,
   renderProbeStatus,
+  renderProbeReport,
+  buildJoinCandidatePrompt,
+  parseJoinCandidateResponse,
   initialSampleSize,
   nextSampleSize,
   pairKey,
+  JoinCandidate,
   ER_SAMPLE_SIZE,
   ER_FULL_JOIN_MAX_ROWS,
   ER_SLOW_PROBE_MS,
@@ -2691,15 +2695,26 @@ export function activate(context: vscode.ExtensionContext): void {
       const rows = rowEstimates[qualifiedName(t).toLowerCase()];
       return rows !== undefined && rows > 0 && rows <= ER_FULL_JOIN_MAX_ROWS;
     }).length;
+    const aiAvailable = SchemaIndexer.enabledByPolicy();
     const mode = await vscode.window.showQuickPick(
       [
+        ...(aiAvailable
+          ? [
+              {
+                label: "$(sparkle) AI-assisted — heuristics + Copilot-proposed joins (recommended)",
+                description:
+                  "Copilot reads the indexed names, types, tags, and content summaries to propose likely joins — and refines once from the measured rates if little confirms",
+                value: "ai" as const,
+              },
+            ]
+          : []),
         {
-          label: "$(beaker) Standard — heuristic candidates",
+          label: "$(beaker) Standard — heuristic candidates only",
           description: `${heuristic.length} pair(s): FK-shaped names, matching names, agreeing tags`,
           value: "standard" as const,
         },
         {
-          label: "$(microscope) Thorough — also every column pair across small tables",
+          label: "$(microscope) Thorough — AI + every column pair across small tables",
           description: `adds all type-compatible pairs between the ${smallTables} table(s) ≤ ${ER_FULL_JOIN_MAX_ROWS.toLocaleString()} rows (complete joins, capped at ${ER_EXHAUSTIVE_PAIR_CAP})`,
           value: "thorough" as const,
         },
@@ -2707,18 +2722,46 @@ export function activate(context: vscode.ExtensionContext): void {
       { ignoreFocusOut: true, title: "Build ER Diagram — how exhaustively?" },
     );
     if (!mode) return;
+    const aiEnabled = aiAvailable && mode.value !== "standard";
     const tried = new Set(heuristic.map((c) => pairKey(c)));
-    const candidates =
-      mode.value === "thorough"
-        ? [...heuristic, ...proposeExhaustivePairs(schema, rowEstimates, tried)]
-        : heuristic;
+    // AI proposals run FIRST in the queue (priority 5): Copilot sees what
+    // the heuristics cannot — content-type summaries saying two differently
+    // named columns hold the same identifiers.
+    const aiPropose = async (rejected?: TestedPair[]): Promise<JoinCandidate[]> => {
+      const res = await copilot.ask(
+        { prompt: buildJoinCandidatePrompt(schema, rejected), label: "erCandidates" },
+        nowIso,
+      );
+      return parseJoinCandidateResponse(res.text, schema).filter((p) => {
+        const k = pairKey(p);
+        if (tried.has(k)) return false;
+        tried.add(k);
+        return true;
+      });
+    };
+    let aiPairs: JoinCandidate[] = [];
+    if (aiEnabled) {
+      try {
+        aiPairs = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Asking Copilot for join hypotheses…" },
+          () => aiPropose(),
+        );
+      } catch (err) {
+        log.warn(`AI join proposals unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    const candidates = [
+      ...aiPairs,
+      ...heuristic,
+      ...(mode.value === "thorough" ? proposeExhaustivePairs(schema, rowEstimates, tried) : []),
+    ];
     const fullPairs = candidates.filter((c) => {
       const f = rowEstimates[c.fromTable.toLowerCase()] ?? 0;
       const t = rowEstimates[c.toTable.toLowerCase()] ?? 0;
       return initialSampleSize(f, t) === "full";
     }).length;
     const consent = await vscode.window.showInformationMessage(
-      `Build the ER model for "${source.displayName}"? ${candidates.length} candidate pair(s) will be probed with bounded read-only count queries (≈${candidates.length * 2}+): ${fullPairs} pair(s) get COMPLETE join tests (both tables small), the rest start with row-count-sized samples and ESCALATE toward completeness while the database answers fast — backing off the moment it doesn't. Only match COUNTS are read; no row data leaves the database.`,
+      `Build the ER model for "${source.displayName}"? ${candidates.length} candidate pair(s)${aiPairs.length > 0 ? ` (${aiPairs.length} proposed by Copilot)` : ""} will be probed with bounded read-only count queries (≈${candidates.length * 2}+): ${fullPairs} pair(s) get COMPLETE join tests (both tables small), the rest start with row-count-sized samples and ESCALATE toward completeness while the database answers fast — backing off the moment it doesn't. Only match COUNTS are read; no row data leaves the database.`,
       { modal: true },
       "Probe & Build",
     );
@@ -2730,9 +2773,12 @@ export function activate(context: vscode.ExtensionContext): void {
       return t ? { ...(t.schema ? { schema: t.schema } : {}), table: t.name, column } : undefined;
     };
     const relationships: ProbedRelationship[] = [];
+    const testedLog: TestedPair[] = [];
+    let zeroSampleCount = 0;
     let tested = 0;
     let partial = false;
     let slowStreak = 0;
+    let aiRefined: number | undefined;
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -2742,7 +2788,9 @@ export function activate(context: vscode.ExtensionContext): void {
       async (progress, token) => {
         // Big-picture status, throttled: "pair X of Y · N relationship(s) ·
         // ~M min left · now: …" — per-pair/per-tier detail must not drown
-        // the run's shape (pilot).
+        // the run's shape (pilot). The queue can GROW mid-run (the AI
+        // refinement round appends new hypotheses).
+        const queue = [...candidates];
         const runStarted = Date.now();
         let lastPaint = 0;
         const paint = (done: number, current?: string, force = false) => {
@@ -2753,7 +2801,7 @@ export function activate(context: vscode.ExtensionContext): void {
             increment: 0,
             message: renderProbeStatus({
               done,
-              total: candidates.length,
+              total: queue.length,
               found: relationships.length,
               elapsedMs: now - runStarted,
               current,
@@ -2761,15 +2809,10 @@ export function activate(context: vscode.ExtensionContext): void {
           });
         };
         paint(0, undefined, true);
-        for (let i = 0; i < candidates.length; i++) {
-          if (token.isCancellationRequested) {
-            partial = true;
-            break;
-          }
-          const c = candidates[i];
+        const probeOne = async (c: JoinCandidate, i: number): Promise<void> => {
           const from = endFor(c.fromTable, c.fromColumn);
           const to = endFor(c.toTable, c.toColumn);
-          if (!from || !to) continue;
+          if (!from || !to) return;
           const rowsFrom = rowEstimates[c.fromTable.toLowerCase()] ?? 0;
           const rowsTo = rowEstimates[c.toTable.toLowerCase()] ?? 0;
           // After three consecutive slow probes the whole run de-escalates
@@ -2806,7 +2849,20 @@ export function activate(context: vscode.ExtensionContext): void {
               complete = next === "full";
             }
             tested += 1;
+            if (forward.sampled === 0 && backward.sampled === 0) zeroSampleCount += 1;
             const graded = classifyJoin(forward, backward);
+            testedLog.push({
+              fromTable: c.fromTable,
+              fromColumn: c.fromColumn,
+              toTable: c.toTable,
+              toColumn: c.toColumn,
+              forwardRate: graded.forwardRate,
+              backwardRate: graded.backwardRate,
+              sampledForward: forward.sampled,
+              sampledBackward: backward.sampled,
+              outcome: graded.verdict ?? "rejected",
+              reason: c.reason,
+            });
             if (graded.verdict) {
               relationships.push({
                 fromTable: c.fromTable,
@@ -2827,17 +2883,60 @@ export function activate(context: vscode.ExtensionContext): void {
             // One failed pair (permissions, timeout) never voids the rest.
             partial = true;
             slowStreak += 1;
+            testedLog.push({
+              fromTable: c.fromTable,
+              fromColumn: c.fromColumn,
+              toTable: c.toTable,
+              toColumn: c.toColumn,
+              forwardRate: 0,
+              backwardRate: 0,
+              sampledForward: 0,
+              sampledBackward: 0,
+              outcome: "failed",
+              reason: c.reason,
+            });
             log.warn(
               `ER probe failed for ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn}: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
-          progress.report({ increment: 100 / candidates.length });
+          progress.report({ increment: 100 / queue.length });
+        };
+        let refinementDone = !aiEnabled;
+        let i = 0;
+        for (;;) {
+          if (token.isCancellationRequested) {
+            partial = true;
+            break;
+          }
+          if (i >= queue.length) {
+            if (refinementDone) break;
+            refinementDone = true;
+            // Incremental refinement: little confirmed → show Copilot what
+            // was MEASURED (the near-misses) and probe its new hypotheses.
+            if (relationships.length >= 3) break;
+            const rejected = testedLog
+              .filter((t) => t.outcome === "rejected" || t.outcome === "failed")
+              .sort((a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate));
+            if (rejected.length === 0) break;
+            paint(i, "asking Copilot to refine the hypotheses from the measured rates…", true);
+            const more = await aiPropose(rejected).catch((err) => {
+              log.warn(`AI refinement unavailable: ${err instanceof Error ? err.message : String(err)}`);
+              return [] as JoinCandidate[];
+            });
+            aiRefined = more.length;
+            if (more.length === 0) break;
+            queue.push(...more);
+            continue;
+          }
+          await probeOne(queue[i], i);
+          i += 1;
         }
       },
     );
     relationships.sort(
       (a, b) => Math.max(b.forwardRate, b.backwardRate) - Math.max(a.forwardRate, a.backwardRate),
     );
+    const bestRate = (t: TestedPair) => Math.max(t.forwardRate, t.backwardRate);
     const er: ErModel = {
       builtAt: nowIso(),
       sampleSize: ER_SAMPLE_SIZE,
@@ -2846,6 +2945,11 @@ export function activate(context: vscode.ExtensionContext): void {
       ...(partial ? { partial: true } : {}),
       mode: mode.value,
       rowEstimates,
+      report: {
+        tested: [...testedLog].sort((a, b) => bestRate(b) - bestRate(a)).slice(0, 80),
+        zeroSampleCount,
+        ...(aiEnabled ? { aiProposed: aiPairs.length, ...(aiRefined ? { aiRefined } : {}) } : {}),
+      },
     };
     await schemas.set(source.id, { ...(schemas.getSync(source.id) ?? schema), er });
     telemetry.record("schema.er", {
@@ -2857,10 +2961,15 @@ export function activate(context: vscode.ExtensionContext): void {
       partial: String(partial),
     });
     const completeCount = relationships.filter((r) => r.complete).length;
-    const view = await vscode.window.showInformationMessage(
-      `ER model for "${source.displayName}": ${relationships.length} relationship(s) from ${tested} probed pair(s) (${completeCount} verified by complete joins)${partial ? " — partial, re-run to finish" : ""}. Persisted with the schema; chat now uses these JOIN paths.`,
-      "View Schema & ER Diagram",
-    );
+    // Zero results must be DIAGNOSABLE, not a dead end: lead with the best
+    // measured rate and route to the probe report (pilot: 800 pairs, zero
+    // results, no way to see why).
+    const bestMiss = testedLog.filter((t) => t.outcome !== "strong" && t.outcome !== "likely").sort((a, b) => bestRate(b) - bestRate(a))[0];
+    const summary =
+      relationships.length === 0 && tested > 0
+        ? `ER model for "${source.displayName}": no pair passed the thresholds across ${tested} probe(s). Best measured rate: ${bestMiss ? `${Math.round(bestRate(bestMiss) * 100)}% (${bestMiss.fromTable}.${bestMiss.fromColumn} ↔ ${bestMiss.toTable}.${bestMiss.toColumn})` : "n/a"}${zeroSampleCount >= Math.max(3, tested / 2) ? " — most probes sampled ZERO values, which points at a sampling/permissions problem, not absent relationships" : ""}. The probe report shows every near-miss.`
+        : `ER model for "${source.displayName}": ${relationships.length} relationship(s) from ${tested} probed pair(s) (${completeCount} verified by complete joins)${partial ? " — partial, re-run to finish" : ""}. Persisted with the schema; chat now uses these JOIN paths.`;
+    const view = await vscode.window.showInformationMessage(summary, "View Schema & ER Diagram");
     if (view) {
       await vscode.commands.executeCommand("aiSharePoint.viewSourceSchema", contextSources.get(source.id));
     }
@@ -2902,6 +3011,7 @@ export function activate(context: vscode.ExtensionContext): void {
           `| \`${r.fromTable}.${r.fromColumn} = ${r.toTable}.${r.toColumn}\` | ${Math.round(r.forwardRate * 100)}%${r.complete ? " (complete)" : ""} | ${Math.round(r.backwardRate * 100)}% | ${r.verdict} | ${r.note ?? r.reason} |`,
         );
       }
+      lines.push(...renderProbeReport(schema.er));
     }
     for (const t of schema.catalog.tables) {
       const s = sem.get(qualifiedName(t).toLowerCase());

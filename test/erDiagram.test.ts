@@ -323,3 +323,83 @@ test("probe status reads big-picture: X of Y, found count, ETA from measured pac
   assert.equal(formatEta(60_000), "~1 min");
   assert.equal(formatEta(170_000), "~3 min");
 });
+
+// --- AI-assisted candidates + probe report (0.25.0) ---------------------------
+
+test("AI join proposals validate against the catalog: hallucinations and type mismatches drop", async () => {
+  const { buildJoinCandidatePrompt, parseJoinCandidateResponse } = await import(
+    "../src/context/db/erDiagram"
+  );
+  const schema = schemaWith();
+  const prompt = buildJoinCandidatePrompt(schema);
+  assert.match(prompt, /no foreign keys/i);
+  assert.match(prompt, /dbo\.Customers/);
+  assert.match(prompt, /ONLY JSON/);
+  const response = JSON.stringify({
+    pairs: [
+      { fromTable: "dbo.Orders", fromColumn: "customer_id", toTable: "dbo.Customers", toColumn: "id", why: "FK by content" },
+      { fromTable: "dbo.Ghost", fromColumn: "x", toTable: "dbo.Customers", toColumn: "id", why: "hallucinated table" },
+      { fromTable: "dbo.Orders", fromColumn: "nope", toTable: "dbo.Customers", toColumn: "id", why: "hallucinated column" },
+      { fromTable: "dbo.Invoices", fromColumn: "customer_id", toTable: "dbo.Customers", toColumn: "id", why: "nvarchar↔int" },
+      { fromTable: "dbo.Orders", fromColumn: "customer_id", toTable: "dbo.Customers", toColumn: "id", why: "duplicate" },
+    ],
+  });
+  const pairs = parseJoinCandidateResponse(`Here you go:\n${response}`, schema);
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].priority, 5, "AI proposals probe first");
+  assert.match(pairs[0].reason, /^AI: FK by content/);
+  assert.deepEqual(parseJoinCandidateResponse("no json here", schema), []);
+});
+
+test("the refinement prompt shows the model what was measured", async () => {
+  const { buildJoinCandidatePrompt } = await import("../src/context/db/erDiagram");
+  const prompt = buildJoinCandidatePrompt(schemaWith(), [
+    {
+      fromTable: "dbo.Orders", fromColumn: "region_code", toTable: "dbo.Customers", toColumn: "region_code",
+      forwardRate: 0.64, backwardRate: 0.1, sampledForward: 100, sampledBackward: 100,
+      outcome: "rejected", reason: "same column name: region_code",
+    },
+  ]);
+  assert.match(prompt, /ALREADY probed/);
+  assert.match(prompt, /region_code: 64%\/10%/);
+  assert.match(prompt, /DIFFERENT hypotheses/);
+});
+
+test("98–99% joins classify as designed joins with a data-quality note", async () => {
+  const dq = classifyJoin({ sampled: 1000, matched: 985 }, { sampled: 1000, matched: 400 });
+  assert.equal(dq.verdict, "strong");
+  assert.match(dq.note ?? "", /data-quality/);
+  assert.match(dq.note ?? "", /orphaned keys/);
+  // A clean 100% gets no data-quality caveat.
+  const clean = classifyJoin({ sampled: 100, matched: 100 }, { sampled: 100, matched: 100 });
+  assert.ok(!/data-quality/.test(clean.note ?? ""));
+});
+
+test("the probe report surfaces near-misses and flags systemic zero-sample runs", async () => {
+  const { renderProbeReport } = await import("../src/context/db/erDiagram");
+  const tested = (over: Partial<import("../src/context/db/schemaIndex").TestedPair>) => ({
+    fromTable: "dbo.A", fromColumn: "x", toTable: "dbo.B", toColumn: "y",
+    forwardRate: 0, backwardRate: 0, sampledForward: 0, sampledBackward: 0,
+    outcome: "rejected" as const, reason: "same column name: x",
+    ...over,
+  });
+  const model: ErModel = {
+    builtAt: T0, sampleSize: 100, candidatesTested: 10, relationships: [], mode: "ai",
+    report: {
+      tested: [
+        tested({ forwardRate: 0.64, backwardRate: 0.1, sampledForward: 100, sampledBackward: 100 }),
+        tested({ outcome: "failed" }),
+      ],
+      zeroSampleCount: 8,
+      aiProposed: 12,
+      aiRefined: 5,
+    },
+  };
+  const text = renderProbeReport(model).join("\n");
+  assert.match(text, /Probe report/);
+  assert.match(text, /1 below thresholds, 1 failed/);
+  assert.match(text, /12 pair\(s\) proposed by Copilot \+ 5 in the refinement round/);
+  assert.match(text, /8 probe\(s\) sampled zero values/);
+  assert.match(text, /64% \| 10%/);
+  assert.deepEqual(renderProbeReport({ builtAt: T0, sampleSize: 100, candidatesTested: 0, relationships: [] }), []);
+});
