@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.30.1",
+  "version": "0.30.2",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -1368,6 +1368,18 @@
             },
             "completionEvents": [
               "onCommand:workbench.action.chat.open"
+            ]
+          },
+          {
+            "id": "projects",
+            "title": "Organize work into Projects",
+            "description": "The **Projects** view groups reference sources into a named scope, carries your **goals & instructions** for @sharepoint, and keeps a separate **AI-managed context** the assistant learns over time (you approve each saved note). Activate a project to scope chat and the Reference Sources view to it — everything travels with Export/Import Reference Config.\n[Open the Projects View](command:aiSharePoint.projectsView.focus)\n[Create a Project](command:aiSharePoint.createProject)",
+            "media": {
+              "image": "media/walkthrough/chat.svg",
+              "altText": "The Projects view"
+            },
+            "completionEvents": [
+              "onCommand:aiSharePoint.createProject"
             ]
           },
           {

@@ -23,12 +23,13 @@ Navigation/theme and AI-autonomous provisioning remain on the roadmap (see `docs
 7. [Agent-mode tools](#agent-mode-tools)
 8. [Site repositories: SharePoint as code](#site-repositories-sharepoint-as-code-git) — pull, write-back, revert
 9. [Reference sources](#reference-sources-confluence--jira) — Confluence, Jira, LDAP/AD, sharing
-10. [Copilot activity and the dashboard](#copilot-activity-and-the-dashboard)
-11. [Getting help: diagnostics export](#getting-help-diagnostics-export)
-12. [All commands](#all-commands)
-13. [All settings](#all-settings)
-14. [Troubleshooting](#troubleshooting)
-15. [FAQ](#faq)
+10. [Projects](#projects-scope-sourcesbookmarks-and-give-sharepoint-goals--memory) — scopes, goals/instructions, AI-managed memory
+11. [Copilot activity and the dashboard](#copilot-activity-and-the-dashboard)
+12. [Getting help: diagnostics export](#getting-help-diagnostics-export)
+13. [All commands](#all-commands)
+14. [All settings](#all-settings)
+15. [Troubleshooting](#troubleshooting)
+16. [FAQ](#faq)
 
 ---
 
@@ -110,17 +111,38 @@ Context menu (right-click): **Test Site Connection** · **Copy Site URL** · **C
 Role** · **Sign Out** (wipes the tenant's cached tokens from the keychain) · **Remove
 Connection** (also wipes tokens unless another connection uses the same tenant).
 
+### Reference Sources
+Your read-only context: Confluence, Jira, LDAP/AD, databases, Vertex AI Search, Power BI,
+ServiceNow, Splunk. Add (+), test, browse & bookmark, schema tools, and the ER diagram all live
+here — see [Reference sources](#reference-sources-confluence--jira). When a project is active,
+the view header shows it and the list is scoped to that project's sources.
+
+### Projects
+Group reference sources into a named scope, give @sharepoint **goals** and **instructions**,
+and let it keep a separate **AI-managed context** it learns over time — see
+[Projects](#projects-scope-sourcesbookmarks-and-give-sharepoint-goals--memory). Click a project
+to activate it; the active project scopes chat and the Reference Sources view.
+
 ### Copilot Activity
 Factual, locally measured counts of the requests this extension made: today / this month, plus
 expandable **By model** / **By task** breakdowns (with token totals). The title-bar button opens
 the dashboard. Premium-request consumption against your plan is **not** estimated — your GitHub
 billing/plan page is the authoritative source.
 
+### Communications
+Teams/Outlook drafts waiting for **your** approval — nothing sends without it (the badge counts
+pending drafts). Draft yourself or ask @sharepoint to prepare one.
+
 ### Support & Diagnostics
 Everything operational: **Export Diagnostics Bundle**, **Error Reports** (the view badge shows
 the count; **right-click → Delete Error Reports** to clear them, with confirmation), extension
 **logs**, **Verbose Wire Logging** (below), the **walkthrough**, this **user guide**, the
 **privacy notice**, and **Rotate Anonymous Install ID**.
+
+> **Don't see one of these views?** VS Code remembers per-view visibility: right-click the
+> **AI SharePoint** activity-bar header and re-check any unchecked view (sections can also be
+> collapsed to a thin header at the bottom — click to expand). After an extension update,
+> reload the window when prompted so newly added views register.
 
 #### Verbose wire logging — see exactly what crossed each integration
 
@@ -565,7 +587,10 @@ Have findings reach people — **without the assistant ever sending anything its
 
 ### Projects: scope sources/bookmarks and give @sharepoint goals + memory
 
-The **Projects** view (activity bar) is the home for this. A project groups reference sources
+The **Projects** view (activity bar — between *Reference Sources* and *Copilot Activity*; if
+it's not visible, right-click the AI SharePoint header and re-check **Projects**, or run
+*Projects: Create Project…* from the Command Palette, which works regardless) is the home for
+this. A project groups reference sources
 (bookmarks follow their sources) and carries context for the assistant:
 
 - **Create** (Projects view → **+**, or *Projects: Create Project…*): name, description,

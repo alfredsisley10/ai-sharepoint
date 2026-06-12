@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.30.2 — 2026-06-12
+
+### Fixed — Projects is discoverable: documented with the other views, in the walkthrough, with a reveal path (pilot)
+- The Projects view has shipped since 0.19.0 (view, commands, menus, chat integration), but a
+  user following the docs couldn't find it: the user guide's **"activity-bar views" overview
+  listed only three of the six views** — Projects, Reference Sources, and Communications were
+  missing — and the table of contents had no Projects entry. The overview now covers all six
+  views in container order, the TOC links the full Projects section, and that section says
+  exactly where the view sits and what to do if it isn't visible.
+- **New walkthrough step "Organize work into Projects"** with one-click [Open the Projects
+  View] (reveals the view even when hidden or collapsed) and [Create a Project].
+- Added a general note for all views: VS Code remembers per-view visibility — right-click the
+  AI SharePoint activity-bar header to re-check hidden views; sections can be collapsed to a
+  thin header; newly added views appear after the post-update reload.
+
 ## 0.30.1 — 2026-06-12
 
 ### Fixed — ANY portion of working SQL now parses into joins (pilot)
