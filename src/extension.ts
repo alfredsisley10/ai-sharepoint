@@ -2813,8 +2813,10 @@ export function activate(context: vscode.ExtensionContext): void {
       telemetry.record("comms.discard", { channel: draft.channel, origin: draft.origin });
       return;
     }
-    const commsClient = await commsClientFor();
-    if (!commsClient) return;
+    const maybeCommsClient = await commsClientFor();
+    if (!maybeCommsClient) return;
+    // Explicit annotation: narrowing doesn't flow into the nested function.
+    const commsClient: CommsClient = maybeCommsClient;
 
     try {
       await runCommsSend();

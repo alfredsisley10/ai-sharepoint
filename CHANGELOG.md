@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.1 — 2026-06-12
+
+### Fixed — Communications failures now name the real cause (pilot: "can't connect to Outlook")
+- Failures creating an Outlook draft / sending mail or Teams messages are translated into the
+  three enterprise causes with exact remediation: **missing delegated Mail.ReadWrite/Mail.Send
+  consent on the app registration** (AADSTS65001 family → Admin Guide §4 steps), **no Exchange
+  Online cloud mailbox** for the account (MailboxNotEnabledForRESTAPI — hybrid/on-prem or
+  unlicensed), or **conditional-access/app policy blocking the mail scopes**. Generic Graph
+  403s point at the consent checklist too.
+
 ## 0.11.0 — 2026-06-12
 
 ### Changed — database indexing is now two plainly-named options (pilot)
