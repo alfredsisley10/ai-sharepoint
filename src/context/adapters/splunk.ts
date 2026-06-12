@@ -9,14 +9,38 @@ import { AppError } from "../../core/errors";
 import { wireEnabled, emitWire, capDetail, safeUrl } from "../../core/wireLog";
 
 /**
- * Splunk connector (ADR-0029): read-only SPL searches against Splunk
- * Enterprise / Splunk Cloud via the management REST API (port 8089).
- * Oneshot execution (no job lifecycle), a fail-closed SPL barrier against
- * mutating/exfiltrating commands, and a bounded default time window so
- * an unscoped question never becomes an all-time scan.
+ * Splunk connector (ADR-0029, amended): read-only SPL searches against
+ * Splunk Enterprise / Splunk Cloud via the management REST API (port 8089).
+ * Searches dispatch as asynchronous jobs — exactly like Splunk Web — so when
+ * the search head is at its concurrent-search limit the job QUEUES for a
+ * slot instead of being refused (oneshot dispatches hard-fail with 503 in
+ * that state, which made the connector fail while the same user's browser
+ * kept working). A fail-closed SPL barrier blocks mutating/exfiltrating
+ * commands, and a bounded default time window keeps an unscoped question
+ * from becoming an all-time scan.
  */
 
 export const SPLUNK_DEFAULT_EARLIEST = "-24h";
+
+/** Job-lifecycle clocks. Mutable on purpose: tests shrink them so queue
+ *  scenarios run in milliseconds — not a public API. */
+export const SPLUNK_JOB_TUNING = {
+  /** Default total budget to ride the queue + run the search. */
+  defaultWaitMs: 90_000,
+  pollInitialMs: 250,
+  pollMaxMs: 2_000,
+  /** Backoff between dispatch attempts when splunkd refuses for capacity. */
+  dispatchRetryMs: [2_000, 4_000],
+};
+
+/** Per-query {"wait": seconds} clamp — long enough for a busy queue, short
+ *  enough that a chat tool call can't hang a session indefinitely. */
+const WAIT_MIN_S = 5;
+const WAIT_MAX_S = 600;
+
+/** splunkd's capacity refusals all spell out concurrency in the message
+ *  ("maximum number of concurrent historical searches … reached"). */
+const CONCURRENCY_RE = /concurren/i;
 
 /** Splunk REST accepts three credential schemes: a JWT authentication token
  *  (Bearer), a session key (the `Splunk` scheme — what a browser SSO session
@@ -33,6 +57,8 @@ export interface SplunkSpec {
   earliest: string;
   latest: string;
   limit?: number;
+  /** Seconds to wait for a queued/running job (clamped 5–600). */
+  wait?: number;
 }
 
 /** Commands that write, exfiltrate, or execute — rejected anywhere in the
@@ -145,28 +171,33 @@ export async function listSplunkApps(
 }
 
 /** Parse a chat/bookmark query:
- *  - JSON spec {"spl": "...", "earliest": "-7d", "latest": "now", "limit": n}
+ *  - JSON spec {"spl": "...", "earliest": "-7d", "latest": "now", "limit": n, "wait": s}
  *  - raw SPL ("search index=web error", "| tstats …", "index=main …")
  *  - free text → keyword search of the default index (last 24 h). */
 export function parseSplunkSpec(query: string, defaultIndex?: string): SplunkSpec {
   const trimmed = query.trim();
   if (trimmed.startsWith("{")) {
-    let raw: { spl?: unknown; earliest?: unknown; latest?: unknown; limit?: unknown };
+    let raw: { spl?: unknown; earliest?: unknown; latest?: unknown; limit?: unknown; wait?: unknown };
     try {
       raw = JSON.parse(trimmed) as typeof raw;
     } catch {
       throw new AppError(
-        'Splunk queries are JSON: {"spl": "search index=web error", "earliest": "-7d", "latest": "now", "limit": 25} — or raw SPL / plain keywords.',
+        'Splunk queries are JSON: {"spl": "search index=web error", "earliest": "-7d", "latest": "now", "limit": 25, "wait": 300} — or raw SPL / plain keywords.',
         "config",
       );
     }
     const spl = typeof raw.spl === "string" ? raw.spl.trim() : "";
     if (!spl) throw new AppError("Spec needs an spl query.", "config");
+    const wait =
+      typeof raw.wait === "number" && Number.isFinite(raw.wait)
+        ? Math.min(WAIT_MAX_S, Math.max(WAIT_MIN_S, Math.round(raw.wait)))
+        : undefined;
     return {
       spl: normalizeSpl(spl),
       earliest: typeof raw.earliest === "string" && raw.earliest.trim() ? raw.earliest.trim() : SPLUNK_DEFAULT_EARLIEST,
       latest: typeof raw.latest === "string" && raw.latest.trim() ? raw.latest.trim() : "now",
       ...(typeof raw.limit === "number" ? { limit: raw.limit } : {}),
+      ...(wait !== undefined ? { wait } : {}),
     };
   }
   if (!trimmed) throw new AppError("Empty Splunk query.", "config");
@@ -248,9 +279,13 @@ async function postSplunk<T>(
   const text = await res.text().catch(() => "");
   if (!res.ok) {
     emitWire("splunk", "✗", `POST ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`, capDetail(text));
+    const detail = splunkMessageText(text) ?? text.slice(0, 300);
     throw new AppError(
-      `Splunk request failed (${res.status}): ${text.slice(0, 300)}`,
+      `Splunk request failed (${res.status}): ${detail}`,
       res.status === 429 || res.status === 503 ? "graph.throttled" : "unknown",
+      CONCURRENCY_RE.test(detail)
+        ? "Splunk is at its concurrent-search limit. Searches queue for a slot like Splunk Web does; if even queueing is refused, retry shortly, close running searches/dashboards, or ask your Splunk admin about your role's search concurrency."
+        : undefined,
     );
   }
   if (wireEnabled()) {
@@ -262,6 +297,24 @@ async function postSplunk<T>(
     throw new AppError("Splunk returned non-JSON content (proxy page? wrong port — use the management port, usually 8089).", "network");
   }
 }
+
+/** splunkd error bodies carry the real reason in messages[].text (e.g.
+ *  "Search not executed: The maximum number of concurrent historical
+ *  searches on this instance has been reached.") — surface that, not raw
+ *  JSON. */
+function splunkMessageText(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { messages?: Array<{ text?: string }> };
+    const texts = (parsed.messages ?? [])
+      .map((m) => m.text)
+      .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+    return texts.length > 0 ? texts.join(" ").slice(0, 300) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function getSplunk<T>(
   url: string,
@@ -357,7 +410,15 @@ function eventToHit(
   };
 }
 
-/** Oneshot SPL search — synchronous, server-capped, time-bounded. */
+/** Queued-job SPL search — dispatched the way Splunk Web dispatches.
+ *
+ *  Why not oneshot: at the concurrent-search limit splunkd REFUSES oneshot
+ *  dispatches outright (503 "maximum number of concurrent … searches …
+ *  reached"), while normal asynchronous jobs are QUEUED and run as soon as
+ *  a slot frees — which is why the same user's browser searches keep
+ *  working on a busy stack. So: dispatch a normal job, ride the queue
+ *  within a bounded wait, fetch results, and always delete the job so a
+ *  timed-out search never piles onto the user's quota. */
 export async function searchSplunk(
   source: ContextSource,
   credential: ContextCredential,
@@ -368,22 +429,137 @@ export async function searchSplunk(
   const issue = splIssue(spec.spl);
   if (issue) throw new AppError(issue, "config");
   const count = Math.min(spec.limit ?? caps.maxResults, caps.maxResults);
-  const res = await postSplunk<{ results?: SplunkEvent[] }>(
-    `${mgmtBase(source)}${nsPath(source)}/search/jobs`,
-    credential,
-    {
-      search: spec.spl,
-      exec_mode: "oneshot",
-      output_mode: "json",
-      count: String(count),
-      earliest_time: spec.earliest,
-      latest_time: spec.latest,
-    },
-    caps.timeoutMs,
-  );
-  const web = webBase(source);
-  const app = defaultSplunkApp(source) ?? "search";
-  return (res.results ?? []).slice(0, caps.maxResults).map((e) => eventToHit(e, web, spec.spl, app));
+  const jobsUrl = `${mgmtBase(source)}${nsPath(source)}/search/jobs`;
+  const waitMs = spec.wait !== undefined ? spec.wait * 1000 : SPLUNK_JOB_TUNING.defaultWaitMs;
+  const deadline = Date.now() + waitMs;
+  const sid = await dispatchSplunkJob(jobsUrl, credential, spec, count, caps.timeoutMs, deadline);
+  const jobUrl = `${jobsUrl}/${encodeURIComponent(sid)}`;
+  try {
+    await waitForSplunkJob(jobUrl, credential, caps.timeoutMs, deadline, waitMs);
+    const res = await getSplunk<{ results?: SplunkEvent[] }>(
+      `${jobUrl}/results?output_mode=json&count=${count}&offset=0`,
+      credential,
+      caps.timeoutMs,
+    );
+    const web = webBase(source);
+    const app = defaultSplunkApp(source) ?? "search";
+    return (res.results ?? []).slice(0, caps.maxResults).map((e) => eventToHit(e, web, spec.spl, app));
+  } finally {
+    // Cancels the job if still queued/running and frees the artifact.
+    await deleteSplunk(jobUrl, credential, caps.timeoutMs).catch(() => undefined);
+  }
+}
+
+/** Create the search job. Capacity refusals (graph.throttled) get a short
+ *  bounded retry — on a saturated search head a dispatch that is refused
+ *  now often lands seconds later. */
+async function dispatchSplunkJob(
+  jobsUrl: string,
+  credential: ContextCredential,
+  spec: SplunkSpec,
+  count: number,
+  timeoutMs: number,
+  deadline: number,
+): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await postSplunk<{ sid?: string }>(
+        jobsUrl,
+        credential,
+        {
+          search: spec.spl,
+          exec_mode: "normal",
+          output_mode: "json",
+          max_count: String(count),
+          earliest_time: spec.earliest,
+          latest_time: spec.latest,
+          // Server-side mop-up: if the extension dies mid-poll the job
+          // cancels itself once nothing touches it for a minute.
+          auto_cancel: "60",
+        },
+        timeoutMs,
+      );
+      if (!res.sid) throw new AppError("Splunk did not return a search job id (sid).", "unknown");
+      return res.sid;
+    } catch (err) {
+      const backoff = SPLUNK_JOB_TUNING.dispatchRetryMs[attempt];
+      const busy = err instanceof AppError && err.code === "graph.throttled";
+      if (!busy || backoff === undefined || Date.now() + backoff > deadline) throw err;
+      emitWire("splunk", "→", `dispatch refused (capacity) — retry ${attempt + 1} in ${backoff}ms`);
+      await sleep(backoff);
+    }
+  }
+}
+
+interface SplunkJobStatus {
+  isDone?: boolean;
+  isFailed?: boolean;
+  dispatchState?: string;
+  messages?: Array<{ type?: string; text?: string }>;
+}
+
+/** Poll the job until DONE (FAILED throws with splunkd's own messages).
+ *  QUEUED is the concurrency cap working as designed — same queue the
+ *  browser rides — so it counts against the wait budget, not as an error. */
+async function waitForSplunkJob(
+  jobUrl: string,
+  credential: ContextCredential,
+  timeoutMs: number,
+  deadline: number,
+  waitMs: number,
+): Promise<void> {
+  let delay = SPLUNK_JOB_TUNING.pollInitialMs;
+  let state = "";
+  for (;;) {
+    const res = await getSplunk<{ entry?: Array<{ content?: SplunkJobStatus }> }>(
+      `${jobUrl}?output_mode=json`,
+      credential,
+      timeoutMs,
+    );
+    const content = res.entry?.[0]?.content ?? {};
+    if (content.isFailed) {
+      const why = (content.messages ?? [])
+        .filter((m) => m.text && m.type !== "DEBUG" && m.type !== "INFO")
+        .map((m) => m.text)
+        .join(" ");
+      throw new AppError(`Splunk search failed: ${why || "the job reported FAILED"}`, "unknown");
+    }
+    if (content.isDone) return;
+    if ((content.dispatchState ?? "") !== state) {
+      state = content.dispatchState ?? "";
+      emitWire(
+        "splunk",
+        "←",
+        `job ${state || "PENDING"}${state === "QUEUED" ? " — concurrency cap reached, waiting for a slot (like Splunk Web)" : ""}`,
+      );
+    }
+    if (Date.now() + delay > deadline) {
+      const waitedS = Math.round(waitMs / 1000);
+      const queued = state === "QUEUED";
+      throw new AppError(
+        queued
+          ? `Splunk is at its concurrent-search limit and no slot freed within ${waitedS}s; the queued job was cancelled. Splunk Web rides the same queue — retry shortly, close running searches/dashboards, or extend the wait: {"spl": "…", "wait": 300}.`
+          : `Splunk search did not finish within ${waitedS}s (state: ${state || "unknown"}); the job was cancelled. Narrow the time range (earliest/latest) or extend the wait: {"spl": "…", "wait": 300}.`,
+        queued ? "graph.throttled" : "unknown",
+        queued
+          ? "Splunk is at its concurrent-search limit; the search waited in the queue but no slot freed in time. Retry, or add {\"wait\": 300} to the query to wait longer."
+          : undefined,
+      );
+    }
+    await sleep(delay);
+    delay = Math.min(delay * 2, SPLUNK_JOB_TUNING.pollMaxMs);
+  }
+}
+
+/** Best-effort job cleanup. DELETE cancels a queued/running job and frees
+ *  the dispatch artifact immediately. */
+async function deleteSplunk(url: string, credential: ContextCredential, timeoutMs: number): Promise<void> {
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: splunkAuthHeader(credential), Accept: "application/json" },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  emitWire("splunk", res.ok ? "←" : "✗", `DELETE ${safeUrl(url)} ${res.status}`);
 }
 
 /** Saved searches + indexes → bookmark candidates (each best-effort: a

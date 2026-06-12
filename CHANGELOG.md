@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.20.0 — 2026-06-12
+
+### Fixed — Splunk: searches queue at the concurrency cap (like Splunk Web) instead of failing (pilot)
+- **Why every search failed while the browser worked**: the connector dispatched
+  `exec_mode=oneshot` searches, which splunkd **refuses outright** (HTTP 503, "maximum number
+  of concurrent … searches … reached") whenever the search head is at its concurrent-search
+  limit — chronic on shared line-of-business Splunk Cloud stacks. Splunk Web never uses
+  oneshot: it dispatches **asynchronous jobs that wait in the queue** for a free slot, so the
+  same user's browser searches kept succeeding.
+- Searches now dispatch **exactly like Splunk Web**: a normal asynchronous job (in the
+  configured app namespace) that **rides the concurrency queue**, is polled to completion
+  within a bounded wait (default 90 s; extend per query with `{"spl": "…", "wait": 300}`, up
+  to 600 s), then results are fetched and the job is **always deleted** — a timed-out search
+  is cancelled server-side, never left consuming your search quota (`auto_cancel` backs this
+  up if VS Code dies mid-search).
+- **Honest errors**: capacity refusals are retried briefly; if Splunk still refuses or no slot
+  frees in time, the error now carries **splunkd's own message** plus what to do (retry, close
+  running searches/dashboards, raise `"wait"`), instead of a generic throttle line. The
+  generic throttle advice no longer claims "Microsoft Graph" for non-Graph sources.
+
 ## 0.19.0 — 2026-06-12
 
 ### Added — Projects view + goals, reference context, and a separate AI-managed memory (pilot)

@@ -429,6 +429,12 @@ Search your logs and metrics **read-only** from chat:
   host`, `| savedsearch "Errors by host"` — or JSON with `earliest`/`latest` to widen the
   window. Mutating/exfiltrating commands (`delete`, `collect`, `outputlookup`, `sendemail`, …)
   are blocked before anything is sent.
+- **Busy instance? Searches queue, they don't fail**: searches dispatch as asynchronous jobs —
+  exactly what Splunk Web does — so when the search head is at its **concurrent-search limit**
+  (common on shared line-of-business stacks) the search **waits in Splunk's queue** and runs as
+  soon as a slot frees, instead of being refused. The connector waits up to 90 s by default;
+  extend a heavy query with `{"spl": "…", "wait": 300}` (seconds, up to 600). Its jobs are
+  always cleaned up afterwards — a timed-out search is cancelled, never left eating your quota.
 - **Browse & Bookmark** lists your saved searches and indexes as ready-made starter queries.
 
 ### Power BI (cloud)

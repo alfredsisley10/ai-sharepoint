@@ -64,7 +64,7 @@ export function adviceFor(code: ErrorCode): string | undefined {
     case "graph.notFound":
       return "The site URL could not be resolved. Check the URL and that the site still exists.";
     case "graph.throttled":
-      return "Microsoft Graph is throttling requests. Wait a moment and retry.";
+      return "The service is rate-limiting or at capacity. Wait a moment and retry.";
     case "copilot.unavailable":
       return "Install and sign in to GitHub Copilot, then retry.";
     case "budget.blocked":
