@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.21.1 — 2026-06-12
+
+### Fixed — expired Splunk session: offer a refresh instead of Entra tenant advice (pilot)
+- A previously-working Splunk connection whose browser-session cookie aged out failed *Test
+  Context Source* with **"Sign-in was rejected. Check with your administrator that this app is
+  allowed in your tenant, or configure a custom client ID"** — Microsoft Entra guidance that
+  has nothing to do with Splunk. Two fixes:
+  - **Test Context Source now prompts to refresh.** When a STORED credential is rejected
+    (auth failure) on an explicit test, it explains what likely happened — *"Your Splunk
+    browser session has likely expired — sign in to Splunk Web again and capture a fresh
+    splunkd cookie"* (ServiceNow sessions and tokens get matching wording) — and offers
+    **Refresh Sign-in**, which reopens the capture flow, re-verifies, and saves the new
+    credential in one pass. Freshly-entered credentials that fail still surface normally.
+  - **Errors that know their own remediation no longer get generic advice appended.** Splunk
+    sign-in rejections now carry scheme-specific guidance (session → re-capture the
+    `splunkd_<port>` cookie; token → create a new one under Settings → Tokens; basic → verify
+    the account), and both the notification and chat error surfaces show that instead of the
+    tenant/client-ID text, which now only appears for errors without their own remediation.
+
 ## 0.21.0 — 2026-06-12
 
 ### Added — Power BI without admin consent: Azure CLI SSO (+ pasted-token fallback) (pilot)

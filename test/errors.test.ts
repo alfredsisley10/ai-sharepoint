@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { classifyError, AppError, adviceFor } from "../src/core/errors";
+import { classifyError, AppError, adviceFor, adviceForError } from "../src/core/errors";
 
 test("AppError carries its own code", () => {
   assert.equal(classifyError(new AppError("x", "graph.throttled")), "graph.throttled");
@@ -26,4 +26,12 @@ test("advice exists for actionable codes", () => {
   for (const code of ["auth.failed", "graph.forbidden", "network", "copilot.unavailable"] as const) {
     assert.ok(adviceFor(code));
   }
+});
+
+test("an error with its own remediation suppresses generic advice (no Entra text on session expiry)", () => {
+  const own = new AppError("Splunk rejected the sign-in (401).", "auth.failed", "Your Splunk browser session has expired — re-capture the cookie.");
+  assert.equal(adviceForError(own, "auth.failed"), undefined);
+  // No userSummary → the generic per-code advice still applies.
+  assert.match(adviceForError(new AppError("x", "auth.failed"), "auth.failed") ?? "", /administrator/);
+  assert.match(adviceForError(new Error("AADSTS50126"), "auth.failed") ?? "", /administrator/);
 });

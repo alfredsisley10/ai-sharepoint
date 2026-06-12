@@ -72,3 +72,13 @@ export function adviceFor(code: ErrorCode): string | undefined {
       return undefined;
   }
 }
+
+/** Per-code advice is a FALLBACK: an AppError that carries its own
+ *  remediation (userSummary) knows better than the generic text — a Splunk
+ *  session expiry must never surface Entra tenant/client-ID guidance
+ *  (pilot: "check with your administrator that this app is allowed in your
+ *  tenant" shown for an expired splunkd cookie). */
+export function adviceForError(err: unknown, code: ErrorCode): string | undefined {
+  if (err instanceof AppError && err.userSummary) return undefined;
+  return adviceFor(code);
+}

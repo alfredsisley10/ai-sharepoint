@@ -252,6 +252,33 @@ test("verify reads current-context; 401 classifies as auth.failed", async () => 
   );
 });
 
+test("a rejected sign-in carries scheme-specific remediation — session expiry, never tenant advice", async () => {
+  // Browser-session cookie (the scheme that routinely expires): the error
+  // itself must say "session expired → re-capture the cookie".
+  await assert.rejects(
+    withFetch(
+      () => ({ status: 401, body: {} }),
+      () => verifySplunk(SRC, { method: "splunk-session", secret: "OLDKEY" }, DEFAULT_CAPS),
+    ),
+    (err: Error & { userSummary?: string }) => {
+      assert.match(err.userSummary ?? "", /browser session has expired/);
+      assert.match(err.userSummary ?? "", /splunkd_<port> cookie/);
+      return true;
+    },
+  );
+  // Token credential → token guidance, on the search (dispatch) path too.
+  await assert.rejects(
+    withFetch(
+      () => ({ status: 401, body: {} }),
+      () => searchSplunk(SRC, CRED, "errors", DEFAULT_CAPS),
+    ),
+    (err: Error & { userSummary?: string }) => {
+      assert.match(err.userSummary ?? "", /authentication token was rejected/);
+      return true;
+    },
+  );
+});
+
 test("browse: saved searches + non-internal indexes, each listing best-effort", async () => {
   const candidates = await withFetch(
     (url) =>

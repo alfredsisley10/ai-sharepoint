@@ -425,8 +425,11 @@ Search your logs and metrics **read-only** from chat:
     **Develop → Show Web Inspector → Storage → Cookies** → copy the value of `splunkd_<port>`.
 
   Copy the **value only** (a long opaque string), not the cookie name. It uses your browser's own
-  Splunk session and is re-captured the same way when it expires (via *Test Context Source*). An
-  authentication **token** or **username/password** also work where permitted.
+  Splunk session and is re-captured the same way when it expires: when a previously-working
+  source is rejected, *Test Context Source* says the session has likely expired and offers
+  **Refresh Sign-in** — sign in to Splunk Web again, capture a fresh cookie, and it re-verifies
+  and saves in one flow. An authentication **token** or **username/password** also work where
+  permitted.
 - **Search app**: on Splunk Cloud the wizard lists the apps you can access and asks which
   **search app** to run in — required when your instance disables the default `search` app and
   meters by a line-of-business app. Searches then dispatch in that app's namespace

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SecretStore } from "./secrets/secretStore";
 import { Logger } from "./core/log";
-import { AppError, adviceFor } from "./core/errors";
+import { AppError, adviceForError, classifyError } from "./core/errors";
 import { redactError } from "./core/redaction";
 import { UsageMeter } from "./copilot/meter";
 import { CopilotService } from "./copilot/copilotService";
@@ -468,7 +468,7 @@ export function activate(context: vscode.ExtensionContext): void {
             err instanceof AppError && err.userSummary
               ? err.userSummary
               : redactError(err).message.slice(0, 200);
-          const advice = adviceFor(code);
+          const advice = adviceForError(err, code);
           const pick = await vscode.window.showErrorMessage(
             `AI SharePoint: ${summary}${advice ? ` — ${advice}` : ""}`,
             "Open Logs",
@@ -2009,28 +2009,59 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       return;
     }
+    const promptCredential = () =>
+      source.type === "powerbi"
+        ? pickAadCredential()
+        : promptContextCredential(source.type, source.deployment, undefined, source.baseUrl);
     let credential = await contextSources.getCredential(source.id);
     let fresh = false;
     if (!credential || (!gateNow.allowed && gateNow.reason === "credential-bad")) {
-      credential =
-        source.type === "powerbi"
-          ? await pickAadCredential()
-          : await promptContextCredential(source.type, source.deployment, undefined, source.baseUrl);
+      credential = await promptCredential();
       if (!credential) return;
       fresh = true;
     }
-    const { account } = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Testing ${source.displayName}…` },
-      () => contextService.verify(source, credential!, fresh),
-    );
-    if (fresh) {
-      await contextSources.setCredential(source.id, credential);
-      await contextSources.upsert({ ...contextSources.get(source.id)!, authMethod: credential.method, account });
+    for (;;) {
+      let account: string;
+      try {
+        ({ account } = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Testing ${source.displayName}…` },
+          () => contextService.verify(source, credential!, fresh),
+        ));
+      } catch (err) {
+        // A STORED credential rejected on an explicit test is the routine
+        // "session/token expired" case (pilot: a working Splunk source going
+        // 401 once the splunkd cookie aged out) — offer the refresh right
+        // here instead of a dead-end error. Freshly-entered credentials
+        // still fail through the normal error path.
+        if (fresh || classifyError(err) !== "auth.failed") throw err;
+        errors.capture("aiSharePoint.testContextSource", err);
+        const hint =
+          credential!.method === "splunk-session"
+            ? "Your Splunk browser session has likely expired — sign in to Splunk Web again and capture a fresh splunkd cookie."
+            : credential!.method === "snow-session"
+              ? "Your ServiceNow browser-session cookies have likely expired — re-capture them from a signed-in tab."
+              : "The stored token/credentials may have expired or been revoked.";
+        const pick = await vscode.window.showWarningMessage(
+          `"${source.displayName}" rejected its stored sign-in. ${hint}`,
+          "Refresh Sign-in",
+        );
+        if (pick !== "Refresh Sign-in") return;
+        const next = await promptCredential();
+        if (!next) return;
+        credential = next;
+        fresh = true;
+        continue;
+      }
+      if (fresh) {
+        await contextSources.setCredential(source.id, credential!);
+        await contextSources.upsert({ ...contextSources.get(source.id)!, authMethod: credential!.method, account });
+      }
+      telemetry.record("context.test");
+      void vscode.window.showInformationMessage(
+        `✓ "${source.displayName}" reachable as ${account}.`,
+      );
+      return;
     }
-    telemetry.record("context.test");
-    void vscode.window.showInformationMessage(
-      `✓ "${source.displayName}" reachable as ${account}.`,
-    );
   });
 
   register("aiSharePoint.removeContextSource", async (arg) => {

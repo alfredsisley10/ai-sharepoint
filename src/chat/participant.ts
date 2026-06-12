@@ -11,7 +11,7 @@ import { ProjectsStore } from "../context/projectsStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
-import { adviceFor } from "../core/errors";
+import { AppError, adviceFor } from "../core/errors";
 import { Logger } from "../core/log";
 import { wireEnabled, emitWire, capDetail, safeJson } from "../core/wireLog";
 import { describeToolCall } from "./toolStatus";
@@ -101,7 +101,9 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
     } catch (err) {
       const code = deps.errors.capture("chat", err);
       const safe = redactError(err);
-      const advice = adviceFor(code);
+      // An error that knows its own remediation (e.g. "your Splunk session
+      // expired — re-capture the cookie") beats the generic per-code advice.
+      const advice = (err instanceof AppError ? err.userSummary : undefined) ?? adviceFor(code);
       stream.markdown(
         `⚠️ **Something went wrong:** ${safe.message}${advice ? `\n\n${advice}` : ""}`,
       );

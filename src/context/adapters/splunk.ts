@@ -30,6 +30,20 @@ export function splunkAuthHeader(credential: ContextCredential): string {
   return `Basic ${Buffer.from(`${user}:${credential.secret}`).toString("base64")}`;
 }
 
+/** Remediation for a rejected sign-in, by credential scheme. Splunk browser
+ *  sessions EXPIRE routinely (splunkd idle timeout), so a previously-working
+ *  source hitting 401 almost always means "capture a fresh cookie" — the
+ *  error must carry that guidance itself, or generic Entra advice leaks in. */
+function splunkAuthSummary(credential: ContextCredential): string {
+  if (credential.method === "splunk-session") {
+    return "Your Splunk browser session has expired (splunkd sessions time out). Sign in to Splunk Web again, then run Test Context Source and capture a fresh splunkd_<port> cookie.";
+  }
+  if (credential.method === "pat") {
+    return "The Splunk authentication token was rejected — it may have expired or been revoked. Create a new one under Settings → Tokens in Splunk Web, then update it via Test Context Source.";
+  }
+  return "Splunk rejected the username/password — verify them (and that the account can dispatch searches), then update them via Test Context Source.";
+}
+
 export interface SplunkSpec {
   spl: string;
   earliest: string;
@@ -244,7 +258,7 @@ async function postSplunk<T>(
     throw new AppError(
       `Splunk rejected the sign-in (${res.status}).`,
       "auth.failed",
-      "Check the token/credentials and that the account can dispatch searches. Authentication tokens are created under Settings → Tokens in Splunk Web.",
+      splunkAuthSummary(credential),
     );
   }
   const text = await res.text().catch(() => "");
@@ -295,7 +309,11 @@ async function getSplunk<T>(
   }
   if (res.status === 401 || res.status === 403) {
     emitWire("splunk", "✗", `GET ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
-    throw new AppError(`Splunk rejected the sign-in (${res.status}).`, "auth.failed");
+    throw new AppError(
+      `Splunk rejected the sign-in (${res.status}).`,
+      "auth.failed",
+      splunkAuthSummary(credential),
+    );
   }
   if (!res.ok) {
     emitWire("splunk", "✗", `GET ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
