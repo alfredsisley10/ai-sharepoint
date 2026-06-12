@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { SecretStore } from "./secrets/secretStore";
 import { Logger } from "./core/log";
 import { AppError, adviceForError, classifyError } from "./core/errors";
+import { EXTENSION_VERSION } from "./core/version";
 import { redactError } from "./core/redaction";
 import { UsageMeter } from "./copilot/meter";
 import { CopilotService } from "./copilot/copilotService";
@@ -197,6 +198,29 @@ export function activate(context: vscode.ExtensionContext): void {
   const dashboard = new UsageDashboard(meter, nowIso);
   const statusBar = new UsageStatusBar(meter, nowIso);
   const version = String(context.extension.packageJSON.version ?? "0.0.0");
+
+  // Torn-install detector: `version` is whatever MANIFEST VS Code loaded;
+  // EXTENSION_VERSION is compiled into this file. When they disagree, new
+  // code is running against stale contributions — views/commands from
+  // newer releases (Projects, Communications, renamed views) silently
+  // don't exist in the UI and can't even be re-enabled from the container
+  // menu (pilot). A window reload does not always heal this; a full
+  // restart or reinstall does. Say so, by name, once.
+  if (version !== EXTENSION_VERSION) {
+    log.warn(
+      `Torn installation detected: code ${EXTENSION_VERSION} is running against manifest ${version}. Views/commands contributed after ${version} are missing from the UI.`,
+    );
+    void vscode.window
+      .showWarningMessage(
+        `AI SharePoint's installed files are out of sync: the interface manifest is v${version} but the running code is v${EXTENSION_VERSION}, so views and commands from newer releases are missing (e.g. the Projects view). Reload the window; if this message comes back, fully quit and restart VS Code — and if it persists, uninstall the extension and reinstall the latest VSIX.`,
+        "Reload Window",
+      )
+      .then((pick) => {
+        if (pick === "Reload Window") {
+          void vscode.commands.executeCommand("workbench.action.reloadWindow");
+        }
+      });
+  }
 
   context.subscriptions.push(
     log,

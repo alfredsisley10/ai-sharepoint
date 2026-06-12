@@ -757,6 +757,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | 429 / throttled | Microsoft Graph throttling → the extension retries once automatically; wait a moment. |
 | SQL Server "authentication rejected" but the login works in SSMS | Re-add the source with the guided wizard (it prompts for server, instance, port, database, certificate, and sign-in method separately — answer exactly as in SSMS) and read the appended **“server said: …”** detail: it is SQL Server's own message distinguishing a bad login, an inaccessible database, or a wrong instance. |
 | "Could not initialize a Git repository" / repo not detected | Folder outside the workspace, Restricted Mode, or git missing → accept the wizard's "Add to Workspace" offer (or File → Add Folder to Workspace…), trust the window, and check `git --version`. |
+| A view is missing AND not listed in the activity-bar header menu (e.g. no "Projects", old view names like "Usage & Budget") | A **torn installation**: VS Code cached an old interface manifest while newer code runs — the extension detects this and warns with the two versions. Reload the window; if it returns, **fully quit and restart VS Code** (not just reload); if it persists, uninstall the extension, restart, and reinstall the latest VSIX. |
 | Network errors behind a proxy | VS Code's proxy settings apply (`http.proxy`) → see Admin Guide §Proxies. |
 
 Still stuck? **Open Extension Logs** (set level to *Trace* via the gear), reproduce, then

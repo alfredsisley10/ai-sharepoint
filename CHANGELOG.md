@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.30.3 — 2026-06-12
+
+### Fixed — torn installations are detected and named (pilot: "no option to enable Projects")
+- The container header showed pre-0.20 view names ("Usage & Budget") with **no Projects entry
+  to enable**, while 0.23+ features ran fine — the definitive signature of a **torn install**:
+  VS Code rendering a stale cached interface manifest while executing newer code. Views and
+  commands contributed after the cached version simply don't exist in the UI, and no amount of
+  header-menu toggling can bring them back.
+- The extension now **detects this state at startup** by comparing the version compiled into
+  its code against the manifest VS Code actually loaded, and says exactly what's wrong with
+  both versions named — *"interface manifest is v0.19.0 but the running code is v0.30.3…"* —
+  plus the escalation path: reload the window → if it returns, fully quit and restart VS Code
+  → if it persists, uninstall and reinstall the VSIX. A release-gate test keeps the compiled
+  constant in lock-step with package.json. Troubleshooting table updated.
+
 ## 0.30.2 — 2026-06-12
 
 ### Fixed — Projects is discoverable: documented with the other views, in the walkthrough, with a reveal path (pilot)
