@@ -104,15 +104,47 @@ export function getVertexToken(credential: ContextCredential): Promise<string> {
 
 // --- HTTP (Discovery Engine is POST-based; mirror fetchJson's taxonomy) --------
 
+/** The serving-config URL carries the project — it doubles as the QUOTA
+ *  project the API demands for end-user credentials (pilot: calls failed
+ *  with 403 even with the right role because no quota project was sent). */
+export function vertexProjectOf(baseUrl: string): string | undefined {
+  return baseUrl.match(/\/projects\/([A-Za-z0-9-]+)\//)?.[1];
+}
+
+/** Translate Google's documented 403 families into the actual fix — a
+ *  valid token with a missing role is NOT a bad credential (and must not
+ *  feed the lockout tracker as one). */
+export function explainVertex403(body: string): string {
+  if (/serviceusage\.services\.use|quota project|consumer/i.test(body)) {
+    return "Your account lacks 'Service Usage Consumer' (roles/serviceusage.serviceUsageConsumer) on the app's project — the extension sends that project as the quota project; ask the app owner to grant the role.";
+  }
+  if (/has not been used in project|SERVICE_DISABLED|API .* disabled/i.test(body)) {
+    return "The Discovery Engine API is not enabled in the app's project — the app owner can enable it (APIs & Services → Discovery Engine API).";
+  }
+  if (/discoveryengine\.servingConfigs\.(search|answer).*denied|Permission .*denied on resource/i.test(body)) {
+    return "Your account lacks the 'Discovery Engine Viewer' role (roles/discoveryengine.viewer) on the app's project — ask the app owner to grant it — or the project/location/engine path is wrong.";
+  }
+  if (/prohibited by organization'?s policy|VPC Service Controls|securityPolicyViolated/i.test(body)) {
+    return "A VPC Service Controls perimeter blocks this API from your network — IT/security owns the perimeter rules.";
+  }
+  return "Google answered 403 — usually a missing 'Discovery Engine Viewer' role, the API not enabled in the project, or a missing quota-project permission. Ask the search app's owner; the exact server message is in the logs.";
+}
+
 async function postVertex<T>(
   url: string,
   token: string,
   body: unknown,
   timeoutMs: number,
+  quotaProject?: string,
 ): Promise<T> {
   const started = Date.now();
   if (wireEnabled()) {
-    emitWire("vertex", "→", `POST ${safeUrl(url)}`, `Authorization: Bearer ***\n${safeJson(body)}`);
+    emitWire(
+      "vertex",
+      "→",
+      `POST ${safeUrl(url)}`,
+      `Authorization: Bearer ***${quotaProject ? `\nx-goog-user-project: ${quotaProject}` : ""}\n${safeJson(body)}`,
+    );
   }
   let res: Response;
   try {
@@ -122,6 +154,8 @@ async function postVertex<T>(
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         Accept: "application/json",
+        // End-user credentials need an explicit quota project for this API.
+        ...(quotaProject ? { "x-goog-user-project": quotaProject } : {}),
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
@@ -140,11 +174,21 @@ async function postVertex<T>(
   if (!res.ok) {
     emitWire("vertex", "✗", `POST ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
   }
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     throw new AppError(
-      `Vertex AI Search rejected the token (${res.status}).`,
+      "Vertex AI Search rejected the token (401).",
       "auth.failed",
       "Google SSO tokens expire after ~1 hour. gcloud mode refreshes automatically — if this persists, run `gcloud auth login`; for pasted tokens, paste a fresh one via Test Context Source.",
+    );
+  }
+  if (res.status === 403) {
+    const errBody = await res.text().catch(() => "");
+    emitWire("vertex", "✗", `POST ${safeUrl(url)} 403 detail`, errBody.slice(0, 800));
+    // 403 with a live token = entitlement, not a bad credential.
+    throw new AppError(
+      `Vertex AI Search denied the request (403): ${errBody.slice(0, 200)}`,
+      "graph.forbidden",
+      explainVertex403(errBody),
     );
   }
   if (res.status === 404) {
@@ -201,6 +245,7 @@ export async function verifyVertex(
     token,
     { query: "connectivity check", pageSize: 1 },
     caps.timeoutMs,
+    vertexProjectOf(source.baseUrl),
   );
   return { account: credential.method === "gcloud-sso" ? "gcloud SSO" : "access token" };
 }
@@ -226,6 +271,7 @@ export async function searchVertex(
       },
     },
     caps.timeoutMs,
+    vertexProjectOf(source.baseUrl),
   );
   return (res.results ?? []).slice(0, caps.maxResults).map((r, i) => {
     const d = r.document?.derivedStructData ?? {};
@@ -282,6 +328,7 @@ export async function answerVertex(
       },
     },
     caps.timeoutMs,
+    vertexProjectOf(source.baseUrl),
   );
   const seen = new Set<string>();
   const citations: Array<{ title: string; url: string }> = [];

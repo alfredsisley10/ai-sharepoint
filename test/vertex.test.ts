@@ -163,3 +163,33 @@ test("parseVertexHint extracts project/location/engine from console and resource
   assert.equal(endpointForLocation("global"), "https://discoveryengine.googleapis.com");
   assert.equal(endpointForLocation("weird"), "https://discoveryengine.googleapis.com");
 });
+
+test("vertexProjectOf derives the quota project from the serving-config URL", async () => {
+  const { vertexProjectOf } = await import("../src/context/adapters/vertexSearch");
+  assert.equal(
+    vertexProjectOf("https://discoveryengine.googleapis.com/v1/projects/corp-prod/locations/global/collections/default_collection/engines/e/servingConfigs/default_search"),
+    "corp-prod",
+  );
+  assert.equal(vertexProjectOf("https://example.com/no-projects-here"), undefined);
+});
+
+test("explainVertex403 maps Google's documented 403 families to the actual fix", async () => {
+  const { explainVertex403 } = await import("../src/context/adapters/vertexSearch");
+  assert.match(
+    explainVertex403('{"error":{"message":"Permission \'discoveryengine.servingConfigs.search\' denied on resource ..."}}'),
+    /Discovery Engine Viewer/,
+  );
+  assert.match(
+    explainVertex403('{"error":{"message":"Caller does not have required permission serviceusage.services.use ..."}}'),
+    /Service Usage Consumer/,
+  );
+  assert.match(
+    explainVertex403("Discovery Engine API has not been used in project 12345 before or it is disabled"),
+    /not enabled/,
+  );
+  assert.match(
+    explainVertex403("Request is prohibited by organization's policy. vpcServiceControlsUniqueIdentifier: ..."),
+    /VPC Service Controls/,
+  );
+  assert.match(explainVertex403("mystery"), /403/);
+});

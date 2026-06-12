@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.24.1 — 2026-06-12
+
+### Fixed — Vertex AI Search: quota project sent automatically; 403s name the actual fix (pilot)
+- Deep-research finding (docs/research/vertex-auth-simplification.md): calling the Discovery
+  Engine API with **end-user credentials requires a quota project** — without it Google
+  answers 403 even when the user holds the right role. The connector now sends the app's own
+  project as `x-goog-user-project` on every search/answer/verify call. This alone explains
+  persistent "connection failing" for both gcloud and pasted-token sign-ins.
+- 403 responses are no longer misreported as "token rejected" (which could also trip the
+  credential lockout): the body is read and triaged into the actual fix — missing
+  **Discovery Engine Viewer** role, **Service Usage Consumer** missing on the quota project,
+  **API not enabled**, wrong resource path, or a **VPC-SC perimeter** — each with who to ask.
+  401 alone remains a credential problem.
+- Research report committed with ranked next steps: PKCE browser sign-in via an org-created
+  Desktop OAuth client ID (no Google verification needed for internal apps; settings-policy
+  distributed like `servicenow.oauthClientId`), gcloud kept for Workforce Identity Federation
+  orgs; device-code flow, API keys, widget reuse, and cookie replay are verified dead ends.
+
 ## 0.24.0 — 2026-06-12
 
 ### Added — full read-only site inspection for ANY connection (pilot)
