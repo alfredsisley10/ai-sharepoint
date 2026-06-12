@@ -241,12 +241,70 @@ test("rejected cookie session (401) reports the replayed cookie NAMES and re-cap
   );
 });
 
-test("an HTML login page in response to a cookie session explains expiry instead of 'non-JSON'", async () => {
+test("the 401 diagnosis quotes ServiceNow's own error body and never presumes expiry", async () => {
   await assert.rejects(
     withFetchInit(
-      () => new Response("<html><body>Sign in to ServiceNow</body></html>", { status: 200 }),
+      () =>
+        new Response(
+          JSON.stringify({
+            error: { message: "User Not Authenticated", detail: "Required to provide Auth information" },
+          }),
+          { status: 401 },
+        ),
       () => searchServiceNow(SRC, { method: "snow-session", secret: SESSION_TABLE_PASTE }, "outage", DEFAULT_CAPS),
     ),
-    /login page \(session expired|login page/,
+    (err: Error & { userSummary?: string }) => {
+      assert.match(err.message, /User Not Authenticated — Required to provide Auth information/);
+      assert.match(err.userSummary ?? "", /captured just now, the session is NOT expired/);
+      return true;
+    },
   );
+});
+
+test("an HTML page in response to a cookie session is diagnosed from its title, not presumed expired", async () => {
+  await assert.rejects(
+    withFetchInit(
+      () =>
+        new Response("<html><head><title>Log in | ServiceNow</title></head><body>…</body></html>", {
+          status: 200,
+        }),
+      () => searchServiceNow(SRC, { method: "snow-session", secret: SESSION_TABLE_PASTE }, "outage", DEFAULT_CAPS),
+    ),
+    (err: Error & { code?: string }) => {
+      assert.match(err.message, /page instead of JSON/);
+      assert.match(err.message, /Log in \| ServiceNow/);
+      assert.equal(err.code, "auth.failed", "a login page is an auth problem (lockout + refresh prompt apply)");
+      assert.ok(!/session expired/i.test(err.message), "must not assert expiry without evidence");
+      return true;
+    },
+  );
+});
+
+test("snow-session requests send a browser-compatible User-Agent; other methods do not", async () => {
+  let sessionUa = "";
+  await withFetchInit(
+    (_url, init) => {
+      sessionUa = (init?.headers as Record<string, string>)["User-Agent"] ?? "";
+      return new Response(JSON.stringify({ result: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    () => searchServiceNow(SRC, { method: "snow-session", secret: SESSION_TABLE_PASTE }, "outage", DEFAULT_CAPS),
+  );
+  assert.match(sessionUa, /^Mozilla\/5\.0/, "SSO/WAF front-ends drop non-browser UAs");
+  assert.match(sessionUa, /AI-SharePoint/, "still identifies the extension");
+
+  let basicUa: string | undefined;
+  await withFetchInit(
+    (_url, init) => {
+      basicUa = (init?.headers as Record<string, string>)["User-Agent"];
+      return new Response(JSON.stringify({ result: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+    () => searchServiceNow(SRC, CRED, "outage", DEFAULT_CAPS),
+  );
+  assert.equal(basicUa, undefined);
 });

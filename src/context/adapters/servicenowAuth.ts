@@ -292,3 +292,98 @@ export function cookieStringIssue(raw: string): string | undefined {
   }
   return undefined;
 }
+
+/** Browser-compatibility User-Agent for cookie-session replay. Some SSO/WAF
+ *  front-ends reject requests with non-browser user agents even when the
+ *  session cookies are valid — the pilot saw freshly captured cookies fail
+ *  within seconds. Mozilla/5.0-prefixed for gateway compatibility while
+ *  still naming the extension (the user's own authorized session is what
+ *  authenticates; this is interoperability, not disguise). */
+export const SNOW_SESSION_USER_AGENT =
+  "Mozilla/5.0 (compatible; AI-SharePoint-VSCode; ServiceNow session replay)";
+
+export interface SnowRejection {
+  message: string;
+  summary: string;
+  /** auth = sign-in problem (counts toward lockout, offers refresh);
+   *  other = infrastructure page (hibernating instance, proxy error). */
+  kind: "auth" | "other";
+}
+
+const hostOf = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+
+/**
+ * Evidence-based diagnosis of a rejected cookie-session request, built from
+ * what the server ACTUALLY returned — never a blanket "session expired"
+ * (pilot: cookies captured 15 seconds earlier were rejected and the error
+ * still claimed expiry). Pure.
+ */
+export function describeSnowRejection(args: {
+  /** HTTP status for 401/403 rejections; undefined for a 200 non-JSON page. */
+  status?: number;
+  bodyText: string;
+  requestUrl: string;
+  /** Final URL after redirects (fetch's res.url) when available. */
+  finalUrl?: string;
+  storedCookies: string;
+}): SnowRejection {
+  const names = cookieNames(args.storedCookies);
+  const lower = names.map((n) => n.toLowerCase());
+  const missing: string[] = [];
+  if (!lower.includes("jsessionid")) missing.push("JSESSIONID (the session cookie)");
+  if (!lower.some((n) => n.startsWith("glide"))) missing.push("the glide_* cookies");
+
+  // What the server actually said: ServiceNow's JSON error envelope, or the
+  // <title> of an HTML page (reveals login pages, SSO gateways, hibernating
+  // developer instances, proxy block pages).
+  let serverSaid = "";
+  let htmlTitle = "";
+  try {
+    const parsed = JSON.parse(args.bodyText) as { error?: { message?: string; detail?: string | null } };
+    serverSaid = [parsed.error?.message, parsed.error?.detail].filter(Boolean).join(" — ");
+  } catch {
+    htmlTitle = args.bodyText.match(/<title[^>]*>([^<]{1,120})/i)?.[1]?.trim() ?? "";
+    if (htmlTitle) serverSaid = `an HTML page titled "${htmlTitle}"`;
+  }
+
+  // A redirect off the instance host is the signature of an SSO front-end
+  // intercepting the API call — the classic reason FRESH cookies fail.
+  let redirectedTo = "";
+  try {
+    if (args.finalUrl && new URL(args.finalUrl).host !== new URL(args.requestUrl).host) {
+      redirectedTo = new URL(args.finalUrl).host;
+    }
+  } catch {
+    // unparseable final URL — no redirect evidence
+  }
+
+  const loginish = /log\s?-?in|sign\s?-?in|sso|saml|authenticat/i.test(`${htmlTitle} ${redirectedTo}`);
+  const kind: SnowRejection["kind"] = args.status !== undefined || redirectedTo !== "" || loginish ? "auth" : "other";
+
+  const message =
+    (args.status !== undefined
+      ? `ServiceNow rejected the session cookies (${args.status})`
+      : `ServiceNow answered the API call with a page instead of JSON`) +
+    (serverSaid ? ` — server returned ${serverSaid}` : "") +
+    (redirectedTo ? `; the request was redirected to ${redirectedTo}` : "") +
+    `. Cookies replayed: ${names.length > 0 ? names.join(", ") : "none parseable from the stored capture"}.`;
+
+  const recapture =
+    `Re-capture via Test Context Source: sign in to ServiceNow in the browser, open DevTools → Network, click any request to ${hostOf(args.requestUrl)}, and copy the WHOLE Cookie header.`;
+  let cause: string;
+  if (missing.length > 0) {
+    cause = `The capture is missing ${missing.join(" and ")} — the session cannot authenticate without them.`;
+  } else if (redirectedTo) {
+    cause = `An SSO/login front-end (${redirectedTo}) intercepted the call. Fresh cookies fail too when the gateway's own cookies are missing or it only accepts browser traffic — copying the full Cookie header (which includes the gateway's cookies) usually satisfies it.`;
+  } else {
+    cause =
+      "If these cookies were captured just now, the session is NOT expired — most often the paste missed some of the host's cookies (every cookie matters, including load-balancer/SSO ones like BIGipServer*), or a security gateway in front of the instance accepts only browser requests. If they were captured a while ago, the browser session has timed out.";
+  }
+  return { message, summary: `${cause} ${recapture}`, kind };
+}

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.21.2 — 2026-06-12
+
+### Fixed — ServiceNow cookie sessions: evidence-based rejection diagnosis + gateway compatibility (pilot)
+- Cookies captured from a **brand-new browser session** were rejected and the error still
+  claimed *"session cookies expire with your browser session"* — a misdiagnosis. Rejections are
+  now diagnosed from **what the server actually returned**: ServiceNow's own error body (e.g.
+  *"User Not Authenticated — Required to provide Auth information"*), the **title of an HTML
+  page** (login page? SSO gateway? hibernating developer instance?), and any **redirect off the
+  instance host** (the signature of an SSO front-end intercepting API calls). Missing
+  essentials are called out by name (*"the capture is missing JSESSIONID"*), and the summary
+  distinguishes just-captured failures (incomplete paste, gateway only accepting browser
+  traffic) from old captures (genuine expiry) instead of presuming expiry. Hibernating-instance
+  pages are classified as infrastructure, not auth, so they don't count toward lockout.
+- **Browser-compatible User-Agent on cookie replay**: SSO/WAF front-ends commonly drop
+  non-browser clients even with valid session cookies — the likely cause of fresh captures
+  failing. Cookie-session requests now send a `Mozilla/5.0`-prefixed UA that still names the
+  extension. Other auth methods are unchanged.
+
 ## 0.21.1 — 2026-06-12
 
 ### Fixed — expired Splunk session: offer a refresh instead of Entra tenant advice (pilot)

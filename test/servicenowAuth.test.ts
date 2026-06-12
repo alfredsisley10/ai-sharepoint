@@ -96,3 +96,40 @@ test("cookieNames lists names only — the safe diagnostic for rejected sessions
   ]);
   assert.deepEqual(cookieNames("garbage"), []);
 });
+
+test("describeSnowRejection: missing session cookies are called out by name", async () => {
+  const { describeSnowRejection } = await import("../src/context/adapters/servicenowAuth");
+  const d = describeSnowRejection({
+    status: 401,
+    bodyText: "{}",
+    requestUrl: "https://corp.service-now.com/api/now/table/incident",
+    storedCookies: "glide_user_route=g; BIGipServerpool=1.2.3",
+  });
+  assert.equal(d.kind, "auth");
+  assert.match(d.summary, /missing JSESSIONID/);
+  assert.match(d.summary, /corp\.service-now\.com/);
+});
+
+test("describeSnowRejection: an off-host redirect names the SSO gateway", async () => {
+  const { describeSnowRejection } = await import("../src/context/adapters/servicenowAuth");
+  const d = describeSnowRejection({
+    bodyText: "<html><title>Corp Single Sign-On</title></html>",
+    requestUrl: "https://corp.service-now.com/api/now/table/incident",
+    finalUrl: "https://sso.corp.example/idp/startSSO",
+    storedCookies: "JSESSIONID=a; glide_user_route=g",
+  });
+  assert.equal(d.kind, "auth");
+  assert.match(d.message, /redirected to sso\.corp\.example/);
+  assert.match(d.summary, /SSO\/login front-end \(sso\.corp\.example\)/);
+});
+
+test("describeSnowRejection: a hibernating-instance page is infrastructure, not an auth failure", async () => {
+  const { describeSnowRejection } = await import("../src/context/adapters/servicenowAuth");
+  const d = describeSnowRejection({
+    bodyText: "<html><head><title>Instance Hibernating</title></head></html>",
+    requestUrl: "https://dev12345.service-now.com/api/now/table/incident",
+    storedCookies: "JSESSIONID=a; glide_user_route=g",
+  });
+  assert.equal(d.kind, "other");
+  assert.match(d.message, /Instance Hibernating/);
+});

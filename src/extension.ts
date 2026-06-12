@@ -2039,7 +2039,7 @@ export function activate(context: vscode.ExtensionContext): void {
           credential!.method === "splunk-session"
             ? "Your Splunk browser session has likely expired — sign in to Splunk Web again and capture a fresh splunkd cookie."
             : credential!.method === "snow-session"
-              ? "Your ServiceNow browser-session cookies have likely expired — re-capture them from a signed-in tab."
+              ? "Your ServiceNow browser-session cookies were rejected (sessions expire with the browser; captures can also be incomplete) — re-capture the full Cookie header from a signed-in tab."
               : "The stored token/credentials may have expired or been revoked.";
         const pick = await vscode.window.showWarningMessage(
           `"${source.displayName}" rejected its stored sign-in. ${hint}`,

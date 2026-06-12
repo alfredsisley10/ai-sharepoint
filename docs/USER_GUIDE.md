@@ -386,10 +386,13 @@ Reference your instance's ITSM and CMDB records **read-only**:
   Network → any request — most reliable), the **Application/Storage → Cookies table** rows
   (select the full set and copy; tab-separated is fine), **Firefox's Copy-All JSON**, or
   one-`name=value`-per-line exports. After the paste the wizard confirms the **cookie names**
-  it captured (values are never shown) and warns if `JSESSIONID` is missing. If the session is
-  later rejected, the error lists the replayed cookie names and how to re-capture. Read-only;
-  re-captured the same way when the session expires (*Test Context Source*). Basic and OAuth
-  token/OAuth-client paths remain available.
+  it captured (values are never shown) and warns if `JSESSIONID` is missing. If a session is
+  rejected, the error shows **what ServiceNow actually returned** (its error message, the title
+  of any HTML/login page, or the SSO gateway it redirected to) plus the replayed cookie names —
+  a *freshly captured* set that fails usually means the paste missed some of the host's cookies
+  (copy the whole Cookie header) or a security gateway in front of the instance, **not** expiry.
+  Read-only; re-captured the same way when the session does expire (*Test Context Source*
+  offers **Refresh Sign-in**). Basic and OAuth token/OAuth-client paths remain available.
 - **Add** (Reference Sources → `+` → *ServiceNow*): enter the instance URL
   (`https://yourorg.service-now.com`) and sign in — **least-privilege integration account**
   (Basic) or an OAuth bearer token. The wizard then **lists the tables your account can

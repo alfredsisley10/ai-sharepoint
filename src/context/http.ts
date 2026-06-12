@@ -1,6 +1,10 @@
 import { AppError } from "../core/errors";
 import { ContextCredential } from "./types";
-import { cleanCookieString, cookieNames } from "./adapters/servicenowAuth";
+import {
+  cleanCookieString,
+  describeSnowRejection,
+  SNOW_SESSION_USER_AGENT,
+} from "./adapters/servicenowAuth";
 import { wireEnabled, emitWire, capDetail, safeHeaders, safeUrl } from "../core/wireLog";
 
 /** Shared fetch wrapper for context adapters: auth header construction,
@@ -23,7 +27,12 @@ export function authHeader(credential: ContextCredential): string {
  *  fetch throw before anything is sent. */
 export function authHeaders(credential: ContextCredential): Record<string, string> {
   if (credential.method === "snow-session") {
-    return { Cookie: cleanCookieString(credential.secret) };
+    // Browser-like UA: SSO/WAF front-ends commonly drop non-browser clients
+    // even with valid session cookies (pilot: fresh captures rejected).
+    return {
+      Cookie: cleanCookieString(credential.secret),
+      "User-Agent": SNOW_SESSION_USER_AGENT,
+    };
   }
   return { Authorization: authHeader(credential) };
 }
@@ -71,15 +80,18 @@ export async function fetchJson<T>(
   }
   if (res.status === 401 || res.status === 403) {
     if (credential.method === "snow-session") {
-      // Diagnostic: name (never value) of every cookie that was replayed,
-      // so "expired session" vs "the paste lost the session cookies" is
-      // distinguishable from the error alone.
-      const names = cookieNames(credential.secret);
-      throw new AppError(
-        `Authentication rejected by the source (${res.status}). Browser-session cookies replayed: ${names.length > 0 ? names.join(", ") : "none parseable from the stored capture"}.`,
-        "auth.failed",
-        "ServiceNow session cookies expire with your browser session. Sign in to ServiceNow in the browser again, then re-capture the cookies via Test Context Source (the Cookie request header from the Network tab is the most reliable source).",
-      );
+      // Evidence-based diagnosis (never a blanket "session expired" — fresh
+      // captures fail too): the server's own error body, any off-host
+      // redirect, and the replayed cookie NAMES (values never appear).
+      const body = await res.text().catch(() => "");
+      const d = describeSnowRejection({
+        status: res.status,
+        bodyText: body,
+        requestUrl: url,
+        finalUrl: res.url || undefined,
+        storedCookies: credential.secret,
+      });
+      throw new AppError(d.message, "auth.failed", d.summary);
     }
     throw new AppError(
       `Authentication rejected by the source (${res.status}).`,
@@ -118,12 +130,20 @@ export async function fetchJson<T>(
   try {
     return JSON.parse(text) as T;
   } catch {
-    // An expired/incomplete cookie session is often answered with a 200
-    // HTML login page rather than a 401 — say so.
+    // A rejected/intercepted cookie session is often answered with a 200
+    // HTML page rather than a 401 — diagnose from the page itself (login
+    // page? SSO gateway? hibernating instance?) instead of presuming expiry.
+    if (credential.method === "snow-session") {
+      const d = describeSnowRejection({
+        bodyText: text,
+        requestUrl: url,
+        finalUrl: res.url || undefined,
+        storedCookies: credential.secret,
+      });
+      throw new AppError(d.message, d.kind === "auth" ? "auth.failed" : "network", d.summary);
+    }
     throw new AppError(
-      credential.method === "snow-session"
-        ? `Source returned non-JSON content — with browser-session cookies this usually means ServiceNow redirected to its login page (session expired or the capture is missing the session cookies; replayed: ${cookieNames(credential.secret).join(", ") || "none parseable"}). Sign in again in the browser and re-capture via Test Context Source.`
-        : "Source returned non-JSON content (proxy page or HTML login redirect?).",
+      "Source returned non-JSON content (proxy page or HTML login redirect?).",
       "network",
     );
   }
