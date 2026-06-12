@@ -15,6 +15,7 @@ import { redactError } from "../core/redaction";
 import { adviceFor } from "../core/errors";
 import { Logger } from "../core/log";
 import { wireEnabled, emitWire, capDetail, safeJson } from "../core/wireLog";
+import { describeToolCall } from "./toolStatus";
 
 export const PARTICIPANT_ID = "aiSharePoint.sharepoint";
 
@@ -327,6 +328,13 @@ async function answerWithModel(
       break;
     }
 
+    // Per-round status so the user can follow a multi-step turn (pilot).
+    stream.progress(
+      round === 0
+        ? "Working on your request…"
+        : "Reviewing what I found and continuing…",
+    );
+
     let text = "";
     const toolCalls: vscode.LanguageModelToolCallPart[] = [];
     let ok = false;
@@ -384,7 +392,9 @@ async function answerWithModel(
     );
     const resultParts: vscode.LanguageModelToolResultPart[] = [];
     for (const call of toolCalls) {
-      stream.progress(`Running ${call.name.replace("aisharepoint_", "").replace(/_/g, " ")}…`);
+      // Accurate, input-aware status — "Searching CMDB for …", not a generic
+      // "Running search context …" (pilot).
+      stream.progress(describeToolCall(call.name, call.input));
       deps.telemetry.record("chat.toolCall", { tool: call.name });
       if (wireEnabled()) {
         emitWire("tool", "→", `${call.name} (round ${round + 1})`, safeJson(call.input));
@@ -474,7 +484,14 @@ async function buildSiteContext(
   }
 
   const urlInPrompt = deps.access.extractSiteUrl(request.prompt);
-  const conn = deps.access.resolve(urlInPrompt) ?? (all.length === 1 ? all[0] : undefined);
+  const promptLc = request.prompt.toLowerCase();
+  const namedConn = all.find(
+    (c) => c.displayName.length > 2 && promptLc.includes(c.displayName.toLowerCase()),
+  );
+  // A site the user explicitly pointed at (URL or name) vs. the sole-connection
+  // fallback — only the former forces a read.
+  const explicitConn = deps.access.resolve(urlInPrompt) ?? namedConn;
+  const conn = explicitConn ?? (all.length === 1 ? all[0] : undefined);
 
   const inventory = all
     .map((c) => `- ${c.displayName} (${c.siteUrl}) — role: ${c.role}`)
@@ -482,6 +499,25 @@ async function buildSiteContext(
 
   if (!conn) {
     return `${referenceBlock}\nConfigured connections:\n${inventory}\n(No single site could be inferred for this question — ask the user to name one if needed.)`;
+  }
+
+  // Read the live site ONLY when the question is actually about a site: one is
+  // explicitly referenced, OR SharePoint is the only context (no reference
+  // sources), OR the prompt uses SharePoint vocabulary. Otherwise skip the read
+  // entirely — no misleading "Reading <site>…" and no wasted Graph call when the
+  // user asked about Confluence/a database/etc. The model can still call
+  // site_overview itself, which shows its own accurate status (pilot).
+  const siteVocab =
+    /\b(site|sites|page|pages|list|lists|librar|web ?part|sharepoint|subsite|navigation|home page|landing page)\b/i.test(
+      request.prompt,
+    );
+  if (!explicitConn && referenceSources.length > 0 && !siteVocab) {
+    return [
+      referenceBlock,
+      `Configured SharePoint connections (not read live — call site_overview / list_pages if the question turns out to concern a site):\n${inventory}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   try {

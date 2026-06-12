@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.18.0 — 2026-06-12
+
+### Changed — @sharepoint status reflects what you actually asked (pilot)
+- The chat status no longer says "Reading <site>" on every turn. The live site read now
+  happens **only when the question is actually about a site** (a site is named, SharePoint is
+  your only connected context, or the prompt uses site vocabulary) — so asking about
+  Confluence, a database, ServiceNow, etc. no longer triggers a misleading "Reading <site>…"
+  (or a wasted Graph call). The model can still pull site data itself via the site tools when
+  it decides it's needed.
+- **Per-step status for multi-turn operations**: each tool call shows an accurate,
+  input-aware line — *"Searching CMDB for …"*, *"Reading CMDB schema for ownership…"*,
+  *"Running bookmark …"*, *"Preparing a Teams message to …"*, *"Launching apply-to-SharePoint
+  (your approval required)…"* — and rounds are framed ("Working on your request…" →
+  "Reviewing what I found and continuing…") so you can follow the steps and tell whether a
+  long operation is on track.
+
 ## 0.17.0 — 2026-06-12
 
 ### Fixed — Splunk Cloud: pick the line-of-business search app (default `search` disabled) (pilot)
