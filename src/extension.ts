@@ -305,7 +305,33 @@ export function activate(context: vscode.ExtensionContext): void {
   // In-place VSIX upgrades can run the new extension.js against a stale
   // cached manifest until the window reloads — createTreeView then throws
   // "No view is registered with id". One missing view must not abort the
-  // whole activation: degrade to a warning and self-heal on reload.
+  // whole activation, and SIX missing views must not raise six toasts
+  // (pilot: every update produced a pile of identical warnings). Failures
+  // are collected and surfaced ONCE — as information, not an error, with
+  // the remedy as a button. Details go to the log only.
+  const unregisteredViews: string[] = [];
+  let reloadPromptQueued = false;
+  const promptReloadOnce = () => {
+    if (reloadPromptQueued) return;
+    reloadPromptQueued = true;
+    // Activation registers views synchronously; a short delay coalesces
+    // every failure into the one prompt.
+    setTimeout(() => {
+      log.warn(
+        `Views pending window reload after the update: ${unregisteredViews.join(", ")}.`,
+      );
+      void vscode.window
+        .showInformationMessage(
+          "AI SharePoint finished updating — reload the window to activate its views.",
+          "Reload Window",
+        )
+        .then((pick) => {
+          if (pick === "Reload Window") {
+            void vscode.commands.executeCommand("workbench.action.reloadWindow");
+          }
+        });
+    }, 1_000);
+  };
   const tryCreateTreeView = <T>(
     id: string,
     provider: vscode.TreeDataProvider<T>,
@@ -314,11 +340,10 @@ export function activate(context: vscode.ExtensionContext): void {
       return vscode.window.createTreeView(id, { treeDataProvider: provider });
     } catch (err) {
       log.warn(
-        `View ${id} could not be registered (${err instanceof Error ? err.message : String(err)}) — usually a pending window reload after a VSIX upgrade. Run "Developer: Reload Window".`,
+        `View ${id} could not be registered (${err instanceof Error ? err.message : String(err)}) — usually a pending window reload after a VSIX upgrade.`,
       );
-      void vscode.window.showWarningMessage(
-        "AI SharePoint updated — reload the window to finish (Developer: Reload Window).",
-      );
+      unregisteredViews.push(id);
+      promptReloadOnce();
       return undefined;
     }
   };

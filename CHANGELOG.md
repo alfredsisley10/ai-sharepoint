@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.24.1 — 2026-06-12
+
+### Fixed — one friendly prompt after updates instead of a pile of "no view registered" warnings (pilot)
+- Every in-place update raised **one warning per activity-bar view** (up to six identical
+  toasts) when VS Code's cached manifest lagged the new code — harmless but confusing. View
+  registration failures during activation are now **collected and surfaced once**, as an
+  information message — *"AI SharePoint finished updating — reload the window to activate its
+  views"* — with a **Reload Window** button that performs the fix. Per-view details go to the
+  extension log only; everything still self-heals on reload exactly as before.
+
 ## 0.24.0 — 2026-06-12
 
 ### Changed — ER probing is now adaptive: sized by your database, escalating to complete joins (pilot)
