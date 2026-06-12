@@ -62,7 +62,7 @@ export class SchemaIndexer {
   async runIndexing(
     source: ContextSource,
     schema: SourceSchema,
-    progress?: vscode.Progress<{ message?: string }>,
+    progress?: vscode.Progress<{ message?: string; increment?: number }>,
     token?: vscode.CancellationToken,
   ): Promise<SourceSchema> {
     const batches = chunkTables(schema.catalog.tables);
@@ -74,21 +74,48 @@ export class SchemaIndexer {
         partial = true;
         break;
       }
-      progress?.report({
-        message: `Copilot is indexing tables ${i * batches[i].length + 1}–${i * batches[i].length + batches[i].length} of ${schema.catalog.tables.length}…`,
-      });
+      // Live feedback (pilot): a batch is one long streaming model request —
+      // tick elapsed seconds until the first token, then stream-throttled
+      // byte counts, then a per-batch completion line with bar movement.
+      const batchLabel = `Batch ${i + 1}/${batches.length} (${batches[i].length} tables)`;
+      const startedAt = Date.now();
+      let received = 0;
+      let lastPaint = 0;
+      const paint = (msg: string) => progress?.report({ message: msg });
+      paint(`${batchLabel} — sending to Copilot…`);
+      const ticker = setInterval(() => {
+        if (received === 0) {
+          paint(`${batchLabel} — waiting for the model… ${Math.round((Date.now() - startedAt) / 1000)}s`);
+        }
+      }, 1000);
       try {
         const res = await this.copilot.ask(
           {
             prompt: buildIndexPrompt(schema.catalog, batches[i]),
             label: "schemaIndex",
             token,
+            onChunk: (text) => {
+              received += text.length;
+              if (Date.now() - lastPaint > 400) {
+                lastPaint = Date.now();
+                paint(
+                  `${batchLabel} — model is writing… ${(received / 1024).toFixed(1)} KB, ${Math.round((Date.now() - startedAt) / 1000)}s`,
+                );
+              }
+            },
           },
           this.now,
         );
+        clearInterval(ticker);
         modelId = res.modelId;
-        results.push(parseSemanticResponse(res.text, schema.catalog));
+        const parsed = parseSemanticResponse(res.text, schema.catalog);
+        results.push(parsed);
+        progress?.report({
+          increment: 100 / batches.length,
+          message: `${batchLabel} done — ${parsed.length} tables tagged in ${Math.round((Date.now() - startedAt) / 1000)}s${i + 1 < batches.length ? `; starting batch ${i + 2}/${batches.length}` : ""}`,
+        });
       } catch (err) {
+        clearInterval(ticker);
         if (err instanceof BudgetBlockedError) {
           partial = true;
           this.log.warn(

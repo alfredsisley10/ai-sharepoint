@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.6 — 2026-06-12
+
+### Fixed — schema indexing shows live progress (pilot)
+- Each indexing batch is one long streaming Copilot request — the UI previously went silent
+  for its whole duration. Now you see **"waiting for the model… Ns"** ticking until the first
+  token, **streamed byte counts** while it writes ("model is writing… 3.2 KB, 24s"), a
+  per-batch completion line ("Batch 2/8 done — 38 tables tagged in 42s"), and the
+  notification's **progress bar advances per batch**. Cancellation still keeps a usable
+  partial index.
+
 ## 0.10.5 — 2026-06-12
 
 ### Added — ServiceNow browser sign-in (SSO) — no passwords, no hand-issued tokens (pilot)
