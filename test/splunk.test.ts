@@ -82,48 +82,143 @@ test("defaultSplunkIndex and the web deep-link come from the descriptor params",
   assert.equal(defaultSplunkIndex({ baseUrl: "https://x:8089" }), undefined);
 });
 
-test("searchSplunk posts a oneshot job and maps raw events with meta", async () => {
+/** Stateful responder for the async job lifecycle: dispatch → status polls
+ *  → results → delete. `states` drives successive status polls. */
+function jobResponder(opts: {
+  results?: unknown[];
+  states?: Array<Partial<{ isDone: boolean; isFailed: boolean; dispatchState: string; messages: unknown[] }>>;
+  onDispatch?: (url: string, init?: RequestInit) => void;
+}) {
+  const log = { dispatches: 0, polls: 0, deleted: false };
+  let poll = 0;
+  const responder = (url: string, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      log.deleted = true;
+      return { body: {} };
+    }
+    if (url.endsWith("/search/jobs") && String(init?.body ?? "").includes("exec_mode=")) {
+      log.dispatches += 1;
+      opts.onDispatch?.(url, init);
+      return { status: 201, body: { sid: "sid123" } };
+    }
+    if (url.includes("/search/jobs/sid123/results")) {
+      return { body: { results: opts.results ?? [] } };
+    }
+    if (url.includes("/search/jobs/sid123")) {
+      log.polls += 1;
+      const states = opts.states ?? [{ isDone: true, dispatchState: "DONE" }];
+      const content = states[Math.min(poll++, states.length - 1)];
+      return { body: { entry: [{ content }] } };
+    }
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+  };
+  return { responder, log };
+}
+
+test("searchSplunk dispatches an async job, polls to done, maps results, and deletes the job", async () => {
   let captured: { url?: string; body?: string; auth?: string } = {};
-  const hits = await withFetch(
-    (url, init) => {
+  let resultsUrl = "";
+  const { responder, log } = jobResponder({
+    results: [
+      {
+        _raw: "2026-06-11 ERROR smtp relay timeout",
+        _time: "2026-06-11T09:00:00.000+00:00",
+        host: "smtp01",
+        source: "/var/log/mail.log",
+        sourcetype: "syslog",
+        index: "web",
+      },
+    ],
+    onDispatch: (url, init) => {
       captured = {
         url,
         body: String(init?.body),
         auth: (init?.headers as Record<string, string>)?.Authorization,
       };
-      return {
-        body: {
-          results: [
-            {
-              _raw: "2026-06-11 ERROR smtp relay timeout",
-              _time: "2026-06-11T09:00:00.000+00:00",
-              host: "smtp01",
-              source: "/var/log/mail.log",
-              sourcetype: "syslog",
-              index: "web",
-            },
-          ],
-        },
-      };
+    },
+  });
+  const hits = await withFetch(
+    (url, init) => {
+      if (url.includes("/results")) resultsUrl = url;
+      return responder(url, init);
     },
     () => searchSplunk(SRC, CRED, "email outage", DEFAULT_CAPS),
   );
   assert.match(captured.url ?? "", /^https:\/\/splunk\.corp\.example:8089\/services\/search\/jobs$/);
   assert.equal(captured.auth, "Bearer splunk-token");
   const form = new URLSearchParams(captured.body);
-  assert.equal(form.get("exec_mode"), "oneshot");
+  assert.equal(form.get("exec_mode"), "normal");
   assert.equal(form.get("search"), "search index=web email outage");
   assert.equal(form.get("earliest_time"), SPLUNK_DEFAULT_EARLIEST);
-  assert.equal(form.get("count"), String(DEFAULT_CAPS.maxResults));
+  assert.equal(form.get("max_count"), String(DEFAULT_CAPS.maxResults));
+  assert.ok(Number(form.get("auto_cancel")) > 0, "auto_cancel safety net set");
+  assert.match(resultsUrl, new RegExp(`count=${DEFAULT_CAPS.maxResults}`));
   assert.equal(hits[0].title, "syslog @ 2026-06-11T09:00:00.000+00:00");
   assert.match(hits[0].excerpt ?? "", /smtp relay timeout/);
   assert.equal(hits[0].meta?.host, "smtp01");
   assert.match(hits[0].url, /^https:\/\/splunk\.corp\.example:8000\/en-US\/app\/search\/search\?q=/);
+  assert.equal(log.deleted, true, "job must be deleted after success");
+});
+
+test("a queued job (concurrency cap) waits for a slot like Splunk Web instead of failing", async () => {
+  const { responder, log } = jobResponder({
+    results: [{ host: "smtp01", count: "42" }],
+    states: [
+      { isDone: false, dispatchState: "QUEUED" },
+      { isDone: false, dispatchState: "RUNNING" },
+      { isDone: true, dispatchState: "DONE" },
+    ],
+  });
+  const hits = await withFetch(responder, () => searchSplunk(SRC, CRED, "errors", DEFAULT_CAPS));
+  assert.equal(hits.length, 1);
+  assert.ok(log.polls >= 3, `polled through QUEUED→RUNNING→DONE (got ${log.polls})`);
+  assert.equal(log.deleted, true);
+});
+
+test("still queued at the deadline → concurrency-cap error, and the job is cancelled", async () => {
+  const { responder, log } = jobResponder({
+    states: [{ isDone: false, dispatchState: "QUEUED" }],
+  });
+  await assert.rejects(
+    withFetch(responder, () => searchSplunk(SRC, CRED, "errors", { ...DEFAULT_CAPS, timeoutMs: 80 })),
+    /queued behind the concurrent-search cap/,
+  );
+  assert.equal(log.deleted, true, "timed-out job must be cancelled");
+});
+
+test("a failed job surfaces the server's message and is cleaned up", async () => {
+  const { responder, log } = jobResponder({
+    states: [
+      {
+        isFailed: true,
+        dispatchState: "FAILED",
+        messages: [{ type: "FATAL", text: "Search not executed: quota exceeded" }],
+      },
+    ],
+  });
+  await assert.rejects(
+    withFetch(responder, () => searchSplunk(SRC, CRED, "errors", DEFAULT_CAPS)),
+    /Search not executed: quota exceeded/,
+  );
+  assert.equal(log.deleted, true);
+});
+
+test("a dispatch rejection mentioning concurrency gets the saturated-cap explanation", async () => {
+  await assert.rejects(
+    withFetch(
+      () => ({
+        status: 503,
+        body: { messages: [{ text: "The maximum number of concurrent searches has been reached" }] },
+      }),
+      () => searchSplunk(SRC, CRED, "errors", DEFAULT_CAPS),
+    ),
+    /concurrent-search limit is saturated/,
+  );
 });
 
 test("transforming-search rows (stats) render as field rows; blocked SPL never reaches the wire", async () => {
   const hits = await withFetch(
-    () => ({ body: { results: [{ host: "smtp01", count: "42" }] } }),
+    jobResponder({ results: [{ host: "smtp01", count: "42" }] }).responder,
     () => searchSplunk(SRC, CRED, "search index=web | stats count by host", DEFAULT_CAPS),
   );
   assert.match(hits[0].title, /host=smtp01/);
@@ -207,12 +302,13 @@ test("splunkAuthHeader: Bearer for token, Splunk scheme for browser session, Bas
 
 test("a browser-SSO session credential reaches Splunk as the Splunk auth scheme", async () => {
   let auth = "";
-  await withFetch(
-    (_url, init) => {
+  const { responder } = jobResponder({
+    onDispatch: (_url, init) => {
       auth = (init?.headers as Record<string, string>)?.Authorization ?? "";
-      return { body: { results: [] } };
     },
-    () => searchSplunk(SRC, { method: "splunk-session", secret: "SESSIONKEY" }, "errors", DEFAULT_CAPS),
+  });
+  await withFetch(responder, () =>
+    searchSplunk(SRC, { method: "splunk-session", secret: "SESSIONKEY" }, "errors", DEFAULT_CAPS),
   );
   assert.equal(auth, "Splunk SESSIONKEY");
 });
@@ -227,24 +323,14 @@ test("defaultSplunkApp reads ?app=; searches dispatch in /servicesNS/-/<app> nam
   assert.equal(defaultSplunkApp(SRC), undefined);
 
   let url = "";
-  await withFetch(
-    (u) => {
-      url = u;
-      return { body: { results: [] } };
-    },
-    () => searchSplunk(appSrc, CRED, "errors", DEFAULT_CAPS),
-  );
+  const appJob = jobResponder({ onDispatch: (u) => (url = u) });
+  await withFetch(appJob.responder, () => searchSplunk(appSrc, CRED, "errors", DEFAULT_CAPS));
   assert.match(url, /\/servicesNS\/-\/lob_security\/search\/jobs$/);
 
   // No app → default-context /services namespace (unchanged).
   let url2 = "";
-  await withFetch(
-    (u) => {
-      url2 = u;
-      return { body: { results: [] } };
-    },
-    () => searchSplunk(SRC, CRED, "errors", DEFAULT_CAPS),
-  );
+  const defaultJob = jobResponder({ onDispatch: (u) => (url2 = u) });
+  await withFetch(defaultJob.responder, () => searchSplunk(SRC, CRED, "errors", DEFAULT_CAPS));
   assert.match(url2, /\/services\/search\/jobs$/);
 });
 
@@ -273,7 +359,7 @@ test("listSplunkApps returns visible, enabled apps by label; deep links target t
     baseUrl: "https://acme.splunkcloud.com:8089?app=lob_security&web=https%3A%2F%2Facme.splunkcloud.com",
   };
   const hits = await withFetch(
-    () => ({ body: { results: [{ _raw: "x", _time: "t", sourcetype: "s" }] } }),
+    jobResponder({ results: [{ _raw: "x", _time: "t", sourcetype: "s" }] }).responder,
     () => searchSplunk(appSrc, CRED, "errors", DEFAULT_CAPS),
   );
   assert.match(hits[0].url, /\/en-US\/app\/lob_security\/search\?q=/);

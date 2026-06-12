@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.1 — 2026-06-12
+
+### Fixed — Splunk: searches no longer fail at the concurrency cap (pilot)
+- On the metered Splunk Cloud stack every search failed with Splunk's **concurrency-cap**
+  error while the same user's browser session searched fine. Cause: the connector dispatched
+  **oneshot** searches, which Splunk rejects outright when its concurrent-search limit is
+  saturated — Splunk Web instead dispatches **async jobs that queue** for a free slot. Searches
+  now dispatch the same way the browser does: an async job (in the selected app's namespace)
+  that may queue, polled within the existing time budget, results fetched on completion, and
+  the job **always deleted** afterward (success, failure, or timeout) with an `auto_cancel`
+  safety net so no job can be left holding a concurrency slot. If a search is still queued when
+  the time budget runs out, the error now says exactly that — the instance is at its
+  concurrent-search limit — instead of a generic failure. Rate-limit advice text is no longer
+  Microsoft-Graph-specific.
+
 ## 0.19.0 — 2026-06-12
 
 ### Added — Projects view + goals, reference context, and a separate AI-managed memory (pilot)

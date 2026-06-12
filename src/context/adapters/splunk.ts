@@ -9,11 +9,13 @@ import { AppError } from "../../core/errors";
 import { wireEnabled, emitWire, capDetail, safeUrl } from "../../core/wireLog";
 
 /**
- * Splunk connector (ADR-0029): read-only SPL searches against Splunk
- * Enterprise / Splunk Cloud via the management REST API (port 8089).
- * Oneshot execution (no job lifecycle), a fail-closed SPL barrier against
- * mutating/exfiltrating commands, and a bounded default time window so
- * an unscoped question never becomes an all-time scan.
+ * Splunk connector (ADR-0029, amended): read-only SPL searches against
+ * Splunk Enterprise / Splunk Cloud via the management REST API (port 8089).
+ * Job-mode execution with guaranteed cleanup (oneshot dispatch is rejected
+ * outright at the search-concurrency cap, where async jobs queue — see
+ * searchSplunk), a fail-closed SPL barrier against mutating/exfiltrating
+ * commands, and a bounded default time window so an unscoped question never
+ * becomes an all-time scan.
  */
 
 export const SPLUNK_DEFAULT_EARLIEST = "-24h";
@@ -248,6 +250,12 @@ async function postSplunk<T>(
   const text = await res.text().catch(() => "");
   if (!res.ok) {
     emitWire("splunk", "✗", `POST ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`, capDetail(text));
+    if (/concurren/i.test(text)) {
+      throw new AppError(
+        `Splunk refused to dispatch the search — its concurrent-search limit is saturated and the job could not even be queued (${res.status}). Retry in a moment. Server said: ${text.slice(0, 300)}`,
+        "graph.throttled",
+      );
+    }
     throw new AppError(
       `Splunk request failed (${res.status}): ${text.slice(0, 300)}`,
       res.status === 429 || res.status === 503 ? "graph.throttled" : "unknown",
@@ -357,7 +365,49 @@ function eventToHit(
   };
 }
 
-/** Oneshot SPL search — synchronous, server-capped, time-bounded. */
+const POLL_START_MS = 250;
+const POLL_MAX_MS = 1_500;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+interface SplunkJobContent {
+  isDone?: boolean;
+  isFailed?: boolean;
+  dispatchState?: string;
+  messages?: Array<{ type?: string; text?: string }>;
+}
+
+function jobMessages(content: SplunkJobContent): string {
+  const texts = (Array.isArray(content.messages) ? content.messages : [])
+    .map((m) => m?.text)
+    .filter((t): t is string => Boolean(t));
+  return texts.join("; ");
+}
+
+/** Best-effort job cleanup — a leaked job would hold a concurrency slot
+ *  (and disk quota) against the very cap this connector must respect. */
+async function cancelSplunkJob(jobUrl: string, credential: ContextCredential): Promise<void> {
+  try {
+    const res = await fetch(`${jobUrl}?output_mode=json`, {
+      method: "DELETE",
+      headers: { Authorization: splunkAuthHeader(credential), Accept: "application/json" },
+      signal: AbortSignal.timeout(5_000),
+    });
+    emitWire("splunk", res.ok ? "←" : "✗", `DELETE ${safeUrl(jobUrl)} ${res.status}`);
+  } catch (err) {
+    emitWire("splunk", "✗", `DELETE ${safeUrl(jobUrl)} — ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** Job-mode SPL search — asynchronous dispatch, polled within the time
+ *  budget, results fetched once done, and the job ALWAYS deleted.
+ *
+ *  Why not oneshot: at Splunk's concurrent-search cap, a oneshot dispatch is
+ *  rejected outright (503 "maximum number of concurrent searches"), while
+ *  async jobs are accepted and QUEUED until a slot frees — which is exactly
+ *  what Splunk Web does. On a busy metered stack, oneshot meant every
+ *  connector search failed at the cap while the same user's browser session
+ *  searched fine; queueing like the browser removes that asymmetry. */
 export async function searchSplunk(
   source: ContextSource,
   credential: ContextCredential,
@@ -368,22 +418,70 @@ export async function searchSplunk(
   const issue = splIssue(spec.spl);
   if (issue) throw new AppError(issue, "config");
   const count = Math.min(spec.limit ?? caps.maxResults, caps.maxResults);
-  const res = await postSplunk<{ results?: SplunkEvent[] }>(
+  const deadline = Date.now() + caps.timeoutMs;
+  const budgetS = Math.ceil(caps.timeoutMs / 1000);
+  const dispatched = await postSplunk<{ sid?: string }>(
     `${mgmtBase(source)}${nsPath(source)}/search/jobs`,
     credential,
     {
       search: spec.spl,
-      exec_mode: "oneshot",
+      exec_mode: "normal",
       output_mode: "json",
-      count: String(count),
+      max_count: String(count),
       earliest_time: spec.earliest,
       latest_time: spec.latest,
+      // Server-side safety net: if this client dies mid-poll, the job
+      // self-cancels instead of holding a concurrency slot until TTL.
+      auto_cancel: String(budgetS + 60),
     },
     caps.timeoutMs,
   );
-  const web = webBase(source);
-  const app = defaultSplunkApp(source) ?? "search";
-  return (res.results ?? []).slice(0, caps.maxResults).map((e) => eventToHit(e, web, spec.spl, app));
+  const sid = dispatched.sid;
+  if (!sid) {
+    throw new AppError("Splunk did not return a search id (sid) for the dispatched job.", "unknown");
+  }
+  const jobUrl = `${mgmtBase(source)}${nsPath(source)}/search/jobs/${encodeURIComponent(sid)}`;
+  try {
+    let wait = POLL_START_MS;
+    let state: SplunkJobContent = {};
+    for (;;) {
+      const left = deadline - Date.now();
+      if (left <= 0) {
+        const queued = (state.dispatchState ?? "").toUpperCase() === "QUEUED";
+        throw new AppError(
+          queued
+            ? `Splunk accepted the search but it stayed queued behind the concurrent-search cap for ${budgetS}s (job cancelled). The instance/app is at its concurrency limit — retry in a moment, or ask the Splunk admin about the app's search quota.`
+            : `Splunk search did not finish within ${budgetS}s (state ${state.dispatchState ?? "RUNNING"}; job cancelled). Narrow the time window (earliest/latest) or aggregate in SPL.`,
+          queued ? "graph.throttled" : "unknown",
+        );
+      }
+      const status = await getSplunk<{ entry?: Array<{ content?: SplunkJobContent }> }>(
+        `${jobUrl}?output_mode=json`,
+        credential,
+        Math.max(1_000, left),
+      );
+      state = status.entry?.[0]?.content ?? {};
+      if (state.isFailed) {
+        throw new AppError(
+          `Splunk search failed: ${jobMessages(state) || `dispatch state ${state.dispatchState ?? "FAILED"}`}`,
+          "unknown",
+        );
+      }
+      if (state.isDone) break;
+      await sleep(Math.min(wait, Math.max(10, deadline - Date.now())));
+      wait = Math.min(POLL_MAX_MS, wait * 2);
+    }
+    const res = await getSplunk<{ results?: SplunkEvent[] }>(
+      `${jobUrl}/results?output_mode=json&count=${count}&offset=0`,
+      credential,
+      Math.max(1_000, deadline - Date.now()),
+    );
+    const web = webBase(source);
+    const app = defaultSplunkApp(source) ?? "search";
+    return (res.results ?? []).slice(0, caps.maxResults).map((e) => eventToHit(e, web, spec.spl, app));
+  } finally {
+    await cancelSplunkJob(jobUrl, credential);
+  }
 }
 
 /** Saved searches + indexes → bookmark candidates (each best-effort: a

@@ -69,7 +69,7 @@ accordingly.
 | Vertex AI Search (optional) | `discoveryengine.googleapis.com` (or regional `*-discoveryengine.googleapis.com`); SSO tokens come from the local gcloud CLI — no Google endpoints are contacted for auth by the extension itself (ADR-0026) |
 | Power BI (optional) | `api.powerbi.com` — read-only Table/executeQueries REST (ADR-0027) |
 | ServiceNow (optional) | Your instance host (`*.service-now.com` or custom) — read-only Table API (ADR-0028) |
-| Splunk (optional) | Your Splunk management endpoint (typically `:8089`) — read-only oneshot SPL, write/exfil commands blocked client-side, default 24 h window (ADR-0029) |
+| Splunk (optional) | Your Splunk management endpoint (typically `:8089`) — read-only SPL search jobs (queued at the concurrency cap like Splunk Web, always cleaned up), write/exfil commands blocked client-side, default 24 h window (ADR-0029) |
 
 ### Proxies and TLS inspection (MITM)
 **Every** outbound request the extension makes — Microsoft Graph reads *and* Microsoft Entra
