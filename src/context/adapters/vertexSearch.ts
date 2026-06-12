@@ -299,3 +299,117 @@ export async function answerVertex(
     citations,
   };
 }
+
+// --- guided setup from "all I have is a URL" (pilot) ---------------------------
+
+/** Best-effort extraction of project/location/engine from whatever URL the
+ *  user has — a Cloud Console app URL, a pasted serving-config URL, or any
+ *  link containing the standard resource segments. */
+export function parseVertexHint(input: string): Partial<VertexParts> {
+  const out: Partial<VertexParts> = {};
+  const text = input.trim();
+  const project =
+    text.match(/[?&]project=([A-Za-z0-9-]+)/)?.[1] ??
+    text.match(/\/projects\/([A-Za-z0-9-]+)/)?.[1];
+  const location = text.match(/\/locations\/([A-Za-z0-9-]+)/)?.[1];
+  const engine = text.match(/\/engines\/([A-Za-z0-9_-]+)/)?.[1];
+  if (project) out.projectId = project;
+  if (location) out.location = location;
+  if (engine) out.engineId = engine;
+  return out;
+}
+
+const LOCATION_ENDPOINTS: Record<string, string> = {
+  global: VERTEX_DEFAULT_ENDPOINT,
+  us: "https://us-discoveryengine.googleapis.com",
+  eu: "https://eu-discoveryengine.googleapis.com",
+};
+
+export function endpointForLocation(location: string): string {
+  return LOCATION_ENDPOINTS[location] ?? VERTEX_DEFAULT_ENDPOINT;
+}
+
+export interface VertexEngineInfo {
+  engineId: string;
+  displayName: string;
+  location: string;
+}
+
+/** List the search apps (engines) a signed-in user can see in one project,
+ *  probing global/us/eu — permission gaps on a location are skipped, so a
+ *  plain search-app user still finds their app wherever it lives. */
+export async function listVertexEngines(
+  token: string,
+  projectId: string,
+  timeoutMs: number,
+): Promise<VertexEngineInfo[]> {
+  const out: VertexEngineInfo[] = [];
+  for (const location of Object.keys(LOCATION_ENDPOINTS)) {
+    try {
+      const res = await fetchVertexJson<{
+        engines?: Array<{ name?: string; displayName?: string; solutionType?: string }>;
+      }>(
+        `${endpointForLocation(location)}/v1/projects/${encodeURIComponent(projectId)}/locations/${location}/collections/default_collection/engines`,
+        token,
+        timeoutMs,
+      );
+      for (const e of res.engines ?? []) {
+        const id = e.name?.match(/\/engines\/([^/]+)$/)?.[1];
+        if (!id) continue;
+        if (e.solutionType && !/SEARCH/i.test(e.solutionType)) continue;
+        out.push({ engineId: id, displayName: e.displayName ?? id, location });
+      }
+    } catch {
+      // No access / no apps in this location — keep probing the others.
+    }
+  }
+  return out;
+}
+
+async function fetchVertexJson<T>(url: string, token: string, timeoutMs: number): Promise<T> {
+  const started = Date.now();
+  emitWire("vertex", "→", `GET ${safeUrl(url)}`);
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  emitWire("vertex", res.ok ? "←" : "✗", `GET ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
+  if (!res.ok) {
+    throw new AppError(`Vertex listing failed (${res.status}).`, res.status === 403 ? "auth.failed" : "unknown");
+  }
+  return (await res.json()) as T;
+}
+
+/** Projects visible to the gcloud SSO session — via the CLI so it works
+ *  with exactly the same sign-in the connector itself uses. */
+export function listGcloudProjects(): Promise<Array<{ projectId: string; name: string }>> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      process.platform === "win32" ? "gcloud.cmd" : "gcloud",
+      ["projects", "list", "--format=json", "--limit=100"],
+      { timeout: 20_000, windowsHide: true },
+      (err, stdout) => {
+        if (err) {
+          reject(
+            new AppError(
+              "Could not list projects via the gcloud CLI.",
+              "auth.failed",
+              "Run `gcloud auth login` first — or pick manual entry and ask your admin for the project ID.",
+            ),
+          );
+          return;
+        }
+        try {
+          const raw = JSON.parse(stdout) as Array<{ projectId?: string; name?: string }>;
+          resolve(
+            raw
+              .filter((p): p is { projectId: string; name?: string } => Boolean(p.projectId))
+              .map((p) => ({ projectId: p.projectId, name: p.name ?? p.projectId })),
+          );
+        } catch {
+          reject(new AppError("gcloud returned unparseable project data.", "unknown"));
+        }
+      },
+    );
+  });
+}

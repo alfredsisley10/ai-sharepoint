@@ -59,7 +59,11 @@ import { CatalogStore } from "./context/catalogStore";
 import {
   buildVertexServingConfig,
   vertexUrlIssue,
-  VERTEX_DEFAULT_ENDPOINT,
+  parseVertexHint,
+  endpointForLocation,
+  listVertexEngines,
+  listGcloudProjects,
+  getVertexToken,
 } from "./context/adapters/vertexSearch";
 import {
   buildCatalog,
@@ -72,6 +76,7 @@ import {
 } from "./context/catalogCache";
 import { setWireSink } from "./core/wireLog";
 import { setLdapDnsServers } from "./context/ldap/ldapClient";
+import { enumeratePowerBiDatasets, POWERBI_SCOPES } from "./context/adapters/powerbi";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
 import {
@@ -1351,6 +1356,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     let baseUrl: string;
     let baseDn: string | undefined;
+    let presetCredential: ContextCredential | undefined;
     let deployment: ContextDeployment = "datacenter";
     let defaultUpn: string | undefined;
 
@@ -1511,66 +1517,174 @@ export function activate(context: vscode.ExtensionContext): void {
       if (qs) baseUrl += `?${qs}`;
     } else if (typePick.value === "powerbi") {
       deployment = "cloud";
-      baseUrl = "https://api.powerbi.com/v1.0/myorg";
-      const defaultDataset = await vscode.window.showInputBox({
+      // Pilot: users only know app.powerbi.com — confirm the portal, sign in
+      // with the existing Microsoft 365 session, then ENUMERATE what they can
+      // access instead of asking for dataset names/GUIDs.
+      const portal = await vscode.window.showInputBox({
         ignoreFocusOut: true,
-        title: "Power BI — default dataset (optional)",
-        placeHolder: "dataset name or GUID — lets chat run bare DAX without a JSON spec (Enter to skip)",
-        prompt: "Browse & Bookmark lists every visible dataset either way.",
+        title: "Power BI — portal URL (just confirm)",
+        value: "https://app.powerbi.com",
+        prompt: "The connector talks to the Power BI API with your Microsoft 365 sign-in; this is only a confirmation of which Power BI you use.",
+        validateInput: (v) => {
+          try {
+            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+          } catch {
+            return "Enter a valid https:// URL";
+          }
+        },
       });
-      if (defaultDataset === undefined) return;
-      if (defaultDataset.trim()) {
-        baseUrl += `?dataset=${encodeURIComponent(defaultDataset.trim())}`;
+      if (!portal) return;
+      baseUrl = "https://api.powerbi.com/v1.0/myorg";
+      presetCredential = await pickAadCredential();
+      if (!presetCredential) return;
+      const cred = presetCredential;
+      try {
+        const datasets = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Listing the Power BI datasets you can access…" },
+          () => enumeratePowerBiDatasets((i) => aadBroker(cred, i, POWERBI_SCOPES), contextService.caps()),
+        );
+        if (datasets.length > 0) {
+          const pick = await vscode.window.showQuickPick(
+            [
+              {
+                label: "$(list-unordered) No default — pick a dataset per question",
+                description: "chat can still target any dataset by name",
+                id: undefined as string | undefined,
+              },
+              ...datasets.map((d) => ({
+                label: d.name,
+                description: `${d.workspace}`,
+                id: d.id as string | undefined,
+              })),
+            ],
+            {
+              ignoreFocusOut: true,
+              title: `Default dataset (${datasets.length} visible) — bare questions go here`,
+              matchOnDescription: true,
+            },
+          );
+          if (!pick) return;
+          if (pick.id) baseUrl += `?dataset=${encodeURIComponent(pick.id)}`;
+        } else {
+          void vscode.window.showInformationMessage(
+            "No datasets are visible to this account yet — the source still connects; datasets appear in Browse & Bookmark once you're granted access.",
+          );
+        }
+      } catch (err) {
+        // Enumeration is a convenience — never block adding the source on it.
+        log.warn(`Power BI dataset enumeration failed: ${err instanceof Error ? err.message : String(err)}`);
+        void vscode.window.showWarningMessage(
+          "Could not list datasets right now — the source will still be added; use Browse & Bookmark later.",
+        );
       }
     } else if (typePick.value === "vertexai") {
-      // Field-by-field like the SQL Server wizard; pasting the full
-      // serving-config URL into the first box short-circuits the rest.
-      const projectRaw = await vscode.window.showInputBox({
-        ignoreFocusOut: true,
-        title: "Vertex AI Search (1/4) — Google Cloud project ID",
-        placeHolder: "my-corp-search-prod   (pasting the full serving-config URL also works)",
-        validateInput: (v) => (v.trim() ? undefined : "Enter the project ID"),
-      });
-      if (!projectRaw) return;
       deployment = "cloud";
-      if (vertexUrlIssue(projectRaw.trim()) === undefined) {
-        baseUrl = projectRaw.trim();
-      } else {
-        const location = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          title: "Vertex AI Search (2/4) — location",
-          value: "global",
-          prompt: "As shown in the app's details (global, us, eu, …).",
-          validateInput: (v) => (v.trim() ? undefined : "Enter the location (e.g. global)"),
-        });
-        if (!location) return;
-        const engineId = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          title: "Vertex AI Search (3/4) — app (engine) ID",
-          placeHolder: "enterprise-search_1700000000000",
-          validateInput: (v) => (v.trim() ? undefined : "Enter the app/engine ID"),
-        });
-        if (!engineId) return;
-        const endpoint = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          title: "Vertex AI Search (4/4) — API endpoint",
-          value: VERTEX_DEFAULT_ENDPOINT,
-          prompt: "Keep the default unless your app is regional (e.g. https://us-discoveryengine.googleapis.com).",
-          validateInput: (v) => {
-            try {
-              return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
-            } catch {
-              return "Enter a valid https:// URL";
-            }
+      // Pilot: users often only have the corporate search URL — offer SSO
+      // discovery (projects → apps across global/us/eu) and hint-parsing of
+      // any pasted URL before falling back to manual IDs.
+      const setupMode = await vscode.window.showQuickPick(
+        [
+          {
+            label: "$(account) Find my search app via Google SSO (recommended)",
+            description: "uses your gcloud sign-in to list projects and apps — no IDs needed",
+            value: "discover" as const,
           },
-        });
-        if (!endpoint) return;
+          {
+            label: "$(edit) Enter details — or paste any URL you have",
+            description: "corporate search page, Cloud Console, or serving-config URL",
+            value: "manual" as const,
+          },
+        ],
+        { ignoreFocusOut: true, title: "Vertex AI Search — set up from what you have" },
+      );
+      if (!setupMode) return;
+      if (setupMode.value === "discover") {
+        const projects = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Listing your Google Cloud projects (gcloud SSO)…" },
+          () => listGcloudProjects(),
+        );
+        if (projects.length === 0) {
+          void vscode.window.showWarningMessage(
+            "Your Google SSO session sees no projects. Ask the search app's owner for the project ID and app ID, then re-add with manual entry.",
+          );
+          return;
+        }
+        const projPick = await vscode.window.showQuickPick(
+          projects.map((pr) => ({ label: pr.projectId, description: pr.name, pr })),
+          { ignoreFocusOut: true, title: "Which project hosts the search app? (ask the app owner if unsure)", matchOnDescription: true },
+        );
+        if (!projPick) return;
+        const token = await getVertexToken({ method: "gcloud-sso", secret: "gcloud-cli-session" });
+        const engines = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Looking for search apps in ${projPick.pr.projectId} (global/us/eu)…` },
+          () => listVertexEngines(token, projPick.pr.projectId, 20_000),
+        );
+        if (engines.length === 0) {
+          void vscode.window.showWarningMessage(
+            `No search apps are visible to you in ${projPick.pr.projectId}. Your account may lack list permission even though searching works — ask the app owner for the location (global/us/eu) and app ID, then re-add with manual entry (pasting the corporate search page's URL pre-fills what it can).`,
+          );
+          return;
+        }
+        const engPick = await vscode.window.showQuickPick(
+          engines.map((e) => ({ label: e.displayName, description: `${e.engineId} · ${e.location}`, e })),
+          { ignoreFocusOut: true, title: "Pick your search app" },
+        );
+        if (!engPick) return;
         baseUrl = buildVertexServingConfig({
-          projectId: projectRaw.trim(),
-          location: location.trim(),
-          engineId: engineId.trim(),
-          endpoint: endpoint.trim(),
+          projectId: projPick.pr.projectId,
+          location: engPick.e.location,
+          engineId: engPick.e.engineId,
+          endpoint: endpointForLocation(engPick.e.location),
         });
+      } else {
+        const first = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Vertex AI Search — project ID, or paste ANY URL you have",
+          placeHolder: "my-corp-search-prod — or paste the corporate search / Cloud Console / serving-config URL",
+          validateInput: (v) => (v.trim() ? undefined : "Enter a project ID or paste a URL"),
+        });
+        if (!first) return;
+        if (vertexUrlIssue(first.trim()) === undefined) {
+          baseUrl = first.trim();
+        } else {
+          const isUrlish = /[/:]/.test(first.trim());
+          const hint = isUrlish ? parseVertexHint(first) : {};
+          let projectId = hint.projectId ?? (isUrlish ? undefined : first.trim());
+          if (!projectId) {
+            projectId = (
+              await vscode.window.showInputBox({
+                ignoreFocusOut: true,
+                title: "Google Cloud project ID",
+                prompt: "That URL didn't carry a project ID — it's in the Cloud Console URL (?project=…) or available from the app owner.",
+                validateInput: (v) => (v.trim() ? undefined : "Enter the project ID"),
+              })
+            )?.trim();
+            if (!projectId) return;
+          }
+          const location = await vscode.window.showInputBox({
+            ignoreFocusOut: true,
+            title: "Location",
+            value: hint.location ?? "global",
+            prompt: "global, us, or eu — pre-filled when your pasted URL contained it; otherwise the app owner knows. The connector probes the matching regional endpoint automatically.",
+            validateInput: (v) => (v.trim() ? undefined : "Enter the location (e.g. global)"),
+          });
+          if (!location) return;
+          const engineId = await vscode.window.showInputBox({
+            ignoreFocusOut: true,
+            title: "App (engine) ID",
+            value: hint.engineId ?? "",
+            placeHolder: "enterprise-search_1700000000000",
+            prompt: "Pre-filled when your pasted URL contained it; otherwise shown in the Cloud Console app list (ask the owner).",
+            validateInput: (v) => (v.trim() ? undefined : "Enter the app/engine ID"),
+          });
+          if (!engineId) return;
+          baseUrl = buildVertexServingConfig({
+            projectId,
+            location: location.trim(),
+            engineId: engineId.trim(),
+            endpoint: endpointForLocation(location.trim()),
+          });
+        }
       }
     } else if (DB_TYPES.has(typePick.value)) {
       const placeholders: Record<string, string> = {
@@ -1626,9 +1740,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     const credential =
-      typePick.value === "powerbi"
+      presetCredential ??
+      (typePick.value === "powerbi"
         ? await pickAadCredential()
-        : await promptContextCredential(typePick.value, deployment, defaultUpn);
+        : await promptContextCredential(typePick.value, deployment, defaultUpn));
     if (!credential) return;
     const hostLabel = (() => {
       try {

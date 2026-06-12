@@ -357,9 +357,11 @@ reasons — ADR-0022):
 
 Connect your organization's **Vertex AI Search** app (the enterprise Gemini search portal):
 
-- **Add** (Reference Sources → `+` → *Vertex AI Search*): enter the Google Cloud **project ID
-  → location → app (engine) ID → endpoint** (regional endpoints supported), or paste the full
-  serving-config URL into the first box.
+- **Add** (Reference Sources → `+` → *Vertex AI Search*): pick **"Find my search app via
+  Google SSO"** and the wizard lists your projects and apps (probing global/us/eu) — no IDs to
+  know. Or choose manual entry and **paste any URL you have** (your corporate search page, a
+  Cloud Console link, or the serving config) — it pre-fills whatever it carries and tells you
+  where the app owner finds the rest.
 - **SSO via the gcloud CLI (recommended)**: each call uses a **live token from your existing
   `gcloud auth login` session** — your corporate Google SSO — and nothing is ever stored.
   No CLI? Paste an OAuth access token instead (kept in your OS keychain; ~1 h lifetime, the
@@ -406,9 +408,10 @@ Search your logs and metrics **read-only** from chat:
 
 Analyze Power BI data without leaving chat — **read-only, with your existing sign-in**:
 
-- **Add** (Reference Sources → `+` → *Power BI (cloud)*): no URL and **no new credential** —
-  it reuses the Microsoft 365 sign-in of a connected SharePoint site (pick which, if you have
-  several). Optionally set a **default dataset** so chat can run bare DAX.
+- **Add** (Reference Sources → `+` → *Power BI (cloud)*): confirm the portal you use
+  (`https://app.powerbi.com`), pick your Microsoft 365 sign-in, and the wizard **lists every
+  dataset you can access** — pick a default for bare-DAX questions or "no default". Nothing to
+  type, **no new credential**, no GUIDs to know.
 - **Browse & Bookmark** lists every dataset you can see (My workspace + group workspaces),
   each with a starter `EVALUATE INFO.TABLES()` bookmark that reveals the model's tables.
 - **Analyze in chat**: *"@sharepoint run EVALUATE TOPN(20, 'Sales') against the Sales Model

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.3 — 2026-06-12
+
+### Changed — Vertex AI Search setup works from just your corporate URL (pilot)
+- The wizard no longer assumes you know project/location/app IDs. New first step:
+  **"Find my search app via Google SSO"** — your existing gcloud sign-in lists your projects,
+  then probes **global/us/eu** for search apps so you simply pick yours from a list (regional
+  endpoint set automatically). Manual entry remains, now **paste-anything aware**: any URL you
+  have (corporate search page, Cloud Console link, serving config) pre-fills whatever it
+  carries, and each remaining field explains where the app owner finds the value.
+
+### Changed — Power BI setup is "confirm the portal, sign in, pick" (pilot)
+- No more dataset names/GUIDs to know: confirm `https://app.powerbi.com`, pick your
+  Microsoft 365 sign-in, and the connector **enumerates every dataset you can access**
+  (My workspace + group workspaces) — choose one as the default for bare-DAX questions, or
+  "no default" to target datasets by name per question. Enumeration failures never block
+  adding the source.
+
 ## 0.10.2 — 2026-06-12
 
 ### Fixed — LDAP over VPN: DNS settling window + split-DNS (pilot)

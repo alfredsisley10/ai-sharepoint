@@ -249,6 +249,20 @@ export interface PowerBiBrowseCandidate {
   detail: string;
 }
 
+/** Wizard enumeration: every dataset the signed-in account can reach —
+ *  so setup is "sign in and pick", no names/GUIDs to know (pilot). */
+export async function enumeratePowerBiDatasets(
+  getToken: PowerBiTokenGetter,
+  caps: ReadCaps,
+): Promise<Array<{ id: string; name: string; workspace: string }>> {
+  const token = await getToken(true);
+  return (await listDatasets(token, caps)).map((d) => ({
+    id: d.id,
+    name: d.name,
+    workspace: d.workspace,
+  }));
+}
+
 /** Datasets → starter DAX bookmarks (INFO.TABLES lists the model's tables). */
 export async function browsePowerBi(
   getToken: PowerBiTokenGetter,

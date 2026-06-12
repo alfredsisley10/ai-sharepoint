@@ -147,3 +147,19 @@ test("expired/rejected tokens classify as auth.failed (lockout-safe) with SSO ad
     },
   );
 });
+
+test("parseVertexHint extracts project/location/engine from console and resource URLs", async () => {
+  const { parseVertexHint, endpointForLocation } = await import("../src/context/adapters/vertexSearch");
+  assert.deepEqual(
+    parseVertexHint("https://console.cloud.google.com/gen-app-builder/locations/eu/engines/corp-search_17/preview?project=corp-prod"),
+    { projectId: "corp-prod", location: "eu", engineId: "corp-search_17" },
+  );
+  assert.deepEqual(
+    parseVertexHint("https://x/v1/projects/p1/locations/us/collections/c/engines/e1/servingConfigs/s"),
+    { projectId: "p1", location: "us", engineId: "e1" },
+  );
+  assert.deepEqual(parseVertexHint("https://corp-search.example/portal"), {});
+  assert.equal(endpointForLocation("eu"), "https://eu-discoveryengine.googleapis.com");
+  assert.equal(endpointForLocation("global"), "https://discoveryengine.googleapis.com");
+  assert.equal(endpointForLocation("weird"), "https://discoveryengine.googleapis.com");
+});
