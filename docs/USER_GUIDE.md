@@ -361,9 +361,13 @@ Connect your organization's **Vertex AI Search** app (the enterprise Gemini sear
 
 - **Add** (Reference Sources → `+` → *Vertex AI Search*): pick **"Find my search app via
   Google SSO"** and the wizard lists your projects and apps (probing global/us/eu) — no IDs to
-  know. Or choose manual entry and **paste any URL you have** (your corporate search page, a
-  Cloud Console link, or the serving config) — it pre-fills whatever it carries and tells you
-  where the app owner finds the rest.
+  know. Or choose manual entry and **paste any URL you have** — including the **corporate
+  search page you open via SSO**
+  (`https://vertexaisearch.cloud.google/<region>/home/cid/<app id>?csesidx=…` — the region and
+  app id are read from it; the `csesidx` session id is ignored), a Cloud Console link, or the
+  serving config. It pre-fills whatever the URL carries and tells you where the app owner finds
+  the rest (the corporate page doesn't name the hosting project, so that's the one thing it may
+  still ask for).
 - **SSO via the gcloud CLI (recommended)**: each call uses a **live token from your existing
   `gcloud auth login` session** — your corporate Google SSO — and nothing is ever stored.
   No CLI? Paste an OAuth access token instead (kept in your OS keychain; ~1 h lifetime, the

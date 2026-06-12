@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.2 — 2026-06-12
+
+### Fixed — Vertex AI Search: Windows gcloud crash + the corporate search-page URL (pilot)
+- **"Find my search app via Google SSO" threw `Error: spawn EINVAL` on Windows.** The gcloud
+  CLI is a `.cmd` batch shim there, and Node's batch-file hardening (CVE-2024-27980 — in all
+  current VS Code runtimes) refuses to spawn `.cmd` files without a shell. gcloud invocations
+  (project listing AND every SSO token read) now run with `shell: true` on Windows — only
+  fixed, hard-coded argument lists are passed, so nothing user-controlled reaches the shell. A
+  missing CLI now says "gcloud not found on PATH — install the Google Cloud SDK or use a
+  pasted access token" instead of a spawn error.
+- **The corporate search-page URL is now understood.** Users connect via SSO to
+  `https://vertexaisearch.cloud.google/<region>/home/cid/<app id>?csesidx=<session>` — a shape
+  the wizard previously couldn't parse. Pasting it now pre-fills the **region** (first path
+  segment) and **app id** (after `cid/`); the per-browser `csesidx` session id is ignored and
+  never stored. The corporate page doesn't carry the hosting project, so the wizard asks for
+  exactly that one missing piece (and says where to find it: the app owner or the Cloud
+  Console URL's `?project=`).
+
 ## 0.20.1 — 2026-06-12
 
 ### Fixed — ServiceNow browser-session: full-cookie-set pastes now connect (pilot)

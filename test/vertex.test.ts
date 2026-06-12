@@ -163,3 +163,28 @@ test("parseVertexHint extracts project/location/engine from console and resource
   assert.equal(endpointForLocation("global"), "https://discoveryengine.googleapis.com");
   assert.equal(endpointForLocation("weird"), "https://discoveryengine.googleapis.com");
 });
+
+test("parseVertexHint understands the corporate end-user search URL (cid + region; csesidx ignored)", async () => {
+  const { parseVertexHint } = await import("../src/context/adapters/vertexSearch");
+  // The URL corporate users open via SSO — region in the first path segment,
+  // app id after cid/, per-session csesidx in the query string.
+  assert.deepEqual(
+    parseVertexHint("https://vertexaisearch.cloud.google/us/home/cid/corp-search_1700000000000?csesidx=SESSION123"),
+    { location: "us", engineId: "corp-search_1700000000000" },
+  );
+  // .com host variant and global region also parse; no project is invented.
+  assert.deepEqual(
+    parseVertexHint("https://vertexaisearch.cloud.google.com/global/home/cid/kb-app?csesidx=abc"),
+    { location: "global", engineId: "kb-app" },
+  );
+  const hint = parseVertexHint("https://vertexaisearch.cloud.google/eu/home/cid/app-1?csesidx=zzz");
+  assert.equal(hint.projectId, undefined);
+  assert.ok(!JSON.stringify(hint).includes("zzz"), "session id must never leak into config");
+});
+
+test("gcloudInvocation uses shell:true for the Windows .cmd shim (spawn EINVAL fix), plain binary elsewhere", async () => {
+  const { gcloudInvocation } = await import("../src/context/adapters/vertexSearch");
+  assert.deepEqual(gcloudInvocation("win32"), { bin: "gcloud.cmd", shell: true });
+  assert.deepEqual(gcloudInvocation("linux"), { bin: "gcloud", shell: false });
+  assert.deepEqual(gcloudInvocation("darwin"), { bin: "gcloud", shell: false });
+});

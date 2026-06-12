@@ -1786,7 +1786,9 @@ export function activate(context: vscode.ExtensionContext): void {
         const first = await vscode.window.showInputBox({
           ignoreFocusOut: true,
           title: "Vertex AI Search — project ID, or paste ANY URL you have",
-          placeHolder: "my-corp-search-prod — or paste the corporate search / Cloud Console / serving-config URL",
+          placeHolder: "my-corp-search-prod — or e.g. https://vertexaisearch.cloud.google/us/home/cid/… (your search page)",
+          prompt:
+            "Accepted URLs: the corporate search page you open via SSO (vertexaisearch.cloud.google/<region>/home/cid/<app>?csesidx=… — region and app are read from it; the csesidx session id is ignored), a Cloud Console app URL, or a full serving-config URL.",
           validateInput: (v) => (v.trim() ? undefined : "Enter a project ID or paste a URL"),
         });
         if (!first) return;
@@ -1801,7 +1803,9 @@ export function activate(context: vscode.ExtensionContext): void {
               await vscode.window.showInputBox({
                 ignoreFocusOut: true,
                 title: "Google Cloud project ID",
-                prompt: "That URL didn't carry a project ID — it's in the Cloud Console URL (?project=…) or available from the app owner.",
+                prompt: hint.engineId
+                  ? `Your search page identifies the app (cid ${hint.engineId}) and location (${hint.location ?? "?"}) but not the hosting Google Cloud project — the app owner (or the Cloud Console URL's ?project=…) has it.`
+                  : "That URL didn't carry a project ID — it's in the Cloud Console URL (?project=…) or available from the app owner.",
                 validateInput: (v) => (v.trim() ? undefined : "Enter the project ID"),
               })
             )?.trim();

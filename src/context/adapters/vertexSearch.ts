@@ -60,46 +60,53 @@ export function vertexLabel(baseUrl: string): string {
 
 const GCLOUD_TIMEOUT_MS = 15_000;
 
-function gcloudBinary(): string {
-  return process.platform === "win32" ? "gcloud.cmd" : "gcloud";
+/** How to invoke gcloud on this platform. On Windows the CLI is `gcloud.cmd`
+ *  (a batch file), and Node's batch-file hardening (CVE-2024-27980, in all
+ *  current Node/VS Code runtimes) makes spawning a .cmd WITHOUT `shell: true`
+ *  throw `spawn EINVAL` before gcloud even runs — exactly how "Find my search
+ *  app via Google SSO" failed in the pilot. Pure (platform injected) for
+ *  testability; only fixed, hard-coded argument lists are ever passed, so the
+ *  shell never sees untrusted input. */
+export function gcloudInvocation(platform: NodeJS.Platform): { bin: string; shell: boolean } {
+  return platform === "win32" ? { bin: "gcloud.cmd", shell: true } : { bin: "gcloud", shell: false };
+}
+
+function runGcloud(args: string[], timeoutMs: number): Promise<string> {
+  const { bin, shell } = gcloudInvocation(process.platform);
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, { timeout: timeoutMs, windowsHide: true, shell }, (err, stdout, stderr) => {
+      if (err) {
+        const notFound = (err as NodeJS.ErrnoException).code === "ENOENT" || /not recognized|not found/i.test(stderr ?? "");
+        reject(
+          new AppError(
+            `gcloud ${args.slice(0, 2).join(" ")} failed: ${stderr?.trim() || err.message}`,
+            notFound ? "config" : "auth.failed",
+            notFound
+              ? "The gcloud CLI was not found on PATH — install the Google Cloud SDK (or use the pasted-access-token sign-in instead)."
+              : "Sign in once with `gcloud auth login` (your corporate Google SSO), then retry. The extension never stores Google tokens — each call asks the CLI.",
+          ),
+        );
+        return;
+      }
+      resolve(stdout);
+    });
+  });
 }
 
 /** Access token for the call: pasted token (pat) or live from gcloud SSO. */
-export function getVertexToken(credential: ContextCredential): Promise<string> {
+export async function getVertexToken(credential: ContextCredential): Promise<string> {
   if (credential.method !== "gcloud-sso") {
-    return Promise.resolve(credential.secret);
+    return credential.secret;
   }
-  return new Promise((resolve, reject) => {
-    execFile(
-      gcloudBinary(),
-      ["auth", "print-access-token"],
-      { timeout: GCLOUD_TIMEOUT_MS, windowsHide: true },
-      (err, stdout, stderr) => {
-        if (err) {
-          reject(
-            new AppError(
-              `Could not obtain a Google SSO token from the gcloud CLI: ${stderr?.trim() || err.message}`,
-              "auth.failed",
-              "Sign in once with `gcloud auth login` (your corporate Google SSO), then retry. The extension never stores Google tokens — each call asks the CLI.",
-            ),
-          );
-          return;
-        }
-        const token = stdout.trim();
-        if (!token) {
-          reject(
-            new AppError(
-              "gcloud returned an empty access token.",
-              "auth.failed",
-              "Run `gcloud auth login` and retry.",
-            ),
-          );
-          return;
-        }
-        resolve(token);
-      },
+  const token = (await runGcloud(["auth", "print-access-token"], GCLOUD_TIMEOUT_MS)).trim();
+  if (!token) {
+    throw new AppError(
+      "gcloud returned an empty access token.",
+      "auth.failed",
+      "Run `gcloud auth login` and retry.",
     );
-  });
+  }
+  return token;
 }
 
 // --- HTTP (Discovery Engine is POST-based; mirror fetchJson's taxonomy) --------
@@ -303,11 +310,24 @@ export async function answerVertex(
 // --- guided setup from "all I have is a URL" (pilot) ---------------------------
 
 /** Best-effort extraction of project/location/engine from whatever URL the
- *  user has — a Cloud Console app URL, a pasted serving-config URL, or any
- *  link containing the standard resource segments. */
+ *  user has — the corporate end-user search page, a Cloud Console app URL, a
+ *  pasted serving-config URL, or any link containing the standard resource
+ *  segments. */
 export function parseVertexHint(input: string): Partial<VertexParts> {
   const out: Partial<VertexParts> = {};
   const text = input.trim();
+  // Corporate end-user search page — the URL most users actually have:
+  //   https://vertexaisearch.cloud.google/<location>/home/cid/<app id>?csesidx=<session>
+  // The location is the first path segment and the app (engine) id follows
+  // `cid/`. `csesidx` is a per-browser-session id — never configuration.
+  const corp = text.match(
+    /^https?:\/\/vertexaisearch\.cloud\.google(?:\.com)?\/([a-z][a-z0-9-]*)\/(?:[^?#]*?\/)?cid\/([A-Za-z0-9_-]+)/i,
+  );
+  if (corp) {
+    out.location = corp[1].toLowerCase();
+    out.engineId = corp[2];
+    return out;
+  }
   const project =
     text.match(/[?&]project=([A-Za-z0-9-]+)/)?.[1] ??
     text.match(/\/projects\/([A-Za-z0-9-]+)/)?.[1];
@@ -382,34 +402,14 @@ async function fetchVertexJson<T>(url: string, token: string, timeoutMs: number)
 
 /** Projects visible to the gcloud SSO session — via the CLI so it works
  *  with exactly the same sign-in the connector itself uses. */
-export function listGcloudProjects(): Promise<Array<{ projectId: string; name: string }>> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      process.platform === "win32" ? "gcloud.cmd" : "gcloud",
-      ["projects", "list", "--format=json", "--limit=100"],
-      { timeout: 20_000, windowsHide: true },
-      (err, stdout) => {
-        if (err) {
-          reject(
-            new AppError(
-              "Could not list projects via the gcloud CLI.",
-              "auth.failed",
-              "Run `gcloud auth login` first — or pick manual entry and ask your admin for the project ID.",
-            ),
-          );
-          return;
-        }
-        try {
-          const raw = JSON.parse(stdout) as Array<{ projectId?: string; name?: string }>;
-          resolve(
-            raw
-              .filter((p): p is { projectId: string; name?: string } => Boolean(p.projectId))
-              .map((p) => ({ projectId: p.projectId, name: p.name ?? p.projectId })),
-          );
-        } catch {
-          reject(new AppError("gcloud returned unparseable project data.", "unknown"));
-        }
-      },
-    );
-  });
+export async function listGcloudProjects(): Promise<Array<{ projectId: string; name: string }>> {
+  const stdout = await runGcloud(["projects", "list", "--format=json", "--limit=100"], 20_000);
+  try {
+    const raw = JSON.parse(stdout) as Array<{ projectId?: string; name?: string }>;
+    return raw
+      .filter((p): p is { projectId: string; name?: string } => Boolean(p.projectId))
+      .map((p) => ({ projectId: p.projectId, name: p.name ?? p.projectId }));
+  } catch {
+    throw new AppError("gcloud returned unparseable project data.", "unknown");
+  }
 }
