@@ -757,53 +757,107 @@ function buildAliasMap(text: string): Map<string, string> {
   return aliases;
 }
 
-function resolveEquality(
-  eq: RegExpMatchArray,
+/** Tables a SNIPPET alias plausibly abbreviates: token initials of the
+ *  table name end with the alias, or a name token starts with it — so an
+ *  undeclared `u`/`ga`/`g` in pasted ON-logic still finds
+ *  LDAP_USERS / LDAP_GROUP_ASSOCIATION / LDAP_GROUPS. */
+function inferTablesFromAlias(alias: string, schema: SourceSchema): TableDef[] {
+  const a = alias.toLowerCase();
+  if (!a || a.length > 12) return [];
+  return schema.catalog.tables.filter((t) => {
+    const tokens = t.name.toLowerCase().split(/[_\s]+/).filter(Boolean);
+    const initials = tokens.map((tok) => tok[0]).join("");
+    return initials === a || initials.endsWith(a) || tokens.some((tok) => tok.startsWith(a));
+  });
+}
+
+const tablesWithColumn = (column: string, pool: TableDef[]): TableDef[] =>
+  pool.filter((t) => t.columns.some((c) => c.name.toLowerCase() === column.toLowerCase()));
+
+/** Candidate tables for one `qualifier.column` side: exact/declared-alias
+ *  resolution first, then alias INFERENCE, then pure column membership —
+ *  any portion of working SQL must parse, including fragments whose
+ *  aliases were never declared. */
+function candidateTables(
+  rawRef: string | undefined,
+  column: string,
+  aliases: Map<string, string>,
+  schema: SourceSchema,
+): TableDef[] {
+  const all = schema.catalog.tables;
+  if (rawRef) {
+    const ref = stripIdent(rawRef).toLowerCase();
+    const target = stripIdent(aliases.get(ref) ?? rawRef).toLowerCase();
+    const exact = all.filter(
+      (x) => qualifiedName(x).toLowerCase() === target || x.name.toLowerCase() === target,
+    );
+    if (exact.length > 0) return tablesWithColumn(column, exact.length ? exact : all);
+    const inferred = tablesWithColumn(column, inferTablesFromAlias(ref, schema));
+    if (inferred.length > 0) return inferred;
+  }
+  // Column-membership fallback: prefer tables the paste actually names.
+  const declared = [...new Set([...aliases.values()].map((v) => stripIdent(v).toLowerCase()))]
+    .flatMap((name) =>
+      all.filter((x) => qualifiedName(x).toLowerCase() === name || x.name.toLowerCase() === name),
+    );
+  const inDeclared = tablesWithColumn(column, declared);
+  return inDeclared.length > 0 ? inDeclared : tablesWithColumn(column, all);
+}
+
+/** Resolve a two-sided equality from candidate sets: unique sides win, and
+ *  a side that is unique EXCLUDES its table from the other side's options
+ *  (a join needs two tables). */
+function resolveSides(
+  a: { ref?: string; column: string },
+  b: { ref?: string; column: string },
   aliases: Map<string, string>,
   schema: SourceSchema,
 ): ParsedJoinSpec | { issue: string } {
-  const resolveTable = (rawRef: string): TableDef | { issue: string } => {
-    const ref = stripIdent(rawRef).toLowerCase();
-    const target = (aliases.get(ref) ?? rawRef).toLowerCase();
-    const cleaned = stripIdent(target);
-    const matches = schema.catalog.tables.filter(
-      (x) => qualifiedName(x).toLowerCase() === cleaned || x.name.toLowerCase() === cleaned,
-    );
-    if (matches.length === 1) return matches[0];
-    if (matches.length > 1) {
-      return { issue: `"${stripIdent(rawRef)}" is ambiguous (${matches.map((x) => qualifiedName(x)).join(", ")}) — qualify it with the schema.` };
+  let candA = candidateTables(a.ref, a.column, aliases, schema);
+  let candB = candidateTables(b.ref, b.column, aliases, schema);
+  if (candA.length === 0 || candB.length === 0) {
+    const missing = candA.length === 0 ? a : b;
+    // Precise message when the table itself resolved but lacks the column.
+    if (missing.ref) {
+      const ref = stripIdent(aliases.get(stripIdent(missing.ref).toLowerCase()) ?? missing.ref).toLowerCase();
+      const named = schema.catalog.tables.find(
+        (x) => qualifiedName(x).toLowerCase() === ref || x.name.toLowerCase() === ref,
+      );
+      if (named) {
+        return {
+          issue: `Column "${missing.column}" is not in ${qualifiedName(named)} (has: ${named.columns
+            .slice(0, 12)
+            .map((c) => c.name)
+            .join(", ")}${named.columns.length > 12 ? ", …" : ""}).`,
+        };
+      }
     }
-    return { issue: `Table "${stripIdent(rawRef)}" is not in the catalog (load/refresh the schema first?).` };
-  };
-  const sides: Array<{ table: TableDef; column: string }> = [];
-  for (const [refIdx, colIdx] of [
-    [1, 2],
-    [3, 4],
-  ] as const) {
-    const table = resolveTable(eq[refIdx]);
-    if ("issue" in table) return table;
-    const colName = stripIdent(eq[colIdx]);
-    const column = table.columns.find((c) => c.name.toLowerCase() === colName.toLowerCase());
-    if (!column) {
-      return {
-        issue: `Column "${colName}" is not in ${qualifiedName(table)} (has: ${table.columns
-          .slice(0, 12)
-          .map((c) => c.name)
-          .join(", ")}${table.columns.length > 12 ? ", …" : ""}).`,
-      };
-    }
-    sides.push({ table, column: column.name });
+    return {
+      issue: `"${missing.ref ? `${stripIdent(missing.ref)}.` : ""}${missing.column}" is not in the catalog — no table matches${missing.ref ? ` "${stripIdent(missing.ref)}" and none` : ""} has a column "${missing.column}" (load/refresh the schema first?).`,
+    };
   }
-  if (sides[0].table === sides[1].table) {
+  if (candA.length === 1) candB = candB.filter((t) => t !== candA[0]).length > 0 ? candB.filter((t) => t !== candA[0]) : candB;
+  if (candB.length === 1) candA = candA.filter((t) => t !== candB[0]).length > 0 ? candA.filter((t) => t !== candB[0]) : candA;
+  if (candA.length > 1 || candB.length > 1) {
+    const amb = candA.length > 1 ? { side: a, cands: candA } : { side: b, cands: candB };
+    return {
+      issue: `"${amb.side.column}" is ambiguous (${amb.cands.map((t) => qualifiedName(t)).join(", ")}) — qualify it (table.column or an alias).`,
+    };
+  }
+  const tableA = candA[0];
+  const tableB = candB[0];
+  if (tableA === tableB) {
     return { issue: "Both sides resolve to the same table — a relationship needs two tables." };
   }
-  const famA = joinFamily(sides[0].table.columns.find((c) => c.name === sides[0].column)!.dataType);
-  const famB = joinFamily(sides[1].table.columns.find((c) => c.name === sides[1].column)!.dataType);
+  const colA = tableA.columns.find((c) => c.name.toLowerCase() === a.column.toLowerCase())!;
+  const colB = tableB.columns.find((c) => c.name.toLowerCase() === b.column.toLowerCase())!;
+  const famA = joinFamily(colA.dataType);
+  const famB = joinFamily(colB.dataType);
   return {
-    fromTable: qualifiedName(sides[0].table),
-    fromColumn: sides[0].column,
-    toTable: qualifiedName(sides[1].table),
-    toColumn: sides[1].column,
+    fromTable: qualifiedName(tableA),
+    fromColumn: colA.name,
+    toTable: qualifiedName(tableB),
+    toColumn: colB.name,
     ...(famA && famB && famA === famB
       ? {}
       : {
@@ -811,6 +865,19 @@ function resolveEquality(
             "The column types are in different join families — the probe (and real joins) will rely on implicit casts, which some engines reject.",
         }),
   };
+}
+
+function resolveEquality(
+  eq: RegExpMatchArray,
+  aliases: Map<string, string>,
+  schema: SourceSchema,
+): ParsedJoinSpec | { issue: string } {
+  return resolveSides(
+    { ref: eq[1], column: stripIdent(eq[2]) },
+    { ref: eq[3], column: stripIdent(eq[4]) },
+    aliases,
+    schema,
+  );
 }
 
 /**
@@ -821,6 +888,32 @@ function resolveEquality(
  * Equalities that don't resolve become `issues` (with enough detail to
  * fix), never run-stoppers.
  */
+/** Bare `column = column` (no qualifiers at all) — common in hand-written
+ *  SQL when names are unambiguous. Sides resolve by column membership. */
+const BARE_EQUALITY_RE = /(?<![\w.\][`"])([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)(?![\w.([])/g;
+
+const NON_COLUMN_WORDS = new Set([
+  ...SQL_KEYWORDS,
+  "null",
+  "true",
+  "false",
+  "select",
+  "not",
+  "in",
+  "like",
+  "between",
+  "exists",
+  "case",
+  "when",
+  "then",
+  "else",
+  "end",
+  "is",
+  "by",
+  "asc",
+  "desc",
+]);
+
 export function parseJoinSpecs(
   text: string,
   schema: SourceSchema,
@@ -831,21 +924,46 @@ export function parseJoinSpecs(
   const issues: string[] = [];
   const seen = new Set<string>();
   let anyEquality = false;
-  for (const eq of t.matchAll(EQUALITY_RE)) {
-    anyEquality = true;
-    const resolved = resolveEquality(eq, aliases, schema);
+  const take = (fragment: string, resolved: ParsedJoinSpec | { issue: string }) => {
     if ("issue" in resolved) {
-      issues.push(`"${eq[0].slice(0, 60)}": ${resolved.issue}`);
-      continue;
+      issues.push(`"${fragment.slice(0, 60)}": ${resolved.issue}`);
+      return;
     }
     const key = pairKey(resolved);
-    if (seen.has(key)) continue;
+    if (seen.has(key)) return;
     seen.add(key);
     joins.push(resolved);
+  };
+  // Pass 1 — qualified equalities (alias.col = alias.col), with declared
+  // aliases, INFERRED aliases (fragments never declare them), and
+  // column-membership fallback. Matched spans are blanked so pass 2 never
+  // re-reads their column parts as bare equalities.
+  let remainder = t;
+  for (const eq of t.matchAll(EQUALITY_RE)) {
+    anyEquality = true;
+    take(eq[0], resolveEquality(eq, aliases, schema));
+    remainder = remainder.replace(eq[0], " ".repeat(eq[0].length));
+  }
+  // Pass 2 — bare column = column: any portion of working SQL must parse,
+  // including snippets with no qualifiers at all. Unknown words on both
+  // sides are skipped silently (literals, variables); a known column
+  // paired with an unknown word is reported.
+  for (const eq of remainder.matchAll(BARE_EQUALITY_RE)) {
+    const [full, left, right] = eq;
+    if (NON_COLUMN_WORDS.has(left.toLowerCase()) || NON_COLUMN_WORDS.has(right.toLowerCase())) continue;
+    const knownLeft = tablesWithColumn(left, schema.catalog.tables).length > 0;
+    const knownRight = tablesWithColumn(right, schema.catalog.tables).length > 0;
+    if (!knownLeft && !knownRight) continue;
+    anyEquality = true;
+    if (!knownLeft || !knownRight) {
+      issues.push(`"${full.slice(0, 60)}": "${knownLeft ? right : left}" is not a column in any catalog table.`);
+      continue;
+    }
+    take(full, resolveSides({ column: left }, { column: right }, aliases, schema));
   }
   if (!anyEquality) {
     issues.push(
-      'No join condition found — paste SQL with ON clauses ("… JOIN Customers c ON o.customer_id = c.id") or bare equalities ("dbo.Orders.customer_id = dbo.Customers.id").',
+      'No join condition found — paste any portion of working SQL: a full query, just the ON/WHERE logic ("u.distinguishedName = ga.member_dn"), or bare equalities ("member_dn = distinguishedName").',
     );
   }
   return { joins, issues };
@@ -878,8 +996,8 @@ export function buildSqlJoinExtractionPrompt(sql: string, schema: SourceSchema):
     .join("\n")
     .slice(0, 4_000);
   return [
-    `You are extracting the JOIN relationships used by a WORKING SQL query against a ${schema.catalog.engine} database ("${schema.catalog.database}").`,
-    "Read the SQL, resolve table aliases (including derived tables when their source is clear), and list every join condition between TWO of the catalog tables below as column pairs. Use the qualified table names exactly as given. Ignore literal filters, self-joins, and tables not in the catalog.",
+    `You are extracting the JOIN relationships used by WORKING SQL against a ${schema.catalog.engine} database ("${schema.catalog.database}").`,
+    "The paste may be ANY portion of a query: a full SELECT, only the join/filtering logic, or a fragment whose table aliases are never declared — infer which catalog table each column belongs to from the column lists below. Resolve aliases (including derived tables when their source is clear) and list every join condition between TWO of the catalog tables as column pairs. Use the qualified table names exactly as given. Ignore literal filters, self-joins, and tables not in the catalog.",
     "",
     'Return ONLY JSON, exactly: {"pairs":[{"fromTable":"<qualified table>","fromColumn":"<col>","toTable":"<qualified table>","toColumn":"<col>","why":"<the SQL fragment this came from>"}]}.',
     "",

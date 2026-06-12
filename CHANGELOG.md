@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.30.1 — 2026-06-12
+
+### Fixed — ANY portion of working SQL now parses into joins (pilot)
+- "No joins could be parsed" happened on the pastes people actually make: **fragments**. The
+  extractor required fully qualified `x.col = y.col` with declared aliases — but real pastes
+  are often just the ON/WHERE logic (`ON u.distinguishedName = ga.member_dn AND …`) whose
+  aliases were never declared, or bare equalities with no qualifiers at all.
+- The parser now resolves all of it: **undeclared aliases are inferred** from table names
+  (`u` → LDAP_USERS, `ga` → LDAP_GROUP_ASSOCIATION — token initials/prefixes, then narrowed by
+  which table actually has the column); **bare `column = column` equalities** resolve by
+  column membership across the catalog (preferring tables the paste names), with a unique side
+  excluding its table from the other side's options; genuinely ambiguous columns produce an
+  honest issue naming the candidate tables — never a guess — and unknown=unknown pairs are
+  skipped as noise. Precise "column not in that table" errors are kept.
+- The **Copilot summarization fallback** now states the paste may be a fragment with
+  undeclared aliases and instructs the model to infer table membership from the catalog's
+  column lists. Wizard text and examples updated to say "any portion of working SQL".
+
 ## 0.30.0 — 2026-06-12
 
 ### Added — paste a working SQL query and the ER run mines its joins (pilot)

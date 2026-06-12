@@ -2829,10 +2829,10 @@ export function activate(context: vscode.ExtensionContext): void {
     // below the automatic thresholds (the working query is the evidence).
     const knownInput = await vscode.window.showInputBox({
       ignoreFocusOut: true,
-      title: "Known joins (optional) — paste a working SQL query, snippet, or equalities",
+      title: "Known joins (optional) — paste ANY portion of working SQL",
       prompt:
-        "Paste SQL that already works (a whole SELECT with JOINs is ideal — ALL its join conditions are extracted, aliases resolved) or simple equalities like \"dbo.Orders.customer_id = dbo.Customers.id\". If parsing falls short, Copilot can summarize the SQL into target joins. Extracted joins are probed first and persist even at low measured rates (marked \"defined\").",
-      placeHolder: "SELECT … FROM Orders o JOIN Customers c ON o.customer_id = c.id …   (Enter to skip)",
+        "Anything goes: a whole SELECT, just the ON/WHERE join logic (aliases may be undeclared — they're inferred), or bare equalities with no qualifiers at all (\"member_dn = sAMAccountName\"). ALL join conditions are extracted; if parsing still falls short, Copilot can summarize the SQL into target joins. Extracted joins are probed first and persist even at low measured rates (marked \"defined\").",
+      placeHolder: "full query · ON u.dn = ga.member_dn AND … · member_dn = distinguishedName   (Enter to skip)",
     });
     if (knownInput === undefined) return;
     const userJoins: JoinCandidate[] = [];

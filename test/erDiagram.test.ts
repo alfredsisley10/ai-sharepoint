@@ -706,7 +706,8 @@ test("the SQL-summarization prompt carries the catalog and the SQL; cross-family
   );
   const schema = schemaWith();
   const prompt = buildSqlJoinExtractionPrompt("SELECT * FROM Orders o JOIN Customers c ON o.customer_id = c.id", schema);
-  assert.match(prompt, /WORKING SQL query/);
+  assert.match(prompt, /WORKING SQL/);
+  assert.match(prompt, /ANY portion of a query/);
   assert.match(prompt, /dbo\.Customers: id, name, region_code/);
   assert.match(prompt, /FROM Orders o JOIN Customers c/);
   // allowCrossFamily keeps int↔nvarchar pairs as cast probes (the working
@@ -718,4 +719,63 @@ test("the SQL-summarization prompt carries the catalog and the SQL; cross-family
   const kept = parseJoinCandidateResponse(crossPair, schema, undefined, { allowCrossFamily: true });
   assert.equal(kept.length, 1);
   assert.equal(kept[0].cast, true);
+});
+
+// --- any portion of working SQL parses (0.30.1) --------------------------------
+
+function ldapSchema(): SourceSchema {
+  return {
+    catalog: {
+      fetchedAt: T0,
+      engine: "mssql",
+      database: "ad_export",
+      tables: [
+        { schema: "dbo", name: "LDAP_USERS", kind: "table", columns: [{ name: "distinguishedName", dataType: "nvarchar" }, { name: "sAMAccountName", dataType: "nvarchar" }] },
+        { schema: "dbo", name: "LDAP_GROUPS", kind: "table", columns: [{ name: "distinguishedName", dataType: "nvarchar" }, { name: "cn", dataType: "nvarchar" }] },
+        { schema: "dbo", name: "LDAP_GROUP_ASSOCIATION", kind: "table", columns: [{ name: "group_dn", dataType: "nvarchar" }, { name: "member_dn", dataType: "nvarchar" }] },
+      ],
+    },
+    semanticState: "none",
+  };
+}
+
+test("a bare ON-logic fragment with UNDECLARED aliases resolves via alias inference + column membership", async () => {
+  const { parseJoinSpecs } = await import("../src/context/db/erDiagram");
+  // No FROM/JOIN clauses at all — exactly the paste that previously
+  // produced "no joins could be parsed".
+  const { joins, issues } = parseJoinSpecs(
+    "ON u.distinguishedName = ga.member_dn AND ga.group_dn = g.distinguishedName",
+    ldapSchema(),
+  );
+  assert.equal(issues.length, 0, JSON.stringify(issues));
+  assert.equal(joins.length, 2, JSON.stringify(joins));
+  const flat = joins.map((j) => `${j.fromTable}.${j.fromColumn}=${j.toTable}.${j.toColumn}`).join(" ");
+  assert.match(flat, /dbo\.LDAP_USERS\.distinguishedName=dbo\.LDAP_GROUP_ASSOCIATION\.member_dn/);
+  assert.match(flat, /dbo\.LDAP_GROUP_ASSOCIATION\.group_dn=dbo\.LDAP_GROUPS\.distinguishedName/);
+});
+
+test("bare unqualified equalities resolve by column membership; ambiguity is reported, noise skipped", async () => {
+  const { parseJoinSpecs } = await import("../src/context/db/erDiagram");
+  // member_dn is unique to the association table; sAMAccountName unique to
+  // users → resolvable with no qualifiers whatsoever.
+  const ok = parseJoinSpecs("WHERE member_dn = sAMAccountName AND foo = bar", ldapSchema());
+  assert.equal(ok.joins.length, 1, JSON.stringify(ok));
+  assert.equal(ok.joins[0].fromTable, "dbo.LDAP_GROUP_ASSOCIATION");
+  assert.equal(ok.joins[0].toTable, "dbo.LDAP_USERS");
+  assert.equal(ok.issues.length, 0, "unknown=unknown is silent noise, not an issue");
+  // distinguishedName lives in two tables and nothing disambiguates → an
+  // honest ambiguity issue naming both candidates, never a guess.
+  const amb = parseJoinSpecs("member_dn = distinguishedName", ldapSchema());
+  assert.equal(amb.joins.length, 0, JSON.stringify(amb));
+  assert.match(amb.issues[0] ?? "", /ambiguous \(dbo\.LDAP_USERS, dbo\.LDAP_GROUPS\)/);
+});
+
+test("join + filtering logic mixes parse: qualified joins extracted, literal filters ignored", async () => {
+  const { parseJoinSpecs } = await import("../src/context/db/erDiagram");
+  const { joins, issues } = parseJoinSpecs(
+    "FROM dbo.LDAP_USERS u JOIN dbo.LDAP_GROUP_ASSOCIATION ga ON u.distinguishedName = ga.member_dn WHERE u.sAMAccountName = 'jdoe' AND active = 1",
+    ldapSchema(),
+  );
+  assert.equal(joins.length, 1);
+  assert.equal(issues.length, 0, JSON.stringify(issues));
 });
