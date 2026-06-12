@@ -80,3 +80,21 @@ export function draftLabel(draft: Pick<CommDraft, "subject" | "body">): string {
   const text = draft.subject?.trim() || draft.body.trim().replace(/\s+/g, " ");
   return text.length > 60 ? `${text.slice(0, 57)}…` : text;
 }
+
+/** Translate raw Graph/MSAL failures from the Communications flow into the
+ *  three actionable enterprise causes (pilot: "can't connect to Outlook"). */
+export function explainCommsError(message: string): string | undefined {
+  if (/AADSTS65001|AADSTS650057|consent_required|invalid_grant.*consent|AADSTS90008|access_denied.*consent/i.test(message)) {
+    return "Your Microsoft 365 app registration has not been granted the Communications permissions. An admin must add delegated Mail.ReadWrite + Mail.Send (and Chat.ReadWrite for Teams) to the app and grant consent — Admin Guide §4 has the exact steps.";
+  }
+  if (/MailboxNotEnabledForRESTAPI|mailbox is (either )?inactive|REST API is not yet supported for this mailbox|ErrorAccessDenied.*mailbox/i.test(message)) {
+    return "This account has no Exchange Online mailbox reachable via Microsoft Graph — it may lack an Exchange Online license, or the mailbox is on-premises (hybrid). Drafts can only be created in cloud mailboxes.";
+  }
+  if (/AADSTS53003|conditional access|AADSTS50105|blocked by .*policy/i.test(message)) {
+    return "A tenant policy (conditional access / app assignment) is blocking this sign-in app from using mail scopes. Ask your admin to allow the app for Exchange/Graph mail, or register a dedicated app (Admin Guide §4).";
+  }
+  if (/graph request failed \(403/i.test(message)) {
+    return "Microsoft Graph returned 403 for the mailbox — usually missing Mail.ReadWrite/Mail.Send consent on the app registration (Admin Guide §4), or an Exchange application access policy.";
+  }
+  return undefined;
+}

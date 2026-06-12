@@ -95,6 +95,7 @@ import {
   recipientIssue,
   draftIssue,
   draftLabel,
+  explainCommsError,
   MAX_BODY_CHARS,
   MAX_SUBJECT_CHARS,
 } from "./comms/outbox";
@@ -2812,17 +2813,31 @@ export function activate(context: vscode.ExtensionContext): void {
       telemetry.record("comms.discard", { channel: draft.channel, origin: draft.origin });
       return;
     }
-    const client = await commsClientFor();
-    if (!client) return;
+    const commsClient = await commsClientFor();
+    if (!commsClient) return;
 
-    await vscode.window.withProgress(
+    try {
+      await runCommsSend();
+    } catch (err) {
+      const hint = explainCommsError(err instanceof Error ? err.message : String(err));
+      if (hint) {
+        throw new AppError(
+          `Could not reach your Outlook/Teams via Microsoft Graph: ${err instanceof Error ? err.message : String(err)}`,
+          "graph.forbidden",
+          hint,
+        );
+      }
+      throw err;
+    }
+    async function runCommsSend(): Promise<void> {
+      await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Resolving recipients…" },
       async (progress) => {
         const resolved = [];
         const failures: string[] = [];
         for (const r of draft!.to) {
           try {
-            resolved.push(await client.resolveRecipient(r));
+            resolved.push(await commsClient.resolveRecipient(r));
           } catch {
             failures.push(r);
           }
@@ -2835,7 +2850,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         if (choice === "Save to Outlook Drafts") {
           progress.report({ message: "Creating the draft in your mailbox…" });
-          const created = await client.createMailDraft(resolved, draft!.subject ?? "", draft!.body);
+          const created = await commsClient.createMailDraft(resolved, draft!.subject ?? "", draft!.body);
           await outbox.remove(draft!.id);
           telemetry.record("comms.saveDraft", { channel: "outlook", origin: draft!.origin });
           const open = await vscode.window.showInformationMessage(
@@ -2849,10 +2864,10 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         progress.report({ message: `Sending to ${resolved.map((r) => r.displayName).join(", ")}…` });
         if (draft!.channel === "teams") {
-          await client.sendTeamsMessage(resolved, draft!.body);
+          await commsClient.sendTeamsMessage(resolved, draft!.body);
         } else {
-          const created = await client.createMailDraft(resolved, draft!.subject ?? "", draft!.body);
-          await client.sendMailDraft(created.id);
+          const created = await commsClient.createMailDraft(resolved, draft!.subject ?? "", draft!.body);
+          await commsClient.sendMailDraft(created.id);
         }
         await outbox.remove(draft!.id);
         telemetry.record("comms.send", { channel: draft!.channel, origin: draft!.origin });
@@ -2860,7 +2875,8 @@ export function activate(context: vscode.ExtensionContext): void {
           `Sent to ${resolved.map((r) => r.displayName).join(", ")} via ${draft!.channel === "teams" ? "Teams" : "Outlook"}.`,
         );
       },
-    );
+      );
+    }
   });
 
   // --- Diagnostics & support ------------------------------------------------

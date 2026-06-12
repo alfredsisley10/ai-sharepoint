@@ -46,3 +46,18 @@ test("draftLabel prefers the subject and truncates long bodies", () => {
   assert.ok(label.length <= 60);
   assert.ok(label.endsWith("…"));
 });
+
+test("explainCommsError names the three enterprise causes; unknown errors pass through", async () => {
+  const { explainCommsError } = await import("../src/comms/outbox");
+  assert.match(
+    explainCommsError("AADSTS65001: The user or administrator has not consented") ?? "",
+    /Mail\.ReadWrite \+ Mail\.Send/,
+  );
+  assert.match(
+    explainCommsError("MailboxNotEnabledForRESTAPI: REST API is not yet supported for this mailbox") ?? "",
+    /Exchange Online (license|mailbox)/i,
+  );
+  assert.match(explainCommsError("AADSTS53003: Access blocked by Conditional Access") ?? "", /tenant policy/i);
+  assert.match(explainCommsError("Graph request failed (403 Forbidden): x") ?? "", /Mail\.ReadWrite/);
+  assert.equal(explainCommsError("ETIMEDOUT"), undefined);
+});
