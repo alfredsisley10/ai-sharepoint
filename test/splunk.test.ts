@@ -216,3 +216,65 @@ test("a browser-SSO session credential reaches Splunk as the Splunk auth scheme"
   );
   assert.equal(auth, "Splunk SESSIONKEY");
 });
+
+test("defaultSplunkApp reads ?app=; searches dispatch in /servicesNS/-/<app> namespace", async () => {
+  const { defaultSplunkApp } = await import("../src/context/adapters/splunk");
+  const appSrc: ContextSource = {
+    ...SRC,
+    baseUrl: "https://acme.splunkcloud.com:8089?app=lob_security&index=web&web=https%3A%2F%2Facme.splunkcloud.com",
+  };
+  assert.equal(defaultSplunkApp(appSrc), "lob_security");
+  assert.equal(defaultSplunkApp(SRC), undefined);
+
+  let url = "";
+  await withFetch(
+    (u) => {
+      url = u;
+      return { body: { results: [] } };
+    },
+    () => searchSplunk(appSrc, CRED, "errors", DEFAULT_CAPS),
+  );
+  assert.match(url, /\/servicesNS\/-\/lob_security\/search\/jobs$/);
+
+  // No app → default-context /services namespace (unchanged).
+  let url2 = "";
+  await withFetch(
+    (u) => {
+      url2 = u;
+      return { body: { results: [] } };
+    },
+    () => searchSplunk(SRC, CRED, "errors", DEFAULT_CAPS),
+  );
+  assert.match(url2, /\/services\/search\/jobs$/);
+});
+
+test("listSplunkApps returns visible, enabled apps by label; deep links target the app", async () => {
+  const { listSplunkApps } = await import("../src/context/adapters/splunk");
+  const apps = await withFetch(
+    (url) => {
+      assert.match(url, /\/services\/apps\/local\?/);
+      return {
+        body: {
+          entry: [
+            { name: "lob_security", content: { label: "Security LOB", visible: true } },
+            { name: "hidden_addon", content: { label: "Hidden", visible: false } },
+            { name: "disabled_app", content: { label: "Disabled", disabled: true } },
+            { name: "search", content: { label: "Search & Reporting", visible: true } },
+          ],
+        },
+      };
+    },
+    () => listSplunkApps(SRC, CRED, DEFAULT_CAPS.timeoutMs),
+  );
+  assert.deepEqual(apps.map((a) => a.name), ["search", "lob_security"]); // sorted by label, hidden/disabled dropped
+
+  const appSrc: ContextSource = {
+    ...SRC,
+    baseUrl: "https://acme.splunkcloud.com:8089?app=lob_security&web=https%3A%2F%2Facme.splunkcloud.com",
+  };
+  const hits = await withFetch(
+    () => ({ body: { results: [{ _raw: "x", _time: "t", sourcetype: "s" }] } }),
+    () => searchSplunk(appSrc, CRED, "errors", DEFAULT_CAPS),
+  );
+  assert.match(hits[0].url, /\/en-US\/app\/lob_security\/search\?q=/);
+});

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.17.0 — 2026-06-12
+
+### Fixed — Splunk Cloud: pick the line-of-business search app (default `search` disabled) (pilot)
+- Splunk Cloud instances that disable the default `search` app and meter by a line-of-business
+  app rejected dispatch against the default context. Setup now **lists the apps your account
+  can see** and has you **pick the search app** to run in; all searches (and saved-search
+  browsing, and result deep links) route through that app's **REST namespace**
+  (`/servicesNS/-/<app>/…`) so they run under the right workload/billing context. The choice is
+  **functionally verified** during setup with a `| makeresults` test dispatch in that namespace
+  — if it fails, you're told the default app is likely disabled and can pick a different app
+  before saving. "No specific app (default context)" remains for instances where the default
+  app is enabled.
+
 ## 0.16.1 — 2026-06-12
 
 ### Changed — Splunk browser-SSO: clearer per-browser cookie instructions (pilot)

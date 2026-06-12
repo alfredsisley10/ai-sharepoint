@@ -86,7 +86,12 @@ import {
   cookieStringIssue,
   SNOW_LOOPBACK_PORT,
 } from "./context/adapters/servicenowAuth";
-import { deriveSplunkApiCandidates, verifySplunk } from "./context/adapters/splunk";
+import {
+  deriveSplunkApiCandidates,
+  verifySplunk,
+  searchSplunk,
+  listSplunkApps,
+} from "./context/adapters/splunk";
 import * as http from "node:http";
 import * as nodeCrypto from "node:crypto";
 import { OutboxStore } from "./comms/outboxStore";
@@ -1614,6 +1619,75 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!manual) return;
         baseUrl = manual.trim().replace(/\/+$/, "");
       }
+      // Splunk Cloud often disables the default "search" app and meters by a
+      // line-of-business app — dispatch must run in that app's namespace. List
+      // the apps the account can see, let the user pick, and verify a real
+      // search dispatches there before saving.
+      let selectedApp: string | undefined;
+      let apps: Array<{ name: string; label: string }> = [];
+      try {
+        apps = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Listing the Splunk apps you can access…" },
+          () => listSplunkApps({ baseUrl }, splunkCred, contextService.caps().timeoutMs),
+        );
+      } catch (err) {
+        log.warn(`Splunk app listing failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (apps.length > 0) {
+        for (;;) {
+          const pick = await vscode.window.showQuickPick(
+            [
+              ...apps.map((a) => ({ label: a.label, description: a.name, app: a.name as string | undefined })),
+              {
+                label: "$(circle-slash) No specific app (default search context)",
+                description: "only if the default search app is enabled for your account",
+                app: undefined as string | undefined,
+              },
+            ],
+            {
+              ignoreFocusOut: true,
+              title: "Which Splunk search app should searches run in? (line-of-business app for workload/billing)",
+              matchOnDescription: true,
+            },
+          );
+          if (!pick) return;
+          selectedApp = pick.app;
+          const probeBase = selectedApp ? `${baseUrl}?app=${encodeURIComponent(selectedApp)}` : baseUrl;
+          try {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: selectedApp ? `Verifying search works in "${selectedApp}"…` : "Verifying search dispatch…",
+              },
+              () =>
+                searchSplunk(
+                  {
+                    id: "probe",
+                    type: "splunk",
+                    displayName: "probe",
+                    baseUrl: probeBase,
+                    deployment: "datacenter",
+                    authMethod: splunkCred.method,
+                    addedAt: nowIso(),
+                  },
+                  splunkCred,
+                  '{"spl": "| makeresults count=1", "earliest": "-1m"}',
+                  contextService.caps(),
+                ),
+            );
+            break; // a search dispatched successfully in this namespace
+          } catch (err) {
+            const choice = await vscode.window.showWarningMessage(
+              `A test search ${selectedApp ? `in "${selectedApp}" ` : "in the default context "}failed: ${err instanceof Error ? err.message : String(err)}. On metered Splunk Cloud the default app is often disabled — pick your line-of-business search app.`,
+              "Pick a different app",
+              "Use this app anyway",
+            );
+            if (choice === "Use this app anyway") break;
+            if (!choice) return;
+            // else loop back to the app picker
+          }
+        }
+      }
       // The browser URL doubles as the deep-link target.
       const autoWeb = !webEntry.includes(":8089") ? webEntry : "";
       const index = await vscode.window.showInputBox({
@@ -1640,6 +1714,7 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (web === undefined) return;
       const params = new URLSearchParams();
+      if (selectedApp) params.set("app", selectedApp);
       if (index.trim()) params.set("index", index.trim());
       if (web.trim()) params.set("web", web.trim().replace(/\/+$/, ""));
       const qs = params.toString();

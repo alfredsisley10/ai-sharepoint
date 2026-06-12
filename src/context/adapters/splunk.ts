@@ -103,6 +103,47 @@ export function defaultSplunkIndex(source: Pick<ContextSource, "baseUrl">): stri
   }
 }
 
+/** The line-of-business search app to dispatch in (the `?app=` descriptor
+ *  param). Splunk Cloud instances that disable the default `search` app and
+ *  meter by app REQUIRE searches to run in a specific app's namespace. */
+export function defaultSplunkApp(source: Pick<ContextSource, "baseUrl">): string | undefined {
+  try {
+    return new URL(source.baseUrl).searchParams.get("app") ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** REST namespace prefix: app-scoped `/servicesNS/-/<app>` when an app is
+ *  configured (owner `-` = current user), else the default-context
+ *  `/services`. Dispatching in the app namespace is what makes searches run
+ *  under the right workload/billing context on locked-down Splunk Cloud. */
+function nsPath(source: Pick<ContextSource, "baseUrl">): string {
+  const app = defaultSplunkApp(source);
+  return app ? `/servicesNS/-/${encodeURIComponent(app)}` : "/services";
+}
+
+export interface SplunkApp {
+  name: string;
+  label: string;
+}
+
+/** List the apps the account can see (for the setup wizard's app picker).
+ *  Visible, enabled apps only; labels are the human names shown in Splunk. */
+export async function listSplunkApps(
+  source: Pick<ContextSource, "baseUrl">,
+  credential: ContextCredential,
+  timeoutMs: number,
+): Promise<SplunkApp[]> {
+  const res = await getSplunk<{
+    entry?: Array<{ name?: string; content?: { label?: string; visible?: boolean; disabled?: boolean } }>;
+  }>(`${mgmtBase(source)}/services/apps/local?output_mode=json&count=0`, credential, timeoutMs);
+  return (res.entry ?? [])
+    .filter((a) => a.name && a.content?.visible !== false && a.content?.disabled !== true)
+    .map((a) => ({ name: a.name!, label: a.content?.label?.trim() || a.name! }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
 /** Parse a chat/bookmark query:
  *  - JSON spec {"spl": "...", "earliest": "-7d", "latest": "now", "limit": n}
  *  - raw SPL ("search index=web error", "| tstats …", "index=main …")
@@ -276,14 +317,19 @@ type SplunkEvent = Record<string, unknown>;
 const sval = (v: unknown): string =>
   v === null || v === undefined ? "" : Array.isArray(v) ? v.map(String).join(", ") : String(v);
 
-function eventToHit(e: SplunkEvent, webUrl: string | undefined, spl: string): ContextSearchHit {
+function eventToHit(
+  e: SplunkEvent,
+  webUrl: string | undefined,
+  spl: string,
+  app = "search",
+): ContextSearchHit {
   const raw = sval(e._raw);
   const time = sval(e._time);
   const sourcetype = sval(e.sourcetype);
   if (raw) {
     return {
       title: `${sourcetype || "event"}${time ? ` @ ${time}` : ""}`,
-      url: webUrl ? `${webUrl.replace(/\/+$/, "")}/en-US/app/search/search?q=${encodeURIComponent(spl)}` : "",
+      url: webUrl ? `${webUrl.replace(/\/+$/, "")}/en-US/app/${encodeURIComponent(app)}/search?q=${encodeURIComponent(spl)}` : "",
       excerpt: raw.slice(0, 300),
       meta: {
         ...(sval(e.host) ? { host: sval(e.host) } : {}),
@@ -302,7 +348,7 @@ function eventToHit(e: SplunkEvent, webUrl: string | undefined, spl: string): Co
       .map(([k, v]) => `${k}=${sval(v)}`)
       .join(" · ")
       .slice(0, 100) || "result",
-    url: webUrl ? `${webUrl.replace(/\/+$/, "")}/en-US/app/search/search?q=${encodeURIComponent(spl)}` : "",
+    url: webUrl ? `${webUrl.replace(/\/+$/, "")}/en-US/app/${encodeURIComponent(app)}/search?q=${encodeURIComponent(spl)}` : "",
     excerpt: pairs
       .map(([k, v]) => `${k}: ${sval(v)}`)
       .join(" | ")
@@ -323,7 +369,7 @@ export async function searchSplunk(
   if (issue) throw new AppError(issue, "config");
   const count = Math.min(spec.limit ?? caps.maxResults, caps.maxResults);
   const res = await postSplunk<{ results?: SplunkEvent[] }>(
-    `${mgmtBase(source)}/services/search/jobs`,
+    `${mgmtBase(source)}${nsPath(source)}/search/jobs`,
     credential,
     {
       search: spec.spl,
@@ -336,7 +382,8 @@ export async function searchSplunk(
     caps.timeoutMs,
   );
   const web = webBase(source);
-  return (res.results ?? []).slice(0, caps.maxResults).map((e) => eventToHit(e, web, spec.spl));
+  const app = defaultSplunkApp(source) ?? "search";
+  return (res.results ?? []).slice(0, caps.maxResults).map((e) => eventToHit(e, web, spec.spl, app));
 }
 
 /** Saved searches + indexes → bookmark candidates (each best-effort: a
@@ -349,7 +396,7 @@ export async function browseSplunkCandidates(
   const base = mgmtBase(source);
   const out: Array<{ name: string; locator: string; kind: "query"; detail: string }> = [];
   const saved = await getSplunk<{ entry?: Array<{ name?: string }> }>(
-    `${base}/services/saved/searches?output_mode=json&count=${caps.maxResults}`,
+    `${base}${nsPath(source)}/saved/searches?output_mode=json&count=${caps.maxResults}`,
     credential,
     caps.timeoutMs,
   ).catch(() => ({ entry: [] }));

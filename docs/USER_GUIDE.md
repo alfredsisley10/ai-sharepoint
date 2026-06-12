@@ -420,6 +420,10 @@ Search your logs and metrics **read-only** from chat:
   Copy the **value only** (a long opaque string), not the cookie name. It uses your browser's own
   Splunk session and is re-captured the same way when it expires (via *Test Context Source*). An
   authentication **token** or **username/password** also work where permitted.
+- **Search app**: on Splunk Cloud the wizard lists the apps you can access and asks which
+  **search app** to run in — required when your instance disables the default `search` app and
+  meters by a line-of-business app. Searches then dispatch in that app's namespace
+  (`/servicesNS/-/<app>/…`); setup verifies it with a quick test search before saving.
 - **Ask naturally**: *"@sharepoint search Splunk for smtp relay timeouts"* (keywords search the
   default index over the last 24 h), or use raw SPL — `search index=web error | stats count by
   host`, `| savedsearch "Errors by host"` — or JSON with `earliest`/`latest` to widen the
