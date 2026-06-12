@@ -377,6 +377,11 @@ reasons — ADR-0022):
   diagram** plus a rate table in *View Database Schema & Semantic Index*, travels with
   reference-config exports, and is fed to chat so multi-table questions JOIN on the right
   columns.
+- **Small scopes are swept completely, in every mode**: when ≤12 tables are in scope, *every*
+  type-compatible column pair is probed — junction tables join on columns whose names share
+  nothing (`member_dn` → `distinguishedName`), so measurement, not naming, finds them. Tables
+  without row statistics (fresh exports) are included with bounded samples; only tables known
+  to be huge sit out of the sweep.
 - **Scope and seed the run**: the wizard first lets you **scope the tables** — type
   comma-separated prefixes/keywords (e.g. `fin_, gl_`; shared prefixes usually mean a shared
   objective) to pre-select, then search and multi-select by hand. A scoped run **merges** into

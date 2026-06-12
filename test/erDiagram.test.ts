@@ -500,3 +500,81 @@ test("upsertRelationship creates a model when absent and replaces by pair, keepi
   );
   assert.equal(merged.relationships[1].forwardRate, 0.97, "re-probe replaced the rates");
 });
+
+// --- the pilot's failing case: a 3-table AD export, no statistics --------------
+
+test("a junction table with cross-named DN columns IS swept when row estimates are unknown", async () => {
+  const { proposeExhaustivePairs, proposeJoinCandidates, pairKey } = await import(
+    "../src/context/db/erDiagram"
+  );
+  const adExport: SourceSchema = {
+    catalog: {
+      fetchedAt: T0,
+      engine: "mssql",
+      database: "ad_export",
+      tables: [
+        {
+          schema: "dbo",
+          name: "LDAP_USERS",
+          kind: "table",
+          columns: [
+            { name: "distinguishedName", dataType: "nvarchar" },
+            { name: "sAMAccountName", dataType: "nvarchar" },
+            { name: "mail", dataType: "nvarchar" },
+            { name: "whenCreated", dataType: "datetime" },
+          ],
+        },
+        {
+          schema: "dbo",
+          name: "LDAP_GROUPS",
+          kind: "table",
+          columns: [
+            { name: "distinguishedName", dataType: "nvarchar" },
+            { name: "cn", dataType: "nvarchar" },
+            { name: "groupType", dataType: "int" },
+          ],
+        },
+        {
+          schema: "dbo",
+          name: "LDAP_GROUP_ASSOCIATION",
+          kind: "table",
+          columns: [
+            { name: "group_dn", dataType: "nvarchar" },
+            { name: "member_dn", dataType: "nvarchar" },
+          ],
+        },
+      ],
+    },
+    semanticState: "none",
+  };
+  // Name heuristics cannot bridge member_dn → distinguishedName…
+  const heuristic = proposeJoinCandidates(adExport);
+  const tried = new Set(heuristic.map((c) => pairKey(c)));
+  // …so the sweep must cover it — INCLUDING when there are no row
+  // estimates at all (fresh export, no statistics), which previously
+  // excluded every table and produced "zero joins" at 100%.
+  const sweep = proposeExhaustivePairs(adExport, {}, tried);
+  const has = (ft: string, fc: string, tt: string, tc: string) =>
+    sweep.some((p) => pairKey(p) === pairKey({ fromTable: ft, fromColumn: fc, toTable: tt, toColumn: tc }));
+  assert.ok(
+    has("dbo.LDAP_GROUP_ASSOCIATION", "member_dn", "dbo.LDAP_USERS", "distinguishedName") ||
+      has("dbo.LDAP_USERS", "distinguishedName", "dbo.LDAP_GROUP_ASSOCIATION", "member_dn"),
+    "member_dn ↔ users.distinguishedName must be probed",
+  );
+  assert.ok(
+    has("dbo.LDAP_GROUP_ASSOCIATION", "group_dn", "dbo.LDAP_GROUPS", "distinguishedName") ||
+      has("dbo.LDAP_GROUPS", "distinguishedName", "dbo.LDAP_GROUP_ASSOCIATION", "group_dn"),
+    "group_dn ↔ groups.distinguishedName must be probed",
+  );
+  // Known-huge tables stay excluded; unknown sizes are eligible.
+  const withHuge = proposeExhaustivePairs(adExport, { "dbo.ldap_users": 80_000_000 }, new Set());
+  assert.ok(!withHuge.some((p) => p.fromTable === "dbo.LDAP_USERS" || p.toTable === "dbo.LDAP_USERS"));
+});
+
+test("the AI prompt teaches junction-table and key-domain reasoning", async () => {
+  const { buildJoinCandidatePrompt } = await import("../src/context/db/erDiagram");
+  const prompt = buildJoinCandidatePrompt(schemaWith());
+  assert.match(prompt, /JUNCTION tables/);
+  assert.match(prompt, /member_dn → users\.distinguishedName/);
+  assert.match(prompt, /LDAP DNs/);
+});

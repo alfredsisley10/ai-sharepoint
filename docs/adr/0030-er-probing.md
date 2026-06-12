@@ -3,7 +3,21 @@
 - **Status:** Accepted (2026-06-12); amended 2026-06-12 (adaptive sizing);
   amended 2026-06-12 (AI-assisted candidates, probe report, data-quality
   tier); amended 2026-06-12 (user-defined joins from chat); amended
-  2026-06-12 (scoped runs, AI hints, known joins in the wizard)
+  2026-06-12 (scoped runs, AI hints, known joins in the wizard); amended
+  2026-06-12 (measurement-first sweeps)
+- **Amendment (measurement-first sweeps):** a 3-table AD export
+  (users / groups / group-association) produced zero joins: name
+  heuristics cannot bridge `member_dn` → `distinguishedName`, and the
+  exhaustive sweep excluded tables with UNKNOWN row estimates — fresh
+  exports often carry no statistics, so "Thorough" tested nothing.
+  Corrections: (1) unknown-size tables are SWEEP-ELIGIBLE (sampled
+  probes bound the cost; only tables KNOWN to exceed the size cap are
+  excluded); (2) scopes of ≤12 tables are swept exhaustively in EVERY
+  mode — "probe all plausible column pairs, measure the join rates,
+  verify" is the method when nothing else is known about a database;
+  (3) the AI prompt teaches junction-table reasoning and the common
+  key domains (ids, GUIDs, SIDs, LDAP DNs, UPNs, emails) so
+  cross-named references are proposed even on large scopes.
 - **Amendment (scoped/guided runs):** the wizard scopes and seeds the
   run. (1) **Table scoping** — an optional prefix/keyword filter
   PRE-SELECTS tables (shared prefixes usually mean a shared objective),

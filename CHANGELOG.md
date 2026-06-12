@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.28.0 — 2026-06-12
+
+### Fixed — ER runs find junction tables: measurement-first sweeps (pilot)
+- A 3-table AD export (LDAP_USERS / LDAP_GROUPS / LDAP_GROUP_ASSOCIATION) finished at 100%
+  with **zero joins** — the textbook case the feature exists for. Two root causes:
+  - **Name heuristics cannot bridge `member_dn` → `distinguishedName`** — junction tables join
+    on columns whose names share nothing. The exhaustive sweep is what finds them by
+    measurement, but…
+  - …**the sweep excluded tables with unknown row estimates.** Fresh exports often carry no
+    statistics, so every table was silently skipped and "Thorough" probed nothing.
+- Corrections, matching how DBAs actually work ("probe all tables for plausible join columns,
+  test the rates, verify the logic"):
+  - Tables with **unknown sizes are sweep-eligible** (bounded samples keep it cheap); only
+    tables *known* to exceed the 50k-row cap sit out.
+  - Scopes of **≤12 tables are swept exhaustively in every mode** — no mode picking required
+    for the small-database case; the consent dialog says so.
+  - The **AI prompt now teaches junction-table reasoning** and the common key domains (numeric
+    ids, GUIDs/UUIDs, SIDs, LDAP DNs, UPNs/sAMAccountNames, emails), so cross-named references
+    get proposed on large scopes too.
+- Expected on the test case: `member_dn ↔ LDAP_USERS.distinguishedName` and
+  `group_dn ↔ LDAP_GROUPS.distinguishedName` at ≈100%, with the association table read as the
+  many-to-many bridge. If rates come back lower than reality on PostgreSQL, check collation —
+  DN comparisons there are case-sensitive; the probe report now shows the measured near-miss
+  either way.
+
 ## 0.27.1 — 2026-06-12
 
 ### Fixed — updates no longer surface ANY raw registration errors (pilot, second report)

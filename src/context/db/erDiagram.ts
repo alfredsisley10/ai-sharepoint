@@ -49,6 +49,10 @@ export const ER_SLOW_PROBE_MS = 5_000;
 export const ER_MAX_SAMPLE = 10_000;
 /** Ceiling on thorough-mode exhaustive pairs (still cancellable). */
 export const ER_EXHAUSTIVE_PAIR_CAP = 500;
+/** Scopes at or under this many tables are ALWAYS swept exhaustively, in
+ *  every mode: "probe all tables for plausible join columns and measure"
+ *  is the whole method when nothing else is known about a database. */
+export const ER_AUTO_SWEEP_TABLES = 12;
 
 /** Row estimates keyed by lowercase qualified table name. */
 export type RowEstimates = Record<string, number>;
@@ -310,11 +314,15 @@ export function proposeJoinCandidates(
 }
 
 /**
- * Thorough mode: EVERY type-compatible cross-table column pair — but only
- * between tables small enough (per row estimates) that complete testing is
- * cheap, deduped against the heuristic set, capped, lowest priority. This is
- * the "every permutation and combination for completeness" pass, kept
- * performance-sensitive by the size gate + cap + cancellable runner.
+ * Exhaustive sweep: EVERY type-compatible cross-table column pair — the
+ * measurement-first method for databases where names carry no signal (a
+ * junction table's member_dn → users.distinguishedName has no name overlap
+ * at all). Tables with UNKNOWN row estimates are ELIGIBLE — sampled probes
+ * bound the cost, and a sweep that silently skips statistics-less tables
+ * reads as "zero joins" on exactly the databases that need it (pilot: a
+ * fresh 3-table AD export produced nothing). Only tables KNOWN to exceed
+ * `maxRows` are excluded; pairs are deduped against the heuristic set,
+ * capped, lowest priority.
  */
 export function proposeExhaustivePairs(
   schema: SourceSchema,
@@ -325,7 +333,7 @@ export function proposeExhaustivePairs(
 ): JoinCandidate[] {
   const small = schema.catalog.tables.filter((t) => {
     const rows = rowEstimates[qualifiedName(t).toLowerCase()];
-    return rows !== undefined && rows > 0 && rows <= maxRows;
+    return rows === undefined || rows === 0 || rows <= maxRows;
   });
   const out: JoinCandidate[] = [];
   for (let i = 0; i < small.length && out.length < cap; i++) {
@@ -550,6 +558,7 @@ export function buildJoinCandidatePrompt(
   return [
     `You are inferring JOIN relationships for a ${schema.catalog.engine} database ("${schema.catalog.database}") that declares no foreign keys.`,
     "From the tables below (column types, semantic tags, and content-type summaries of actual values), propose the column pairs MOST LIKELY to join — keys referencing other tables, shared business identifiers, matching code domains. Only pairs whose types can join. No same-table pairs.",
+    "Pay special attention to ASSOCIATION/JUNCTION tables (names like *_association, *_map, *_member, *_link, or two reference-shaped columns): their columns reference the entity tables' key-like columns even when the NAMES share nothing — e.g. member_dn → users.distinguishedName, group_dn → groups.distinguishedName, account_sid → objectSid. Common key domains: numeric ids, GUIDs/UUIDs, SIDs, LDAP DNs, UPNs/sAMAccountNames, emails, natural codes.",
     ...(opts.hint?.trim()
       ? [
           "",

@@ -69,6 +69,7 @@ import {
   JoinCandidate,
   ER_SAMPLE_SIZE,
   ER_FULL_JOIN_MAX_ROWS,
+  ER_AUTO_SWEEP_TABLES,
   ER_SLOW_PROBE_MS,
   ER_EXHAUSTIVE_PAIR_CAP,
   ER_STATUS_REFRESH_MS,
@@ -2778,8 +2779,13 @@ export function activate(context: vscode.ExtensionContext): void {
     const heuristic = proposeJoinCandidates(scoped);
     const smallTables = scoped.catalog.tables.filter((t) => {
       const rows = rowEstimates[qualifiedName(t).toLowerCase()];
-      return rows !== undefined && rows > 0 && rows <= ER_FULL_JOIN_MAX_ROWS;
+      return rows === undefined || rows === 0 || rows <= ER_FULL_JOIN_MAX_ROWS;
     }).length;
+    // Small scopes are ALWAYS swept exhaustively, whatever the mode: name
+    // heuristics cannot connect member_dn → distinguishedName, and "probe
+    // every plausible column pair, measure, verify" IS the method when
+    // nothing else is known about a database (pilot: 3-table AD export).
+    const autoSweep = selectedTables.length <= ER_AUTO_SWEEP_TABLES;
     const aiAvailable = SchemaIndexer.enabledByPolicy();
     const mode = await vscode.window.showQuickPick(
       [
@@ -2799,8 +2805,8 @@ export function activate(context: vscode.ExtensionContext): void {
           value: "standard" as const,
         },
         {
-          label: "$(microscope) Thorough — AI + every column pair across small tables",
-          description: `adds all type-compatible pairs between the ${smallTables} table(s) ≤ ${ER_FULL_JOIN_MAX_ROWS.toLocaleString()} rows (complete joins, capped at ${ER_EXHAUSTIVE_PAIR_CAP})`,
+          label: "$(microscope) Thorough — AI + every column pair across small/unknown-size tables",
+          description: `adds all type-compatible pairs between the ${smallTables} eligible table(s) (≤ ${ER_FULL_JOIN_MAX_ROWS.toLocaleString()} rows or no statistics; capped at ${ER_EXHAUSTIVE_PAIR_CAP})`,
           value: "thorough" as const,
         },
       ],
@@ -2894,7 +2900,7 @@ export function activate(context: vscode.ExtensionContext): void {
       ...userJoins,
       ...aiPairs,
       ...heuristic,
-      ...(mode.value === "thorough" ? proposeExhaustivePairs(scoped, rowEstimates, tried) : []),
+      ...(mode.value === "thorough" || autoSweep ? proposeExhaustivePairs(scoped, rowEstimates, tried) : []),
     ];
     if (candidates.length === 0) {
       void vscode.window.showInformationMessage(
@@ -2908,7 +2914,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return initialSampleSize(f, t) === "full";
     }).length;
     const consent = await vscode.window.showInformationMessage(
-      `Build the ER model for "${source.displayName}"? ${candidates.length} candidate pair(s)${aiPairs.length > 0 ? ` (${aiPairs.length} proposed by Copilot)` : ""} will be probed with bounded read-only count queries (≈${candidates.length * 2}+): ${fullPairs} pair(s) get COMPLETE join tests (both tables small), the rest start with row-count-sized samples and ESCALATE toward completeness while the database answers fast — backing off the moment it doesn't. Only match COUNTS are read; no row data leaves the database.`,
+      `Build the ER model for "${source.displayName}"? ${candidates.length} candidate pair(s)${aiPairs.length > 0 ? ` (${aiPairs.length} proposed by Copilot)` : ""}${autoSweep && mode.value !== "thorough" ? ` — small scope, so every type-compatible column pair is swept` : ""} will be probed with bounded read-only count queries (≈${candidates.length * 2}+): ${fullPairs} pair(s) get COMPLETE join tests (both tables small), the rest start with row-count-sized samples and ESCALATE toward completeness while the database answers fast — backing off the moment it doesn't. Only match COUNTS are read; no row data leaves the database.`,
       { modal: true },
       "Probe & Build",
     );
