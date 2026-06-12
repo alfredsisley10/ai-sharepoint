@@ -41,6 +41,10 @@ export function describeToolCall(name: string, input: unknown): string {
       return "Testing the Outlook channel (draft to yourself — nothing is sent)…";
     case "aisharepoint_site_overview":
       return `Reading ${str(i.site) ?? "the site"} overview…`;
+    case "aisharepoint_inspect_site":
+      return str(i.page)
+        ? `Inspecting page “${short(String(i.page), 40)}” (read-only)…`
+        : `Inspecting ${str(i.site) ?? "the site"} architecture (read-only)…`;
     case "aisharepoint_list_pages":
       return `Listing pages of ${str(i.site) ?? "the site"}…`;
     case "aisharepoint_list_connections":

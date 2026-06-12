@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.24.0 — 2026-06-12
+
+### Added — full read-only site inspection for ANY connection (pilot)
+- Pilot: asked about a read-only site's tech stack, @sharepoint claimed an authoritative
+  component-by-page breakdown needed the site *"onboarded as managed so pull_site could
+  capture its full spec"*. Wrong premise: **reading never requires managed** — managed exists
+  to *change* sites.
+- New `#spInspectSite` tool (`inspect_site`): an authoritative, **read-only** architecture
+  inspection that works identically for **reference and managed** connections — every visible
+  list/library **with its columns** (name/type/required), the page inventory, and (with a page
+  name) that page's **full section/column/web-part breakdown** (text web parts HTML-stripped,
+  standard web parts by title/description/type). Bounded output (20 lists / 40 columns per
+  list / capped text) so answers stay chat-sized.
+- @sharepoint's instructions now route architecture/tech-stack questions to `inspect_site` for
+  any connection and explicitly forbid telling users a site must be onboarded as managed (or
+  pulled) just to analyze it.
+
 ## 0.23.2 — 2026-06-12
 
 ### Fixed — @sharepoint no longer sends you hunting for a "preview dialog" (pilot)

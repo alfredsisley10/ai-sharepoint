@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, budget guardrails, enterprise auth, and privacy-first diagnostics.",
-  "version": "0.23.2",
+  "version": "0.24.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -554,6 +554,30 @@
             "site": {
               "type": "string",
               "description": "Site URL or display name of a configured connection. Optional when exactly one connection exists."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_inspect_site",
+        "displayName": "Inspect Site Architecture (read-only)",
+        "toolReferenceName": "spInspectSite",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(type-hierarchy-sub)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Authoritative, READ-ONLY architecture inspection of a connected SharePoint site — works for reference (read-only) connections exactly like managed ones; no repository, pull, or managed onboarding is ever needed to read. Without 'page': enumerates every visible list/library WITH its columns (name/type/required) plus the page inventory. With page: \"<title or id>\": returns that page's full layout — sections, columns, and each web part (text content stripped of HTML, standard web parts by title/type). Use this for tech-stack, component-by-page, or 'how is this site built' questions.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Site URL or display name of a configured connection. Optional when exactly one connection exists."
+            },
+            "page": {
+              "type": "string",
+              "description": "Optional page title (or id) for a full section/web-part breakdown of that page."
             }
           }
         }

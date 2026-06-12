@@ -174,6 +174,7 @@ automatically when relevant, or you can `#`-reference them in any chat prompt:
 |---|---|
 | `#spConnections` | Your configured connections (name, URL, role, verified) |
 | `#spSiteOverview` | Site title/description + lists/libraries + pages |
+| `#spInspectSite` | **Full architecture, read-only — works on reference connections**: every list with its columns + page inventory; with a page name, that page's sections & web parts |
 | `#spPages` | Modern pages with URLs and last-modified times |
 | `#spUsage` | This extension's metered usage vs. your budget |
 | `#spSources` | Your configured reference sources (Confluence/Jira) |
