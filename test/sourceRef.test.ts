@@ -78,7 +78,7 @@ test("sourceChatLabel leads with the alias when present", () => {
 });
 
 test("site spec file paths: only lists/pages JSON, no traversal or absolutes", async () => {
-  const { validateSiteFilePath } = await import("../src/chat/siteDevTools");
+  const { validateSiteFilePath } = await import("../src/chat/siteDevPaths");
   assert.equal(validateSiteFilePath("lists/Projects.json"), undefined);
   assert.equal(validateSiteFilePath("pages/Home Page.json"), undefined);
   for (const bad of ["../evil.json", "/etc/passwd", "lists\\x.json", "scripts/run.json", "lists/x.exe", "lists/.hidden.json"]) {

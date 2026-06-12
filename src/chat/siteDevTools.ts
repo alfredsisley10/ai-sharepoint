@@ -17,19 +17,10 @@ import { redactError } from "../core/redaction";
  * guarded pipeline a human would.
  */
 
-const SITE_FILE_RE = /^(lists|pages)\/[A-Za-z0-9][A-Za-z0-9._ -]*\.json$/;
+import { validateSiteFilePath } from "./siteDevPaths";
+
 const MAX_FILES = 30;
 const MAX_FILE_CHARS = 200_000;
-
-export function validateSiteFilePath(p: string): string | undefined {
-  if (p.includes("..") || p.startsWith("/") || p.includes("\\")) {
-    return `"${p}" — paths must be relative, forward-slash, no traversal.`;
-  }
-  if (!SITE_FILE_RE.test(p)) {
-    return `"${p}" — only lists/<name>.json and pages/<name>.json are writable.`;
-  }
-  return undefined;
-}
 
 function text(s: string): vscode.LanguageModelToolResult {
   return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(s)]);
