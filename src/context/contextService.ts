@@ -40,6 +40,11 @@ import {
   scopesForSource,
 } from "./adapters/m365copilot";
 import {
+  createConfluencePage,
+  updateConfluencePage,
+  ConfluenceWriteResult,
+} from "./adapters/confluenceWrite";
+import {
   verifyServiceNow,
   searchServiceNow,
   getServiceNowItem,
@@ -417,6 +422,46 @@ export class ContextService {
         });
       },
     );
+  }
+
+  /** Create or update a Confluence page with the source's stored credential
+   *  (the user's own API token — no admin OAuth consent). Lockout-gated like a
+   *  read; never cached (writes are always live). The caller (the write tool)
+   *  gates on explicit user approval before this runs. */
+  async writeConfluencePage(
+    source: ContextSource,
+    op: {
+      action: "create" | "update";
+      spaceKey?: string;
+      title: string;
+      body: string;
+      pageId?: string;
+      parentId?: string;
+    },
+  ): Promise<ConfluenceWriteResult> {
+    if (source.type !== "confluence") {
+      throw new AppError("Page writes target a Confluence source.", "config");
+    }
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () => {
+      if (op.action === "update") {
+        if (!op.pageId) throw new AppError("Updating a Confluence page needs its pageId.", "config");
+        return updateConfluencePage(
+          source,
+          credential,
+          { id: op.pageId, title: op.title, body: op.body },
+          caps.timeoutMs,
+        );
+      }
+      if (!op.spaceKey) throw new AppError("Creating a Confluence page needs a spaceKey.", "config");
+      return createConfluencePage(
+        source,
+        credential,
+        { spaceKey: op.spaceKey, title: op.title, body: op.body, parentId: op.parentId },
+        caps.timeoutMs,
+      );
+    });
   }
 
   /** Gemini-grounded answer from a Vertex AI Search app (the "analysis"

@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.40.0",
+  "version": "0.41.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -657,6 +657,59 @@
         "inputSchema": {
           "type": "object",
           "properties": {}
+        }
+      },
+      {
+        "name": "aisharepoint_write_confluence_page",
+        "displayName": "Write Confluence Page",
+        "toolReferenceName": "spWriteConfluencePage",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Create or UPDATE a page in a Confluence space — the writable target that needs NO SharePoint tenant-admin consent (it uses the Confluence source's own API token). Approval-gated: the user must confirm before anything is written. To CREATE: action='create', source=<Confluence source name>, spaceKey, title, markdown (the body in Markdown — auto-converted to Confluence storage format), optional parentId. To UPDATE: action='update', source, pageId (find it first via search_context on that source), title, markdown — the page's version is read and bumped automatically. Returns the saved page's title, new version, and URL; Confluence keeps version history, so updates are reversible there. Use ONLY for a change the user explicitly asked to make.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one Confluence source is configured)."
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update"
+              ],
+              "description": "Create a new page or update an existing one."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Target space key (create only)."
+            },
+            "title": {
+              "type": "string",
+              "description": "Page title."
+            },
+            "markdown": {
+              "type": "string",
+              "description": "Page body in Markdown (converted to Confluence storage format)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "Existing page id (update only) — find it via search_context on the source."
+            },
+            "parentId": {
+              "type": "string",
+              "description": "Optional parent page id (create only)."
+            }
+          },
+          "required": [
+            "title",
+            "markdown"
+          ]
         }
       },
       {

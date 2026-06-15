@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.41.0 — 2026-06-15
+
+### Added — manage Confluence pages (write), the no-admin-consent target (ADR-0038, Phase 2)
+- @sharepoint can now **create and update Confluence pages** — the writable target that needs
+  **no SharePoint tenant-admin consent**, because Confluence writes use the source's **own API
+  token** (the same credential it already reads with). This unblocks pilots who can't get Graph
+  `Sites.*` write consent approved.
+- A new **approval-gated** tool (`#spWriteConfluencePage`): the assistant proposes a page
+  (space + title + Markdown to create, or page id + title + Markdown to update) and **you confirm
+  before anything is written**. Markdown is auto-converted to Confluence storage format; updates
+  read the current version and bump it (concurrent edits fail loudly rather than clobbering); and
+  Confluence's version history makes every change reversible there.
+- Under the hood: a Confluence-native write client (create / update / trash via the REST content
+  API), `fetchJson` widened to `PUT`/`DELETE` + `204 No Content`, and writes routed through
+  `ContextService` (stored-credential, lockout-gated, never cached).
+- This is the **direct page-write** path; the fuller "managed Confluence space" Git lifecycle
+  (pull → edit as files → apply/revert), building on this writer and the 0.40.0 view/role work,
+  is the next step.
+
 ## 0.40.0 — 2026-06-15
 
 ### Changed — "Managed Sites" view + read-only sites moved to Reference Sources (Phase 1)

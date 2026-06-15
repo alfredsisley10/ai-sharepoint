@@ -19,6 +19,7 @@ import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { sourceChatLabel, resolveSourceRef } from "../context/sourceRef";
 import { EXPORT_MAX_ROWS, EXPORT_TIMEOUT_MS, EXPORT_DIR } from "../context/exportData";
+import { markdownToStorage } from "../context/adapters/confluenceWrite";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
@@ -99,6 +100,75 @@ export function registerContextTools(
   };
 
   return [
+    // The one WRITE tool over the context framework: create/update a Confluence
+    // page. Approval-gated (VS Code tool confirmation) before anything is
+    // written — uses the source's own API token, no admin OAuth consent.
+    vscode.lm.registerTool<{
+      source?: string;
+      action?: "create" | "update";
+      spaceKey?: string;
+      title?: string;
+      markdown?: string;
+      pageId?: string;
+      parentId?: string;
+    }>("aisharepoint_write_confluence_page", {
+      prepareInvocation(options) {
+        const i = options.input;
+        const verb = i.action === "update" ? "Update" : "Create";
+        return {
+          invocationMessage: `${verb} a Confluence page`,
+          confirmationMessages: {
+            title: `${verb} Confluence page “${i.title ?? "(untitled)"}”?`,
+            message: new vscode.MarkdownString(
+              [
+                `**Source:** ${i.source ?? "_the configured Confluence source_"}`,
+                i.action === "update"
+                  ? `**Page id:** ${i.pageId ?? "_?_"}`
+                  : `**Space:** ${i.spaceKey ?? "_?_"}${i.parentId ? ` · under parent ${i.parentId}` : ""}`,
+                "",
+                "Writes to **Confluence** with your own API token — a real change. Confluence keeps version history (updates bump the version), so it's reversible there.",
+              ].join("\n"),
+            ),
+          },
+        };
+      },
+      async invoke(options) {
+        telemetry.record("tool.invoke", { tool: "aisharepoint_write_confluence_page" });
+        try {
+          const i = options.input;
+          const source = resolveOrExplain(i.source);
+          if (source.type !== "confluence") {
+            return text(
+              `"${source.displayName}" is a ${source.type} source — page writes target a Confluence source.`,
+            );
+          }
+          if (!i.title?.trim()) return text("A page title is required.");
+          if (!i.markdown?.trim()) return text("The page body (markdown) is required.");
+          const action = i.action === "update" ? "update" : "create";
+          if (action === "update" && !i.pageId?.trim()) {
+            return text("Updating a page needs its pageId (search the source first to find it).");
+          }
+          if (action === "create" && !i.spaceKey?.trim()) {
+            return text("Creating a page needs the target spaceKey.");
+          }
+          const res = await service.writeConfluencePage(source, {
+            action,
+            ...(i.spaceKey ? { spaceKey: i.spaceKey.trim() } : {}),
+            title: i.title.trim(),
+            body: markdownToStorage(i.markdown),
+            ...(i.pageId ? { pageId: i.pageId.trim() } : {}),
+            ...(i.parentId ? { parentId: i.parentId.trim() } : {}),
+          });
+          telemetry.record("confluence.write", { action });
+          return text(
+            `Confluence page ${action === "update" ? "updated" : "created"}: “${res.title}” (v${res.version}) — ${res.url}`,
+          );
+        } catch (err) {
+          errors.capture("tool:aisharepoint_write_confluence_page", err);
+          return text(`Could not write the Confluence page: ${redactError(err).message}`);
+        }
+      },
+    }),
     vscode.lm.registerTool(
       "aisharepoint_db_schema",
       guarded<{ source?: string; topic?: string }>(
