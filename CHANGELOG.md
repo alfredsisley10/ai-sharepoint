@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.42.0 — 2026-06-15
+
+### Added — reusable Confluence ownership + archiving constructs (ADR-0039)
+Foundation for content-cleanup accountability (chat tools + the active-user checks wire next):
+- **Page ownership** (`confluenceOwnership.ts`): determine a page's *likely owner* from
+  **contribution history**, not the unreliable space-owner field — (1) an explicit **owner
+  label** `owners|sam1|sam2` (pipe-delimited AD sAMAccountNames, since Confluence labels can't
+  hold emails) is authoritative; else (2) the **most prolific contributor who is also active**;
+  else (3) the most prolific active contributor for the **whole space**. "Active" is an injected
+  predicate (LDAP / M365, next). Owners can be **written back** as the label.
+- **Archiving** (`confluenceArchive.ts`): "archive a page" moves it under a root-level page named
+  **"archive"** (matched **case-insensitively**, created if absent) using Confluence's
+  content-safe move endpoint; refuses to archive the Archive root itself.
+- Designed for Confluence **Data Center** (version author `by.username` = the sAMAccountName).
+  All writes use the source's own API token (no admin consent). Pure logic + the REST IO are
+  unit-tested (13 new tests).
+
+### Next (staged)
+- LDAP / M365 **active-user** predicates; chat tools for "who owns this page?", "set owners", and
+  "archive page" (notifying the resolved owner first); and a local Confluence **content cache +
+  drift check** (don't deploy onto a page that changed underneath us).
+
 ## 0.41.1 — 2026-06-15
 
 ### Decided — Confluence management is complete; no Git lifecycle for it
