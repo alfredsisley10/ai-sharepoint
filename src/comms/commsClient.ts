@@ -122,4 +122,14 @@ export class CommsClient extends SharePointClient {
       MAIL_SEND_SCOPES,
     );
   }
+
+  /** Remove a mailbox draft — channel-test cleanup. Same scope as creating it. */
+  deleteMailDraft(messageId: string): Promise<void> {
+    return this.request(
+      "DELETE",
+      `/me/messages/${encodeURIComponent(messageId)}`,
+      undefined,
+      MAIL_DRAFT_SCOPES,
+    );
+  }
 }

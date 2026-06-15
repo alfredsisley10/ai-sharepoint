@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { ModelCostTable } from "./modelCosts";
 import { UsageMeter } from "./meter";
+import { EntitlementGate, isEntitlementFailure } from "./entitlementGate";
 import { AppError } from "../core/errors";
 import { wireEnabled, emitWire, capDetail } from "../core/wireLog";
 
@@ -41,11 +42,33 @@ export interface AskResult {
  */
 export class CopilotService {
   private readonly costs = new ModelCostTable();
+  // Pilot: a 403 "not authorized to use this Copilot feature" must not be
+  // re-hit by every chat turn / indexing batch — short-circuit locally.
+  private readonly gate = new EntitlementGate();
 
   constructor(private readonly meter: UsageMeter) {}
 
+  /** Close the entitlement pause early — the user explicitly retrying
+   *  ("Check Copilot Status") after fixing the subscription/policy. */
+  resetEntitlementGate(): void {
+    this.gate.reset();
+  }
+
+  /** Fail FAST (no Copilot traffic) while the entitlement pause is open. */
+  private assertEntitled(): void {
+    const block = this.gate.check(Date.now());
+    if (!block) return;
+    const mins = Math.max(1, Math.ceil(block.remainingMs / 60_000));
+    throw new AppError(
+      `Copilot requests are paused (~${mins} min left) after GitHub answered: ${block.reason}`,
+      "copilot.entitlement",
+      `Copilot said "not authorized for this feature" — requests are paused ~${mins} min so the refusal isn't hammered. Fix the subscription/org policy, then run "Check Copilot Status" to retry immediately.`,
+    );
+  }
+
   /** Models the signed-in user is entitled to, cheapest first. */
   async listModels(): Promise<ModelInfo[]> {
+    this.assertEntitled();
     const models = await vscode.lm.selectChatModels({ vendor: "copilot" });
     return models
       .map((m) => {
@@ -72,6 +95,7 @@ export class CopilotService {
    * largest context window.
    */
   async pickDefaultModel(): Promise<vscode.LanguageModelChat> {
+    this.assertEntitled();
     const all = await vscode.lm.selectChatModels({ vendor: "copilot" });
     if (all.length === 0) {
       throw new AppError(
@@ -102,6 +126,7 @@ export class CopilotService {
    * still counted.
    */
   async ask(opts: AskOptions, nowIso: () => string): Promise<AskResult> {
+    this.assertEntitled();
     const model = opts.model ?? (await this.pickDefaultModel());
     const modelKey = model.family || model.id;
 
@@ -136,6 +161,20 @@ export class CopilotService {
         opts.onChunk?.(fragment);
       }
       ok = true;
+      this.gate.reset(); // entitlement proven — close any stale pause
+    } catch (err) {
+      if (isEntitlementFailure(err)) {
+        // Open the pause so chat turns / indexing batches / pickers fail
+        // fast locally instead of re-hitting the refusal (pilot).
+        const reason = err instanceof Error ? err.message : String(err);
+        this.gate.open(reason, Date.now());
+        throw new AppError(
+          `GitHub Copilot rejected the request as not authorized: ${reason}`,
+          "copilot.entitlement",
+          'Copilot answered "not authorized for this feature" — the subscription/seat may have lapsed, or an organization policy disables it. Requests are paused ~5 min so the refusal isn\'t hammered; run "Check Copilot Status" to retry sooner.',
+        );
+      }
+      throw err;
     } finally {
       if (wireEnabled()) {
         emitWire(

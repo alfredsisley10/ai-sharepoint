@@ -5,6 +5,7 @@ import { UsageMeter } from "../copilot/meter";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
+import { describeColumn, summarizeCanvas } from "./siteInspect";
 
 /**
  * Language Model Tools (ADR-0017 surface 1): read-only capabilities Copilot
@@ -146,6 +147,94 @@ export function registerLanguageModelTools(
           2,
         );
       }),
+    ),
+
+    // Pilot: an authoritative component-by-page breakdown must work for
+    // ANY connection — reference (read-only) included. Managed onboarding
+    // is for CHANGING a site, never a prerequisite for reading it.
+    vscode.lm.registerTool(
+      "aisharepoint_inspect_site",
+      guarded<{ site?: string; page?: string }>(
+        "aisharepoint_inspect_site",
+        "Inspecting site architecture (read-only)",
+        async (input) => {
+          const conn = resolveOrExplain(input.site);
+          const client = access.clientFor(conn, { silent: true });
+          const site = await client.getSite(conn.siteUrl);
+          if (input.page?.trim()) {
+            const pages = await client.getPages(site.id);
+            const refRaw = input.page.trim();
+            const ref = refRaw.toLowerCase();
+            const match =
+              pages.find((p) => p.id === refRaw || p.title.toLowerCase() === ref) ??
+              pages.find((p) => p.title.toLowerCase().includes(ref));
+            if (!match) {
+              return `No page matched "${refRaw}". Pages: ${pages
+                .map((p) => p.title)
+                .join("; ")
+                .slice(0, 1500)}`;
+            }
+            const content = await client.getPageContent(site.id, match.id);
+            return JSON.stringify(
+              {
+                page: {
+                  title: match.title,
+                  url: match.webUrl,
+                  layout: content.pageLayout ?? null,
+                },
+                canvas: summarizeCanvas(content.canvasLayout),
+              },
+              null,
+              2,
+            );
+          }
+          const INSPECT_MAX_LISTS = 20;
+          const INSPECT_MAX_COLUMNS = 40;
+          const [lists, pages] = await Promise.all([
+            client.getLists(site.id),
+            client.getPages(site.id).catch(() => undefined),
+          ]);
+          const withColumns = [];
+          for (const l of lists.slice(0, INSPECT_MAX_LISTS)) {
+            const cols = (await client
+              .getListColumns(site.id, l.id)
+              .catch(() => [])) as Array<Record<string, unknown>>;
+            withColumns.push({
+              name: l.displayName,
+              template: l.template ?? null,
+              url: l.webUrl,
+              columns: cols.slice(0, INSPECT_MAX_COLUMNS).map(describeColumn),
+              ...(cols.length > INSPECT_MAX_COLUMNS
+                ? { columnsTruncated: cols.length - INSPECT_MAX_COLUMNS }
+                : {}),
+            });
+          }
+          return JSON.stringify(
+            {
+              site: {
+                name: site.displayName,
+                url: site.webUrl,
+                role: conn.role,
+                ...(conn.role === "reference"
+                  ? {
+                      note: "Read-only reference connection — inspection is fully available; managed onboarding is only needed to CHANGE the site.",
+                    }
+                  : {}),
+              },
+              lists: withColumns,
+              ...(lists.length > INSPECT_MAX_LISTS
+                ? { listsTruncated: lists.length - INSPECT_MAX_LISTS }
+                : {}),
+              pages:
+                pages?.map((p) => ({ title: p.title, url: p.webUrl })) ??
+                "unavailable (tenant restricts the Pages API)",
+              tip: 'For a page\'s full section/web-part breakdown, call inspect_site again with page: "<title>".',
+            },
+            null,
+            2,
+          );
+        },
+      ),
     ),
 
     vscode.lm.registerTool(

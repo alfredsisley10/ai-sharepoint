@@ -18,6 +18,7 @@ import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { sourceChatLabel, resolveSourceRef } from "../context/sourceRef";
+import { EXPORT_MAX_ROWS, EXPORT_TIMEOUT_MS, EXPORT_DIR } from "../context/exportData";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
@@ -347,12 +348,14 @@ export function registerContextTools(
     ),
     vscode.lm.registerTool(
       "aisharepoint_search_context",
-      guarded<{ source?: string; query: string }>(
+      guarded<{ source?: string; query: string; allowExpensive?: boolean }>(
         "aisharepoint_search_context",
         "Searching reference sources",
         async (input) => {
           const source = resolveOrExplain(input.source);
-          const hits = await service.search(source, input.query);
+          const hits = await service.search(source, input.query, {
+            allowExpensive: input.allowExpensive === true,
+          });
           if (hits.length === 0) {
             return `No results in "${source.displayName}" for that query. (Confluence accepts raw CQL, Jira raw JQL, or plain text.)`;
           }
@@ -403,6 +406,60 @@ export function registerContextTools(
           );
         },
       ),
+    ),
+    // ADR-0031: large datasets leave through FILES — the tool runs the query
+    // with export bounds, writes every row into the workspace, and hands the
+    // model ONLY the path + count (the data never enters chat context).
+    vscode.lm.registerTool<{ source?: string; query: string; fileName?: string }>(
+      "aisharepoint_export_context_results",
+      {
+        prepareInvocation(options) {
+          const src = resolveSourceRef(scopedSources(), options.input.source);
+          const q = options.input.query ?? "";
+          return {
+            invocationMessage: "Exporting search results to a workspace file",
+            confirmationMessages: {
+              title: `Export results from ${src?.displayName ?? options.input.source ?? "a source"} to a file?`,
+              message: new vscode.MarkdownString(
+                [
+                  "```",
+                  q.length > 400 ? `${q.slice(0, 400)}…` : q,
+                  "```",
+                  `Runs read-only with export bounds (up to **${EXPORT_MAX_ROWS.toLocaleString("en-US")} rows**, ${Math.round(EXPORT_TIMEOUT_MS / 1000)}s) and writes every result to \`${EXPORT_DIR}/\` in your workspace.`,
+                  "",
+                  "_The dataset goes to the file only — it is **not** loaded into the chat context. For SQL Server this bulk read intentionally bypasses the cost guard._",
+                ].join("\n"),
+              ),
+            },
+          };
+        },
+        async invoke(options) {
+          telemetry.record("tool.invoke", { tool: "aisharepoint_export_context_results" });
+          try {
+            const source = resolveOrExplain(options.input.source);
+            const result = await vscode.commands.executeCommand<
+              { file: string; rows: number } | undefined
+            >("aiSharePoint.exportSearchResults", {
+              source: source.id,
+              query: options.input.query,
+              ...(options.input.fileName ? { fileName: options.input.fileName } : {}),
+            });
+            if (!result) {
+              return text(
+                "The export did not complete (the user cancelled, or an error was already shown to them). Do not retry on your own.",
+              );
+            }
+            return text(
+              `Exported ${result.rows} row(s) from "${source.displayName}" to "${result.file}" in the workspace${
+                result.rows >= EXPORT_MAX_ROWS ? ` (hit the ${EXPORT_MAX_ROWS}-row export cap — suggest narrowing the query if they need the rest)` : ""
+              }. The dataset was intentionally NOT loaded into chat — point the user at the file. Do not read it back into context unless the user asks about a specific small slice.`,
+            );
+          } catch (err) {
+            errors.capture("tool:aisharepoint_export_context_results", err);
+            return text(`The export failed: ${redactError(err).message}`);
+          }
+        },
+      },
     ),
     // Agent-proposed bookmarks: persistence is gated by VS Code's tool
     // confirmation UI — the user sees name/locator/source and must approve

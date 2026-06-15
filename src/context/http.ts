@@ -25,7 +25,9 @@ export function authHeader(credential: ContextCredential): string {
  *  send a `Cookie` header and no `Authorization`. The stored capture is
  *  re-normalized here so a paste in a raw DevTools shape (table rows, JSON,
  *  stray newlines — illegal in a header value) self-heals instead of making
- *  fetch throw before anything is sent. */
+ *  fetch throw before anything is sent. Splunk Observability Cloud access
+ *  tokens (`sfx-token`) travel in the `X-SF-TOKEN` header (masked in wire
+ *  logs by the secret-key filter, like Authorization). */
 export function authHeaders(credential: ContextCredential): Record<string, string> {
   if (credential.method === "snow-session") {
     // Browser-like UA: SSO/WAF front-ends commonly drop non-browser clients
@@ -38,6 +40,9 @@ export function authHeaders(credential: ContextCredential): Record<string, strin
       "User-Agent": SNOW_SESSION_USER_AGENT,
       ...(session.userToken ? { "X-UserToken": session.userToken } : {}),
     };
+  }
+  if (credential.method === "sfx-token") {
+    return { "X-SF-TOKEN": credential.secret };
   }
   return { Authorization: authHeader(credential) };
 }

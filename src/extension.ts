@@ -49,7 +49,16 @@ import {
 } from "./context/types";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
-import { aliasIssue, normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
+import { aliasIssue, normalizeAlias, resolveSourceRef, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
+import {
+  rowsToCsv,
+  exportFileName,
+  sanitizeExportFileName,
+  EXPORT_MAX_ROWS,
+  EXPORT_TIMEOUT_MS,
+  EXPORT_DIR,
+} from "./context/exportData";
+import { deriveSplunkObsEndpoints } from "./context/adapters/splunkObservability";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
 import { SourceSchema, ErModel, ProbedRelationship, TestedPair, qualifiedName } from "./context/db/schemaIndex";
@@ -609,7 +618,8 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.registerCommand(id, async (...args: unknown[]) => {
         telemetry.record("command", { id: id.replace("aiSharePoint.", "") });
         try {
-          await fn(...args);
+          // Pass results through — tools read outcomes via executeCommand.
+          return await fn(...args);
         } catch (err) {
           const code = errors.capture(id, err);
           log.error(`${id} failed`, err);
@@ -631,6 +641,7 @@ export function activate(context: vscode.ExtensionContext): void {
           } else if (pick === "Export Diagnostics") {
             await vscode.commands.executeCommand("aiSharePoint.exportDiagnostics");
           }
+          return undefined;
         }
       }),
     );
@@ -651,6 +662,8 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   register("aiSharePoint.checkCopilotStatus", async () => {
+    // Explicit user retry: close the entitlement pause before re-probing.
+    copilot.resetEntitlementGate();
     await refreshCopilotState();
     if (!copilotState.chatInstalled) {
       const pick = await vscode.window.showWarningMessage(
@@ -1103,9 +1116,9 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   });
 
-  register("aiSharePoint.pullSiteToRepo", async (arg) => {
+  register("aiSharePoint.pullSiteToRepo", async (arg): Promise<string> => {
     const conn = await resolveConnArg(arg, sites, "Pull which site to its repository?");
-    if (!conn) return;
+    if (!conn) return "cancelled";
     requireManaged(conn);
     const config = syncConfigs.get(conn.siteUrl);
     if (!config) {
@@ -1114,7 +1127,7 @@ export function activate(context: vscode.ExtensionContext): void {
         "Configure Repository…",
       );
       if (go) await vscode.commands.executeCommand("aiSharePoint.configureSiteRepo", conn);
-      return;
+      return "no-repo";
     }
 
     const plan = await vscode.window.withProgress(
@@ -1132,14 +1145,14 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(
         `Pull blocked: ${plan.report.leakFindings.length} credential-shaped finding(s) and ${plan.report.oversize.length} oversize file(s). Nothing was written — see logs.`,
       );
-      return;
+      return "blocked";
     }
     if (!hasChanges(plan.report)) {
       await sites.markVerified(conn.siteUrl, nowIso());
       void vscode.window.showInformationMessage(
         `"${conn.displayName}" is already up to date (${plan.report.unchanged} files unchanged).`,
       );
-      return;
+      return "up-to-date";
     }
 
     const previewDoc = await vscode.workspace.openTextDocument({
@@ -1152,7 +1165,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { modal: true },
       "Apply & Commit",
     );
-    if (!confirm) return;
+    if (!confirm) return "cancelled";
 
     const staged = await syncEngine.apply(config.folder, plan.files, plan.report);
     const repo = await openOrInitRepository(vscode.Uri.file(config.folder));
@@ -1176,6 +1189,7 @@ export function activate(context: vscode.ExtensionContext): void {
     } else if (next === "Configure Remote…") {
       await vscode.commands.executeCommand("aiSharePoint.configureSiteRepo", conn);
     }
+    return `committed:${plan.report.added.length}+${plan.report.updated.length}~${plan.report.removed.length}-`;
   });
 
   register("aiSharePoint.pushSiteRepo", async (arg) => {
@@ -1236,7 +1250,7 @@ export function activate(context: vscode.ExtensionContext): void {
     repo: Awaited<ReturnType<typeof openOrInitRepository>>,
     desiredFiles: Map<string, string>,
     headline: string,
-  ): Promise<void> => {
+  ): Promise<string> => {
     const { snapshot, planBase, plan } = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Planning ${headline} for ${conn.displayName}…` },
       async (p) => {
@@ -1253,7 +1267,7 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage(
         `SharePoint already matches the target state for "${conn.displayName}"${plan.warnings.length ? ` (${plan.warnings.length} warning(s))` : ""}.`,
       );
-      return;
+      return "no-changes";
     }
 
     let includeDeletions = false;
@@ -1273,7 +1287,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ],
         { ignoreFocusOut: true, title: `${headline} — ${plan.deletions.length} deletion(s) detected` },
       );
-      if (!delPick) return;
+      if (!delPick) return "cancelled";
       includeDeletions = delPick.value;
     }
 
@@ -1288,7 +1302,7 @@ export function activate(context: vscode.ExtensionContext): void {
       { modal: true },
       includeDeletions ? "Apply Including Deletions" : "Apply to SharePoint",
     );
-    if (!confirm) return;
+    if (!confirm) return "cancelled";
 
     const writer = new SharePointWriteClient(
       registry.create(conn.authProviderId, conn.cacheHandle),
@@ -1343,27 +1357,33 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(
         `${headline} stopped after ${outcome.applied.length} op(s) at "${outcome.failedAt.op}": ${outcome.failedAt.error.slice(0, 160)} — the repository now reflects the actual live state; the intended state is preserved in commit history. Fix and re-run.`,
       );
-    } else {
-      void vscode.window.showInformationMessage(
-        `✓ ${headline} complete: ${outcome.applied.length} operation(s) applied to "${conn.displayName}". Repository reconciled with live state.`,
-      );
+      return `failed:${outcome.applied.length}:${outcome.failedAt.op}`;
     }
+    void vscode.window.showInformationMessage(
+      `✓ ${headline} complete: ${outcome.applied.length} operation(s) applied to "${conn.displayName}". Repository reconciled with live state.`,
+    );
+    return `applied:${outcome.applied.length}`;
   };
 
-  /** Guards shared by the write-back entry points. Returns null when blocked. */
+  /** Guards shared by the write-back entry points. Blocked outcomes carry a
+   *  machine-readable reason so agent tools can relay what ACTUALLY happened
+   *  (pilot: "look for the preview dialog" after a flow that never opened one). */
   const writeBackPreflight = async (
     arg: unknown,
     title: string,
-  ): Promise<{ conn: SiteConnection; config: SiteSyncConfig; repo: Awaited<ReturnType<typeof openOrInitRepository>> } | null> => {
+  ): Promise<
+    | { ok: true; conn: SiteConnection; config: SiteSyncConfig; repo: Awaited<ReturnType<typeof openOrInitRepository>> }
+    | { ok: false; outcome: string }
+  > => {
     const conn = await resolveConnArg(arg, sites, title);
-    if (!conn) return null;
+    if (!conn) return { ok: false, outcome: "cancelled" };
     requireManaged(conn);
     const config = syncConfigs.get(conn.siteUrl);
     if (!config) {
       void vscode.window.showWarningMessage(
         "No repository configured for this site — run “Configure Site Repository…”, pull, then retry.",
       );
-      return null;
+      return { ok: false, outcome: "no-repo" };
     }
     // Clean-tree guard: every desired edit must be committed before write-back,
     // so the closing reconcile pull can never destroy unsaved work (ADR-0021).
@@ -1374,27 +1394,27 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showWarningMessage(
         `The site repository has ${dirty} uncommitted change(s). Commit them first — write-back reconciles the working tree with live SharePoint afterwards.`,
       );
-      return null;
+      return { ok: false, outcome: `dirty:${dirty}` };
     }
-    return { conn, config, repo };
+    return { ok: true, conn, config, repo };
   };
 
-  register("aiSharePoint.applyRepoToSharePoint", async (arg) => {
+  register("aiSharePoint.applyRepoToSharePoint", async (arg): Promise<string> => {
     const pre = await writeBackPreflight(arg, "Apply which site repository to SharePoint?");
-    if (!pre) return;
+    if (!pre.ok) return pre.outcome;
     const repoFiles = await syncEngine.readRepoFiles(pre.config.folder);
     if (repoFiles.size === 0) {
       void vscode.window.showWarningMessage(
         "The repository has no site files yet — run “Pull Site to Repository” first.",
       );
-      return;
+      return "empty-repo";
     }
-    await runWriteBackFlow(pre.conn, pre.config, pre.repo, repoFiles, "Write-back");
+    return runWriteBackFlow(pre.conn, pre.config, pre.repo, repoFiles, "Write-back");
   });
 
   register("aiSharePoint.revertSiteToCommit", async (arg) => {
     const pre = await writeBackPreflight(arg, "Revert which site to an earlier commit?");
-    if (!pre) return;
+    if (!pre.ok) return;
 
     const commits = await pre.repo.log({ maxEntries: 30 });
     if (commits.length === 0) {
@@ -1574,7 +1594,9 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
         { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Azure CLI or Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
         { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
-        { label: "$(pulse) Splunk", description: "read-only SPL searches (time-bounded)", value: "splunk" as ContextSourceType },
+        { label: "$(pulse) Splunk", description: "read-only SPL searches (oneshot, time-bounded)", value: "splunk" as ContextSourceType },
+        { label: "$(dashboard) Splunk Observability Cloud", description: "metrics/detectors/dashboards/active incidents (the former SignalFx)", value: "splunkobs" as ContextSourceType },
+        { label: "$(graph-line) Grafana", description: "dashboards, alert-rule state, annotations — Cloud or self-hosted", value: "grafana" as ContextSourceType },
       ],
       { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );
@@ -1887,6 +1909,52 @@ export function activate(context: vscode.ExtensionContext): void {
       if (web.trim()) params.set("web", web.trim().replace(/\/+$/, ""));
       const qs = params.toString();
       if (qs) baseUrl += `?${qs}`;
+    } else if (typePick.value === "splunkobs") {
+      deployment = "cloud";
+      // Users know the app URL (or just the realm) — both API and app
+      // addresses derive from it.
+      const entry = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Splunk Observability Cloud — the URL you open in your browser (or just the realm)",
+        placeHolder: "https://app.us1.signalfx.com — or simply: us1",
+        validateInput: (v) =>
+          deriveSplunkObsEndpoints(v)
+            ? undefined
+            : "Paste the app/API URL (app.<realm>.signalfx.com) or the realm (us0, us1, eu0, …)",
+      });
+      if (!entry) return;
+      const ep = deriveSplunkObsEndpoints(entry)!;
+      const typeDefault = await vscode.window.showQuickPick(
+        [
+          { label: "$(graph) Metrics", description: "free-text questions search metric names (default)", value: "metric" as const },
+          { label: "$(flame) Active incidents", description: "what is alerting right now", value: "incident" as const },
+          { label: "$(bell) Detectors", description: "alerting rules by name", value: "detector" as const },
+          { label: "$(dashboard) Dashboards", description: "dashboards by name", value: "dashboard" as const },
+        ],
+        { ignoreFocusOut: true, title: "What should bare chat questions search by default?" },
+      );
+      if (!typeDefault) return;
+      const obsParams = new URLSearchParams();
+      obsParams.set("web", ep.appBase);
+      obsParams.set("type", typeDefault.value);
+      baseUrl = `${ep.apiBase}?${obsParams.toString()}`;
+    } else if (typePick.value === "grafana") {
+      const entry = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Grafana — the URL you open in your browser",
+        placeHolder: "https://acme.grafana.net  or  https://grafana.corp.example",
+        validateInput: (v) => {
+          try {
+            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+          } catch {
+            return "Enter a valid https:// URL";
+          }
+        },
+      });
+      if (!entry) return;
+      const u = new URL(entry.trim());
+      baseUrl = `${u.protocol}//${u.host}`;
+      deployment = /\.grafana\.net$/i.test(u.hostname) ? "cloud" : "datacenter";
     } else if (typePick.value === "powerbi") {
       deployment = "cloud";
       // Pilot: users only know app.powerbi.com — confirm the portal, sign in
@@ -3692,6 +3760,91 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage("Cached reference-source results cleared.");
   });
 
+  // ADR-0031: large datasets leave through FILES, not chat — run the query
+  // with export bounds and write every row into the workspace, so Copilot
+  // only ever sees the path and a count.
+  register(
+    "aiSharePoint.exportSearchResults",
+    async (arg): Promise<{ file: string; rows: number } | undefined> => {
+      const plain =
+        arg && typeof arg === "object" && !("baseUrl" in arg)
+          ? (arg as { source?: string; query?: string; fileName?: string })
+          : undefined;
+      const source = plain?.source
+        ? resolveSourceRef(contextSources.list(), plain.source)
+        : await resolveSourceArg(arg, contextSources);
+      if (!source) {
+        if (plain?.source) {
+          throw new AppError(`No reference source matches "${plain.source}".`, "config");
+        }
+        return undefined;
+      }
+      const isDb = ["mssql", "postgres", "mysql", "mongodb"].includes(source.type);
+      const query =
+        plain?.query?.trim() ||
+        (await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: `Export from ${source.displayName} — query`,
+          prompt: `Runs read-only with export bounds (up to ${EXPORT_MAX_ROWS.toLocaleString("en-US")} rows, ${Math.round(EXPORT_TIMEOUT_MS / 1000)}s) and writes every result to a file — nothing is sent to Copilot.`,
+          placeHolder: isDb
+            ? source.type === "mongodb"
+              ? '{"collection": "...", "filter": {...}}'
+              : "SELECT … (single read-only statement)"
+            : "Raw query (CQL/JQL/filter/SPL…) or free text",
+        }));
+      if (!query?.trim()) return undefined;
+      const ext = source.type === "mongodb" ? "json" : "csv";
+      const fileName =
+        (plain?.fileName ? sanitizeExportFileName(plain.fileName, ext) : undefined) ??
+        exportFileName(source.alias ?? source.displayName, ext, nowIso());
+      const rows = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Exporting from ${source.displayName} (up to ${EXPORT_MAX_ROWS.toLocaleString("en-US")} rows)…`,
+        },
+        () =>
+          contextService.searchForExport(source, query, {
+            maxResults: EXPORT_MAX_ROWS,
+            timeoutMs: EXPORT_TIMEOUT_MS,
+          }),
+      );
+      const content = ext === "json" ? JSON.stringify(rows, null, 2) : rowsToCsv(rows);
+      const ws = vscode.workspace.workspaceFolders?.[0];
+      let target: vscode.Uri;
+      let shownPath: string;
+      if (ws) {
+        const dir = vscode.Uri.joinPath(ws.uri, EXPORT_DIR);
+        await vscode.workspace.fs.createDirectory(dir);
+        target = vscode.Uri.joinPath(dir, fileName);
+        shownPath = `${EXPORT_DIR}/${fileName}`;
+      } else {
+        const picked = await vscode.window.showSaveDialog({
+          saveLabel: "Export",
+          filters: ext === "json" ? { JSON: ["json"] } : { CSV: ["csv"] },
+          defaultUri: vscode.Uri.file(fileName),
+        });
+        if (!picked) return undefined;
+        target = picked;
+        shownPath = picked.fsPath;
+      }
+      await vscode.workspace.fs.writeFile(target, Buffer.from(content, "utf8"));
+      telemetry.record("context.export", { type: source.type, rows: String(rows.length) });
+      const capNote =
+        rows.length >= EXPORT_MAX_ROWS
+          ? ` — capped at ${EXPORT_MAX_ROWS.toLocaleString("en-US")}; narrow the query for the rest`
+          : "";
+      void vscode.window
+        .showInformationMessage(
+          `Exported ${rows.length.toLocaleString("en-US")} row(s) to ${shownPath}${capNote}.`,
+          "Open File",
+        )
+        .then(async (open) => {
+          if (open) await vscode.window.showTextDocument(target);
+        });
+      return { file: shownPath, rows: rows.length };
+    },
+  );
+
   register("aiSharePoint.exportReferenceConfig", async () => {
     const all = contextSources.list();
     if (all.length === 0 && bookmarks.list().length === 0) {
@@ -5118,6 +5271,63 @@ async function promptContextCredential(
     const secret = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "ServiceNow password",
+      password: true,
+      prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+    });
+    if (!secret) return undefined;
+    return { method: "basic", username: username.trim(), secret };
+  }
+  if (type === "splunkobs") {
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Splunk Observability Cloud access token",
+      password: true,
+      placeHolder: "org access token with API authentication scope",
+      prompt:
+        "Splunk Observability → Settings → Access Tokens (API scope). Sent as X-SF-TOKEN; stored only in your OS keychain; verified with a single read (lockout-safe).",
+    });
+    if (!secret) return undefined;
+    return { method: "sfx-token", secret: secret.trim() };
+  }
+  if (type === "grafana") {
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(shield) Service account token (recommended)",
+          description: "Administration → Service accounts → Add token (Viewer role is enough)",
+          value: "pat" as const,
+        },
+        {
+          label: "$(key) Username + password",
+          description: "self-hosted basic auth — a least-privilege Viewer account",
+          value: "basic" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Grafana sign-in" },
+    );
+    if (!mode) return undefined;
+    if (mode.value === "pat") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Grafana service account token",
+        password: true,
+        placeHolder: "glsa_…",
+        prompt:
+          "Administration → Service accounts → Add service account (Viewer) → Add token. Stored only in your OS keychain; verified with a single read (lockout-safe).",
+      });
+      if (!secret) return undefined;
+      return { method: "pat", secret: secret.trim() };
+    }
+    const username = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Grafana user",
+      placeHolder: "viewer.readonly",
+      prompt: "Use a least-privilege Viewer account where available.",
+    });
+    if (!username) return undefined;
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Grafana password",
       password: true,
       prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
     });

@@ -38,6 +38,15 @@ import {
   JoinProbeCounts,
   ER_SAMPLE_SIZE,
 } from "./erDiagram";
+import {
+  extractMssqlTables,
+  buildStatsProbeSql,
+  parseTableStats,
+  assessMssqlQueryCost,
+  rewriteWithSubset,
+  CostVerdict,
+  SUBSET_TOP_ROWS,
+} from "./queryCost";
 import { loadTrustedCAs } from "../ldap/osTrust";
 import { AppError } from "../../core/errors";
 import { wireEnabled, emitWire, capDetail, safeJson } from "../../core/wireLog";
@@ -137,6 +146,20 @@ function mapDbError(err: unknown, engine: string): AppError {
       "Database TLS certificate not trusted — deploy the corporate CA to the OS store, set aiSharePoint.ldap.caCertificatesFile (shared pinned bundle), or for SQL Server with a self-signed certificate append ?trustServerCertificate=true to the connection URL (the SSMS checkbox equivalent).",
     );
   }
+  // A query that ran out of time is NOT a connection problem — say so, with
+  // the way out (pilot: "connection failed: Timeout: Request failed to
+  // complete in 30000ms" sent people chasing network issues).
+  if (
+    /request failed to complete|statement timeout|query_timeout|max_execution_time|ER_QUERY_TIMEOUT|operation exceeded time limit/i.test(
+      msg,
+    )
+  ) {
+    return new AppError(
+      `${engine} query timed out: ${msg}`,
+      "config",
+      "The statement exceeded the query timeout — it scans more data than the server can read in time. Narrow it with a WHERE on an indexed column or TOP n; for SQL Server the cost guard estimates this from catalog stats first and answers expensive queries from a bounded sample instead.",
+    );
+  }
   if (/timeout|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|socket|getaddrinfo/i.test(msg)) {
     return new AppError(`${engine} connection failed: ${msg}`, "network");
   }
@@ -200,13 +223,22 @@ async function mssqlRows(
     });
     const result = await new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
       const rows: Array<Record<string, unknown>> = [];
+      let cappedOut = false;
       // READ UNCOMMITTED (NOLOCK semantics) so reads never block writers.
       const request = new TdsRequest(
         `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;\n${sql}`,
-        (err) => (err ? reject(err) : resolve(rows)),
+        // A cancel WE issued at the row cap is success, not an error.
+        (err) => (err && !cappedOut ? reject(err) : resolve(rows)),
       );
       request.on("row", (columns: Array<{ value: unknown; metadata: { colName: string } }>) => {
-        if (rows.length >= caps.maxResults) return; // client-side cap
+        if (rows.length >= caps.maxResults) {
+          // Stop the server stream at the cap instead of draining it.
+          if (!cappedOut) {
+            cappedOut = true;
+            connection.cancel();
+          }
+          return;
+        }
         const row: Record<string, unknown> = {};
         for (const col of columns) {
           row[col.metadata.colName || `col${Object.keys(row).length}`] = col.value;
@@ -366,12 +398,51 @@ export async function verifyDb(
   return { account: credential.username ?? "verified" };
 }
 
+export interface DbSearchOptions {
+  /** True ONLY when the user explicitly accepted a slow full-table run. */
+  allowExpensive?: boolean;
+}
+
+/** Catalog-stat preflight for SQL Server (ADR-0030). Fails OPEN: any probe
+ *  problem (permissions, exotic names, timeout) and the query runs as-is. */
+async function mssqlCostGuard(
+  source: ContextSource,
+  credential: ContextCredential,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+  sql: string,
+): Promise<{ verdict: CostVerdict; subsetSql?: string } | undefined> {
+  try {
+    const refs = extractMssqlTables(sql);
+    if (refs.length === 0) return undefined;
+    const probe = buildStatsProbeSql(refs);
+    if (!probe) return undefined;
+    const probeCaps: ReadCaps = {
+      ...caps,
+      maxResults: 1_000,
+      timeoutMs: Math.min(caps.timeoutMs, 15_000),
+    };
+    const stats = parseTableStats(
+      await mssqlRows(source, credential, tls, probeCaps, probe),
+      refs,
+    );
+    if (stats.length === 0) return undefined;
+    const verdict = assessMssqlQueryCost(sql, stats);
+    if (!verdict.expensive) return { verdict };
+    const subsetSql = rewriteWithSubset(sql, verdict.bigTables);
+    return { verdict, ...(subsetSql ? { subsetSql } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function searchDb(
   source: ContextSource,
   credential: ContextCredential,
   query: string,
   tls: DbTlsOptions,
   caps: ReadCaps,
+  opts: DbSearchOptions = {},
 ): Promise<ContextSearchHit[]> {
   const label = `${source.type}:${source.displayName}`;
   if (source.type === "mongodb") {
@@ -398,14 +469,67 @@ export async function searchDb(
     );
     return rowsToHits(docs as Array<Record<string, unknown>>, caps.maxResults, label);
   }
+  const sql = guardSql(query);
+  if (source.type === "mssql" && !opts.allowExpensive) {
+    const guard = await mssqlCostGuard(source, credential, tls, caps, sql);
+    if (guard?.verdict.expensive) {
+      if (!guard.subsetSql) {
+        throw new AppError(
+          `Query not run — estimated too expensive from catalog stats: ${guard.verdict.reasons.join("; ")}.`,
+          "config",
+          `Cost guard (table sizes read from the catalog, no scan): ${guard.verdict.statsNote}. Add a WHERE on an indexed lead column or TOP n, or explicitly accept a full run (allowExpensive) — full scans can exceed the ${Math.round(caps.timeoutMs / 1000)}s query timeout.`,
+        );
+      }
+      const rows = await SQL_RUNNERS.mssql(source, credential, tls, caps, guard.subsetSql);
+      return [
+        {
+          title: `⚠ Cost guard: computed on a TOP ${SUBSET_TOP_ROWS.toLocaleString("en-US")} sample per big table — NOT full-table results`,
+          url: "cost-guard:sample",
+          excerpt:
+            `Estimated expensive: ${guard.verdict.reasons.join("; ")}. Catalog sizes: ${guard.verdict.statsNote}. ` +
+            "Counts/aggregates below reflect the sample only. For exact results, refine the query (indexed WHERE / TOP n) — or re-run with allowExpensive=true once the user accepts that a full scan may be slow.",
+        },
+        ...rowsToHits(rows, caps.maxResults, label),
+      ];
+    }
+  }
   const rows = await SQL_RUNNERS[source.type as SqlEngine](
     source,
     credential,
     tls,
     caps,
-    guardSql(query),
+    sql,
   );
   return rowsToHits(rows, caps.maxResults, label);
+}
+
+/** Export-grade search (ADR-0031): the SAME read-only query, but returning
+ *  RAW rows/documents (full values, export caps) for file serialization.
+ *  The cost guard is intentionally bypassed — an export is the user's
+ *  explicit request for the large dataset; the row cap and timeout still
+ *  bound the read. */
+export async function searchDbRaw(
+  source: ContextSource,
+  credential: ContextCredential,
+  query: string,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+): Promise<Array<Record<string, unknown>>> {
+  if (source.type === "mongodb") {
+    const spec = parseMongoSpec(query);
+    return withMongo(source, credential, tls, caps, (client, dbName) =>
+      client
+        .db(dbName)
+        .collection(spec.collection)
+        .find(spec.filter, {
+          ...(spec.projection ? { projection: spec.projection } : {}),
+          limit: Math.min(spec.limit ?? caps.maxResults, caps.maxResults),
+          maxTimeMS: caps.timeoutMs,
+        })
+        .toArray(),
+    ) as Promise<Array<Record<string, unknown>>>;
+  }
+  return SQL_RUNNERS[source.type as SqlEngine](source, credential, tls, caps, guardSql(query));
 }
 
 // --- schema catalog (ADR-0024) ------------------------------------------------

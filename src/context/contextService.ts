@@ -22,7 +22,7 @@ import {
 } from "./adapters/jira";
 import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
-import { verifyDb, searchDb, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, DbTlsOptions } from "./db/dbAdapters";
+import { verifyDb, searchDb, searchDbRaw, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, DbTlsOptions } from "./db/dbAdapters";
 import { JoinProbeEnd, JoinProbeCounts, RowEstimates } from "./db/erDiagram";
 import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
 import {
@@ -40,6 +40,18 @@ import {
   browseServiceNowCandidates,
 } from "./adapters/servicenow";
 import { verifySplunk, searchSplunk, browseSplunkCandidates } from "./adapters/splunk";
+import {
+  verifySplunkObs,
+  searchSplunkObs,
+  getSplunkObsItem,
+  browseSplunkObsCandidates,
+} from "./adapters/splunkObservability";
+import {
+  verifyGrafana,
+  searchGrafana,
+  getGrafanaItem,
+  browseGrafanaCandidates,
+} from "./adapters/grafana";
 import {
   snowTokensFromSecret,
   snowTokenExpired,
@@ -217,6 +229,10 @@ export class ContextService {
           return this.snowCredential(source, credential).then((c) => verifyServiceNow(source, c, caps));
         case "splunk":
           return verifySplunk(source, credential, caps);
+        case "splunkobs":
+          return verifySplunkObs(source, credential, caps);
+        case "grafana":
+          return verifyGrafana(source, credential, caps);
         default:
           return verifyConfluence(source, credential, caps);
       }
@@ -235,38 +251,85 @@ export class ContextService {
     return credential;
   }
 
-  async search(source: ContextSource, query: string): Promise<ContextSearchHit[]> {
+  async search(
+    source: ContextSource,
+    query: string,
+    opts?: { allowExpensive?: boolean },
+  ): Promise<ContextSearchHit[]> {
     const caps = this.caps();
     return this.cache.getOrLoad(
-      TtlCache.key(source.id, "search", `${caps.maxResults}:${query}`),
+      TtlCache.key(
+        source.id,
+        "search",
+        `${caps.maxResults}:${opts?.allowExpensive ? "full:" : ""}${query}`,
+      ),
       this.ttlMs(),
       async () => {
         const credential = await this.storedCredential(source);
-        return this.tracked(source, false, () => {
-          if (ContextService.DB_TYPES.has(source.type)) {
-            return searchDb(source, credential, query, this.dbTls(), caps);
-          }
-          switch (source.type) {
-            case "ldap":
-              return searchLdap(source, credential, query, this.ldapTls(), caps);
-            case "jira":
-              return searchJira(source, credential, query, caps);
-            case "vertexai":
-              return searchVertex(source, credential, query, caps);
-            case "powerbi":
-              return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
-            case "servicenow":
-              return this.snowCredential(source, credential).then((c) =>
-                searchServiceNow(source, c, query, caps),
-              );
-            case "splunk":
-              return searchSplunk(source, credential, query, caps);
-            default:
-              return searchConfluence(source, credential, query, caps);
-          }
-        });
+        return this.tracked(source, false, () =>
+          this.dispatchSearch(source, credential, query, caps, opts),
+        );
       },
     );
+  }
+
+  private dispatchSearch(
+    source: ContextSource,
+    credential: ContextCredential,
+    query: string,
+    caps: ReadCaps,
+    opts?: { allowExpensive?: boolean },
+  ): Promise<ContextSearchHit[]> {
+    if (ContextService.DB_TYPES.has(source.type)) {
+      return searchDb(source, credential, query, this.dbTls(), caps, opts);
+    }
+    switch (source.type) {
+      case "ldap":
+        return searchLdap(source, credential, query, this.ldapTls(), caps);
+      case "jira":
+        return searchJira(source, credential, query, caps);
+      case "vertexai":
+        return searchVertex(source, credential, query, caps);
+      case "powerbi":
+        return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
+      case "servicenow":
+        return this.snowCredential(source, credential).then((c) =>
+          searchServiceNow(source, c, query, caps),
+        );
+      case "splunk":
+        return searchSplunk(source, credential, query, caps);
+      case "splunkobs":
+        return searchSplunkObs(source, credential, query, caps);
+      case "grafana":
+        return searchGrafana(source, credential, query, caps);
+      default:
+        return searchConfluence(source, credential, query, caps);
+    }
+  }
+
+  /** Export-grade search (ADR-0031): same queries, bigger bounds, RAW rows
+   *  for file serialization — uncached (datasets are too big to keep, and an
+   *  export should always be a fresh read). DB sources return raw rows/
+   *  documents; other sources return their hits flattened to rows. */
+  async searchForExport(
+    source: ContextSource,
+    query: string,
+    exportCaps: { maxResults: number; timeoutMs: number },
+  ): Promise<Array<Record<string, unknown>>> {
+    const caps = { ...this.caps(), ...exportCaps };
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      if (ContextService.DB_TYPES.has(source.type)) {
+        return searchDbRaw(source, credential, query, this.dbTls(), caps);
+      }
+      const hits = await this.dispatchSearch(source, credential, query, caps);
+      return hits.map((h) => ({
+        title: h.title,
+        url: h.url,
+        ...(h.excerpt ? { excerpt: h.excerpt } : {}),
+        ...(h.meta ?? {}),
+      }));
+    });
   }
 
   async getItem(source: ContextSource, id: string): Promise<ContextItem> {
@@ -310,6 +373,10 @@ export class ContextService {
               return getLdapEntry(source, credential, id, this.ldapTls(), caps);
             case "jira":
               return getJiraIssue(source, credential, id, caps);
+            case "splunkobs":
+              return getSplunkObsItem(source, credential, id, caps);
+            case "grafana":
+              return getGrafanaItem(source, credential, id, caps);
             default:
               return getConfluencePage(source, credential, id, caps);
           }
@@ -525,6 +592,12 @@ export class ContextService {
           }
           if (source.type === "splunk") {
             return browseSplunkCandidates(source, credential, caps);
+          }
+          if (source.type === "splunkobs") {
+            return browseSplunkObsCandidates(source, credential, caps);
+          }
+          if (source.type === "grafana") {
+            return browseGrafanaCandidates(source, credential, caps);
           }
           return []; // LDAP: search-then-bookmark is the guided path
         });

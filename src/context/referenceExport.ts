@@ -130,8 +130,8 @@ export interface ParsedImport {
   projects: Project[];
 }
 
-const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai", "powerbi", "servicenow", "splunk"]);
-const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple", "ntlm", "gcloud-sso", "az-sso", "aad-sso", "snow-oauth", "splunk-session", "snow-session"]);
+const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai", "powerbi", "servicenow", "splunk", "splunkobs", "grafana"]);
+const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple", "ntlm", "gcloud-sso", "az-sso", "aad-sso", "snow-oauth", "splunk-session", "snow-session", "sfx-token"]);
 const BOOKMARK_KINDS = new Set(["query", "item", "container"]);
 
 /** Parse + validate an export file; ids are regenerated via `newId`. */

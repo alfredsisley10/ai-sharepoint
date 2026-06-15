@@ -199,6 +199,7 @@ automatically when relevant, or you can `#`-reference them in any chat prompt:
 |---|---|
 | `#spConnections` | Your configured connections (name, URL, role, verified) |
 | `#spSiteOverview` | Site title/description + lists/libraries + pages |
+| `#spInspectSite` | **Full architecture, read-only — works on reference connections**: every list with its columns + page inventory; with a page name, that page's sections & web parts |
 | `#spPages` | Modern pages with URLs and last-modified times |
 | `#spUsage` | This extension's request activity (local counts) |
 | `#spSources` | Your configured reference sources (Confluence/Jira) |
@@ -361,6 +362,16 @@ reasons — ADR-0022):
   on top of server-side read-only sessions where the engine supports them); MongoDB takes a
   JSON spec `{"collection": "...", "filter": {...}, "limit": n}`. Results are row-capped
   (`context.maxResults`) and time-limited.
+- **SQL Server cost guard (ADR-0030)**: before a statement runs, the extension reads the
+  referenced tables' **approximate sizes and leading index columns from catalog stats**
+  (instant, metadata only). A statement that would scan a big (≥500k-row) table — aggregates,
+  `DISTINCT`/`GROUP BY`/`ORDER BY`, or a `WHERE` that no index can seek — runs against a
+  bounded **`TOP 10000` sample per big table instead**, and the first result clearly says so
+  (with per-table row counts, so "how big is X?" never needs a `COUNT(*)`). Refine the query
+  with an indexed `WHERE`/`TOP`, or explicitly accept a full run when asked — slow scans can
+  otherwise exceed the query timeout (the timeout error now says *query timed out*, with the
+  way out, instead of "connection failed"). The guard fails open: if your login can't see
+  catalog stats, queries behave exactly as before.
 - **Browse & Bookmark** lists the database's tables/collections and saves capped sample-row
   queries as bookmarks — **you can tailor the SQL before saving**, and edit any bookmark's
   name/query later (inline pencil or right-click → *Edit Bookmark*; database queries stay
@@ -568,6 +579,63 @@ Analyze Power BI data without leaving chat — **read-only, with your existing s
   DAX-only (read-only by API design), row-capped, and your Power BI licenses, workspace roles,
   and row-level security apply exactly as in the service.
 
+### Splunk Observability Cloud (the former SignalFx)
+
+Metrics metadata, detectors, dashboards, and **what's alerting right now** (ADR-0032):
+
+- **Add** (Reference Sources → `+` → *Splunk Observability Cloud*): paste the URL you open in
+  the browser (`https://app.us1.signalfx.com`) **or just the realm** (`us1`) — the API
+  endpoint is derived. Then pick what bare chat questions should search by default: metrics,
+  **active incidents**, detectors, or dashboards.
+- **Sign in** with an **access token** (Splunk Observability → Settings → Access Tokens, API
+  scope) — sent as `X-SF-TOKEN`, stored only in your OS keychain, verified with a single
+  lockout-safe read.
+- **Ask in chat**: *"what's alerting right now in observability?"* (incidents), *"find the
+  detector for disk space"*, or target a kind explicitly —
+  `{"type": "metric|dimension|detector|dashboard|incident", "query": "cpu", "limit": 25}`.
+  Detector/dashboard hits deep-link into the app and can be fetched as items
+  (`detector:<id>` shows the description and SignalFlow program).
+- **Browse & Bookmark** lists your dashboards and detectors, plus a standing *Active
+  incidents* bookmark candidate. SignalFlow program execution (computed timeseries) is not in
+  v1 — reads are metadata/state only.
+
+### Grafana (Cloud or self-hosted)
+
+Dashboards, alert-rule state, and annotations (ADR-0033):
+
+- **Add** (Reference Sources → `+` → *Grafana*): just the URL you open in the browser
+  (`https://acme.grafana.net` or your self-hosted address).
+- **Sign in** with a **service account token** (Administration → Service accounts → Add
+  token; the **Viewer** role is enough) — or basic auth on self-hosted. Stored only in your
+  OS keychain, verified with a single lockout-safe read.
+- **Ask in chat**: *"find the payments latency dashboard in Grafana"* (plain text searches
+  dashboards), *"which Grafana alerts are firing?"* —
+  `{"type": "alert", "query": ""}` returns each rule's **state** (firing/pending/inactive);
+  `{"type": "annotation"}` recalls recent deploy/incident annotations;
+  `{"type": "dashboard", "folderUid": "…"}` scopes to a folder. Dashboard hits deep-link and
+  fetch as items (`dashboard:<uid>` shows the description + panel inventory).
+- **Browse & Bookmark** lists your folders (each a scoped dashboard search) plus standing
+  *Alert rules — current state* and *Recent annotations* candidates. Datasource listings may
+  need admin permission — the error says so; everything else reads with Viewer.
+
+### Export search results to a workspace file (ADR-0031)
+
+Chat results are capped on purpose — when you want the **dataset itself**, export it instead
+of fighting the cap:
+
+- **Export Context Search Results to File…** (palette, or right-click any source): enter the
+  same kind of read-only query you'd use in chat (SELECT, MongoDB spec, CQL/JQL/SPL, free
+  text); it runs with **export bounds** (up to 50,000 rows, 120s) and writes **every** result
+  to `ai-sharepoint-exports/` in your workspace — **CSV** for tabular sources (full values),
+  **JSON** for MongoDB.
+- Or just ask: *"@sharepoint export all CMDB servers to a file"* — you approve a confirmation
+  naming the query and destination, and the assistant receives **only the path and row
+  count**: the data never enters the chat context (that's the point — Copilot doesn't need to
+  see it for you to have it).
+- Read-only guards, the row cap, and the timeout still apply; the SQL Server cost guard is
+  bypassed for exports because your confirmation *is* the accepted bulk read. Add the folder
+  to `.gitignore` if your workspace repo shouldn't carry data extracts.
+
 ## Communications: Teams & Outlook drafts you approve
 
 Have findings reach people — **without the assistant ever sending anything itself**:
@@ -596,6 +664,10 @@ Have findings reach people — **without the assistant ever sending anything its
   sending — finish and send from Outlook itself. (Teams has no equivalent: Microsoft Graph has
   no “unsent Teams message” — direct Teams messaging always posts live, which is why it needs
   `Chat.ReadWrite` consent. Outlook drafts use `Mail.ReadWrite`, separate from `Mail.Send`.)
+- **Verify a method end-to-end before relying on it**: *AI SharePoint: Test Communication
+  Method…* (Communications view title bar) sends a one-time code over the method you pick
+  (Outlook self-draft, Teams via Graph, or a Teams webhook) and asks you to confirm it, so
+  drafting/sending only ever offers methods proven to work.
 - **Teams without admin consent — Incoming Webhooks.** If your tenant won't grant
   `Chat.ReadWrite`, a channel owner can create a **Teams Incoming Webhook** (channel ••• →
   Connectors → Incoming Webhook, or a Power Automate “Workflows” webhook) — **no app
@@ -780,6 +852,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | 403 / “access denied” on a site | Your account lacks permission, or the tenant hasn't consented `Sites.Read.All` for the app → Admin Guide. |
 | Pages list shows “unavailable” | Some tenants restrict the Graph Pages API → lists still work; this is expected. |
 | 429 / throttled | Microsoft Graph throttling → the extension retries once automatically; wait a moment. |
+| 403 “unauthorized: not authorized to use this Copilot feature” | GitHub refuses a Copilot feature for your account: lapsed subscription/seat, or an **organization policy** disables it (org admin: GitHub → Copilot → Policies). When this surfaces through our requests, the extension **pauses Copilot calls ~5 min** (failing fast locally with the explanation, and indexing runs stop) so the refusal isn't hammered — fix the entitlement, then run **Check Copilot Status** to retry immediately. If the error only appears in the *GitHub Copilot Chat* output as `[CopilotCliSession] Failed to fetch models`, that's Copilot Chat's own **CLI-sessions integration** being blocked — pilot-confirmed to occur when *Copilot CLI* is disabled by org policy. It is benign for this extension (our features use the editor Language Model API, not the CLI), and the repeated logging is an acknowledged upstream bug ([microsoft/vscode#315405](https://github.com/microsoft/vscode/issues/315405), open — no workaround setting documented yet); options are to have the admin enable the Copilot CLI policy, disable any "agent sessions" / Copilot CLI integration toggle your VS Code version exposes in Settings, or ignore the log line. |
 | SQL Server "authentication rejected" but the login works in SSMS | Re-add the source with the guided wizard (it prompts for server, instance, port, database, certificate, and sign-in method separately — answer exactly as in SSMS) and read the appended **“server said: …”** detail: it is SQL Server's own message distinguishing a bad login, an inaccessible database, or a wrong instance. |
 | "Could not initialize a Git repository" / repo not detected | Folder outside the workspace, Restricted Mode, or git missing → accept the wizard's "Add to Workspace" offer (or File → Add Folder to Workspace…), trust the window, and check `git --version`. |
 | A view is missing AND not listed in the activity-bar header menu (e.g. no "Projects", old view names like "Usage & Budget") | A **torn installation**: VS Code cached an old interface manifest while newer code runs — the extension detects this and warns with the two versions. Reload the window; if it returns, **fully quit and restart VS Code** (not just reload); if it persists, uninstall the extension, restart, and reinstall the latest VSIX. |

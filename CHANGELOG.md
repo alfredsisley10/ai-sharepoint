@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.33.0 — 2026-06-15
+
+### Integrated — parallel development branches merged into one line
+This release reconciles three independently advanced branches into `main`, taking the most
+complete code for every subsystem and preserving each branch's unique features:
+
+- **Read-only site inspection (`#spInspectSite` / `inspect_site`)** — an authoritative,
+  component-by-page architecture breakdown that works for ANY connection (reference or managed):
+  every visible list/library with its columns, the page inventory, and a named page's full
+  section/column/web-part breakdown. Reading never requires onboarding a site as managed.
+- **Observability connectors** — Splunk Observability Cloud (the former SignalFx; metrics,
+  detectors, dashboards, active incidents) and Grafana (dashboards, alert-rule state,
+  annotations), both read-only (ADR-0032/0033).
+- **Export search results to a workspace file** (`#spExportContextResults`) (ADR-0031).
+- **SQL Server cost guard** — size a query first, sample when it would be expensive (ADR-0030).
+- **Vertex AI Search** — the quota project is now sent automatically (`x-goog-user-project`),
+  and 403s are triaged into the actual fix rather than a generic "token rejected".
+- **Copilot entitlement guardrail** — a circuit-breaker that pauses calls after a
+  Copilot-entitlement 403 instead of hammering it (locally measured usage is retained; the
+  earlier hard-cap "budget" feature stays retired, per the most advanced branch).
+
+### Changed — communications testing consolidated
+- The earlier single-purpose *Test Outlook Channel* flow is superseded by the verified
+  **Test Communication Method** system (Outlook / Teams-via-Graph / Teams webhook), which proves
+  a method end-to-end before drafting or sending will offer it. The redundant command, language
+  model tool, and helper were removed in favor of the more complete path.
+
 ## 0.32.1 — 2026-06-12
 
 ### Fixed — ER probe rejected by SQL Server ("aggregate function on … a subquery")

@@ -15,7 +15,9 @@ export type ContextSourceType =
   | "vertexai"
   | "powerbi"
   | "servicenow"
-  | "splunk";
+  | "splunk"
+  | "splunkobs"
+  | "grafana";
 export type ContextDeployment = "cloud" | "datacenter";
 
 /** Auth method descriptor persisted per source (ADR-0014/0015).
@@ -36,7 +38,8 @@ export type ContextAuthMethod =
   | "aad-sso"
   | "snow-oauth"
   | "splunk-session"
-  | "snow-session";
+  | "snow-session"
+  | "sfx-token";
 
 export interface ContextSource {
   /** Stable random id; also keys the keychain credential entry. */

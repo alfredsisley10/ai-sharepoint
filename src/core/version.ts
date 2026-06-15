@@ -9,4 +9,4 @@
  * declared it). A test asserts this constant matches package.json on every
  * release.
  */
-export const EXTENSION_VERSION = "0.32.1";
+export const EXTENSION_VERSION = "0.33.0";
