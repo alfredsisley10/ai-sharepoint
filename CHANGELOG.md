@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.38.0 — 2026-06-15
+
+### Changed — Teams/Outlook drafting is now Copilot-grounded
+- When @sharepoint prepares a Teams message or Outlook email that should reflect what was already
+  said or decided, it now **grounds the draft first** — searching the relevant sources, especially
+  a **Microsoft 365 Copilot source** (which reads Teams messages, email, and documents) — and
+  writes the draft from that context, instead of from scratch.
+- Clarified the truth about Teams drafts: **Microsoft Graph exposes no Teams "Drafts" folder**
+  (unlike Outlook's `/me/messages`), so the assistant must never claim a message was saved into
+  Teams. The extension's **approval-gated outbox** is the supported draft — prepared by the
+  assistant, reviewed and released by you — and it remains the only path; nothing is auto-sent.
+- Reading Teams chats is already available through the Microsoft 365 Copilot connector's Teams
+  (`chatMessage`) surface added in 0.36.0.
+
 ## 0.37.0 — 2026-06-15
 
 ### Added — Grafana live panel data (ADR-0036)
