@@ -607,7 +607,7 @@ Metrics metadata, detectors, dashboards, and **what's alerting right now** (ADR-
 
 ### Grafana (Cloud or self-hosted)
 
-Dashboards, alert-rule state, and annotations (ADR-0033):
+Dashboards, alert-rule state, annotations, and **live panel data** (ADR-0033/0036):
 
 - **Add** (Reference Sources → `+` → *Grafana*): just the URL you open in the browser
   (`https://acme.grafana.net` or your self-hosted address).
@@ -619,7 +619,12 @@ Dashboards, alert-rule state, and annotations (ADR-0033):
   `{"type": "alert", "query": ""}` returns each rule's **state** (firing/pending/inactive);
   `{"type": "annotation"}` recalls recent deploy/incident annotations;
   `{"type": "dashboard", "folderUid": "…"}` scopes to a folder. Dashboard hits deep-link and
-  fetch as items (`dashboard:<uid>` shows the description + panel inventory).
+  fetch as items (`dashboard:<uid>` shows the description + panel inventory, each panel's id).
+- **Read live panel data** — *"what's the current p95 on the Latency panel of the Payments
+  dashboard?"* — `{"type": "panel", "query": "<dashboard uid or title>", "panel": "<panel id or
+  title>", "from": "now-6h"}` runs that panel's **own queries** and summarizes each series
+  (last/min/max). Datasource-agnostic (Prometheus, SQL, Loki, …); needs `datasources:query` on
+  the token. Omit `panel` to summarize every panel on the dashboard.
 - **Browse & Bookmark** lists your folders (each a scoped dashboard search) plus standing
   *Alert rules — current state* and *Recent annotations* candidates. Datasource listings may
   need admin permission — the error says so; everything else reads with Viewer.

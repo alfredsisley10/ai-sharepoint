@@ -1597,7 +1597,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
         { label: "$(pulse) Splunk", description: "read-only SPL searches (oneshot, time-bounded)", value: "splunk" as ContextSourceType },
         { label: "$(dashboard) Splunk Observability Cloud", description: "metrics/detectors/dashboards/active incidents (the former SignalFx)", value: "splunkobs" as ContextSourceType },
-        { label: "$(graph-line) Grafana", description: "dashboards, alert-rule state, annotations — Cloud or self-hosted", value: "grafana" as ContextSourceType },
+        { label: "$(graph-line) Grafana", description: "dashboards, alert state, annotations, and LIVE panel data — Cloud or self-hosted", value: "grafana" as ContextSourceType },
       ],
       { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );

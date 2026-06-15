@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.38.2 — 2026-06-15
+
+### Fixed — Grafana live panel data was invisible to the assistant
+- The live-panel-data capability added in 0.37.0 worked in the adapter but was **not advertised
+  to @sharepoint**: the `search_context` tool description still listed Grafana as
+  `dashboard|folder|alert|annotation|datasource`, so the assistant reported the connector as
+  "dashboard metadata only" and never offered to read panel values. The tool description now
+  includes the **`panel`** type and its query format
+  (`{"type":"panel","query":"<dashboard>","panel":"<id or title>","from":"now-6h"}`), the
+  add-source picker now says "dashboards, alert state, annotations, and **live panel data**", and
+  the User Guide documents it.
+- **Browse & Bookmark** now lists a **"Live panel data — &lt;dashboard&gt;"** entry per dashboard
+  (a one-click bookmark that summarizes every panel), so the capability is discoverable in the UI
+  too, not just in chat.
+
 ## 0.38.1 — 2026-06-15
 
 ### Maintenance — dependency updates (the pending Dependabot set)

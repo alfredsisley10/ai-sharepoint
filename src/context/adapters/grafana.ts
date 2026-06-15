@@ -527,7 +527,8 @@ export async function getGrafanaItem(
   };
 }
 
-/** Folders + standing alert/annotation views → bookmark candidates. */
+/** Folders, standing alert/annotation views, and a live-panel-data entry per
+ *  dashboard → bookmark candidates. */
 export async function browseGrafanaCandidates(
   source: ContextSource,
   credential: ContextCredential,
@@ -562,5 +563,20 @@ export async function browseGrafanaCandidates(
       detail: "Grafana folder",
     });
   }
-  return out.slice(0, caps.maxResults * 2);
+  // Live-panel-data entry per dashboard (no panel = summarize all panels).
+  const dashboards = await fetchJson<unknown>(
+    `${base}/api/search?type=dash-db&limit=${caps.maxResults}`,
+    credential,
+    caps.timeoutMs,
+  ).catch(() => undefined);
+  for (const d of (Array.isArray(dashboards) ? dashboards : []) as Obj[]) {
+    if (!s(d.title) || !s(d.uid)) continue;
+    out.push({
+      name: `Live panel data — ${s(d.title)}`,
+      locator: JSON.stringify({ type: "panel", query: s(d.uid) }),
+      kind: "query",
+      detail: "Grafana panel data (/api/ds/query)",
+    });
+  }
+  return out.slice(0, caps.maxResults * 3);
 }
