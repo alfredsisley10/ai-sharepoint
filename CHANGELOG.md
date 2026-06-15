@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.35.0 — 2026-06-15
+
+### Added — Microsoft 365 Copilot connector (ADR-0034)
+- New read-only reference source **Microsoft 365 Copilot** leverages the **Microsoft 365 Copilot
+  Retrieval API** (`POST /copilot/retrieval`) so @sharepoint can ground answers on the same
+  semantically-indexed enterprise context Copilot itself uses — relevant passages from the
+  user's **SharePoint/OneDrive** (or, per source, **Graph connectors**), ranked by Microsoft 365
+  and trimmed to what the signed-in user is allowed to see.
+- **Reuses the existing Microsoft 365 sign-in** — the Retrieval API is a Graph call, so the
+  connector takes a delegated `graph.microsoft.com` token from the same MSAL sign-in used for
+  SharePoint sites (no new app registration), or a pasted Graph token. Requires a **Microsoft
+  365 Copilot licence** and delegated **`Files.Read.All` + `Sites.Read.All`** consent; a 403
+  names exactly that, a 404 means the tenant hasn't enabled the API yet.
+- Add it from **Reference Sources → `+` → Microsoft 365 Copilot**: choose the grounding surface
+  (SharePoint/OneDrive or Graph connectors) and the sign-in. Then ask @sharepoint normally —
+  `search_context` routes natural-language queries to retrieval and returns cited passages,
+  which compose with the new full-site scan for richer, better-grounded reviews.
+- Strictly read-only, behind the standard lockout/cache/caps rails; shares the
+  `graph.microsoft.com` host already in the admin allowlist.
+
 ## 0.34.0 — 2026-06-15
 
 ### Added — full-site content scan + deep web-part inventory (`#spScanSiteContent`)

@@ -113,7 +113,7 @@ Connection** (also wipes tokens unless another connection uses the same tenant).
 
 ### Reference Sources
 Your read-only context: Confluence, Jira, LDAP/AD, databases, Vertex AI Search, Power BI,
-ServiceNow, Splunk. Add (+), test, browse & bookmark, schema tools, and the ER diagram all live
+Microsoft 365 Copilot, ServiceNow, Splunk. Add (+), test, browse & bookmark, schema tools, and the ER diagram all live
 here — see [Reference sources](#reference-sources-confluence--jira). When a project is active,
 the view header shows it and the list is scoped to that project's sources.
 

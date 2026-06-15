@@ -1593,6 +1593,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
         { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
         { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Azure CLI or Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
+        { label: "$(sparkle) Microsoft 365 Copilot", description: "grounded enterprise context via the Copilot Retrieval API — reuses your Microsoft 365 sign-in", value: "m365copilot" as ContextSourceType },
         { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
         { label: "$(pulse) Splunk", description: "read-only SPL searches (oneshot, time-bounded)", value: "splunk" as ContextSourceType },
         { label: "$(dashboard) Splunk Observability Cloud", description: "metrics/detectors/dashboards/active incidents (the former SignalFx)", value: "splunkobs" as ContextSourceType },
@@ -2017,6 +2018,85 @@ export function activate(context: vscode.ExtensionContext): void {
           "Could not list datasets right now — the source will still be added; use Browse & Bookmark later.",
         );
       }
+    } else if (typePick.value === "m365copilot") {
+      deployment = "cloud";
+      // The Retrieval API is a Graph call, so it reuses the SAME Microsoft 365
+      // sign-in as SharePoint — an aad-sso token for graph.microsoft.com. The
+      // grounding surface (SharePoint/OneDrive vs Graph connectors) rides on
+      // the baseUrl query so it travels with the reference-config export.
+      const dataSourcePick = await vscode.window.showQuickPick(
+        [
+          {
+            label: "$(folder) SharePoint & OneDrive",
+            description: "ground on the user's Microsoft 365 documents and sites (recommended)",
+            value: "sharePoint" as const,
+          },
+          {
+            label: "$(plug) Graph connectors (external items)",
+            description: "ground on content indexed by Microsoft 365 Copilot connectors",
+            value: "externalItem" as const,
+          },
+        ],
+        { ignoreFocusOut: true, title: "Microsoft 365 Copilot — what to ground on" },
+      );
+      if (!dataSourcePick) return;
+      baseUrl = `https://graph.microsoft.com/v1.0/copilot/retrieval?dataSource=${dataSourcePick.value}`;
+
+      const signIn = await vscode.window.showQuickPick(
+        [
+          {
+            label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
+            description: "reuses a connected site's sign-in — recommended",
+            value: "aad" as const,
+          },
+          {
+            label: "$(key) Paste a Graph access token",
+            description: "from shell.azure.com or another machine — ~1 h lifetime",
+            value: "pat" as const,
+          },
+        ],
+        { ignoreFocusOut: true, title: "Microsoft 365 Copilot sign-in" },
+      );
+      if (!signIn) return;
+      if (signIn.value === "pat") {
+        const token = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          password: true,
+          title: "Microsoft Graph access token",
+          prompt:
+            "No CLI installed? Open shell.azure.com and run `az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv`, then paste it. Stored only in your OS keychain; expires after ~1 h (re-paste via Test Context Source).",
+        });
+        if (!token?.trim()) return;
+        presetCredential = { method: "pat", secret: token.trim() };
+      } else {
+        const all = sites.list();
+        if (all.length === 0) {
+          const add = await vscode.window.showInformationMessage(
+            "This reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
+            "Connect Site",
+          );
+          if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
+          return;
+        }
+        let conn = all.length === 1 ? all[0] : undefined;
+        if (!conn) {
+          const pick = await vscode.window.showQuickPick(
+            all.map((c) => ({
+              label: c.displayName,
+              description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
+              conn: c,
+            })),
+            { ignoreFocusOut: true, title: "Use which Microsoft 365 sign-in for Copilot retrieval?" },
+          );
+          if (!pick) return;
+          conn = pick.conn;
+        }
+        presetCredential = {
+          method: "aad-sso",
+          secret: JSON.stringify({ providerId: conn.authProviderId, cacheHandle: conn.cacheHandle }),
+        };
+      }
+      if (!presetCredential) return;
     } else if (typePick.value === "vertexai") {
       deployment = "cloud";
       // Pilot: users often only have the corporate search URL — offer SSO

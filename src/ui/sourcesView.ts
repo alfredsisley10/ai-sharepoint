@@ -79,9 +79,11 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
                     ? "dashboard"
                     : source.type === "grafana"
                       ? "graph-line"
-                      : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
-                        ? "database"
-                        : "book";
+                      : source.type === "m365copilot"
+                        ? "sparkle"
+                        : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
+                          ? "database"
+                          : "book";
     item.iconPath = new vscode.ThemeIcon(
       icon,
       locked

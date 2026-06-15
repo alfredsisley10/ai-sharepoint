@@ -34,6 +34,12 @@ import {
   POWERBI_SCOPES,
 } from "./adapters/powerbi";
 import {
+  verifyM365Copilot,
+  searchM365Copilot,
+  GraphTokenGetter,
+  M365_COPILOT_SCOPES,
+} from "./adapters/m365copilot";
+import {
   verifyServiceNow,
   searchServiceNow,
   getServiceNowItem,
@@ -98,6 +104,23 @@ export class ContextService {
       );
     }
     return (interactive) => broker(credential, interactive, POWERBI_SCOPES);
+  }
+
+  /** Microsoft 365 Copilot retrieval tokens: a pasted Graph token (pat) or the
+   *  extension's reused Microsoft 365 sign-in (aad-sso), scoped for the
+   *  Retrieval API's SharePoint/OneDrive grounding. */
+  private m365CopilotTokens(credential: ContextCredential): GraphTokenGetter {
+    if (credential.method === "pat") {
+      return () => Promise.resolve(credential.secret);
+    }
+    const broker = this.aadBroker;
+    if (!broker) {
+      throw new AppError(
+        "Microsoft 365 Copilot sources need the extension's Microsoft 365 sign-in (unavailable in this context).",
+        "config",
+      );
+    }
+    return (interactive) => broker(credential, interactive, M365_COPILOT_SCOPES);
   }
 
   private static powerBiAccountLabel(credential: ContextCredential): string {
@@ -225,6 +248,8 @@ export class ContextService {
             caps,
             ContextService.powerBiAccountLabel(credential),
           );
+        case "m365copilot":
+          return verifyM365Copilot(this.m365CopilotTokens(credential), caps);
         case "servicenow":
           return this.snowCredential(source, credential).then((c) => verifyServiceNow(source, c, caps));
         case "splunk":
@@ -292,6 +317,8 @@ export class ContextService {
         return searchVertex(source, credential, query, caps);
       case "powerbi":
         return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
+      case "m365copilot":
+        return searchM365Copilot(source, this.m365CopilotTokens(credential), query, caps);
       case "servicenow":
         return this.snowCredential(source, credential).then((c) =>
           searchServiceNow(source, c, query, caps),
@@ -361,6 +388,12 @@ export class ContextService {
           if (source.type === "splunk") {
             throw new AppError(
               "Splunk has no item fetch — use search with SPL (results carry the matching events).",
+              "config",
+            );
+          }
+          if (source.type === "m365copilot") {
+            throw new AppError(
+              "Microsoft 365 Copilot returns ranked grounding passages, not addressable items — use search with a natural-language query.",
               "config",
             );
           }

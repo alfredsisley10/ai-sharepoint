@@ -17,7 +17,8 @@ export type ContextSourceType =
   | "servicenow"
   | "splunk"
   | "splunkobs"
-  | "grafana";
+  | "grafana"
+  | "m365copilot";
 export type ContextDeployment = "cloud" | "datacenter";
 
 /** Auth method descriptor persisted per source (ADR-0014/0015).
