@@ -313,6 +313,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const sitesProvider = new SitesTreeProvider(sites);
   const sourcesProvider = new SourcesTreeProvider(
     contextSources,
+    sites,
     bookmarks,
     schemas,
     catalogs,
@@ -496,7 +497,9 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.commands.executeCommand(
       "setContext",
       "aiSharePoint.hasSites",
-      sites.list().length > 0,
+      // Drives the Managed Sites empty state: managed targets only — read-only
+      // sites live under Reference Sources now.
+      sites.list().some((c) => c.role === "managed"),
     );
     if (supportView)
       safeViewOp(() => {

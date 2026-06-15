@@ -6,18 +6,25 @@ import { CatalogStore } from "../context/catalogStore";
 import { isExpired, catalogAge } from "../context/catalogCache";
 import { ContextSource, ContextBookmark } from "../context/types";
 import { isSrvLocator } from "../context/ldap/srvLocator";
+import { SitesStore, SiteConnection } from "../auth/sitesStore";
+import { siteTreeItem } from "./sitesView";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
-type Node = ContextSource | ContextBookmark;
+type Node = ContextSource | ContextBookmark | SiteConnection;
 
 function isBookmark(node: Node): node is ContextBookmark {
   return (node as ContextBookmark).locator !== undefined;
 }
 
+function isSiteConnection(node: Node): node is SiteConnection {
+  return (node as SiteConnection).siteUrl !== undefined && (node as SiteConnection).role !== undefined;
+}
+
 /**
- * Reference Sources view (PLAN §9 unified surface): sources at the top level,
- * their saved bookmarks (ADR-0010) as children.
+ * Reference Sources view (PLAN §9 unified surface): all read-only references —
+ * read-only/reference SharePoint sites first, then context sources (Confluence,
+ * Jira, databases, …) with their saved bookmarks (ADR-0010) as children.
  */
 export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   private readonly emitter = new vscode.EventEmitter<void>();
@@ -25,6 +32,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
 
   constructor(
     private readonly sources: ContextSourcesStore,
+    private readonly sites: SitesStore,
     private readonly bookmarks: BookmarksStore,
     private readonly schemas: SchemaStore,
     private readonly catalogs: CatalogStore,
@@ -32,6 +40,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     private readonly scope: (all: ContextSource[]) => ContextSource[] = (all) => all,
   ) {
     sources.onDidChange(() => this.emitter.fire());
+    sites.onDidChange(() => this.emitter.fire());
     bookmarks.onDidChange(() => this.emitter.fire());
     schemas.onDidChange(() => this.emitter.fire());
     catalogs.onDidChange(() => this.emitter.fire());
@@ -42,12 +51,16 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
+    if (isSiteConnection(node)) return siteTreeItem(node);
     return isBookmark(node) ? this.bookmarkItem(node) : this.sourceItem(node);
   }
 
   getChildren(node?: Node): Node[] {
-    if (!node) return this.scope(this.sources.list());
-    if (isBookmark(node)) return [];
+    if (!node) {
+      const referenceSites = this.sites.list().filter((c) => c.role === "reference");
+      return [...referenceSites, ...this.scope(this.sources.list())];
+    }
+    if (isBookmark(node) || isSiteConnection(node)) return [];
     return this.bookmarks.listForSource(node.id);
   }
 

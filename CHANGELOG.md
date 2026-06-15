@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.40.0 — 2026-06-15
+
+### Changed — "Managed Sites" view + read-only sites moved to Reference Sources (Phase 1)
+- The **"SharePoint Sites"** view is now **"Managed Sites"** and shows **only managed targets**
+  (the ones with the full pull / apply / revert lifecycle). It's framed to hold SharePoint *or
+  Confluence* managed targets — Confluence write-back parity lands next (Phase 2).
+- **Read-only / reference SharePoint sites now live under "Reference Sources"**, alongside
+  Confluence, Jira, databases, and the other read-only context — one place for everything the
+  assistant only *reads*. Their context-menu actions (test, open, change role, sign out, remove)
+  work there, and flipping a site to "managed" moves it to Managed Sites automatically.
+- Groundwork for managing a **Confluence space** as a first-class target (next: a Confluence
+  write client behind the existing `PushWriter` boundary, so pull/apply/revert work for
+  Confluence the way they do for SharePoint — a writable target that doesn't need SharePoint's
+  tenant-admin write consent).
+
 ## 0.39.0 — 2026-06-15
 
 ### Changed — write-back now asks for least-privilege `Sites.Selected` by default (ADR-0037)
