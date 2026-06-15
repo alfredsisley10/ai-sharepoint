@@ -9,13 +9,15 @@ import { fetchJson } from "../http";
 import { AppError } from "../../core/errors";
 
 /**
- * Grafana connector (ADR-0033): read-only reads against a Grafana instance
- * (Cloud stack or self-hosted) with a service-account token (Bearer) or
- * basic auth. Surfaces dashboards/folders (search), unified-alerting rule
- * STATE (the Viewer-readable Prometheus-style endpoint), annotations, and
- * datasources. Running datasource queries through `/api/ds/query` is
- * deliberately out of scope for v1 — payloads are per-datasource-type and
- * belong behind their own design.
+ * Grafana connector (ADR-0033/0036): read-only reads against a Grafana
+ * instance (Cloud stack or self-hosted) with a service-account token (Bearer)
+ * or basic auth. Surfaces dashboards/folders (search), unified-alerting rule
+ * STATE (the Viewer-readable Prometheus-style endpoint), annotations,
+ * datasources, and — the `panel` type — **live panel data**: a dashboard
+ * panel's own native queries executed through `/api/ds/query`, with the
+ * returned data frames summarized (per-series last/min/max, datasource-type
+ * agnostic). This lifts the ADR-0033 deferral so the assistant can read what a
+ * panel actually shows, not just its title/type.
  */
 
 export type GrafanaObjectType =
@@ -23,7 +25,8 @@ export type GrafanaObjectType =
   | "folder"
   | "alert"
   | "annotation"
-  | "datasource";
+  | "datasource"
+  | "panel";
 
 const OBJECT_TYPES = new Set<GrafanaObjectType>([
   "dashboard",
@@ -31,6 +34,7 @@ const OBJECT_TYPES = new Set<GrafanaObjectType>([
   "alert",
   "annotation",
   "datasource",
+  "panel",
 ]);
 
 export function grafanaBaseOf(source: Pick<ContextSource, "baseUrl">): string {
@@ -44,20 +48,34 @@ export interface GrafanaSpec {
   limit?: number;
   /** Restrict dashboard searches to a folder (search hits/browse carry it). */
   folderUid?: string;
+  /** panel type: which panel (id or title substring); blank = all panels. */
+  panel?: string;
+  /** panel type: time range (Grafana relative or epoch-ms). Defaults now-6h. */
+  from?: string;
+  to?: string;
 }
 
 /** Parse a chat/bookmark query:
  *  - JSON spec {"type": "alert", "query": "cpu", "limit": 25, "folderUid": "…"}
+ *  - live data {"type": "panel", "query": "<dash uid/title>", "panel": "<id/title>", "from": "now-24h"}
  *  - free text → dashboard search. */
 export function parseGrafanaSpec(query: string): GrafanaSpec {
   const trimmed = query.trim();
   if (trimmed.startsWith("{")) {
-    let raw: { type?: unknown; query?: unknown; limit?: unknown; folderUid?: unknown };
+    let raw: {
+      type?: unknown;
+      query?: unknown;
+      limit?: unknown;
+      folderUid?: unknown;
+      panel?: unknown;
+      from?: unknown;
+      to?: unknown;
+    };
     try {
       raw = JSON.parse(trimmed) as typeof raw;
     } catch {
       throw new AppError(
-        'Grafana queries are JSON: {"type": "dashboard|folder|alert|annotation|datasource", "query": "cpu", "limit": 25} — or plain text to search dashboards.',
+        'Grafana queries are JSON: {"type": "dashboard|folder|alert|annotation|datasource|panel", "query": "cpu", "limit": 25} — or plain text to search dashboards. For live data: {"type":"panel","query":"<dashboard uid or title>","panel":"<id or title>"}.',
         "config",
       );
     }
@@ -65,13 +83,16 @@ export function parseGrafanaSpec(query: string): GrafanaSpec {
       typeof raw.type === "string" && OBJECT_TYPES.has(raw.type as GrafanaObjectType)
         ? (raw.type as GrafanaObjectType)
         : "dashboard";
+    const strField = (v: unknown): string | undefined =>
+      typeof v === "string" && v.trim() ? v.trim() : undefined;
     return {
       type,
       query: typeof raw.query === "string" ? raw.query.trim() : "",
       ...(typeof raw.limit === "number" ? { limit: raw.limit } : {}),
-      ...(typeof raw.folderUid === "string" && raw.folderUid.trim()
-        ? { folderUid: raw.folderUid.trim() }
-        : {}),
+      ...(strField(raw.folderUid) ? { folderUid: strField(raw.folderUid) } : {}),
+      ...(strField(raw.panel) ? { panel: strField(raw.panel) } : {}),
+      ...(strField(raw.from) ? { from: strField(raw.from) } : {}),
+      ...(strField(raw.to) ? { to: strField(raw.to) } : {}),
     };
   }
   if (!trimmed) throw new AppError("Empty Grafana query.", "config");
@@ -101,6 +122,9 @@ export function grafanaSearchPath(spec: GrafanaSpec, maxResults: number): string
       return `/api/annotations?limit=${limit}`;
     case "datasource":
       return "/api/datasources";
+    case "panel":
+      // Live panel data takes a multi-step /api/ds/query path, not a search URL.
+      throw new AppError("Grafana panel data uses the live-query path, not a search URL.", "config");
   }
 }
 
@@ -200,6 +224,209 @@ export function mapGrafanaResults(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Live panel data (ADR-0036): run a panel's native queries via /api/ds/query.
+// ---------------------------------------------------------------------------
+
+const MAX_PANELS = 8;
+const MAX_FRAMES = 24;
+const MAX_SUMMARY_LINES = 40;
+
+/** Flatten a dashboard's panels, descending into row panels. */
+export function collectPanels(dashboard: Obj): Obj[] {
+  const out: Obj[] = [];
+  const walk = (panels: unknown): void => {
+    for (const p of (Array.isArray(panels) ? panels : []) as Obj[]) {
+      if (s(p.type) === "row") walk(p.panels);
+      else out.push(p);
+    }
+  };
+  walk(dashboard.panels);
+  return out;
+}
+
+/** Select panels by id or title (case-insensitive contains); all when blank. */
+export function selectPanels(panels: Obj[], ref?: string): Obj[] {
+  const r = (ref ?? "").trim().toLowerCase();
+  if (!r) return panels;
+  const byId = panels.filter((p) => s(p.id) === r);
+  if (byId.length) return byId;
+  return panels.filter((p) => s(p.title).toLowerCase().includes(r));
+}
+
+function fieldLabel(field: Obj): string {
+  const name = s(field.name) || "value";
+  const labels = field.labels as Obj | undefined;
+  if (labels && typeof labels === "object") {
+    const pairs = Object.entries(labels)
+      .map(([k, v]) => `${k}=${s(v)}`)
+      .join(",");
+    if (pairs) return `${name}{${pairs}}`;
+  }
+  return name;
+}
+
+function fmtNum(n: number): string {
+  if (!isFinite(n)) return String(n);
+  if (Number.isInteger(n)) return String(n);
+  return Number(n.toPrecision(5)).toString();
+}
+
+/** Build /api/ds/query `queries` from a panel's targets — pass the native query
+ *  model through, attaching the resolved datasource, refId, and point caps.
+ *  Skips hidden targets and ones without a concrete datasource uid
+ *  (default/mixed/expression), which can't be run without datasources:read. */
+export function buildDsQueries(panel: Obj, maxDataPoints: number): Obj[] {
+  const panelDs = panel.datasource as Obj | undefined;
+  const targets = (Array.isArray(panel.targets) ? panel.targets : []) as Obj[];
+  const out: Obj[] = [];
+  let auto = 0;
+  for (const t of targets) {
+    if (t.hide === true) continue;
+    const ds = (t.datasource ?? panelDs) as Obj | undefined;
+    const uid = ds && typeof ds === "object" ? s((ds as Obj).uid) : "";
+    if (!uid || uid.startsWith("-- ")) continue;
+    const refId = s(t.refId) || String.fromCharCode(65 + (auto % 26));
+    auto += 1;
+    out.push({ ...t, refId, datasource: ds, maxDataPoints, intervalMs: 60000 });
+  }
+  return out;
+}
+
+/** Summarize an /api/ds/query response (data frames) into compact text —
+ *  per non-time field: last/min/max for numeric series, last value otherwise.
+ *  Datasource-type agnostic (timeseries and table both reduce to fields). */
+export function summarizeFrames(payload: unknown, maxChars: number): string {
+  const results =
+    (payload as { results?: Record<string, { frames?: Obj[]; error?: string }> } | null)?.results ?? {};
+  const lines: string[] = [];
+  for (const [refId, r] of Object.entries(results)) {
+    if (r && r.error) {
+      lines.push(`[${refId}] error: ${s(r.error).slice(0, 160)}`);
+      continue;
+    }
+    const frames = (Array.isArray(r?.frames) ? r.frames : []) as Obj[];
+    for (const f of frames.slice(0, MAX_FRAMES)) {
+      const schema = (f.schema ?? {}) as Obj;
+      const fields = (Array.isArray(schema.fields) ? schema.fields : []) as Obj[];
+      const data = (f.data ?? {}) as Obj;
+      const values = (Array.isArray(data.values) ? data.values : []) as unknown[][];
+      const rowCount = Array.isArray(values[0]) ? values[0].length : 0;
+      fields.forEach((fld, i) => {
+        if (s(fld.type) === "time") return;
+        const col = (Array.isArray(values[i]) ? values[i] : []) as unknown[];
+        const label = fieldLabel(fld);
+        const nums = col.filter((v): v is number => typeof v === "number" && isFinite(v));
+        if (nums.length) {
+          lines.push(
+            `${label}: last=${fmtNum(nums[nums.length - 1])} min=${fmtNum(Math.min(...nums))} max=${fmtNum(Math.max(...nums))} n=${nums.length}`,
+          );
+        } else if (col.length) {
+          lines.push(
+            `${label}: ${s(col[col.length - 1]).slice(0, 60)}${rowCount > 1 ? ` (+${rowCount - 1} more rows)` : ""}`,
+          );
+        }
+      });
+    }
+  }
+  if (!lines.length) return "(no data returned)";
+  const more = lines.length > MAX_SUMMARY_LINES ? `\n…(+${lines.length - MAX_SUMMARY_LINES} more series)` : "";
+  return (lines.slice(0, MAX_SUMMARY_LINES).join("\n") + more).slice(0, maxChars);
+}
+
+interface DashboardLoad {
+  uid: string;
+  title: string;
+  panels: Obj[];
+}
+
+/** Load a dashboard model by uid, falling back to a title search. */
+async function loadDashboard(
+  base: string,
+  credential: ContextCredential,
+  ref: string,
+  timeoutMs: number,
+): Promise<DashboardLoad> {
+  const byUid = (uid: string) =>
+    fetchJson<{ dashboard?: Obj }>(`${base}/api/dashboards/uid/${encodeURIComponent(uid)}`, credential, timeoutMs);
+  let uid = ref.trim();
+  let res: { dashboard?: Obj };
+  try {
+    res = await byUid(uid);
+  } catch (err) {
+    if (err instanceof AppError && err.code === "graph.notFound") {
+      const hits = await fetchJson<Obj[]>(
+        `${base}/api/search?type=dash-db&limit=1&query=${encodeURIComponent(uid)}`,
+        credential,
+        timeoutMs,
+      );
+      const found = Array.isArray(hits) && hits[0] ? s(hits[0].uid) : "";
+      if (!found) throw new AppError(`No Grafana dashboard matched "${ref}".`, "graph.notFound");
+      uid = found;
+      res = await byUid(uid);
+    } else {
+      throw err;
+    }
+  }
+  const dashboard = (res?.dashboard ?? {}) as Obj;
+  return { uid, title: s(dashboard.title) || `dashboard ${uid}`, panels: collectPanels(dashboard) };
+}
+
+/** Live panel data: resolve a dashboard, run each selected panel's queries via
+ *  /api/ds/query, and return one hit per panel with the data summarized. A
+ *  panel that can't run (text/row, default datasource, denied query) degrades
+ *  to a noted hit rather than failing the whole read. */
+export async function queryGrafanaPanelData(
+  source: ContextSource,
+  credential: ContextCredential,
+  spec: GrafanaSpec,
+  caps: ReadCaps,
+): Promise<ContextSearchHit[]> {
+  const base = grafanaBaseOf(source);
+  const dash = await loadDashboard(base, credential, spec.query, caps.timeoutMs);
+  const selected = selectPanels(dash.panels, spec.panel);
+  if (!selected.length) {
+    const names = dash.panels.map((p) => s(p.title)).filter(Boolean).join("; ").slice(0, 300);
+    throw new AppError(
+      `No panel matched${spec.panel ? ` "${spec.panel}"` : ""} on "${dash.title}". Panels: ${names || "(none)"}`,
+      "graph.notFound",
+    );
+  }
+  const from = spec.from ?? "now-6h";
+  const to = spec.to ?? "now";
+  const hits: ContextSearchHit[] = [];
+  for (const panel of selected.slice(0, MAX_PANELS)) {
+    const url = `${base}/d/${encodeURIComponent(dash.uid)}?viewPanel=${encodeURIComponent(s(panel.id))}`;
+    const queries = buildDsQueries(panel, 100);
+    const baseMeta = { kind: "panel", dashboard: dash.title } as Record<string, string>;
+    if (!queries.length) {
+      hits.push({
+        title: s(panel.title) || "panel",
+        url,
+        excerpt: "(no runnable datasource query — a text/row panel, or a default/mixed datasource)",
+        meta: baseMeta,
+      });
+      continue;
+    }
+    try {
+      const res = await fetchJson<unknown>(`${base}/api/ds/query`, credential, caps.timeoutMs, undefined, {
+        method: "POST",
+        body: { from, to, queries },
+      });
+      hits.push({
+        title: s(panel.title) || "panel",
+        url,
+        excerpt: summarizeFrames(res, caps.maxBodyChars),
+        meta: { ...baseMeta, ...(s(panel.type) ? { type: s(panel.type) } : {}), range: `${from}→${to}` },
+      });
+    } catch (err) {
+      const msg = err instanceof AppError ? err.message : String(err);
+      hits.push({ title: s(panel.title) || "panel", url, excerpt: `(live query failed: ${msg.slice(0, 160)})`, meta: baseMeta });
+    }
+  }
+  return hits.slice(0, caps.maxResults);
+}
+
 /** Single deliberate verification read (ADR-0009): the smallest dashboard
  *  search — every Viewer-grade token can run it. Org name is a best-effort
  *  label on top. */
@@ -226,6 +453,15 @@ export async function searchGrafana(
 ): Promise<ContextSearchHit[]> {
   const base = grafanaBaseOf(source);
   const spec = parseGrafanaSpec(query);
+  if (spec.type === "panel") {
+    if (!spec.query) {
+      throw new AppError(
+        'Live panel data needs the dashboard: {"type":"panel","query":"<dashboard uid or title>","panel":"<id or title, optional>"}.',
+        "config",
+      );
+    }
+    return queryGrafanaPanelData(source, credential, spec, caps);
+  }
   let payload: unknown;
   try {
     payload = await fetchJson<unknown>(
@@ -268,11 +504,14 @@ export async function getGrafanaItem(
   }>(`${base}/api/dashboards/uid/${encodeURIComponent(uid)}`, credential, caps.timeoutMs);
   const dash = res.dashboard ?? {};
   const panels = (Array.isArray(dash.panels) ? dash.panels : [])
-    .map((p) => `- ${s(p.title) || "(untitled)"} [${s(p.type)}]`)
+    .map((p) => `- [panel ${s(p.id)}] ${s(p.title) || "(untitled)"} [${s(p.type)}]`)
     .join("\n");
   const body = [
     s(dash.description),
     panels ? `Panels:\n${panels}` : "",
+    panels
+      ? `For LIVE data from a panel, search this source with {"type":"panel","query":"${uid}","panel":"<id or title>"} (optional "from"/"to", default now-6h).`
+      : "",
   ]
     .filter(Boolean)
     .join("\n\n");

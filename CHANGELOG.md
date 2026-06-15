@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.37.0 — 2026-06-15
+
+### Added — Grafana live panel data (ADR-0036)
+- The Grafana connector can now read **what a panel actually shows**, not just its title/type.
+  A new query — `{"type":"panel","query":"<dashboard uid or title>","panel":"<id or title>"}`
+  (optional `from`/`to`, default `now-6h`) — resolves the dashboard, runs the panel's **own
+  native queries** through `POST /api/ds/query`, and summarizes the returned data frames
+  (per-series `last/min/max/n` for metrics, last value for tables).
+- **Datasource-type agnostic**: the panel's target query model (PromQL/SQL/Graphite/…) is passed
+  through unchanged, so Prometheus, SQL, Loki, etc. all work without bespoke parsing. Panels with
+  no runnable query (text/row, default/mixed datasource) and per-series datasource errors degrade
+  to noted hits rather than failing the whole read.
+- Dashboard item fetch now lists each panel's **id** and points to the `panel` query for live data.
+- Still strictly read-only (executes a panel's read query); needs `datasources:query` on the
+  Viewer token. Lifts the ADR-0033 deferral; bounded by panel/frame/line caps.
+
 ## 0.36.0 — 2026-06-15
 
 ### Added — Microsoft 365 Copilot connector now spans the breadth Copilot does (ADR-0035)

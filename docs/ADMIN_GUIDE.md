@@ -73,7 +73,7 @@ accordingly.
 | ServiceNow (optional) | Your instance host (`*.service-now.com` or custom) — read-only Table API (ADR-0028) |
 | Splunk (optional) | Your Splunk management endpoint (typically `:8089`) — read-only SPL search jobs (queued at the concurrency cap like Splunk Web, always cleaned up), write/exfil commands blocked client-side, default 24 h window (ADR-0029) |
 | Splunk Observability Cloud (optional) | `api.<realm>.signalfx.com` (e.g. `api.us1.signalfx.com`) — read-only metadata/state GETs, access token via `X-SF-TOKEN` (ADR-0032) |
-| Grafana (optional) | Your Grafana host (`*.grafana.net` or self-hosted) — read-only `/api/*` GETs with a Viewer service-account token (ADR-0033) |
+| Grafana (optional) | Your Grafana host (`*.grafana.net` or self-hosted) — read-only `/api/*` with a Viewer service-account token: GETs for dashboards/alerts/annotations (ADR-0033), plus `POST /api/ds/query` to read **live panel data** (executes a panel's own read query; needs `datasources:query`) (ADR-0036) |
 
 ### Proxies and TLS inspection (MITM)
 **Every** outbound request the extension makes — Microsoft Graph reads *and* Microsoft Entra

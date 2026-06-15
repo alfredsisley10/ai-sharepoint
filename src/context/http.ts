@@ -54,13 +54,15 @@ export async function fetchJson<T>(
   credential: ContextCredential,
   timeoutMs: number,
   extraHeaders?: Record<string, string>,
+  init?: { method?: "GET" | "POST"; body?: unknown },
 ): Promise<T> {
   const started = Date.now();
+  const method = init?.method ?? "GET";
   if (wireEnabled()) {
     emitWire(
       "http",
       "→",
-      `GET ${safeUrl(url)}`,
+      `${method} ${safeUrl(url)}`,
       safeHeaders({
         ...authHeaders(credential),
         Accept: "application/json",
@@ -71,22 +73,25 @@ export async function fetchJson<T>(
   let res: Response;
   try {
     res = await fetch(url, {
+      method,
       headers: {
         ...authHeaders(credential),
         Accept: "application/json",
+        ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...extraHeaders,
       },
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    emitWire("http", "✗", `GET ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
+    emitWire("http", "✗", `${method} ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
     throw new AppError(
       `Context request failed: ${err instanceof Error ? err.message : String(err)}`,
       "network",
     );
   }
   if (!res.ok && wireEnabled()) {
-    emitWire("http", "✗", `GET ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
+    emitWire("http", "✗", `${method} ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
   }
   if (res.status === 401 || res.status === 403) {
     if (credential.method === "snow-session") {
@@ -129,7 +134,7 @@ export async function fetchJson<T>(
     emitWire(
       "http",
       "←",
-      `GET ${safeUrl(url)} ${res.status} · ${text.length} bytes (${Date.now() - started}ms)`,
+      `${method} ${safeUrl(url)} ${res.status} · ${text.length} bytes (${Date.now() - started}ms)`,
       capDetail(text),
     );
   }
