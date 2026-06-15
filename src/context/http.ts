@@ -54,7 +54,7 @@ export async function fetchJson<T>(
   credential: ContextCredential,
   timeoutMs: number,
   extraHeaders?: Record<string, string>,
-  init?: { method?: "GET" | "POST"; body?: unknown },
+  init?: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown },
 ): Promise<T> {
   const started = Date.now();
   const method = init?.method ?? "GET";
@@ -143,6 +143,10 @@ export async function fetchJson<T>(
       `Source response exceeded the ${MAX_RESPONSE_BYTES / 1024 / 1024} MB read cap (ADR-0012).`,
       "config",
     );
+  }
+  if (!text.trim()) {
+    // Writes (DELETE, some PUT/POST) legitimately return 204 No Content.
+    return undefined as unknown as T;
   }
   try {
     return JSON.parse(text) as T;
