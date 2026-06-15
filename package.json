@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.38.0",
+  "version": "0.38.1",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -1682,19 +1682,19 @@
     "vscode:prepublish": "node esbuild.js --production"
   },
   "dependencies": {
-    "@azure/msal-node": "^2.16.2",
+    "@azure/msal-node": "^5.2.4",
     "ldapts": "^8.1.8",
-    "mongodb": "^6.21.0",
+    "mongodb": "^7.3.0",
     "mysql2": "^3.22.5",
     "pg": "^8.21.0",
-    "tedious": "^18.6.2"
+    "tedious": "^19.2.1"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^25.9.3",
     "@types/pg": "^8.20.0",
     "@types/vscode": "^1.95.0",
     "@vscode/vsce": "^3.2.1",
-    "esbuild": "^0.24.0",
-    "typescript": "^5.6.0"
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3"
   }
 }

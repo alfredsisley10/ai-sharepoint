@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.38.1 — 2026-06-15
+
+### Maintenance — dependency updates (the pending Dependabot set)
+- **Runtime:** `@azure/msal-node` 2 → 5, `mongodb` 6 → 7, `tedious` 18 → 19.
+- **Build/tooling:** TypeScript 5 → 6, `@types/node` 20 → 25, `esbuild` 0.24 → 0.28. TypeScript 6
+  errors on the test config's deprecated `node10` module resolution, so the test build now sets
+  `ignoreDeprecations: "6.0"` (the classic resolution is kept because the tests rely on
+  extensionless imports; a full move to `node16`/`nodenext` is a separate follow-up before TS 7).
+- **CI:** `actions/checkout` v5 → v6, `actions/setup-node` v5 → v6, `actions/upload-artifact`
+  v5 → v7.
+- Validated: `tsc --noEmit` clean under TS 6, 390/390 tests pass, the production esbuild bundle
+  builds, and the secret scan passes. The major **runtime** bumps (MSAL auth, MongoDB, SQL Server
+  driver) compile and pass the mocked suite but are not exercised against live services here, so a
+  real sign-in / database smoke test is recommended before a production release.
+
 ## 0.38.0 — 2026-06-15
 
 ### Changed — Teams/Outlook drafting is now Copilot-grounded
