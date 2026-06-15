@@ -37,7 +37,7 @@ import {
   verifyM365Copilot,
   searchM365Copilot,
   GraphTokenGetter,
-  M365_COPILOT_SCOPES,
+  scopesForSource,
 } from "./adapters/m365copilot";
 import {
   verifyServiceNow,
@@ -106,10 +106,10 @@ export class ContextService {
     return (interactive) => broker(credential, interactive, POWERBI_SCOPES);
   }
 
-  /** Microsoft 365 Copilot retrieval tokens: a pasted Graph token (pat) or the
-   *  extension's reused Microsoft 365 sign-in (aad-sso), scoped for the
-   *  Retrieval API's SharePoint/OneDrive grounding. */
-  private m365CopilotTokens(credential: ContextCredential): GraphTokenGetter {
+  /** Microsoft 365 Copilot tokens: a pasted Graph token (pat) or the
+   *  extension's reused Microsoft 365 sign-in (aad-sso), scoped to exactly the
+   *  surfaces this source has enabled (documents, email, calendar, …). */
+  private m365CopilotTokens(source: ContextSource, credential: ContextCredential): GraphTokenGetter {
     if (credential.method === "pat") {
       return () => Promise.resolve(credential.secret);
     }
@@ -120,7 +120,8 @@ export class ContextService {
         "config",
       );
     }
-    return (interactive) => broker(credential, interactive, M365_COPILOT_SCOPES);
+    const scopes = scopesForSource(source);
+    return (interactive) => broker(credential, interactive, scopes);
   }
 
   private static powerBiAccountLabel(credential: ContextCredential): string {
@@ -249,7 +250,7 @@ export class ContextService {
             ContextService.powerBiAccountLabel(credential),
           );
         case "m365copilot":
-          return verifyM365Copilot(this.m365CopilotTokens(credential), caps);
+          return verifyM365Copilot(source, this.m365CopilotTokens(source, credential), caps);
         case "servicenow":
           return this.snowCredential(source, credential).then((c) => verifyServiceNow(source, c, caps));
         case "splunk":
@@ -318,7 +319,7 @@ export class ContextService {
       case "powerbi":
         return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
       case "m365copilot":
-        return searchM365Copilot(source, this.m365CopilotTokens(credential), query, caps);
+        return searchM365Copilot(source, this.m365CopilotTokens(source, credential), query, caps);
       case "servicenow":
         return this.snowCredential(source, credential).then((c) =>
           searchServiceNow(source, c, query, caps),

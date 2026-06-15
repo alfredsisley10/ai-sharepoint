@@ -2020,27 +2020,29 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     } else if (typePick.value === "m365copilot") {
       deployment = "cloud";
-      // The Retrieval API is a Graph call, so it reuses the SAME Microsoft 365
-      // sign-in as SharePoint — an aad-sso token for graph.microsoft.com. The
-      // grounding surface (SharePoint/OneDrive vs Graph connectors) rides on
-      // the baseUrl query so it travels with the reference-config export.
-      const dataSourcePick = await vscode.window.showQuickPick(
+      // Both engines are Graph calls that reuse the SAME Microsoft 365 sign-in
+      // as SharePoint (an aad-sso token for graph.microsoft.com). The enabled
+      // surfaces ride on the baseUrl query so they travel with the
+      // reference-config export — and each surface added expands the delegated
+      // consent the account must hold, so it is an explicit, opt-in choice.
+      const surfacePicks = await vscode.window.showQuickPick(
         [
-          {
-            label: "$(folder) SharePoint & OneDrive",
-            description: "ground on the user's Microsoft 365 documents and sites (recommended)",
-            value: "sharePoint" as const,
-          },
-          {
-            label: "$(plug) Graph connectors (external items)",
-            description: "ground on content indexed by Microsoft 365 Copilot connectors",
-            value: "externalItem" as const,
-          },
+          { label: "$(folder) SharePoint & OneDrive documents", description: "Copilot Retrieval — semantic doc grounding (recommended)", value: "sharePoint" as const, picked: true },
+          { label: "$(plug) Graph connectors", description: "Copilot Retrieval — Copilot connector content · needs ExternalItem.Read.All", value: "externalItem" as const },
+          { label: "$(mail) Outlook email", description: "Microsoft Search — your mailbox · needs Mail.Read", value: "message" as const },
+          { label: "$(calendar) Calendar events", description: "Microsoft Search — your calendar · needs Calendars.Read", value: "event" as const },
+          { label: "$(comment-discussion) Teams messages", description: "Microsoft Search — your chats · needs Chat.Read (tenant support varies)", value: "chatMessage" as const },
+          { label: "$(person) People", description: "Microsoft Search — people & expertise · needs People.Read", value: "person" as const },
         ],
-        { ignoreFocusOut: true, title: "Microsoft 365 Copilot — what to ground on" },
+        {
+          ignoreFocusOut: true,
+          canPickMany: true,
+          title: "Microsoft 365 Copilot — surfaces to ground on (each one expands consent)",
+        },
       );
-      if (!dataSourcePick) return;
-      baseUrl = `https://graph.microsoft.com/v1.0/copilot/retrieval?dataSource=${dataSourcePick.value}`;
+      if (!surfacePicks || surfacePicks.length === 0) return;
+      const surfaces = surfacePicks.map((p) => p.value);
+      baseUrl = `https://graph.microsoft.com/v1.0/copilot/retrieval?surfaces=${surfaces.join(",")}`;
 
       const signIn = await vscode.window.showQuickPick(
         [

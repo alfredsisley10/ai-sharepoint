@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.36.0 — 2026-06-15
+
+### Added — Microsoft 365 Copilot connector now spans the breadth Copilot does (ADR-0035)
+- The connector gained a **second engine, the Microsoft Search API** (`POST /search/query`), so
+  @sharepoint can ground on **Outlook email, calendar events, Teams messages, and people** —
+  not just documents. (The Copilot Retrieval API only reaches SharePoint/OneDrive + connectors;
+  this fills the gap that let Copilot's web app search email while the connector couldn't.)
+- **Surfaces are opt-in per source** (SharePoint/OneDrive docs · Graph connectors · email ·
+  calendar · Teams · people). The delegated consent requested equals exactly what you enable —
+  `Files.Read.All`+`Sites.Read.All` for docs, `Mail.Read` for email, `Calendars.Read`,
+  `Chat.Read`, `People.Read`, `ExternalItem.Read.All` for connectors — so a documents-only
+  source never asks for mailbox access. Email/calendar/Teams/people work **without** a Copilot
+  licence (Search API); document retrieval still needs one.
+- One query **fans out to every enabled engine in parallel** and merges results; a surface the
+  tenant doesn't support (e.g. Teams) can't void the others.
+
+### Added — Retrieval refinements
+- **KQL scoping for `search_context`**: pass plain text, or `{"query":"…","filter":"<KQL>"}` to
+  scope by `Path`/`SiteID`/`Author`/`FileType`/`LastModifiedTime` (e.g. *"stale docs under
+  /sites/HR modified before 2024"*). The filter drives both engines.
+- **Richer hits**: results now carry the relevance score and author/last-modified metadata
+  (documents) and entity-aware sender/received/start details (email/calendar).
+- **Fixed** the connectors surface, which previously requested too few scopes to work
+  (`ExternalItem.Read.All` is now requested when enabled).
+
 ## 0.35.0 — 2026-06-15
 
 ### Added — Microsoft 365 Copilot connector (ADR-0034)
