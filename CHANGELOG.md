@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.43.0 — 2026-06-15
+
+### Added — more reusable Confluence cleanup constructs (ADR-0039/0040)
+- **Remove a page from search** (`confluenceArchive.ts`): for compliance estates that **can't
+  delete** pages — replaces the page's **current** content with a blank page. The page and all
+  prior versions stay in history (retained), but the live page is empty, so it drops out of
+  search and navigation. Title preserved; typically the step after archiving when a page is still
+  not needed.
+- **Authoritative source for a topic** (`confluenceAuthority.ts`): declare a **space / page /
+  subtree** as the authority for a topic (a self-describing `authoritative|<topic>` label), then
+  **gather** its content and **find conflict candidates** across the rest of Confluence — a CQL
+  topic sweep that excludes the authoritative space/pages — so the assistant can flag conflicting
+  or misleading pages elsewhere and recommend cleanup (archive / remove-from-search / contact the
+  owner). The construct does the scoping + retrieval; the model does the comparison.
+- Pure logic + REST IO unit-tested (12 new; 419 total). Builds on the page write/version rails
+  (ADR-0038) and the ownership/archiving constructs (ADR-0039).
+
 ## 0.42.0 — 2026-06-15
 
 ### Added — reusable Confluence ownership + archiving constructs (ADR-0039)

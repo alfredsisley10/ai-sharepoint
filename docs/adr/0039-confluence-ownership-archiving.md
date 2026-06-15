@@ -26,12 +26,18 @@ backed by **LDAP** (`sAMAccountName` + `userAccountControl`) or **M365**
 (`onPremisesSamAccountName` + `accountEnabled`) — wired next. Owners are written
 back with `setConfluencePageOwners` (replace the existing owner label).
 
-### Archiving (`confluenceArchive.ts`)
-"Archive a page" = move it **under a root-level page named "archive"** in its
-space, matched **case-insensitively** and **created if absent**. The move uses
-Confluence's content-safe move endpoint (`/move/append/{targetId}` — no body
-round-trip, so macros/content are untouched). Refuses to archive the Archive
-root itself.
+### Content lifecycle (`confluenceArchive.ts`)
+The compliance-friendly cleanup escalation — pages are **never deleted**:
+- **Archive a page** = move it **under a root-level page named "archive"** in
+  its space, matched **case-insensitively** and **created if absent**, using
+  Confluence's content-safe move endpoint (`/move/append/{targetId}` — no body
+  round-trip, so macros/content are untouched). Refuses to archive the Archive
+  root itself.
+- **Remove a page from search** = replace the page's **current** content with a
+  **blank** page. The page and all prior versions remain in history (compliance
+  retention), but the live page is empty — so it drops out of search and
+  navigation. The title is preserved; only the body is blanked. Typically the
+  next step after archiving, when a page is still not needed.
 
 ## Consequences
 

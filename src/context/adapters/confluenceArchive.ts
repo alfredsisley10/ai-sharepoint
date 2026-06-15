@@ -1,15 +1,28 @@
 import { ContextSource, ContextCredential } from "../types";
 import { fetchJson } from "../http";
 import { AppError } from "../../core/errors";
-import { getConfluencePageMeta, createConfluencePage } from "./confluenceWrite";
+import {
+  getConfluencePageMeta,
+  createConfluencePage,
+  updateConfluencePage,
+  ConfluenceWriteResult,
+} from "./confluenceWrite";
 
 /**
- * Confluence archiving construct (ADR-0039): "archive a page" = move it
- * underneath a page named **"archive"** at the ROOT of its space. The archive
- * root is matched **case-insensitively** ("Archive" / "ARCHIVE" / "archive"),
- * and created if it doesn't exist yet. The move uses Confluence's content-safe
- * move endpoint (no body round-trip), authenticated with the source's own API
- * token. Pairs with ownership: notify the owner before archiving.
+ * Confluence content-lifecycle constructs (ADR-0039) — the compliance-friendly
+ * cleanup escalation (pages are NEVER deleted):
+ *
+ *  - **Archive a page** = move it underneath a page named **"archive"** at the
+ *    ROOT of its space (matched **case-insensitively**, created if absent),
+ *    using Confluence's content-safe move endpoint (no body round-trip).
+ *  - **Remove a page from search** = replace the page's **current** content with
+ *    a blank page. The page and all prior versions stay in history (compliance
+ *    retention), but the live page is empty, so it drops out of search and
+ *    navigation. Typically done only after archiving, when a page is still not
+ *    needed.
+ *
+ * Both authenticate with the source's own API token, and pair with ownership
+ * (notify the resolved owner before archiving / removing).
  */
 
 const enc = encodeURIComponent;
@@ -104,4 +117,29 @@ export async function archiveConfluencePage(
     archiveRootTitle: archive.title,
     createdArchiveRoot: created,
   };
+}
+
+/** Confluence storage value for a "blank" page. Empty body = nothing for search
+ *  to index; prior versions retain the original content for compliance. */
+export const BLANK_PAGE_BODY = "";
+
+/**
+ * Remove a page from search by blanking its CURRENT content (the page is never
+ * deleted — Confluence keeps every prior version, so the original content is
+ * retained for compliance, while the live page is empty and drops out of search
+ * and navigation). The title is preserved; only the body is blanked.
+ */
+export async function removeConfluencePageFromSearch(
+  source: ContextSource,
+  credential: ContextCredential,
+  pageId: string,
+  timeoutMs: number,
+): Promise<ConfluenceWriteResult> {
+  const meta = await getConfluencePageMeta(source, credential, pageId, timeoutMs);
+  return updateConfluencePage(
+    source,
+    credential,
+    { id: meta.id, title: meta.title, body: BLANK_PAGE_BODY },
+    timeoutMs,
+  );
 }

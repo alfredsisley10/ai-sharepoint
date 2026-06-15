@@ -3,6 +3,7 @@ import * as assert from "node:assert/strict";
 import {
   findRootArchivePage,
   archiveConfluencePage,
+  removeConfluencePageFromSearch,
 } from "../src/context/adapters/confluenceArchive";
 import { ContextSource, ContextCredential } from "../src/context/types";
 
@@ -101,4 +102,21 @@ test("archiveConfluencePage refuses to archive the Archive root itself", async (
       ),
     /Archive root/,
   );
+});
+
+test("removeConfluencePageFromSearch blanks the current content, keeps title + bumps version", async () => {
+  const { result, calls } = await withFetch(
+    (_url, init) =>
+      ((init as { method?: string }).method ?? "GET") === "GET"
+        ? { body: { id: "55", title: "Old Doc", version: { number: 4 }, body: { storage: { value: "<p>secret</p>" } } } }
+        : { body: { id: "55", title: "Old Doc", version: { number: 5 }, _links: { webui: "/x" } } },
+    () => removeConfluencePageFromSearch(SRC, CRED, "55", 30000),
+  );
+  const put = calls.find((c) => (c.init as { method?: string }).method === "PUT");
+  assert.ok(put, "page updated");
+  const body = JSON.parse(String((put!.init as { body?: string }).body));
+  assert.equal(body.body.storage.value, ""); // blanked — nothing for search to index
+  assert.equal(body.title, "Old Doc"); // title preserved
+  assert.equal(body.version.number, 5); // version bumped (history retains the original)
+  assert.equal(result.version, 5);
 });
