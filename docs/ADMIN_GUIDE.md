@@ -47,7 +47,7 @@ Allow these HTTPS (443) endpoints from developer machines:
 | Endpoint | Purpose | When |
 |---|---|---|
 | `login.microsoftonline.com` (or sovereign: `login.microsoftonline.us`, `login.partner.microsoftonline.cn`) | Microsoft Entra sign-in (MSAL public client) | Sign-in / token refresh |
-| `graph.microsoft.com` | Site/list/page reads (`Sites.Read.All`); write-back adds `Sites.ReadWrite.All` + `Sites.Manage.All` (delegated, consent at first write) | Site features |
+| `graph.microsoft.com` | Site/list/page reads (`Sites.Read.All`); write-back adds — by default — `Sites.Selected` (least privilege; an admin grants the app each target site) or, when configured, tenant-wide `Sites.ReadWrite.All` + `Sites.Manage.All` (delegated, consent at first write; ADR-0037) | Site features |
 | `microsoft.com/devicelogin` (user's browser, any device) | Device-code completion page | Device-code sign-in only |
 | GitHub Copilot service endpoints | AI requests — made by the **GitHub Copilot extension**, not by this extension directly | Chat / Ask Copilot |
 
@@ -112,8 +112,16 @@ If your tenant requires admin consent for it, grant consent in Entra admin cente
    is requested automatically by MSAL) → **Grant admin consent**. Optional feature scopes —
    each requested **only** when a user first uses that feature (incremental consent), never
    for reads:
-   - **Write-back** (ADR-0021): `Sites.ReadWrite.All` (pages) + `Sites.Manage.All`
-     (lists/columns).
+   - **Write-back** (ADR-0021/0037): the requested scope is set by
+     `aiSharePoint.sync.writePermissionMode` (default **`selected`**):
+     - **`selected`** → **`Sites.Selected`** (recommended, least privilege). Consenting it
+       grants the app **nothing** until you grant it a **specific site**, so admins can approve
+       the scope freely. One-time per site, with PnP PowerShell —
+       `Grant-PnPAzureADAppSitePermission -Site <site-url> -Permissions Manage -AppId <app-id>` —
+       or Graph `POST /v1.0/sites/{site-id}/permissions` with a `write`/`manage` role for the
+       app (`manage` covers both pages and list/column schema). A write before the grant fails
+       with the exact remediation.
+     - **`all`** → tenant-wide `Sites.ReadWrite.All` (pages) + `Sites.Manage.All` (lists/columns).
    - **Communications** (ADR-0025 — Teams/Outlook drafts the user approves per message):
      `User.ReadBasic.All` (recipient resolution), `Chat.ReadWrite` (create chat + post),
      `Mail.ReadWrite` (mailbox draft), `Mail.Send` (send on approval). Tenant DLP/compliance

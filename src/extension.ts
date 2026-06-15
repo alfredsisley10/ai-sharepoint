@@ -37,7 +37,7 @@ import { parseDesiredState } from "./sync/desiredState";
 import { buildPushPlan, renderPushPlan, hasWork } from "./sync/pushPlan";
 import { applyPushPlan, assertFresh } from "./sync/pushEngine";
 import { serializeSite } from "./sync/serializer";
-import { SharePointWriteClient } from "./auth/sharePointWriteClient";
+import { SharePointWriteClient, WritePermissionMode } from "./auth/sharePointWriteClient";
 import { ContextSourcesStore } from "./context/sourcesStore";
 import { ContextService } from "./context/contextService";
 import { TtlCache } from "./context/cache";
@@ -1304,8 +1304,12 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (!confirm) return "cancelled";
 
+    const writeMode = vscode.workspace
+      .getConfiguration("aiSharePoint")
+      .get<WritePermissionMode>("sync.writePermissionMode", "selected");
     const writer = new SharePointWriteClient(
       registry.create(conn.authProviderId, conn.cacheHandle),
+      writeMode,
     );
     const outcome = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Applying to SharePoint…", cancellable: false },

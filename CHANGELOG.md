@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.39.0 — 2026-06-15
+
+### Changed — write-back now asks for least-privilege `Sites.Selected` by default (ADR-0037)
+- The managed **Apply to SharePoint** flow previously requested tenant-wide `Sites.ReadWrite.All`
+  + `Sites.Manage.All` — broad scopes admins routinely refuse (a pilot's first apply hit an
+  admin-approval prompt unlikely to be granted). The requested scope is now a setting,
+  **`aiSharePoint.sync.writePermissionMode`**, defaulting to **`selected`**:
+  - **`selected`** → **`Sites.Selected`**: the app gets **no** access until an admin grants it a
+    **specific site** (`Grant-PnPAzureADAppSitePermission -Permissions Manage`, or
+    `POST /sites/{id}/permissions`). The ask becomes "write to only this site" — far more likely
+    to be approved — and a per-site `manage` grant covers pages *and* list/column schema.
+  - **`all`** → the previous tenant-wide `Sites.ReadWrite.All` + `Sites.Manage.All` (for tenants
+    that prefer it).
+- A `Sites.Selected` **403** (app not yet granted this site) now returns the exact remediation —
+  the per-site grant command and the `"all"` fallback — instead of a bare "forbidden".
+- **Migration:** existing managed users on the broad scopes should either have an admin run the
+  one-time per-site grant, or set `writePermissionMode: "all"`. Reads are unchanged
+  (`Sites.Read.All`); the zero-consent fallback (pull → author-as-files → a site owner applies
+  the plan) remains available. See the Admin Guide §4 runbook.
+
 ## 0.38.2 — 2026-06-15
 
 ### Fixed — Grafana live panel data was invisible to the assistant

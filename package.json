@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.38.2",
+  "version": "0.39.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -1592,6 +1592,20 @@
           "scope": "machine",
           "order": 11,
           "markdownDescription": "Git hosts that site repositories may push to (ADR-0019). Add your GitHub Enterprise Server host, e.g. `github.corp.example`. Machine-scoped: workspaces cannot override it."
+        },
+        "aiSharePoint.sync.writePermissionMode": {
+          "type": "string",
+          "enum": [
+            "selected",
+            "all"
+          ],
+          "enumDescriptions": [
+            "Sites.Selected (recommended, least privilege): an admin grants the app access to ONLY the specific site(s). Requires a one-time per-site grant — see the Admin Guide.",
+            "Sites.ReadWrite.All + Sites.Manage.All: tenant-wide delegated write across every site you can access. Simpler, but usually needs broad admin consent."
+          ],
+          "default": "selected",
+          "order": 11,
+          "markdownDescription": "Graph permission the write-back (*Apply to SharePoint*) requests (ADR-0037). **`selected`** asks for `Sites.Selected` — far more likely to be approved, but an admin must grant the app access to each target site (`Grant-PnPAzureADAppSitePermission`, or `POST /sites/{id}/permissions`; see the Admin Guide §4). **`all`** asks for the tenant-wide `Sites.ReadWrite.All` + `Sites.Manage.All`."
         },
         "aiSharePoint.context.cacheTtlMinutes": {
           "type": "number",
