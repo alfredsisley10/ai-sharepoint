@@ -38,9 +38,12 @@
   the writable target that unblocks pilots walled off from SharePoint writes.
 - Strictly opt-in and gated: nothing is written without the per-write approval;
   writes are never cached and are lockout-gated like reads.
-- This is the **direct page-write** path. The fuller "managed Confluence space"
-  parity with SharePoint's Git lifecycle (pull a space → edit as files → apply /
-  revert) builds on this writer and the role/view work (0.40.0) — a subsequent
-  step.
+- This is the **complete** Confluence management model — **not** a stepping
+  stone to a Git lifecycle. Confluence keeps full **page version history**
+  natively, so a SharePoint-style pull → edit-as-files → apply/revert
+  round-trip is **intentionally not built** for Confluence: native versioning
+  provides revert, and the approval-gated direct write provides create/update.
+  (Unlike SharePoint, whose Git lifecycle exists precisely because it has no
+  comparable built-in versioning/rollback for the structures it manages.)
 - The Markdown converter is intentionally not a full Markdown engine; complex
   source may need hand-tuned storage. Tables/macros are future extensions.

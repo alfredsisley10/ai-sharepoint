@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.41.1 — 2026-06-15
+
+### Decided — Confluence management is complete; no Git lifecycle for it
+- Confluence keeps **native page version history**, so a SharePoint-style Git pull → edit →
+  apply/revert round-trip is **intentionally not built** for Confluence. The approval-gated
+  direct page write (0.41.0) handles create/update, and Confluence's own versioning handles
+  revert — that's the whole model. (SharePoint's Git lifecycle exists precisely because it lacks
+  comparable built-in versioning for the structures it manages.) This supersedes the
+  "Git lifecycle is the next step" note in 0.41.0; ADR-0038 updated.
+
 ## 0.41.0 — 2026-06-15
 
 ### Added — manage Confluence pages (write), the no-admin-consent target (ADR-0038, Phase 2)
