@@ -56,6 +56,19 @@ const INSTRUCTIONS = [
   "pages, and (with page: \"<title>\") a page's full section/web-part breakdown. Reading never",
   "requires a managed connection — NEVER tell the user a site must be onboarded as managed (or",
   "pulled) just to analyze it; managed exists only for CHANGING sites.",
+  "To REVIEW or AUDIT the actual CONTENT of a whole site — 'review the entire contents of",
+  "<site>', find DUPLICATIVE / OUT-OF-DATE / CONFUSING pages, or any content-cleanup ask —",
+  "call scan_site_content: it returns EVERY page's rendered text, headings, link targets",
+  "(Quick Links, Hero tiles, in-text links) and embedded list views. Compare ACROSS the",
+  "returned pages, cite page titles + urls in every finding, and recommend concrete cleanup",
+  "(merge, archive, update, delete). These reviews are legitimately LONG-RUNNING and",
+  "MULTI-STEP — take as many tool rounds as the task needs rather than answering prematurely.",
+  "For CROSS-SOURCE reviews — e.g. 'using the authoritative <site>, find content in Confluence",
+  "that conflicts with or misleads users, and recommend cleanup' — treat the named SharePoint",
+  "site as the source of truth: FIRST establish its content (scan_site_content for the whole",
+  "site, or inspect_site/site_overview for a part), THEN search_context the other source for",
+  "the same topics, compare them point by point, and recommend which side to fix (usually the",
+  "non-authoritative one) with specific edits.",
   "You are also a capable SharePoint DEVELOPER: when the user asks you to design or change a",
   "managed site, IMPLEMENT it yourself end-to-end instead of handing the user manual steps —",
   "(1) optionally pull_site for a fresh baseline, (2) write the lists/*.json and pages/*.json",
@@ -70,8 +83,11 @@ const INSTRUCTIONS = [
   "Prefer SharePoint's no-code, out-of-the-box features so sites stay maintainable. Be concise.",
 ].join(" ");
 
-/** Cap on tool-calling rounds per turn (each round is its own request). */
-const MAX_TOOL_ROUNDS = 4;
+/** Cap on tool-calling rounds per turn (each round is its own request).
+ *  Deep, multi-step asks — scan a whole site's content, then cross-reference it
+ *  against a reference source like Confluence — legitimately need several
+ *  rounds, so the cap is generous; usage stays visible in Copilot Activity. */
+const MAX_TOOL_ROUNDS = 8;
 
 interface ChatDeps {
   ctx: vscode.ExtensionContext;

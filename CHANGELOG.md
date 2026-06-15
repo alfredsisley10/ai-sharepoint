@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.34.0 — 2026-06-15
+
+### Added — full-site content scan + deep web-part inventory (`#spScanSiteContent`)
+- New read-only tool **`scan_site_content`** walks **every modern page** of a connected site
+  and returns each page's **rendered content and web-part inventory**, so @sharepoint can review
+  a whole site at once: heading text, visible body text, **link targets** (Quick Links targets,
+  Hero tiles, Call to action, in-text links), **embedded list views**, and a site-wide web-part
+  histogram. Ask things like *"@sharepoint review the entire contents of <site> to identify
+  duplicative, out-of-date, or confusing content for users"* and get findings cited by page
+  title + URL with concrete cleanup recommendations (merge / archive / update / delete).
+- The page inspector (`inspect_site` with a page, and the per-page breakdown) now extracts the
+  **rendered content of each web part**, not just titles/types: Text web parts yield their text,
+  **headings**, and **links**; first-party web parts (Hero, Quick Links, News, Highlighted
+  content, Call to action, …) yield their searchable text and link targets via SharePoint's
+  uniform `serverProcessedContent`; List/Highlighted-content web parts report the **embedded
+  list**. Web-part type GUIDs are mapped to friendly names (Hero, Quick links, List, News, …).
+- Works identically for **reference (read-only)** and **managed** connections — reading never
+  requires onboarding. Page fetches are concurrency-bounded and every output is capped so an
+  N-page scan stays chat-sized; the Pages API being tenant-restricted degrades gracefully.
+
+### Added — longer-running, cross-source authoritative reviews
+- @sharepoint can now ground a review on an **authoritative SharePoint site** and cross-check
+  another reference source: *"using the authoritative WXPS site at <location>, search Confluence
+  for any content that conflicts with or misleads users and recommend cleanup steps"*. It scans
+  the site for the source of truth, searches the other source (Confluence/Jira/…) for the same
+  topics, compares them, and recommends which side to fix.
+- The per-turn tool-round cap was raised (4 → 8) so these deep, multi-step investigations run to
+  completion instead of being cut short; usage remains visible in the Copilot Activity view.
+
 ## 0.33.0 — 2026-06-15
 
 ### Integrated — parallel development branches merged into one line

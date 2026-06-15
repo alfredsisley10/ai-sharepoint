@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -579,6 +579,30 @@
             "page": {
               "type": "string",
               "description": "Optional page title (or id) for a full section/web-part breakdown of that page."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_scan_site_content",
+        "displayName": "Scan Site Content (read-only)",
+        "toolReferenceName": "spScanSiteContent",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(search-fuzzy)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Read-only FULL-SITE content scan: walks EVERY modern page of a connected SharePoint site and returns each page's RENDERED content and web-part inventory — headings, visible text, link targets (Quick Links targets, Hero tiles, Call to action, in-text links), embedded list views, and a site-wide web-part histogram. Use this to review an ENTIRE site for DUPLICATIVE, OUT-OF-DATE, or CONFUSING content and to recommend cleanup (e.g. 'review the entire contents of <site> to identify duplicative, out-of-date, or confusing content for users'). It is also the way to ground a cross-source review: scan the authoritative SharePoint site here, then search another reference source (Confluence, Jira, …) with search_context to find content that conflicts with or is misled by it. Works for reference (read-only) and managed connections alike — no onboarding needed. Defaults to the first 50 pages; pass maxPages (up to 100) to widen. For ONE page's deep section/web-part breakdown use inspect_site with page; for the list/column architecture use inspect_site without page.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Site URL or display name of a configured connection. Optional when exactly one connection exists."
+            },
+            "maxPages": {
+              "type": "number",
+              "description": "Maximum modern pages to scan (default 50, max 100)."
             }
           }
         }

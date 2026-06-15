@@ -5,7 +5,7 @@ import { UsageMeter } from "../copilot/meter";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
-import { describeColumn, summarizeCanvas } from "./siteInspect";
+import { describeColumn, summarizeCanvas, summarizePageContent, PageContentSummary } from "./siteInspect";
 
 /**
  * Language Model Tools (ADR-0017 surface 1): read-only capabilities Copilot
@@ -24,6 +24,20 @@ function text(parts: string): vscode.LanguageModelToolResult {
   return new vscode.LanguageModelToolResult([
     new vscode.LanguageModelTextPart(parts),
   ]);
+}
+
+/** Run `fn` over `items` with at most `limit` concurrent executions, preserving
+ *  input order. Bounds Graph fan-out when a content scan fetches many pages. */
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (let i = next++; i < items.length; i = next++) {
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export function registerLanguageModelTools(
@@ -229,6 +243,93 @@ export function registerLanguageModelTools(
                 pages?.map((p) => ({ title: p.title, url: p.webUrl })) ??
                 "unavailable (tenant restricts the Pages API)",
               tip: 'For a page\'s full section/web-part breakdown, call inspect_site again with page: "<title>".',
+            },
+            null,
+            2,
+          );
+        },
+      ),
+    ),
+
+    // Full-site content scan (read-only): walk EVERY modern page and extract
+    // its rendered content + web-part inventory, so the model can review the
+    // whole site for duplicative / out-of-date / confusing content. Works for
+    // reference and managed connections alike — no onboarding required.
+    vscode.lm.registerTool(
+      "aisharepoint_scan_site_content",
+      guarded<{ site?: string; maxPages?: number }>(
+        "aisharepoint_scan_site_content",
+        "Scanning every page's content (read-only)",
+        async (input) => {
+          const conn = resolveOrExplain(input.site);
+          const client = access.clientFor(conn, { silent: true });
+          const site = await client.getSite(conn.siteUrl);
+          let pages;
+          try {
+            pages = await client.getPages(site.id);
+          } catch {
+            return JSON.stringify(
+              {
+                site: { name: site.displayName, url: site.webUrl },
+                pages:
+                  "unavailable — this tenant restricts the Graph Pages API, so page content cannot be scanned. Lists/columns are still available via inspect_site.",
+              },
+              null,
+              2,
+            );
+          }
+          if (pages.length === 0) {
+            return `Site "${site.displayName}" has no modern pages to scan (or none are visible to this account).`;
+          }
+          const HARD_CAP = 100;
+          const cap = Math.min(
+            input.maxPages && input.maxPages > 0 ? input.maxPages : 50,
+            HARD_CAP,
+          );
+          const target = pages.slice(0, cap);
+          const scanned = await mapPool(target, 5, async (p): Promise<PageContentSummary> => {
+            try {
+              const content = await client.getPageContent(site.id, p.id);
+              return summarizePageContent(
+                { title: p.title, webUrl: p.webUrl, lastModified: p.lastModified },
+                content,
+              );
+            } catch (err) {
+              return {
+                title: p.title,
+                url: p.webUrl,
+                ...(p.lastModified ? { lastModified: p.lastModified } : {}),
+                headings: [],
+                text: `(content unavailable: ${redactError(err).message})`,
+                links: [],
+                webParts: [],
+                embeddedLists: [],
+                webPartCount: 0,
+              };
+            }
+          });
+          // Site-wide web-part histogram — a quick read on composition.
+          const histogram = new Map<string, number>();
+          for (const pg of scanned)
+            for (const wp of pg.webParts)
+              histogram.set(wp.type, (histogram.get(wp.type) ?? 0) + wp.count);
+          return JSON.stringify(
+            {
+              site: { name: site.displayName, url: site.webUrl, role: conn.role },
+              pageCount: pages.length,
+              scannedPages: scanned.length,
+              ...(pages.length > cap
+                ? {
+                    truncated: pages.length - cap,
+                    note: `Only the first ${cap} pages were scanned; call again with maxPages to widen.`,
+                  }
+                : {}),
+              webPartHistogram: [...histogram.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, count]) => ({ type, count })),
+              pages: scanned,
+              analysisHint:
+                "Review ACROSS pages: DUPLICATIVE content (near-identical headings/text/links, or several pages on one topic), OUT-OF-DATE content (stale lastModified, superseded topics, dead-looking links), and CONFUSING overlap. Cite page titles + urls in every finding and propose concrete cleanup (merge, archive, update, or delete).",
             },
             null,
             2,
