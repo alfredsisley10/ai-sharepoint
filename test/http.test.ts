@@ -24,6 +24,21 @@ async function withFetchResponse<T>(
   }
 }
 
+async function captureInit(run: () => Promise<unknown>): Promise<RequestInit> {
+  let seen: RequestInit = {};
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+    seen = init ?? {};
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await run().catch(() => undefined);
+    return seen;
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
 test("recognizes the HTTP/2 stream-reset class on a WRITE and points at the HTTP/1.1 lever", () => {
   const d = diagnoseTransportError("POST", "net::ERR_HTTP2_PROTOCOL_ERROR");
   assert.ok(d, "should diagnose");
@@ -91,4 +106,26 @@ test("a 401 stays auth.failed and echoes the reason", async () => {
   assert.ok(err instanceof AppError);
   assert.equal((err as AppError).code, "auth.failed");
   assert.match((err as AppError).message, /Authentication rejected \(401\)/);
+});
+
+test("an 'XSRF check failed' 403 gets the CSRF-specific guidance", async () => {
+  const err = await withFetchResponse(403, JSON.stringify({ message: "XSRF check failed" }), () =>
+    fetchJson("https://wiki.corp/rest/api/content", CRED, 5000, { "X-Atlassian-Token": "no-check" }, { method: "POST", body: { x: 1 } }),
+  );
+  assert.ok(err instanceof AppError);
+  assert.equal((err as AppError).code, "graph.forbidden");
+  assert.match((err as AppError).userSummary ?? "", /X-Atlassian-Token/);
+  assert.match((err as AppError).userSummary ?? "", /Referer/);
+  assert.match((err as AppError).userSummary ?? "", /proxy|Base URL|electronFetch/);
+});
+
+test("writes present a same-origin Referer (CSRF: Origin/Referer must not both be null); reads do not", async () => {
+  const writeInit = await captureInit(() =>
+    fetchJson("https://wiki.corp/rest/api/content", CRED, 5000, undefined, { method: "POST", body: { x: 1 } }),
+  );
+  assert.equal(writeInit.referrer, "https://wiki.corp");
+  assert.equal(writeInit.referrerPolicy, "unsafe-url");
+
+  const readInit = await captureInit(() => fetchJson("https://wiki.corp/rest/api/content/1", CRED, 5000));
+  assert.equal(readInit.referrer, undefined, "GET reads don't spoof a Referer");
 });

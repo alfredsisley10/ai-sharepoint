@@ -50,6 +50,19 @@ export function authHeaders(credential: ContextCredential): Record<string, strin
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
+/** Same-origin Referer for a request URL. Atlassian's CSRF filter (and others)
+ *  reject a state-changing REST call when BOTH Origin and Referer are null —
+ *  the default for a bare programmatic fetch — so writes present a first-party
+ *  Referer. It must be set via the `referrer` init, not the headers object:
+ *  `Referer` is a Fetch "forbidden header name" and is dropped from headers. */
+function sameOriginReferrer(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Recognize the transport-reset error class — an SSL-inspecting proxy or an
  * HTTP/2 intermediary resetting the stream (net::ERR_HTTP2_PROTOCOL_ERROR and
@@ -108,6 +121,10 @@ export async function fetchJson<T>(
       }),
     );
   }
+  // Present a first-party Referer on state-changing calls so CSRF filters that
+  // reject "Origin and Referer both null" let the write through (see above).
+  const referrer = method !== "GET" ? sameOriginReferrer(url) : undefined;
+  const referrerInit: RequestInit = referrer ? { referrer, referrerPolicy: "unsafe-url" } : {};
   let res: Response;
   try {
     res = await fetch(url, {
@@ -119,6 +136,7 @@ export async function fetchJson<T>(
         ...extraHeaders,
       },
       ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      ...referrerInit,
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
@@ -166,10 +184,13 @@ export async function fetchJson<T>(
     // 403: authenticated, but not allowed to do THIS. Classified as
     // graph.forbidden (not auth.failed) so a write-permission denial never
     // trips the auth lockout that guards a perfectly good read credential.
+    const xsrf = /xsrf|csrf/i.test(reason);
     throw new AppError(
       `Forbidden (403)${reason ? `: ${reason}` : ""}.`,
       "graph.forbidden",
-      `Authenticated, but the server refused this operation. For a WRITE this usually means your account lacks create/edit permission in this space, the space or instance is read-only, a personal space hasn't been created yet, or a proxy/WAF blocked the request.${reason ? ` The server said: “${reason}”.` : ""}`,
+      xsrf
+        ? `Confluence rejected this write's CSRF/XSRF check. The connector already sends "X-Atlassian-Token: no-check" and a same-origin Referer, so a *remaining* failure almost always means an intermediary or config is interfering: (1) an SSL-inspecting proxy STRIPPING the X-Atlassian-Token / Referer headers — ask the proxy team to pass them, or raw-tunnel the Confluence host for writes; (2) the Confluence Server Base URL (Admin → General Configuration) doesn't match the URL you connect through; (3) a browser User-Agent triggers stricter CSRF — set "http.electronFetch": false. Turn on "aiSharePoint.logging.verboseWire" and retry to confirm the headers actually leave the client.`
+        : `Authenticated, but the server refused this operation. For a WRITE this usually means your account lacks create/edit permission in this space, the space or instance is read-only, a personal space hasn't been created yet, or a proxy/WAF blocked the request.${reason ? ` The server said: “${reason}”.` : ""}`,
     );
   }
   if (res.status === 404) {

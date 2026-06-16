@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.52.0 — 2026-06-16
+
+### Fixed — Confluence writes rejected with "XSRF check failed"
+- Modern Atlassian CSRF protection rejects a state-changing REST call when **both `Origin` and
+  `Referer` are null** — the default for a bare programmatic `fetch` — which `X-Atlassian-Token:
+  no-check` does not always cover, and a **browser User-Agent** (Electron fetch) triggers the
+  stricter path. Writes now present a **same-origin `Referer`** (the instance origin), set via the
+  Fetch `referrer`/`referrerPolicy` init because `Referer` is a forbidden header name the headers
+  object silently drops. Reads are unaffected.
+- A `403` whose body mentions **XSRF/CSRF** now gets targeted guidance: the connector already sends
+  `X-Atlassian-Token: no-check` + a Referer, so a remaining failure points at an SSL-inspecting proxy
+  **stripping** those headers, a **Server Base URL** mismatch (Admin → General Configuration), or a
+  browser UA (`"http.electronFetch": false`) — and to confirm via `aiSharePoint.logging.verboseWire`.
+
+### Changed — "Test" commands now say what they cover (read vs. write)
+- **Test Context Source** (Confluence) and **Test Site Connection** (SharePoint) verify a **read /
+  connectivity** check only — they now say so. For a **managed Confluence** target the read-test
+  result offers a **"Test Write Access"** button that runs the non-destructive create→update→delete
+  probe (0.51.0), so the read and write checks are no longer easy to confuse. (SharePoint write-back
+  isn't a quick REST probe — it runs through the Pull → Apply sync pipeline and needs admin consent —
+  so the message says that rather than implying write was proven.) 2 new unit tests (495 total).
+
 ## 0.51.0 — 2026-06-16
 
 ### Added — Safe write-access self-test for managed Confluence targets (ADR-0042)

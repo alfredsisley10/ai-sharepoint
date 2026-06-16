@@ -895,8 +895,12 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     await sites.markVerified(conn.siteUrl, nowIso(), result.account);
     telemetry.record("site.test");
+    // This is a read/connectivity check. SharePoint write-back isn't a simple
+    // REST write — it runs through the pull → apply → revert sync pipeline and
+    // needs Sites.Selected/ReadWrite admin consent — so there's no quick write
+    // probe here; say so rather than imply this proved write.
     void vscode.window.showInformationMessage(
-      `✓ "${result.site.displayName}" reachable in ${result.latencyMs}ms as ${result.account}.`,
+      `✓ "${result.site.displayName}" reachable in ${result.latencyMs}ms as ${result.account} (read/connectivity check${conn.role === "managed" ? "; managed write-back goes through Pull → Apply" : ""}).`,
     );
   });
 
@@ -2627,9 +2631,26 @@ export function activate(context: vscode.ExtensionContext): void {
         await contextSources.upsert({ ...contextSources.get(source.id)!, authMethod: credential!.method, account });
       }
       telemetry.record("context.test");
-      void vscode.window.showInformationMessage(
-        `✓ "${source.displayName}" reachable as ${account}.`,
-      );
+      // "Test Context Source" verifies a READ only (a single authenticated
+      // fetch). Be explicit about that — and for a managed Confluence target,
+      // where write is the whole point, offer the separate non-destructive
+      // write probe right here so the two aren't confused.
+      if (source.type === "confluence" && source.role === "managed") {
+        const pick = await vscode.window.showInformationMessage(
+          `✓ "${source.displayName}" READ verified as ${account}. This did NOT test write access.`,
+          "Test Write Access",
+        );
+        if (pick === "Test Write Access") {
+          await vscode.commands.executeCommand(
+            "aiSharePoint.testWriteAccess",
+            contextSources.get(source.id) ?? source,
+          );
+        }
+      } else {
+        void vscode.window.showInformationMessage(
+          `✓ "${source.displayName}" reachable as ${account} (read-only check).`,
+        );
+      }
       return;
     }
   });
