@@ -46,7 +46,13 @@ import {
   ContextCredential,
   ContextDeployment,
   ContextSourceType,
+  ConfluenceWriteScope,
 } from "./context/types";
+import {
+  parseConfluenceUrl,
+  writeScopeFromParsed,
+  describeWriteScope,
+} from "./context/adapters/confluenceScope";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
 import { aliasIssue, normalizeAlias, resolveSourceRef, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
@@ -310,7 +316,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const projects = new ProjectsStore(context.globalState);
   const syncConfigs = new SyncConfigStore(context.globalState);
 
-  const sitesProvider = new SitesTreeProvider(sites);
+  const sitesProvider = new SitesTreeProvider(sites, contextSources);
   const sourcesProvider = new SourcesTreeProvider(
     contextSources,
     sites,
@@ -496,9 +502,11 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.commands.executeCommand(
       "setContext",
       "aiSharePoint.hasSites",
-      // Drives the Managed Sites empty state: managed targets only — read-only
-      // sites live under Reference Sources now.
-      sites.list().some((c) => c.role === "managed"),
+      // Drives the Managed Sites empty state: managed targets only — managed
+      // SharePoint sites OR managed context sources (e.g. a Confluence space).
+      // Read-only connections live under Reference Sources.
+      sites.list().some((c) => c.role === "managed") ||
+        contextSources.list().some((s) => s.role === "managed"),
     );
     if (supportView)
       safeViewOp(() => {
@@ -1583,8 +1591,11 @@ export function activate(context: vscode.ExtensionContext): void {
           ? Promise.resolve(cred.secret)
           : aadBroker(cred, interactive, POWERBI_SCOPES);
 
-  register("aiSharePoint.addContextSource", async () => {
-    const typePick = await vscode.window.showQuickPick(
+  register("aiSharePoint.addContextSource", async (presetArg?: unknown) => {
+    const preset = presetArg as { type?: ContextSourceType; role?: "managed" | "reference" } | undefined;
+    const typePick = preset?.type
+      ? { label: "", value: preset.type }
+      : await vscode.window.showQuickPick(
       [
         { label: "$(book) Confluence", value: "confluence" as ContextSourceType },
         { label: "$(issues) Jira", value: "jira" as ContextSourceType },
@@ -1614,6 +1625,8 @@ export function activate(context: vscode.ExtensionContext): void {
     let presetCredential: ContextCredential | undefined;
     let deployment: ContextDeployment = "datacenter";
     let defaultUpn: string | undefined;
+    // Managed Confluence: the write boundary derived from the onboarding URL.
+    let writeScope: ConfluenceWriteScope | undefined;
 
     const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
     if (typePick.value === "ldap") {
@@ -2321,15 +2334,27 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (!depPick) return;
       deployment = depPick.value;
+      const managedConfluence = typePick.value === "confluence" && preset?.role === "managed";
       const url = await vscode.window.showInputBox({
       ignoreFocusOut: true,
-        title: "Add Context Source — base URL",
+        title: managedConfluence
+          ? "Managed Confluence — URL of the space or page to manage"
+          : "Add Context Source — base URL",
+        prompt: managedConfluence
+          ? "Paste the space or page you want to manage (read/write) — its URL defines the write boundary. Reads, ownership and notifications still span ALL of Confluence regardless. A bare instance URL lets you pick the scope next."
+          : typePick.value === "confluence"
+            ? "The instance root — search and read span all of Confluence."
+            : undefined,
         placeHolder:
           depPick.value === "cloud"
             ? typePick.value === "confluence"
-              ? "https://yourorg.atlassian.net/wiki"
+              ? managedConfluence
+                ? "https://yourorg.atlassian.net/wiki/spaces/ENG  (or …/spaces/~you for your personal space)"
+                : "https://yourorg.atlassian.net/wiki"
               : "https://yourorg.atlassian.net"
-            : `https://${typePick.value}.corp.example`,
+            : managedConfluence
+              ? "https://confluence.corp.example/spaces/ENG  (or /spaces/~you, /display/ENG, a page URL…)"
+              : `https://${typePick.value}.corp.example`,
         validateInput: (v) => {
           try {
             return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
@@ -2340,6 +2365,42 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (!url) return;
       baseUrl = url.trim().replace(/\/+$/, "");
+
+      if (typePick.value === "confluence") {
+        // A Confluence connector ALWAYS reads globally, so normalize baseUrl to
+        // the instance root (origin + any /wiki or /confluence context path)
+        // regardless of how deep a URL was pasted (ADR-0040).
+        const parsed = parseConfluenceUrl(url.trim());
+        if (parsed) {
+          baseUrl = parsed.baseUrl;
+          if (managedConfluence) {
+            writeScope = writeScopeFromParsed(parsed, url.trim());
+            // A bare instance URL gives no write boundary — let the user narrow
+            // it to a space (managed targets are normally scoped). They can
+            // still choose to manage the whole instance.
+            if (writeScope.kind === "instance") {
+              const narrow = await vscode.window.showQuickPick(
+                [
+                  { label: "$(book) Scope to a space", description: "enter a space key (incl. ~personal) — recommended", value: "space" as const },
+                  { label: "$(globe) Manage the entire instance", description: "no write boundary — any page anywhere", value: "instance" as const },
+                ],
+                { ignoreFocusOut: true, title: "Managed Confluence — write boundary" },
+              );
+              if (!narrow) return;
+              if (narrow.value === "space") {
+                const key = await vscode.window.showInputBox({
+                  ignoreFocusOut: true,
+                  title: "Managed Confluence — space key",
+                  placeHolder: "ENG   ·   ~jdoe for a personal space",
+                  validateInput: (v) => (v.trim() ? undefined : "Enter a space key"),
+                });
+                if (!key) return;
+                writeScope = { kind: "space", spaceKey: key.trim(), url: baseUrl };
+              }
+            }
+          }
+        }
+      }
     }
 
     const credential =
@@ -2377,6 +2438,8 @@ export function activate(context: vscode.ExtensionContext): void {
       deployment,
       authMethod: credential.method,
       addedAt: nowIso(),
+      role: preset?.role ?? "reference",
+      ...(writeScope ? { writeScope } : {}),
     };
     try {
       const { account } = await vscode.window.withProgress(
@@ -2385,9 +2448,11 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       await contextSources.upsert({ ...source, account, lastVerifiedAt: nowIso() });
       await contextSources.setCredential(source.id, credential);
-      telemetry.record("context.add", { type: source.type, deployment: source.deployment, method: credential.method });
+      telemetry.record("context.add", { type: source.type, deployment: source.deployment, method: credential.method, ...(source.role === "managed" ? { role: "managed" } : {}) });
       void vscode.window.showInformationMessage(
-        `Connected "${source.displayName}" as ${account} (read-only).`,
+        source.role === "managed"
+          ? `Connected "${source.displayName}" as ${account} — managed: writes are bounded to ${describeWriteScope(writeScope)}; reads span all of Confluence.`
+          : `Connected "${source.displayName}" as ${account} (read-only).`,
       );
       if (DB_TYPES.has(source.type)) {
         // First use of a database source: preload the schema catalog, then
@@ -2400,6 +2465,42 @@ export function activate(context: vscode.ExtensionContext): void {
       await contextSources.resetLockout(source.id);
       throw err;
     }
+  });
+
+  // Managed Sites "+": a managed target can be a SharePoint site OR a Confluence
+  // space we actively manage (read/write via the source's own API token).
+  register("aiSharePoint.addManagedTarget", async () => {
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: "$(cloud) SharePoint site", description: "Microsoft 365 sign-in; managed or reference", value: "sharepoint" as const },
+        { label: "$(book) Confluence space", description: "read/write with your own API token — no admin consent", value: "confluence" as const },
+      ],
+      { ignoreFocusOut: true, title: "Add a managed target" },
+    );
+    if (!pick) return;
+    if (pick.value === "sharepoint") {
+      await vscode.commands.executeCommand("aiSharePoint.connectSite");
+    } else {
+      await vscode.commands.executeCommand("aiSharePoint.addContextSource", { type: "confluence", role: "managed" });
+    }
+  });
+
+  // Open a context source in the browser (Managed Sites node click + menu).
+  register("aiSharePoint.openSourceInBrowser", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (source) await vscode.env.openExternal(vscode.Uri.parse(source.baseUrl));
+  });
+
+  // Flip a context source between managed (Managed Sites) and reference
+  // (Reference Sources) — the same move-across as a SharePoint site's role.
+  register("aiSharePoint.changeSourceRole", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    const next = source.role === "managed" ? "reference" : "managed";
+    await contextSources.upsert({ ...source, role: next });
+    void vscode.window.showInformationMessage(
+      `"${source.displayName}" is now ${next === "managed" ? "managed (read/write — Managed Sites)" : "a read-only reference (Reference Sources)"}.`,
+    );
   });
 
   register("aiSharePoint.testContextSource", async (arg) => {

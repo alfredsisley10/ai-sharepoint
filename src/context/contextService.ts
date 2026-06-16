@@ -42,8 +42,10 @@ import {
 import {
   createConfluencePage,
   updateConfluencePage,
+  getConfluencePageMeta,
   ConfluenceWriteResult,
 } from "./adapters/confluenceWrite";
+import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
 import {
   verifyServiceNow,
   searchServiceNow,
@@ -444,9 +446,25 @@ export class ContextService {
     }
     const caps = this.caps();
     const credential = await this.storedCredential(source);
-    return this.tracked(source, false, () => {
+    const scope = source.writeScope;
+    const refuse = (reason?: string): never => {
+      throw new AppError(
+        `This managed Confluence connector may only write within ${describeWriteScope(scope)}${reason ? ` — refused (${reason})` : ""}. Reads, ownership lookup and owner notifications across all of Confluence are unaffected.`,
+        "config",
+      );
+    };
+    return this.tracked(source, false, async () => {
       if (op.action === "update") {
         if (!op.pageId) throw new AppError("Updating a Confluence page needs its pageId.", "config");
+        // For a space/page scope, resolve the target page's space BEFORE the
+        // mutation so the guard runs first. This read is global (not gated by
+        // the write scope) — it's just establishing where the page lives.
+        let targetSpace: string | undefined;
+        if (scope && scope.kind !== "instance") {
+          targetSpace = (await getConfluencePageMeta(source, credential, op.pageId, caps.timeoutMs)).spaceKey;
+        }
+        const gate = checkWriteScope(scope, { action: "update", pageId: op.pageId, spaceKey: targetSpace });
+        if (!gate.allowed) refuse(gate.reason);
         return updateConfluencePage(
           source,
           credential,
@@ -455,6 +473,8 @@ export class ContextService {
         );
       }
       if (!op.spaceKey) throw new AppError("Creating a Confluence page needs a spaceKey.", "config");
+      const gate = checkWriteScope(scope, { action: "create", spaceKey: op.spaceKey, parentId: op.parentId });
+      if (!gate.allowed) refuse(gate.reason);
       return createConfluencePage(
         source,
         credential,

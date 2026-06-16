@@ -64,6 +64,28 @@ export interface ContextSource {
   lastVerifiedAt?: string;
   /** Account hint from verification (display only, e.g. "jdoe"). */
   account?: string;
+  /** Lifecycle role (parallels SiteConnection.role). "managed" targets (e.g. a
+   *  Confluence space we actively manage) show under Managed Sites; absent or
+   *  "reference" = read-only context under Reference Sources. */
+  role?: "managed" | "reference";
+  /** MANAGED Confluence only: the space/page the user onboarded, which bounds
+   *  MUTATING operations (page write, archive, remove-from-search). Reads,
+   *  ownership lookup and owner notifications are global and ignore this — the
+   *  connector's baseUrl always points at the instance root so those span all
+   *  of Confluence (ADR-0040). */
+  writeScope?: ConfluenceWriteScope;
+}
+
+/** The write boundary of a managed Confluence connector. "instance" = the
+ *  whole site (no boundary); "space"/"page" = the onboarded target. Derived
+ *  from the onboarding URL; see adapters/confluenceScope. */
+export interface ConfluenceWriteScope {
+  kind: "instance" | "space" | "page";
+  /** Space key — includes a leading "~" for a personal space. */
+  spaceKey?: string;
+  pageId?: string;
+  /** The human URL the scope was derived from (display only). */
+  url?: string;
 }
 
 /** Credential JSON stored in the keychain (never in the descriptor). */

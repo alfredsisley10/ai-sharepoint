@@ -58,7 +58,10 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   getChildren(node?: Node): Node[] {
     if (!node) {
       const referenceSites = this.sites.list().filter((c) => c.role === "reference");
-      return [...referenceSites, ...this.scope(this.sources.list())];
+      // Managed context sources (e.g. a managed Confluence space) live under
+      // Managed Sites; Reference Sources keeps the read-only ones.
+      const referenceSources = this.scope(this.sources.list().filter((s) => s.role !== "managed"));
+      return [...referenceSites, ...referenceSources];
     }
     if (isBookmark(node) || isSiteConnection(node)) return [];
     return this.bookmarks.listForSource(node.id);

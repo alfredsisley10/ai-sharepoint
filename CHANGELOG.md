@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.48.0 — 2026-06-16
+
+### Added — Add a managed Confluence target from the Managed Sites tab (ADR-0040)
+- The Managed Sites view's **+** is now **Add Managed Target**: pick a **SharePoint site** *or* a
+  **Confluence space/page** to manage (read/write with your own API token — no admin consent).
+  Managed Confluence targets render under Managed Sites (book icon, write-scope in the description
+  and tooltip) with right-click **Verify / Browse / Open / Change role / Remove**; the welcome text
+  and Reference Sources filter were updated so a managed source shows in exactly one place.
+
+### Added — Reference vs. managed Confluence scoping; reads are always global
+- A Confluence connector **always reads globally** — its `baseUrl` is normalized to the **instance
+  root** (origin + any `/wiki` or `/confluence` context path), so search, read, **ownership lookup**
+  and **owner notifications span all of Confluence** no matter how the source was onboarded. Those
+  three are classified **read-only** and are never bounded by a write scope.
+- A **managed** connector additionally carries a **write scope** derived from the onboarding URL —
+  the specific **space or page** you pasted bounds the **mutating** operations (page write, archive,
+  remove-from-search). Onboarding a bare instance URL prompts you to narrow it to a space (or opt
+  into instance-wide). The boundary is enforced at the write chokepoint (`contextService`) and
+  surfaced in the node tooltip.
+
+### Added — Confluence personal-space support (`~userid`), DC & Cloud
+- New pure `confluenceScope.ts` parses every Confluence URL shape into instance-base + scope:
+  DC host-root / context-path, `/display/<KEY>`, `/spaces/<KEY>`, `/pages/viewpage.action?pageId=…`,
+  newer `/spaces/<KEY>/pages/<id>/…`, and Cloud `/wiki/...`. **Personal spaces** (keys starting with
+  `~`, e.g. `~jdoe` on DC or `~<accountId>` on Cloud) are handled end-to-end — the tilde is RFC-3986
+  unreserved, so it survives `encodeURIComponent` and CQL untouched; percent-encoded tildes/colons
+  round-trip. 28 new unit tests (465 total) cover both deployments, both space kinds, and the
+  write-scope guard.
+
 ## 0.47.0 — 2026-06-16
 
 ### Changed — Outlook email drafts go straight to your Outlook Drafts folder
