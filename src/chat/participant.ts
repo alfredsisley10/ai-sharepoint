@@ -10,6 +10,7 @@ import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
+import { LessonsStore } from "../diagnostics/lessonsStore";
 import { redactError } from "../core/redaction";
 import { AppError, adviceFor } from "../core/errors";
 import { Logger } from "../core/log";
@@ -117,9 +118,25 @@ interface ChatDeps {
   meter: UsageMeter;
   telemetry: TelemetryService;
   errors: ErrorReportStore;
+  lessons: LessonsStore;
   log: Logger;
   now: () => string;
 }
+
+/** Appended to the prompt only while lesson capture is opted into, so the model
+ *  is nudged toward capture_lesson exactly when it's actually recording (no
+ *  wasted instruction otherwise). */
+const LESSONS_NUDGE = [
+  "\n## Capturing lessons learned (the user has opted in)",
+  "When you SELF-CORRECT (you tried one approach, it was wrong/empty, and a refined one worked)",
+  "or discover a reusable interaction pattern, call aisharepoint_capture_lesson with a GENERALIZED,",
+  "anonymized heuristic — a 'trigger' (the user situation) and a 'lesson' (the better action).",
+  "Canonical example: you searched Confluence globally, then corrected to the user's PERSONAL space,",
+  "so the lesson is \"when the user says 'my Confluence space', scope to their personal space",
+  "(~userid), not global.\" NEVER put real space keys, usernames, site names, URLs, or page titles",
+  "in it — write it in the abstract. Capture sparingly (durable insight, not per-turn detail); it",
+  "records to a local, anonymized, user-reviewable ledger and sends nothing.",
+].join(" ");
 
 export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
   const handler: vscode.ChatRequestHandler = async (
@@ -333,8 +350,10 @@ async function answerWithModel(
       : activeProject
         ? `\n## Project: ${activeProject.name} (no goals/instructions/AI context set yet — you may propose saving durable learnings via remember_project_context)`
         : "";
+  const lessonsOn = deps.lessons.enabled();
   const prompt = [
     INSTRUCTIONS,
+    lessonsOn ? LESSONS_NUDGE : "",
     projectBlock,
     contextBlock ? `\n## Connected context\n${contextBlock}` : "",
     history ? `\n## Conversation so far\n${history}` : "",
@@ -343,9 +362,12 @@ async function answerWithModel(
 
   // This extension's tools (SharePoint + reference sources + bookmarks),
   // declared on the request so the model can call them from @sharepoint —
-  // not only from Copilot agent mode.
+  // not only from Copilot agent mode. The capture_lesson tool is advertised
+  // only while the user has opted into lesson capture, so it never shows up as
+  // a no-op the model might "use".
   const tools: vscode.LanguageModelChatTool[] = vscode.lm.tools
     .filter((t) => t.name.startsWith("aisharepoint_"))
+    .filter((t) => t.name !== "aisharepoint_capture_lesson" || lessonsOn)
     .map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
 
   const messages = [vscode.LanguageModelChatMessage.User(prompt)];

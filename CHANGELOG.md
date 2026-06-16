@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.49.0 — 2026-06-16
+
+### Added — Anonymized "lessons learned" capture & export (ADR-0041)
+- @sharepoint can now record **generalized, anonymized interaction lessons** when it self-corrects
+  or finds a reusable pattern — the canonical case being "the user said *my Confluence space*, so
+  scope to their **personal** space (`~userid`), not global." The intent: surface the heuristics
+  real usage discovers so the developer can bake them into the shipped prompt/tool descriptions
+  ("up-front intelligence") in a future release.
+- **Model-authored capture** — a new `aisharepoint_capture_lesson` tool (mirrors the `remember`
+  tool) the assistant calls with an abstract `trigger` + `lesson`; a system-prompt nudge encourages
+  it on self-correction. It writes the heuristic, never transcripts or tool inputs.
+- **Strictly opt-in (`aiSharePoint.lessons.capture`, default OFF)** — because lessons derive from
+  interaction content. While off, the tool is not even advertised to the model and is a no-op.
+- **Anonymized on write** — every field passes through the existing `redactText` layer (emails,
+  GUIDs, tenant hosts, IPs, paths) plus a domain scrubber (`~userid` → `~<user>`, `/spaces|display/<KEY>`,
+  `/sites|teams/<name>`, quoted space keys). Lessons dedupe (a repeat increments a count rather than
+  duplicating) and are capped locally.
+- **Reviewable file export** — *Review Lessons Learned* opens the anonymized ledger (with per-entry
+  removal); *Export Lessons Learned* previews the exact payload, runs the same block-severity
+  leak-scan gate as the diagnostics bundle, then writes a JSON + Markdown file you share with the
+  developer. **Nothing is ever transmitted by the extension** — export is an explicit user action,
+  consistent with the diagnostics pipeline. New pure module + 14 unit tests (479 total).
+
 ## 0.48.0 — 2026-06-16
 
 ### Added — Add a managed Confluence target from the Managed Sites tab (ADR-0040)

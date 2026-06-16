@@ -17,6 +17,9 @@ import { InstallIdStore } from "./diagnostics/installId";
 import { TelemetryService } from "./diagnostics/telemetry";
 import { ErrorReportStore } from "./diagnostics/errorReports";
 import { DiagnosticsExportService } from "./diagnostics/exportService";
+import { LessonsStore } from "./diagnostics/lessonsStore";
+import { registerLessonsTools } from "./chat/lessonsTools";
+import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
 import { SyncEngine } from "./sync/syncEngine";
 import { openOrInitRepository } from "./sync/vscodeGit";
@@ -209,6 +212,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const installIds = new InstallIdStore(context.globalState);
   const telemetry = new TelemetryService(context.globalState, nowIso);
   const errors = new ErrorReportStore(context.globalState, nowIso);
+  const lessons = new LessonsStore(context.globalState, EXTENSION_VERSION, nowIso);
   const meter = new UsageMeter(context.globalState);
   const copilot = new CopilotService(meter);
   const sites = new SitesStore(context.globalState, context.workspaceState);
@@ -490,6 +494,8 @@ export function activate(context: vscode.ExtensionContext): void {
     outbox.onDidChange(syncCommsBadge),
     ...tryRegister("site-dev tools", () => registerSiteDevTools(sites, access, syncConfigs, telemetry, errors)),
     ...tryRegister("project tools", () => registerProjectTools(projects, telemetry, errors)),
+    ...tryRegister("lessons tools", () => registerLessonsTools(lessons, telemetry, errors)),
+    lessons,
   );
   const projectsProvider = new ProjectsTreeProvider(projects, contextSources);
   const projectsView = tryCreateTreeView("aiSharePoint.projectsView", projectsProvider);
@@ -587,6 +593,7 @@ export function activate(context: vscode.ExtensionContext): void {
         meter,
         telemetry,
         errors,
+        lessons,
         log,
         now: nowIso,
       }),
@@ -4770,6 +4777,156 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // --- Diagnostics & support ------------------------------------------------
   register("aiSharePoint.exportDiagnostics", () => exporter.run());
+
+  // --- Lessons learned (ADR-0041): review / export / clear -----------------
+  register("aiSharePoint.reviewLessons", async () => {
+    const all = lessons.list();
+    if (all.length === 0) {
+      const enableLabel = "Enable Capture";
+      const choice = await vscode.window.showInformationMessage(
+        lessons.enabled()
+          ? "No lessons captured yet. As you work with @sharepoint and it self-corrects, it notes anonymized, reusable lessons here that you can export for the plugin developer."
+          : "Lesson capture is OFF. Turn on “aiSharePoint.lessons.capture” to let @sharepoint record anonymized, reusable interaction lessons you can later review and export.",
+        ...(lessons.enabled() ? [] : [enableLabel]),
+      );
+      if (choice === enableLabel) {
+        await vscode.workspace
+          .getConfiguration("aiSharePoint")
+          .update("lessons.capture", true, vscode.ConfigurationTarget.Global);
+        void vscode.window.showInformationMessage(
+          "Lesson capture enabled. @sharepoint will note anonymized lessons as it learns; review them here anytime.",
+        );
+      }
+      return;
+    }
+    const ex = buildLessonsExport(all, {
+      generatedAt: nowIso(),
+      anonymousInstallId: installIds.get().id,
+      extensionVersion: EXTENSION_VERSION,
+    });
+    const doc = await vscode.workspace.openTextDocument({
+      content: lessonsToMarkdown(ex),
+      language: "markdown",
+    });
+    await vscode.window.showTextDocument(doc, { preview: true });
+    const choice = await vscode.window.showInformationMessage(
+      `${all.length} anonymized lesson(s) captured. Nothing is transmitted — review here, then export a file to share with the developer.`,
+      "Export…",
+      "Remove Entries…",
+      "Clear All",
+    );
+    if (choice === "Export…") {
+      await vscode.commands.executeCommand("aiSharePoint.exportLessons");
+    } else if (choice === "Clear All") {
+      await vscode.commands.executeCommand("aiSharePoint.clearLessons");
+    } else if (choice === "Remove Entries…") {
+      const picks = await vscode.window.showQuickPick(
+        all.map((l) => ({
+          label: l.lesson.slice(0, 80),
+          description: `${l.category} · ${l.count}×`,
+          detail: l.trigger.slice(0, 100),
+          id: l.id,
+        })),
+        {
+          canPickMany: true,
+          ignoreFocusOut: true,
+          title: "Select lessons to REMOVE from the local ledger",
+          placeHolder: "Checked entries are deleted; nothing is sent anywhere.",
+        },
+      );
+      if (picks && picks.length > 0) {
+        await lessons.remove(picks.map((p) => p.id));
+        void vscode.window.showInformationMessage(`Removed ${picks.length} lesson(s) from the ledger.`);
+      }
+    }
+  });
+
+  register("aiSharePoint.exportLessons", async () => {
+    const all = lessons.list();
+    if (all.length === 0) {
+      void vscode.window.showInformationMessage("No lessons captured yet — nothing to export.");
+      return;
+    }
+    const identity = installIds.get();
+    const ex = buildLessonsExport(all, {
+      generatedAt: nowIso(),
+      anonymousInstallId: identity.id,
+      extensionVersion: EXTENSION_VERSION,
+    });
+    const json = JSON.stringify(ex, null, 2);
+    const markdown = lessonsToMarkdown(ex);
+
+    // Defense-in-depth gate: refuse to export anything secret-shaped, exactly
+    // like the diagnostics bundle.
+    const findings = scanForLeaks(json, [identity.id]);
+    const blockers = findings.filter((f) => f.severity === "block");
+    if (blockers.length > 0) {
+      log.error(`Lessons export blocked by leak scan: ${blockers.map((f) => `${f.pattern}×${f.count}`).join(", ")}`);
+      void vscode.window.showErrorMessage(
+        `Lessons export blocked: the safety scan found ${blockers.length} pattern(s) that look like sensitive data (${blockers.map((f) => f.pattern).join(", ")}). Nothing was written.`,
+      );
+      return;
+    }
+
+    const previewDoc = await vscode.workspace.openTextDocument({ content: markdown, language: "markdown" });
+    await vscode.window.showTextDocument(previewDoc, { preview: true });
+    const warnNote =
+      findings.length > 0
+        ? ` Review note: ${findings.map((f) => `${f.count}× ${f.pattern}`).join(", ")} present (non-secret patterns, listed for transparency).`
+        : "";
+    const choice = await vscode.window.showInformationMessage(
+      `Export ${ex.count} anonymized lesson(s)? This is the exact content that will be saved — the extension sends nothing.${warnNote}`,
+      { modal: true },
+      "Save File…",
+      "Copy JSON to Clipboard",
+    );
+    if (!choice) return;
+    if (choice === "Copy JSON to Clipboard") {
+      await vscode.env.clipboard.writeText(json);
+      telemetry.record("lessons.export", { via: "clipboard" });
+      void vscode.window.showInformationMessage("Lessons JSON copied to clipboard.");
+      return;
+    }
+    const stamp = nowIso().replace(/[-:]/g, "").slice(0, 13);
+    const defaultUri = vscode.Uri.file(path.join(os.homedir(), `ai-sharepoint-lessons-${stamp}.json`));
+    const target = await vscode.window.showSaveDialog({
+      defaultUri,
+      filters: { "Lessons (JSON)": ["json"] },
+      title: "Save lessons file",
+    });
+    if (!target) return;
+    await vscode.workspace.fs.writeFile(target, Buffer.from(json, "utf8"));
+    const mdUri = target.with({ path: target.path.replace(/\.json$/i, "") + ".md" });
+    await vscode.workspace.fs.writeFile(mdUri, Buffer.from(markdown, "utf8"));
+    telemetry.record("lessons.export", { via: "file" });
+    log.info(`Lessons exported (${ex.count}).`);
+    const action = await vscode.window.showInformationMessage(
+      "Lessons saved (JSON + Markdown). Share it with the plugin developer — e.g. attach it to a GitHub issue.",
+      "Reveal in File Manager",
+      "Copy Path",
+    );
+    if (action === "Reveal in File Manager") {
+      await vscode.commands.executeCommand("revealFileInOS", target);
+    } else if (action === "Copy Path") {
+      await vscode.env.clipboard.writeText(target.fsPath);
+    }
+  });
+
+  register("aiSharePoint.clearLessons", async () => {
+    if (lessons.count() === 0) {
+      void vscode.window.showInformationMessage("No lessons to clear.");
+      return;
+    }
+    const ok = await vscode.window.showWarningMessage(
+      `Delete all ${lessons.count()} captured lesson(s)? This can't be undone.`,
+      { modal: true },
+      "Delete All",
+    );
+    if (ok === "Delete All") {
+      await lessons.clear();
+      void vscode.window.showInformationMessage("Cleared all captured lessons.");
+    }
+  });
 
   register("aiSharePoint.showErrorReports", async () => {
     const reports = errors.list();

@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.48.0",
+  "version": "0.49.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -347,6 +347,24 @@
         "title": "Export Diagnostics Bundle (anonymized)",
         "category": "AI SharePoint",
         "icon": "$(export)"
+      },
+      {
+        "command": "aiSharePoint.reviewLessons",
+        "title": "Review Lessons Learned (anonymized)",
+        "category": "AI SharePoint",
+        "icon": "$(book)"
+      },
+      {
+        "command": "aiSharePoint.exportLessons",
+        "title": "Export Lessons Learned (anonymized)",
+        "category": "AI SharePoint",
+        "icon": "$(export)"
+      },
+      {
+        "command": "aiSharePoint.clearLessons",
+        "title": "Delete Captured Lessons",
+        "category": "AI SharePoint",
+        "icon": "$(trash)"
       },
       {
         "command": "aiSharePoint.showErrorReports",
@@ -1168,6 +1186,54 @@
             "note"
           ]
         }
+      },
+      {
+        "name": "aisharepoint_capture_lesson",
+        "displayName": "Capture Lesson Learned",
+        "toolReferenceName": "spCaptureLesson",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(book)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Record a GENERALIZED, ANONYMIZED interaction lesson when you self-correct or discover a reusable pattern — so the plugin developer can bake it into a future release. Canonical example: you searched Confluence globally, then corrected to the user's PERSONAL space; the lesson is \"when the user says 'my Confluence space', scope to their personal space (~userid), not global.\" Write the heuristic in the ABSTRACT: NEVER include real space keys, usernames, site names, URLs, tenant names, page titles, or any tenant-specific value (they are scrubbed anyway, but write them out generically). Provide 'trigger' (the user situation it applies to) and 'lesson' (the better action). Categories: scoping, tool-selection, query-shape, interpretation, workflow, other. Use it sparingly for genuinely reusable insight, not per-turn detail. No-op unless the user opted in (aiSharePoint.lessons.capture); never claim a lesson was saved when it reports it was not stored.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "enum": [
+                "scoping",
+                "tool-selection",
+                "query-shape",
+                "interpretation",
+                "workflow",
+                "other"
+              ],
+              "description": "Which kind of lesson this is."
+            },
+            "trigger": {
+              "type": "string",
+              "description": "The generalized user situation/intent that should trigger this lesson (no tenant-specific values)."
+            },
+            "lesson": {
+              "type": "string",
+              "description": "The generalized, reusable heuristic — the better action to take (no tenant-specific values)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional short tags: tool names or source types (e.g. confluence, sharepoint, search_context)."
+            }
+          },
+          "required": [
+            "trigger",
+            "lesson"
+          ]
+        }
       }
     ],
     "menus": {
@@ -1191,6 +1257,11 @@
           "command": "aiSharePoint.exportDiagnostics",
           "when": "view == aiSharePoint.supportView",
           "group": "navigation@1"
+        },
+        {
+          "command": "aiSharePoint.reviewLessons",
+          "when": "view == aiSharePoint.supportView",
+          "group": "navigation@2"
         },
         {
           "command": "aiSharePoint.draftTeamsMessage",
@@ -1680,6 +1751,12 @@
           "default": true,
           "order": 10,
           "markdownDescription": "Store redacted error reports locally for the diagnostics bundle. Disable to keep no error history at all."
+        },
+        "aiSharePoint.lessons.capture": {
+          "type": "boolean",
+          "default": false,
+          "order": 10.5,
+          "markdownDescription": "**Opt-in, default off.** Let @sharepoint record *anonymized, generalized* interaction lessons when it self-corrects (e.g. \"when the user says 'my Confluence space', scope to their personal space, not global\") into a local ledger you can review and export. The lessons are scrubbed of tenant/user identifiers and **nothing is ever transmitted by the extension** — they leave the machine only when you explicitly export the file to share with the plugin developer (\"AI SharePoint: Export Lessons Learned\")."
         },
         "aiSharePoint.sync.allowedRemoteHosts": {
           "type": "array",
