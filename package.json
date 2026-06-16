@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -1052,6 +1052,45 @@
           "required": [
             "pageId"
           ]
+        }
+      },
+      {
+        "name": "aisharepoint_confluence_page_tree",
+        "displayName": "Confluence Page Hierarchy",
+        "toolReferenceName": "spConfluenceTree",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(list-tree)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Understand a Confluence page's PLACE IN THE TREE and its relationships — use this whenever you need a page's parent, ancestors, children, or whole subtree (search_context finds pages but NOT how they relate). All listings are fully paginated, so enumeration is complete, not truncated. Views (the 'view' arg, with a pageId): 'context' (default) = the breadcrumb (ancestors), the immediate parent, AND the immediate children, in one read; 'ancestors' = just the breadcrumb path; 'children' = just the immediate child pages; 'subtree' = the full nested descendant tree (indented outline). With a spaceKey and NO pageId, returns the space's ROOT pages (the top of the tree). Each page is returned with its id, title and URL so you can drill in or move/re-parent it. Args: source (optional if one), pageId OR spaceKey, optional view.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page whose hierarchy to read (parent/ancestors/children/subtree)."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "List this space's root pages (use instead of pageId for the top of the tree)."
+            },
+            "view": {
+              "type": "string",
+              "enum": [
+                "context",
+                "ancestors",
+                "children",
+                "subtree"
+              ],
+              "description": "With a pageId: context (ancestors + parent + children, default), ancestors, children, or subtree (full nested tree)."
+            }
+          }
         }
       },
       {

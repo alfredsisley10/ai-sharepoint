@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.58.0 — 2026-06-16
+
+### Added — Confluence page hierarchy & relationships (`confluence_page_tree`)
+- Fixes the connector's trouble enumerating parents/children: a new `confluence_page_tree` tool walks
+  the actual tree — a page's **ancestors** (breadcrumb) + immediate **parent** + immediate
+  **children** (`view: "context"`, default), just ancestors, just children, the full nested
+  **subtree**, or a space's **root pages** (spaceKey, no pageId). search_context finds pages but not
+  how they relate; this does.
+- **Fixes silent truncation:** the connector previously listed children/descendants/space-pages with a
+  single `limit` and no pagination, so large trees came back incomplete. New `confluenceHierarchy.ts`
+  has a real paginator (`fetchAllPages` walks `start`) so enumeration is **complete**, plus the
+  immediate-children read (`/child/page`) that didn't exist before and a full ancestor path (not just
+  the one immediate parent). 8 new tests (528 total).
+
 ## 0.57.0 — 2026-06-16
 
 ### Added — Move / re-parent and re-order Confluence pages

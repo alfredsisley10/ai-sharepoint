@@ -68,6 +68,15 @@ import {
   ManageabilityReport,
 } from "./adapters/confluenceEntitlements";
 import { reviewPageCurrency, CurrencyReport } from "./adapters/confluenceCurrency";
+import {
+  getPageAncestors,
+  getChildPages,
+  getDescendantPages,
+  getSpaceRootPages,
+  getPageHierarchy,
+  buildPageTree,
+  HierarchyResult,
+} from "./adapters/confluenceHierarchy";
 import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
 import {
   probeConfluenceWriteAccess,
@@ -690,6 +699,46 @@ export class ContextService {
       await moveConfluencePageAdapter(source, credential, op.pageId, position, target, caps.timeoutMs);
       const meta = await getConfluencePageMeta(source, credential, op.pageId, caps.timeoutMs);
       return { pageId: meta.id, title: meta.title, ...(meta.parentId ? { parentId: meta.parentId } : {}) };
+    });
+  }
+
+  /** Explore a page's HIERARCHY & RELATIONSHIPS: its breadcrumb (ancestors),
+   *  immediate children ("context", default), just ancestors, just children, the
+   *  full nested subtree, or — with a spaceKey and no pageId — the space's root
+   *  pages. All listings are fully paginated (no truncation). Global READ. */
+  async exploreConfluenceHierarchy(
+    source: ContextSource,
+    opts: { pageId?: string; spaceKey?: string; view?: "context" | "ancestors" | "children" | "subtree" },
+  ): Promise<HierarchyResult> {
+    if (source.type !== "confluence") throw new AppError("Hierarchy targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const ws = source.writeScope;
+    return this.tracked(source, false, async () => {
+      if (!opts.pageId) {
+        const spaceKey = opts.spaceKey ?? (ws?.kind === "space" ? ws.spaceKey : undefined);
+        if (!spaceKey) {
+          throw new AppError("Provide a pageId, or a spaceKey to list a space's root pages.", "config");
+        }
+        return { kind: "roots", spaceKey, roots: await getSpaceRootPages(source, credential, spaceKey, caps) };
+      }
+      const view = opts.view ?? "context";
+      if (view === "ancestors") {
+        return { kind: "ancestors", ancestors: await getPageAncestors(source, credential, opts.pageId, caps) };
+      }
+      if (view === "children") {
+        const [anc, children] = await Promise.all([
+          getPageAncestors(source, credential, opts.pageId, caps),
+          getChildPages(source, credential, opts.pageId, caps),
+        ]);
+        return { kind: "children", page: anc.page, children };
+      }
+      if (view === "subtree") {
+        const anc = await getPageAncestors(source, credential, opts.pageId, caps);
+        const descendants = await getDescendantPages(source, credential, opts.pageId, caps);
+        return { kind: "subtree", root: anc.page, tree: buildPageTree(anc.page, descendants), count: descendants.length };
+      }
+      return { kind: "context", hierarchy: await getPageHierarchy(source, credential, opts.pageId, caps) };
     });
   }
 

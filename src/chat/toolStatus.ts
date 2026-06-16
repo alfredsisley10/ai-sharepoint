@@ -119,6 +119,10 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Reviewing manageability of ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"}…`;
     case "aisharepoint_review_page_currency":
       return `Reviewing currency of Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""}…`;
+    case "aisharepoint_confluence_page_tree":
+      return str(i.spaceKey) && !str(i.pageId)
+        ? `Listing root pages of Confluence space ${String(i.spaceKey)}…`
+        : `Reading the Confluence page hierarchy${str(i.pageId) ? ` of ${String(i.pageId)}` : ""} (${str(i.view) ? String(i.view) : "context"})…`;
     case "aisharepoint_site_overview":
       return `Reading ${str(i.site) ?? "the site"} overview…`;
     case "aisharepoint_inspect_site":

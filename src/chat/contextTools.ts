@@ -24,6 +24,7 @@ import { catalogByCategory, CapabilityReport, RenderedValidation } from "../cont
 import { OwnerResolution } from "../context/adapters/confluenceOwnership";
 import { ManageabilityReport } from "../context/adapters/confluenceEntitlements";
 import { CurrencyReport } from "../context/adapters/confluenceCurrency";
+import { PageRef, HierarchyResult, renderPageTree } from "../context/adapters/confluenceHierarchy";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
@@ -115,6 +116,48 @@ function renderManageability(r: { report: ManageabilityReport; note: string }): 
     lines.push("", `✅ ${note}`);
   }
   return lines.join("\n");
+}
+
+function renderPageRefs(refs: PageRef[]): string {
+  return refs.length ? refs.map((r) => `- ${r.title} (id ${r.id}) — ${r.url}`).join("\n") : "_(none)_";
+}
+
+function renderHierarchy(r: HierarchyResult): string {
+  switch (r.kind) {
+    case "roots":
+      return [`# Space ${r.spaceKey} — ${r.roots.length} root page(s)`, "", renderPageRefs(r.roots)].join("\n");
+    case "ancestors": {
+      const a = r.ancestors;
+      return [
+        `# Ancestors of “${a.page.title}” (id ${a.page.id})`,
+        `Breadcrumb: ${[...a.ancestors, a.page].map((p) => p.title).join(" › ")}`,
+        ...(a.spaceKey ? [`Space: ${a.spaceKey}`] : []),
+        "",
+        renderPageRefs(a.ancestors),
+      ].join("\n");
+    }
+    case "children":
+      return [`# Children of “${r.page.title}” (id ${r.page.id}) — ${r.children.length}`, "", renderPageRefs(r.children)].join("\n");
+    case "subtree":
+      return [
+        `# Subtree of “${r.root.title}” (id ${r.root.id}) — ${r.count} descendant page(s)`,
+        "```",
+        renderPageTree(r.tree),
+        "```",
+      ].join("\n");
+    case "context": {
+      const h = r.hierarchy;
+      return [
+        `# “${h.page.title}” (id ${h.page.id})`,
+        ...(h.spaceKey ? [`Space: ${h.spaceKey}`] : []),
+        `Breadcrumb: ${[...h.ancestors, h.page].map((p) => p.title).join(" › ")}`,
+        `Parent: ${h.parent ? `${h.parent.title} (id ${h.parent.id})` : "(none — this is a root page)"}`,
+        "",
+        `## Children (${h.childCount})`,
+        renderPageRefs(h.children),
+      ].join("\n");
+    }
+  }
 }
 
 function renderCurrency(r: CurrencyReport): string {
@@ -497,6 +540,24 @@ export function registerContextTools(
         if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — this targets Confluence.`;
         if (!i.pageId?.trim()) return "A pageId is required.";
         return renderCurrency(await service.reviewConfluenceCurrency(source, i.pageId.trim()));
+      }),
+    ),
+    // Hierarchy & relationships — enumerate a page's parent/ancestors, immediate
+    // children, full subtree, or a space's root pages (all fully paginated).
+    vscode.lm.registerTool<{ source?: string; pageId?: string; spaceKey?: string; view?: "context" | "ancestors" | "children" | "subtree" }>(
+      "aisharepoint_confluence_page_tree",
+      guarded("aisharepoint_confluence_page_tree", "Reading the Confluence page hierarchy", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — page hierarchy targets Confluence.`;
+        if (!i.pageId?.trim() && !i.spaceKey?.trim()) {
+          return "Provide a pageId (to see its parent/children/subtree) or a spaceKey (to list the space's root pages).";
+        }
+        const r = await service.exploreConfluenceHierarchy(source, {
+          ...(i.pageId ? { pageId: i.pageId.trim() } : {}),
+          ...(i.spaceKey ? { spaceKey: i.spaceKey.trim() } : {}),
+          ...(i.view ? { view: i.view } : {}),
+        });
+        return renderHierarchy(r);
       }),
     ),
     vscode.lm.registerTool(
