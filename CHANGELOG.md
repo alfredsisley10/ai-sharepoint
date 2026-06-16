@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.55.0 — 2026-06-16
+
+### Added — "Test Content Functionality" (rendered macro validation, Test-Write-Access style)
+- A new non-destructive probe, exposed exactly like **Test Write Access** (right-click a managed
+  Confluence target → **Test Content Functionality**, or the command palette): it authors a throwaway
+  page exercising the built-in rich elements (table of contents, info/note/warning/tip panels, status,
+  task list, code, expand, multi-column layout, anchor, rule), pulls the **true rendered content** to
+  confirm they published as real Confluence elements (none leaked as literal "[TOC]"-style text), then
+  trashes the page. Proves the design → author → render pipeline end-to-end on the real instance.
+
+### Added — Manage Confluence page labels (the connector "didn't know how" before)
+- New **`manage_confluence_labels`** chat tool: **list** (read), **add**, or **remove** labels on a
+  page. Add/remove are approval-gated writes bounded by the connector's write scope; labels are
+  normalized to Confluence's rules (lowercased, spaces → hyphens). Closes a real gap — labels power
+  search, the *content-by-label* macro, and the ownership/archive constructs, but were previously only
+  reachable from the adapter layer, so @sharepoint couldn't tag a page when asked. 6 new tests (517 total).
+
 ## 0.54.0 — 2026-06-16
 
 ### Added — Full Confluence "Add more content" macro support (ADR-0043)

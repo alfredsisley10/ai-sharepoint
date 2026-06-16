@@ -15,6 +15,7 @@ import {
   layout,
   MACRO_CATALOG,
   catalogByCategory,
+  buildFunctionalitySample,
   extractMacrosFromStorage,
   tallyMacros,
   findLeakedMacroMarkup,
@@ -114,6 +115,17 @@ test("catalog covers the requested elements and groups them", () => {
   const groups = catalogByCategory();
   assert.equal(groups[0].category, "formatting");
   assert.ok(groups.every((g) => g.macros.length > 0));
+});
+
+test("buildFunctionalitySample emits real macros for every claimed element", () => {
+  const { body, emitted } = buildFunctionalitySample("2026-06-16T18:00:00Z");
+  // every emitted built-in element is present as a real element in the body
+  const present = new Set(extractMacrosFromStorage(body));
+  for (const name of emitted) {
+    assert.ok(present.has(name), `sample missing real element ${name}`);
+  }
+  // and it carries NO wiki/markdown shorthand
+  assert.deepEqual(findLeakedMacroMarkup(body.replace(/<[^>]+>/g, " ")), []);
 });
 
 // --- extract / tally -------------------------------------------------------

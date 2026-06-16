@@ -5,6 +5,8 @@ import {
   probeBody,
   summarizeProbe,
   probeConfluenceWriteAccess,
+  probeConfluenceFunctionality,
+  summarizeFunctionalityProbe,
   WriteProbeResult,
 } from "../src/context/adapters/confluenceProbe";
 import { ContextSource, ContextCredential } from "../src/context/types";
@@ -130,4 +132,50 @@ test("instance scope (no space/page) reports it can't test", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.failedAt, "resolve");
   assert.match(result.reason ?? "", /instance-scoped/);
+});
+
+// --- content functionality probe -------------------------------------------
+
+const CAPS = { maxResults: 25, maxBodyChars: 8000, timeoutMs: 30000 };
+
+test("functionality probe: create → validate (clean) → delete = ok", async () => {
+  const { result, calls } = await withFetch(
+    (url, init) => {
+      const m = (init.method as string) ?? "GET";
+      if (m === "POST" && /\/content$/.test(url)) return { body: { id: "70", version: { number: 1 }, _links: { webui: "/p/70" } } };
+      // validate: rendered view with real macros, no leaks
+      if (m === "GET" && /\/content\/70\?expand=body\.view/.test(url)) {
+        return { body: { title: "T", body: { view: { value: '<div data-macro-name="toc">x</div><div data-macro-name="info">i</div>' } }, _links: { webui: "/p/70" } } };
+      }
+      if (m === "DELETE" && /\/content\/70$/.test(url)) return { status: 204, body: undefined };
+      return { status: 500, body: {} };
+    },
+    () => probeConfluenceFunctionality(SRC, CRED, { spaceKey: "ENG" }, CAPS, "2026-06-16T18:00:00Z"),
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.create, true);
+  assert.equal(result.cleanedUp, true);
+  assert.deepEqual(result.leaks, []);
+  assert.ok(result.rendered.some((e) => e.name === "toc"));
+  assert.deepEqual(calls.map((c) => c.method), ["POST", "GET", "DELETE"]);
+  assert.match(summarizeFunctionalityProbe(result), /Content functionality confirmed/);
+});
+
+test("functionality probe: a leaked [TOC] fails the check (still cleans up)", async () => {
+  const result = (
+    await withFetch(
+      (_url, init) => {
+        const m = (init.method as string) ?? "GET";
+        if (m === "POST") return { body: { id: "71", version: { number: 1 }, _links: { webui: "/p/71" } } };
+        if (m === "GET") return { body: { title: "T", body: { view: { value: "<p>[TOC]</p>" } }, _links: { webui: "/p/71" } } };
+        if (m === "DELETE") return { status: 204, body: undefined };
+        return { status: 500, body: {} };
+      },
+      () => probeConfluenceFunctionality(SRC, CRED, { spaceKey: "ENG" }, CAPS, "2026-06-16T18:00:00Z"),
+    )
+  ).result;
+  assert.equal(result.ok, false);
+  assert.ok(result.leaks.some((l) => l.macro === "toc"));
+  assert.equal(result.cleanedUp, true);
+  assert.match(summarizeFunctionalityProbe(result), /leaked as literal text/);
 });

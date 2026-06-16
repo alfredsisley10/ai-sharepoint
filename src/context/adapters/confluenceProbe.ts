@@ -1,4 +1,4 @@
-import { ContextSource, ContextCredential } from "../types";
+import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { AppError } from "../../core/errors";
 import {
   createConfluencePage,
@@ -6,6 +6,7 @@ import {
   deleteConfluencePage,
   getConfluencePageMeta,
 } from "./confluenceWrite";
+import { buildFunctionalitySample, validateConfluencePageRendered } from "./confluenceMacros";
 
 /**
  * Safe, non-destructive write-access probe for a managed Confluence connector
@@ -142,6 +143,125 @@ export async function probeConfluenceWriteAccess(
 
   result.ok = result.create && result.update && result.remove;
   return result;
+}
+
+export interface FunctionalityProbeResult {
+  ok: boolean;
+  create: boolean;
+  /** Element types authored into the sample. */
+  emitted: string[];
+  /** Macros recognized as actually rendered in the view. */
+  rendered: Array<{ name: string; count: number }>;
+  /** Element markup that leaked as literal text (BAD — not real elements). */
+  leaks: Array<{ markup: string; macro: string }>;
+  spaceKey?: string;
+  pageId?: string;
+  /** Rendered-page URL (for inspection if cleanup couldn't run). */
+  pageUrl?: string;
+  failedAt?: "resolve" | "create" | "validate" | "delete";
+  reason?: string;
+  cleanedUp: boolean;
+}
+
+/**
+ * Non-destructive CONTENT FUNCTIONALITY test (the macro analogue of the write
+ * probe): author a throwaway page exercising the built-in rich elements, pull
+ * the TRUE rendered content to confirm they published as real Confluence
+ * elements (not literal "[TOC]"-style text), then trash it. Proves the whole
+ * design→author→render pipeline end-to-end on a real instance.
+ */
+export async function probeConfluenceFunctionality(
+  source: ContextSource,
+  credential: ContextCredential,
+  target: WriteProbeTarget,
+  caps: ReadCaps,
+  nowIso: string,
+): Promise<FunctionalityProbeResult> {
+  const result: FunctionalityProbeResult = {
+    ok: false,
+    create: false,
+    emitted: [],
+    rendered: [],
+    leaks: [],
+    cleanedUp: false,
+  };
+
+  let spaceKey = target.spaceKey;
+  const parentId = target.parentId;
+  if (!spaceKey && parentId) {
+    try {
+      spaceKey = (await getConfluencePageMeta(source, credential, parentId, caps.timeoutMs)).spaceKey;
+    } catch (err) {
+      return { ...result, failedAt: "resolve", reason: reasonOf(err) };
+    }
+  }
+  if (!spaceKey) {
+    return {
+      ...result,
+      failedAt: "resolve",
+      reason: "This connector has no space/page scope to test (instance-scoped). Re-onboard it pointed at a space or page URL.",
+    };
+  }
+  result.spaceKey = spaceKey;
+
+  const { body, emitted } = buildFunctionalitySample(nowIso);
+  result.emitted = emitted;
+  const title = `[AI Toolkit] content-functionality check — safe to delete — ${nowIso}`;
+  let pageId: string | undefined;
+  try {
+    const created = await createConfluencePage(
+      source,
+      credential,
+      { spaceKey, title, body, ...(parentId ? { parentId } : {}) },
+      caps.timeoutMs,
+    );
+    pageId = created.id;
+    result.create = true;
+    result.pageId = created.id;
+  } catch (err) {
+    return { ...result, failedAt: "create", reason: reasonOf(err) };
+  }
+
+  try {
+    const v = await validateConfluencePageRendered(source, credential, pageId, caps);
+    result.rendered = v.rendered;
+    result.leaks = v.leaks;
+    result.pageUrl = v.url;
+  } catch (err) {
+    result.failedAt = "validate";
+    result.reason = reasonOf(err);
+  }
+
+  // Always clean up the sample page.
+  try {
+    await deleteConfluencePage(source, credential, pageId, caps.timeoutMs);
+    result.cleanedUp = true;
+  } catch (err) {
+    result.cleanedUp = false;
+    if (!result.failedAt) {
+      result.failedAt = "delete";
+      result.reason = reasonOf(err);
+    }
+  }
+
+  result.ok = result.create && result.leaks.length === 0 && !result.failedAt;
+  return result;
+}
+
+/** One-line verdict for the content-functionality test notification. Pure. */
+export function summarizeFunctionalityProbe(r: FunctionalityProbeResult): string {
+  if (r.failedAt === "resolve") return `Couldn't run the content check: ${r.reason}`;
+  if (r.failedAt === "create") return `Couldn't create the sample page (write may be blocked): ${r.reason}`;
+  if (r.ok) {
+    return `Content functionality confirmed: authored ${r.emitted.length} built-in element types and NONE leaked as literal text — all published as real Confluence elements${r.rendered.length ? ` (recognized rendered: ${r.rendered.map((e) => e.name).join(", ")})` : ""}. The sample page was removed.`;
+  }
+  const parts: string[] = [];
+  if (r.leaks.length) {
+    parts.push(`${r.leaks.length} element(s) leaked as literal text (${r.leaks.map((l) => l.markup).join(", ")}) — they did NOT become real Confluence elements`);
+  }
+  if (r.failedAt === "validate") parts.push(`couldn't pull the rendered content (${r.reason})`);
+  const stray = !r.cleanedUp && r.pageUrl ? ` A sample page may remain — remove it here: ${r.pageUrl}.` : "";
+  return `Content functionality issues${r.spaceKey ? ` in ${r.spaceKey}` : ""}: ${parts.join("; ")}.${stray}`;
 }
 
 /** One-line, human-readable verdict for the setup notification. Pure. */

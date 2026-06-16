@@ -7,6 +7,9 @@ import {
   createConfluencePage,
   updateConfluencePage,
   deleteConfluencePage,
+  normalizeLabel,
+  addConfluenceLabels,
+  removeConfluenceLabel,
 } from "../src/context/adapters/confluenceWrite";
 import { ContextSource, ContextCredential } from "../src/context/types";
 
@@ -95,6 +98,36 @@ test("markdownToStorage rescues a literal [TOC]/{toc} into the real toc macro", 
     assert.match(out, /<ac:structured-macro ac:name="toc">/, `failed for ${shorthand}`);
     assert.doesNotMatch(out, /\[TOC\]|\{toc/i);
   }
+});
+
+test("normalizeLabel enforces Confluence's lowercase/no-space rules", () => {
+  assert.equal(normalizeLabel("Needs Review"), "needs-review");
+  assert.equal(normalizeLabel("  ARCHIVE  "), "archive");
+  assert.equal(normalizeLabel("team:platform_v2.0"), "team:platform_v2.0");
+  assert.equal(normalizeLabel("bad/chars!"), "badchars");
+});
+
+test("addConfluenceLabels POSTs normalized labels with the write headers", async () => {
+  const { result, calls } = await withFetch(
+    () => ({ body: { results: [{ name: "needs-review" }, { name: "q3" }] } }),
+    () => addConfluenceLabels(SRC, CRED, "55", ["Needs Review", "Q3", "Needs Review"], 30000),
+  );
+  assert.match(calls[0].url, /\/rest\/api\/content\/55\/label$/);
+  assert.equal((calls[0].init as { method?: string }).method, "POST");
+  assert.equal((calls[0].init.headers as Record<string, string>)["X-Atlassian-Token"], "no-check");
+  const body = JSON.parse(String((calls[0].init as { body?: string }).body));
+  // de-duped + normalized
+  assert.deepEqual(body, [{ prefix: "global", name: "needs-review" }, { prefix: "global", name: "q3" }]);
+  assert.deepEqual(result, ["needs-review", "q3"]);
+});
+
+test("removeConfluenceLabel DELETEs by normalized name", async () => {
+  const { calls } = await withFetch(
+    () => ({ status: 204, body: undefined }),
+    () => removeConfluenceLabel(SRC, CRED, "55", "Needs Review", 30000),
+  );
+  assert.equal((calls[0].init as { method?: string }).method, "DELETE");
+  assert.match(calls[0].url, /\/label\?name=needs-review$/);
 });
 
 test("createConfluencePage POSTs to the content API and maps the result", async () => {

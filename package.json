@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.54.0",
+  "version": "0.55.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -87,6 +87,12 @@
         "title": "Test Write Access (safe — creates & deletes a temp page)",
         "category": "AI SharePoint",
         "icon": "$(beaker)"
+      },
+      {
+        "command": "aiSharePoint.testConfluenceFunctionality",
+        "title": "Test Content Functionality (safe — renders & checks page elements)",
+        "category": "AI SharePoint",
+        "icon": "$(symbol-color)"
       },
       {
         "command": "aiSharePoint.testConnection",
@@ -823,6 +829,50 @@
         }
       },
       {
+        "name": "aisharepoint_manage_confluence_labels",
+        "displayName": "Manage Confluence Page Labels",
+        "toolReferenceName": "spConfluenceLabels",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(tag)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "List, ADD, or REMOVE labels on a Confluence page. action='list' reads the page's labels (no approval). action='add' or 'remove' changes them — approval-gated, and bounded by the connector's write scope (the page must be in the managed space/page). Provide source (Confluence source name; optional if one), pageId (find it via search_context), and for add/remove a 'labels' array. Labels are normalized to Confluence's rules (lowercased, spaces → hyphens). Returns the page's labels after the change. Use this when the user asks to label/tag/categorize a page or to remove a label.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page whose labels to manage (required)."
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "list",
+                "add",
+                "remove"
+              ],
+              "description": "list (read), add, or remove labels. Defaults to list."
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Labels to add or remove (required for add/remove)."
+            }
+          },
+          "required": [
+            "pageId"
+          ]
+        }
+      },
+      {
         "name": "aisharepoint_search_context",
         "displayName": "Search Reference Sources",
         "toolReferenceName": "spSearchContext",
@@ -1511,9 +1561,14 @@
           "group": "1_actions@2"
         },
         {
+          "command": "aiSharePoint.testConfluenceFunctionality",
+          "when": "view == aiSharePoint.sitesView && viewItem == managed-source-confluence",
+          "group": "1_actions@3"
+        },
+        {
           "command": "aiSharePoint.browseSource",
           "when": "view == aiSharePoint.sitesView && viewItem =~ /^managed-source/",
-          "group": "1_actions@3"
+          "group": "1_actions@4"
         },
         {
           "command": "aiSharePoint.changeSourceRole",

@@ -56,7 +56,7 @@ import {
   writeScopeFromParsed,
   describeWriteScope,
 } from "./context/adapters/confluenceScope";
-import { summarizeProbe } from "./context/adapters/confluenceProbe";
+import { summarizeProbe, summarizeFunctionalityProbe } from "./context/adapters/confluenceProbe";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
 import { aliasIssue, normalizeAlias, resolveSourceRef, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
@@ -2570,6 +2570,53 @@ export function activate(context: vscode.ExtensionContext): void {
     } catch (err) {
       const safe = err instanceof AppError ? (err.userSummary ?? err.message) : err instanceof Error ? err.message : String(err);
       void vscode.window.showErrorMessage(`Write test could not run: ${safe}`);
+    }
+  });
+
+  // Safe, non-destructive CONTENT FUNCTIONALITY test for a managed Confluence
+  // target: author a sample page of built-in rich elements (toc, panels, status,
+  // task list, code, expand, layout…), pull the rendered content to confirm they
+  // published as real Confluence elements (not literal "[TOC]" text), then delete.
+  register("aiSharePoint.testConfluenceFunctionality", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    if (source.type !== "confluence") {
+      void vscode.window.showInformationMessage("Content functionality tests apply to managed Confluence targets.");
+      return;
+    }
+    if (source.role !== "managed") {
+      const go = await vscode.window.showInformationMessage(
+        `"${source.displayName}" is a read-only reference, so there's nothing to author to. Make it a managed target first?`,
+        "Make Managed",
+      );
+      if (go === "Make Managed") await vscode.commands.executeCommand("aiSharePoint.changeSourceRole", source);
+      return;
+    }
+    try {
+      const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Testing Confluence content functionality on "${source.displayName}" (renders & removes a sample page)…` },
+        () => contextService.probeConfluenceFunctionality(source),
+      );
+      const verdict = summarizeFunctionalityProbe(result);
+      if (result.ok) {
+        void vscode.window.showInformationMessage(`✅ ${verdict}`);
+      } else {
+        const actions = !result.cleanedUp && result.pageUrl ? ["Open Sample Page", "Verbose Log"] : ["Verbose Log"];
+        const choice = await vscode.window.showWarningMessage(`⚠️ ${verdict}`, ...actions);
+        if (choice === "Open Sample Page" && result.pageUrl) {
+          await vscode.env.openExternal(vscode.Uri.parse(result.pageUrl));
+        } else if (choice === "Verbose Log") {
+          await vscode.workspace
+            .getConfiguration("aiSharePoint")
+            .update("logging.verboseWire", true, vscode.ConfigurationTarget.Global);
+          void vscode.window.showInformationMessage(
+            "Verbose wire logging enabled (Output → AI SharePoint). Re-run the content test to capture the exchange, then disable it again.",
+          );
+        }
+      }
+    } catch (err) {
+      const safe = err instanceof AppError ? (err.userSummary ?? err.message) : err instanceof Error ? err.message : String(err);
+      void vscode.window.showErrorMessage(`Content functionality test could not run: ${safe}`);
     }
   });
 

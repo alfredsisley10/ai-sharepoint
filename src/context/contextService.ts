@@ -43,10 +43,19 @@ import {
   createConfluencePage,
   updateConfluencePage,
   getConfluencePageMeta,
+  addConfluenceLabels,
+  removeConfluenceLabel,
   ConfluenceWriteResult,
 } from "./adapters/confluenceWrite";
+import { getConfluencePageLabels } from "./adapters/confluenceOwnership";
 import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
-import { probeConfluenceWriteAccess, WriteProbeResult, WriteProbeTarget } from "./adapters/confluenceProbe";
+import {
+  probeConfluenceWriteAccess,
+  probeConfluenceFunctionality,
+  WriteProbeResult,
+  WriteProbeTarget,
+  FunctionalityProbeResult,
+} from "./adapters/confluenceProbe";
 import {
   discoverConfluenceMacros,
   detectConfluenceApps,
@@ -544,6 +553,67 @@ export class ContextService {
       const apps = await detectConfluenceApps(source, credential, caps);
       return { pagesSampled, used, apps, catalog: MACRO_CATALOG };
     });
+  }
+
+  /** Manage a page's labels: list (read), add, or remove. Add/remove are
+   *  mutations, so they respect the connector's write scope (the page must be in
+   *  it); list is a global read. Lockout-gated. Returns the labels after the op. */
+  async manageConfluenceLabels(
+    source: ContextSource,
+    op: { action: "add" | "remove" | "list"; pageId: string; labels?: string[] },
+  ): Promise<{ action: string; labels: string[] }> {
+    if (source.type !== "confluence") {
+      throw new AppError("Label management targets a Confluence source.", "config");
+    }
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const scope = source.writeScope;
+    return this.tracked(source, false, async () => {
+      if (op.action === "list") {
+        return { action: "list", labels: await getConfluencePageLabels(source, credential, op.pageId, caps.timeoutMs) };
+      }
+      // Mutations: enforce the write scope (resolve the page's space first).
+      if (scope && scope.kind !== "instance") {
+        const meta = await getConfluencePageMeta(source, credential, op.pageId, caps.timeoutMs);
+        const gate = checkWriteScope(scope, { action: "update", pageId: op.pageId, spaceKey: meta.spaceKey });
+        if (!gate.allowed) {
+          throw new AppError(
+            `This managed Confluence connector may only write within ${describeWriteScope(scope)} — refused (${gate.reason}).`,
+            "config",
+          );
+        }
+      }
+      if (!op.labels || op.labels.length === 0) {
+        throw new AppError(`A label is required to ${op.action}.`, "config");
+      }
+      if (op.action === "add") {
+        return { action: "add", labels: await addConfluenceLabels(source, credential, op.pageId, op.labels, caps.timeoutMs) };
+      }
+      for (const l of op.labels) await removeConfluenceLabel(source, credential, op.pageId, l, caps.timeoutMs);
+      return { action: "remove", labels: await getConfluencePageLabels(source, credential, op.pageId, caps.timeoutMs) };
+    });
+  }
+
+  /** Non-destructive CONTENT FUNCTIONALITY test: author a throwaway page of
+   *  built-in rich elements, pull the rendered content to confirm they became
+   *  real Confluence elements (no leaked shorthand), then delete it. The macro
+   *  analogue of probeConfluenceWrite. Lockout-gated. */
+  async probeConfluenceFunctionality(source: ContextSource): Promise<FunctionalityProbeResult> {
+    if (source.type !== "confluence") {
+      throw new AppError("Content tests target a Confluence source.", "config");
+    }
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const scope = source.writeScope;
+    const target: WriteProbeTarget =
+      scope?.kind === "space"
+        ? { spaceKey: scope.spaceKey }
+        : scope?.kind === "page"
+          ? { parentId: scope.pageId }
+          : {};
+    return this.tracked(source, false, () =>
+      probeConfluenceFunctionality(source, credential, target, caps, new Date().toISOString()),
+    );
   }
 
   /** Pull a page's TRUE RENDERED content (body.view) and validate it: flag any

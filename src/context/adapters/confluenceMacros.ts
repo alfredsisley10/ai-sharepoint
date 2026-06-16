@@ -455,6 +455,37 @@ export function catalogByCategory(): Array<{ category: MacroCategory; macros: Ma
     .filter((g) => g.macros.length > 0);
 }
 
+/** A throwaway page body exercising the BUILT-IN rich elements (the ones that
+ *  render on any instance without an app), for the non-destructive content
+ *  functionality test: if any of these come back as literal text instead of a
+ *  real element, the connector isn't publishing true Confluence elements. App
+ *  macros (Jira, draw.io) are intentionally excluded — they need real data/apps;
+ *  their availability is reported separately by discovery. Pure. */
+export function buildFunctionalitySample(nowIso: string): { body: string; emitted: string[] } {
+  const body = [
+    `<p>Automated content-functionality check (${esc(nowIso)}). Safe to delete.</p>`,
+    tableOfContents(),
+    "<h2>Panels</h2>",
+    panel("info", "<p>info</p>"),
+    panel("note", "<p>note</p>"),
+    panel("warning", "<p>warning</p>"),
+    panel("tip", "<p>tip</p>"),
+    panel("panel", "<p>custom</p>", { title: "Custom panel" }),
+    "<h2>Status &amp; code</h2>",
+    `<p>Status: ${status("DONE", "Green")}</p>`,
+    codeBlock('print("hello")', "python"),
+    "<h2>Tasks</h2>",
+    taskList([{ text: "first task" }, { text: "second task", done: true }]),
+    "<h2>Expand &amp; layout</h2>",
+    expand("<p>hidden detail</p>", "Details"),
+    layout([{ type: "two_equal", cells: ["<p>left</p>", "<p>right</p>"] }]),
+    horizontalRule(),
+    anchor("end"),
+  ].join("");
+  const emitted = ["toc", "info", "note", "warning", "tip", "panel", "status", "code", "task-list", "expand", "layout", "hr", "anchor"];
+  return { body, emitted };
+}
+
 // ---------------------------------------------------------------------------
 // Discovery — what's actually used / available in this instance.
 // ---------------------------------------------------------------------------

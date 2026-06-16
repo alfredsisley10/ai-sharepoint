@@ -265,6 +265,59 @@ export function registerContextTools(
         return renderValidation(v);
       }),
     ),
+    // Manage a page's labels (list / add / remove). Add & remove are writes —
+    // approval-gated and bounded by the connector's write scope; list is a read.
+    vscode.lm.registerTool<{ source?: string; pageId?: string; action?: "add" | "remove" | "list"; labels?: string[] }>(
+      "aisharepoint_manage_confluence_labels",
+      {
+        prepareInvocation(options) {
+          const i = options.input;
+          const action = i.action ?? "list";
+          if (action === "list") return { invocationMessage: "Reading Confluence page labels" };
+          const verb = action === "add" ? "Add" : "Remove";
+          return {
+            invocationMessage: `${verb} Confluence page label(s)`,
+            confirmationMessages: {
+              title: `${verb} label(s) on page ${i.pageId ?? "?"}?`,
+              message: new vscode.MarkdownString(
+                [
+                  `**Labels:** ${(i.labels ?? []).map((l) => `\`${l}\``).join(", ") || "_?_"}`,
+                  "",
+                  "Changes the page's labels in Confluence (metadata — reversible). Labels are lowercased and spaces become hyphens.",
+                ].join("\n"),
+              ),
+            },
+          };
+        },
+        async invoke(options) {
+          telemetry.record("tool.invoke", { tool: "aisharepoint_manage_confluence_labels" });
+          try {
+            const i = options.input;
+            const source = resolveOrExplain(i.source);
+            if (source.type !== "confluence") {
+              return text(`"${source.displayName}" is a ${source.type} source — labels target a Confluence source.`);
+            }
+            if (!i.pageId?.trim()) return text("A pageId is required (search the source first to find it).");
+            const action = i.action ?? "list";
+            if (action !== "list" && (!i.labels || i.labels.length === 0)) {
+              return text(`Provide at least one label to ${action}.`);
+            }
+            const res = await service.manageConfluenceLabels(source, {
+              action,
+              pageId: i.pageId.trim(),
+              ...(i.labels ? { labels: i.labels } : {}),
+            });
+            telemetry.record("confluence.labels", { action });
+            return text(
+              `Page labels after ${res.action}: ${res.labels.length ? res.labels.map((l) => `\`${l}\``).join(", ") : "(none)"}.`,
+            );
+          } catch (err) {
+            errors.capture("tool:aisharepoint_manage_confluence_labels", err);
+            return text(`Could not manage labels: ${redactError(err).message}`);
+          }
+        },
+      },
+    ),
     vscode.lm.registerTool(
       "aisharepoint_db_schema",
       guarded<{ source?: string; topic?: string }>(

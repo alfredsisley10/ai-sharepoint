@@ -206,6 +206,62 @@ export async function deleteConfluencePage(
 }
 
 // ---------------------------------------------------------------------------
+// Labels — page metadata (add / remove). Labels power search, the "content by
+// label" macro, and the ownership/archive constructs.
+// ---------------------------------------------------------------------------
+
+/** Confluence label rules: lowercase, no whitespace. Normalize a human label
+ *  ("Needs Review") to a valid one ("needs-review") so the write doesn't 400.
+ *  Pure. */
+export function normalizeLabel(raw: string): string {
+  return (raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9_:.-]/g, "");
+}
+
+/** Add one or more labels to a page (POST /label). Returns the page's labels
+ *  after the change. */
+export async function addConfluenceLabels(
+  source: ContextSource,
+  credential: ContextCredential,
+  pageId: string,
+  labels: string[],
+  timeoutMs: number,
+): Promise<string[]> {
+  const clean = Array.from(new Set(labels.map(normalizeLabel).filter(Boolean)));
+  if (clean.length === 0) throw new AppError("No valid label to add (labels are lowercase, no spaces).", "config");
+  const res = await fetchJson<{ results?: Array<{ name?: string }> }>(
+    `${base(source)}/rest/api/content/${enc(pageId)}/label`,
+    credential,
+    timeoutMs,
+    CONFLUENCE_WRITE_HEADERS,
+    { method: "POST", body: clean.map((name) => ({ prefix: "global", name })) },
+  );
+  return (res.results ?? []).map((l) => String(l.name ?? "")).filter(Boolean);
+}
+
+/** Remove one label from a page (DELETE /label?name=). */
+export async function removeConfluenceLabel(
+  source: ContextSource,
+  credential: ContextCredential,
+  pageId: string,
+  label: string,
+  timeoutMs: number,
+): Promise<void> {
+  const clean = normalizeLabel(label);
+  if (!clean) throw new AppError("No valid label to remove.", "config");
+  await fetchJson<unknown>(
+    `${base(source)}/rest/api/content/${enc(pageId)}/label?name=${enc(clean)}`,
+    credential,
+    timeoutMs,
+    CONFLUENCE_WRITE_HEADERS,
+    { method: "DELETE" },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Markdown → Confluence storage format (XHTML). Pragmatic converter for the
 // common blocks the assistant authors; pure and testable.
 // ---------------------------------------------------------------------------
