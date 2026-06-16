@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.45.0 — 2026-06-16
+
+### Added — Confluence content cache + page-currency review (ADR-0042/0043)
+- **Local content cache** (`confluenceCache.ts`): snapshot a space / subtree / page's essential
+  content (title, **version**, stripped body, labels, parent) so cleanup/design passes read fast
+  instead of re-fetching. Persistence-agnostic (`serialize()` + load); because each entry keeps
+  the page version, **`stale(liveVersions)`** is the drift baseline — "don't deploy onto a page
+  that changed underneath us." This is also the substrate for *"review all content in the space
+  for consistency/accuracy/branding/usability and summarize proposed changes per owner."*
+- **Page currency review** (`confluenceCurrency.ts`): is a page still current? Checks its
+  **outbound links** are live (HEAD/GET, bounded), verifies the **owner tag**'s sAMAccountNames
+  are still **active** users (via the user directory), and reports **staleness** (days since last
+  update) — rolled into an `issues` list for cleanup proposals.
+- Pure logic + REST/HTTP IO unit-tested (7 new; 433 total).
+
 ## 0.44.0 — 2026-06-16
 
 ### Added — user directory: active-check + contact resolution (ADR-0041)
