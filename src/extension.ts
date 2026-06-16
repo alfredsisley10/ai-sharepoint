@@ -482,7 +482,6 @@ export function activate(context: vscode.ExtensionContext): void {
     outbox,
     commsProvider,
     outbox.onDidChange(syncCommsBadge),
-    ...tryRegister("communication tools", () => registerCommsTools(outbox, telemetry, errors, nowIso)),
     ...tryRegister("site-dev tools", () => registerSiteDevTools(sites, access, syncConfigs, telemetry, errors)),
     ...tryRegister("project tools", () => registerProjectTools(projects, telemetry, errors)),
   );
@@ -4113,6 +4112,44 @@ export function activate(context: vscode.ExtensionContext): void {
     const provider = registry.create(conn.authProviderId, conn.cacheHandle);
     return new CommsClient(provider, false);
   };
+
+  /** Create an email draft directly in the user's Outlook Drafts folder.
+   *  Outlook's own Drafts is the review surface (the user finishes/sends it
+   *  there), so the assistant skips the in-plugin Communications staging and
+   *  approval — nothing is sent. Returns the web link + any unresolved
+   *  recipients. */
+  const createOutlookDraftDirect = async (
+    to: string[],
+    subject: string,
+    body: string,
+  ): Promise<{ webLink?: string; failures: string[] }> => {
+    const client = await commsClientFor();
+    if (!client) {
+      throw new AppError(
+        "Set up your Microsoft 365 sign-in for email first (connect a SharePoint site).",
+        "config",
+      );
+    }
+    const resolved = [];
+    const failures: string[] = [];
+    for (const r of to) {
+      try {
+        resolved.push(await client.resolveRecipient(r));
+      } catch {
+        failures.push(r);
+      }
+    }
+    if (resolved.length === 0) {
+      throw new AppError(`No recipients could be resolved in the directory: ${failures.join(", ")}.`, "config");
+    }
+    const created = await client.createMailDraft(resolved, subject, body);
+    return { ...(created.webLink ? { webLink: created.webLink } : {}), failures };
+  };
+  context.subscriptions.push(
+    ...tryRegister("communication tools", () =>
+      registerCommsTools(outbox, createOutlookDraftDirect, telemetry, errors, nowIso),
+    ),
+  );
 
   // Teams Incoming Webhooks (ADR-0025 amendment): the no-admin-consent
   // delivery path. URLs embed a token, so they live in the keychain (never

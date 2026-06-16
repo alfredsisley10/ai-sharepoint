@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.47.0 — 2026-06-16
+
+### Changed — Outlook email drafts go straight to your Outlook Drafts folder
+- An Outlook draft is already a non-committal, user-reviewable artifact (you finish and send it in
+  Outlook), so the in-plugin Communications-tab staging + approval prompt was redundant for it.
+  @sharepoint now creates Outlook email drafts **directly in your Outlook Drafts folder** — no
+  prompt, no Communications-tab step. **Nothing is sent**; Outlook is the review-and-send surface.
+- **Teams is unchanged**: it posts live (no draft folder), so a Teams message still queues in the
+  Communications outbox behind your explicit per-draft approval. The assistant still has zero send
+  paths for either channel.
+
 ## 0.46.0 — 2026-06-16
 
 ### Added — Confluence space manageability (entitlement) review (ADR-0044)

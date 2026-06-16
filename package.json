@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.46.0",
+  "version": "0.47.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -952,7 +952,7 @@
           "sharepoint",
           "communications"
         ],
-        "modelDescription": "PREPARE (never send) a Microsoft Teams chat message or an Outlook email to specific individuals, e.g. after research the user asked to share. The draft goes to the extension's Communications outbox where the USER must review and explicitly approve it before anything is sent — you cannot send, and must tell the user the draft awaits their approval in the Communications view. When the message should reflect existing context (a status update, reply, or summary), FIRST ground it: search relevant sources — especially a Microsoft 365 Copilot source, which can read Teams messages, email, and documents — then draft from what you find. Note: Teams exposes no draft folder via API, so this queued, approval-gated draft IS the draft; never say it was saved into Teams or already sent. Provide recipients as emails/UPNs (max 10), a subject for email, and a plain-text body. Use ONLY for a message the user explicitly asked to prepare, addressed to recipients THEY named.",
+        "modelDescription": "PREPARE a message to specific individuals (you never SEND). Two paths by channel. OUTLOOK email: the draft is created DIRECTLY in the user's Outlook Drafts folder — Outlook is the review-and-send surface, so there is no in-plugin approval and nothing is sent; tell the user to review and send it from Outlook. TEAMS: Teams posts live (no draft folder), so it is queued in the extension's Communications outbox behind the user's explicit per-draft approval there; tell them it awaits approval in the Communications view, and never say it was saved into Teams or already sent. When the message should reflect existing context (status update, reply, summary), FIRST ground it: search relevant sources — especially a Microsoft 365 Copilot source (Teams messages, email, documents) — then draft from what you find. Provide recipients as emails/UPNs (max 10), a subject for email, and a plain-text body. Use ONLY for a message the user explicitly asked to prepare, addressed to recipients THEY named.",
         "inputSchema": {
           "type": "object",
           "properties": {
