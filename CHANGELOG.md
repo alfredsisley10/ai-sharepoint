@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.44.0 — 2026-06-16
+
+### Added — user directory: active-check + contact resolution (ADR-0041)
+- The lynchpin for the content-cleanup workflow: resolve an AD **sAMAccountName** to whether the
+  user is **active** and how to **contact** them (email/UPN). Feeds both the **ownership**
+  active-contributor check and the **owner notification** before cleanup.
+- Backed by **LDAP** (`userAccountControl` ACCOUNTDISABLE bit) or **Microsoft 365**
+  (`onPremisesSamAccountName` + `accountEnabled`); pure parsers normalize both into one
+  `UserRecord`. Injected as a `UserDirectory` so the constructs don't bind to a backing store.
+  Unknown state → assume active; unresolvable user → inactive (a ghost never becomes the owner).
+- Pure logic + the Graph lookup unit-tested (7 new; 426 total). This completes the primitives
+  behind the *authority sweep → owner → notify → clean up* flow; the chat tools that drive it are
+  the remaining wiring.
+
 ## 0.43.0 — 2026-06-15
 
 ### Added — more reusable Confluence cleanup constructs (ADR-0039/0040)
