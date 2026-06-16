@@ -46,6 +46,7 @@ import {
   ConfluenceWriteResult,
 } from "./adapters/confluenceWrite";
 import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
+import { probeConfluenceWriteAccess, WriteProbeResult, WriteProbeTarget } from "./adapters/confluenceProbe";
 import {
   verifyServiceNow,
   searchServiceNow,
@@ -482,6 +483,28 @@ export class ContextService {
         caps.timeoutMs,
       );
     });
+  }
+
+  /** Non-destructive write-access probe for a managed Confluence connector:
+   *  create → update → delete a throwaway page within the connector's write
+   *  scope, cleaning up after itself, so write-permission gaps surface at setup
+   *  with the server's own reason. Lockout-gated like any call; never cached. */
+  async probeConfluenceWrite(source: ContextSource): Promise<WriteProbeResult> {
+    if (source.type !== "confluence") {
+      throw new AppError("Write tests target a Confluence source.", "config");
+    }
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const scope = source.writeScope;
+    const target: WriteProbeTarget =
+      scope?.kind === "space"
+        ? { spaceKey: scope.spaceKey }
+        : scope?.kind === "page"
+          ? { parentId: scope.pageId }
+          : {};
+    return this.tracked(source, false, () =>
+      probeConfluenceWriteAccess(source, credential, target, caps.timeoutMs, new Date().toISOString()),
+    );
   }
 
   /** Gemini-grounded answer from a Vertex AI Search app (the "analysis"

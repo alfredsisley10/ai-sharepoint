@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.51.0 — 2026-06-16
+
+### Added — Safe write-access self-test for managed Confluence targets (ADR-0042)
+- **The problem:** a Confluence write can 403 (no create/edit permission, a read-only space, a
+  personal space that hasn't been created yet, or a proxy/WAF block) even though reads succeed — so
+  the connector "looks" fine until you try to publish.
+- **The fix:** a **non-destructive write probe** that exercises the full lifecycle — create → update →
+  delete — on a throwaway, clearly-labeled, time-stamped page **inside the connector's write scope**,
+  then trashes it (Confluence keeps trash recoverable). It is **offered automatically** at the end of
+  managed-Confluence onboarding and available any time via **right-click → Test Write Access** (or the
+  command palette). A page-scoped connector creates the probe as a child of the managed page; an
+  instance-scoped one reports there's nothing bounded to test. On failure it reports the failing step
+  with the server's own reason, offers to open a stray page (if cleanup couldn't run) and to enable
+  the verbose wire log.
+
+### Changed — 403 / 401 now surface the server's actual reason
+- A `403` is no longer reported as "authentication rejected." It is classified as **forbidden** (so a
+  write-permission denial never trips the auth lockout that protects a working read credential) and
+  now includes the **server's own message** (redacted, capped) plus targeted guidance — exactly what
+  reveals *why* a write was refused. A `401` likewise echoes the server reason. 8 new unit tests
+  (493 total).
+
 ## 0.50.0 — 2026-06-16
 
 ### Fixed — Confluence writes failing with net::ERR_HTTP2_PROTOCOL_ERROR behind an inspecting proxy

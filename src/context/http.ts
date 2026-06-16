@@ -1,4 +1,5 @@
 import { AppError } from "../core/errors";
+import { redactText } from "../core/redaction";
 import { ContextCredential } from "./types";
 import {
   cleanCookieString,
@@ -147,10 +148,28 @@ export async function fetchJson<T>(
       });
       throw new AppError(d.message, "auth.failed", d.summary);
     }
+    // Surface the server's OWN reason (redacted, capped) — a 403 on a WRITE is
+    // almost never "bad credentials" (reads work with the same token); it's a
+    // permission/policy refusal whose body says exactly why.
+    const reason = redactText(await res.text().catch(() => ""))
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 300);
+    if (res.status === 401) {
+      throw new AppError(
+        `Authentication rejected (401)${reason ? `: ${reason}` : ""}.`,
+        "auth.failed",
+        "The source rejected these credentials — re-check the username/token and that it hasn't expired.",
+      );
+    }
+    // 403: authenticated, but not allowed to do THIS. Classified as
+    // graph.forbidden (not auth.failed) so a write-permission denial never
+    // trips the auth lockout that guards a perfectly good read credential.
     throw new AppError(
-      `Authentication rejected by the source (${res.status}).`,
-      "auth.failed",
-      "The source rejected these credentials.",
+      `Forbidden (403)${reason ? `: ${reason}` : ""}.`,
+      "graph.forbidden",
+      `Authenticated, but the server refused this operation. For a WRITE this usually means your account lacks create/edit permission in this space, the space or instance is read-only, a personal space hasn't been created yet, or a proxy/WAF blocked the request.${reason ? ` The server said: “${reason}”.` : ""}`,
     );
   }
   if (res.status === 404) {

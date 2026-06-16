@@ -56,6 +56,7 @@ import {
   writeScopeFromParsed,
   describeWriteScope,
 } from "./context/adapters/confluenceScope";
+import { summarizeProbe } from "./context/adapters/confluenceProbe";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
 import { aliasIssue, normalizeAlias, resolveSourceRef, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
@@ -2467,6 +2468,19 @@ export function activate(context: vscode.ExtensionContext): void {
         // Failures here never undo the just-added source.
         void vscode.commands.executeCommand("aiSharePoint.loadSourceSchema", source);
       }
+      // A managed Confluence target exists to be WRITTEN to — offer to verify
+      // that up front (read succeeded; write can still 403 on permissions / a
+      // read-only or not-yet-created personal space / a proxy). Non-destructive.
+      if (source.type === "confluence" && source.role === "managed") {
+        const run = await vscode.window.showInformationMessage(
+          `Run a safe write test on "${source.displayName}" now? It creates a temporary page in ${describeWriteScope(writeScope)} and immediately deletes it — so any write-permission problem shows up now, not at publish time.`,
+          "Run Write Test",
+          "Skip",
+        );
+        if (run === "Run Write Test") {
+          await vscode.commands.executeCommand("aiSharePoint.testWriteAccess", { ...source, account, lastVerifiedAt: nowIso() });
+        }
+      }
     } catch (err) {
       // Nothing was saved — discard the unsaved source's failure record too.
       await contextSources.resetLockout(source.id);
@@ -2508,6 +2522,51 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage(
       `"${source.displayName}" is now ${next === "managed" ? "managed (read/write — Managed Sites)" : "a read-only reference (Reference Sources)"}.`,
     );
+  });
+
+  // Safe, non-destructive write-access test for a managed Confluence target:
+  // create → update → delete a throwaway page in scope, then report the verdict.
+  register("aiSharePoint.testWriteAccess", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source) return;
+    if (source.type !== "confluence") {
+      void vscode.window.showInformationMessage("Write tests apply to managed Confluence targets.");
+      return;
+    }
+    if (source.role !== "managed") {
+      const go = await vscode.window.showInformationMessage(
+        `"${source.displayName}" is a read-only reference, so there's nothing to write to. Make it a managed target first?`,
+        "Make Managed",
+      );
+      if (go === "Make Managed") await vscode.commands.executeCommand("aiSharePoint.changeSourceRole", source);
+      return;
+    }
+    try {
+      const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Testing write access to "${source.displayName}" (creates + deletes a temporary page)…` },
+        () => contextService.probeConfluenceWrite(source),
+      );
+      const verdict = summarizeProbe(result);
+      if (result.ok) {
+        void vscode.window.showInformationMessage(`✅ ${verdict}`);
+      } else {
+        const actions = !result.cleanedUp && result.pageUrl ? ["Open Stray Page", "Verbose Log"] : ["Verbose Log"];
+        const choice = await vscode.window.showWarningMessage(`⚠️ ${verdict}`, ...actions);
+        if (choice === "Open Stray Page" && result.pageUrl) {
+          await vscode.env.openExternal(vscode.Uri.parse(result.pageUrl));
+        } else if (choice === "Verbose Log") {
+          await vscode.workspace
+            .getConfiguration("aiSharePoint")
+            .update("logging.verboseWire", true, vscode.ConfigurationTarget.Global);
+          void vscode.window.showInformationMessage(
+            "Verbose wire logging enabled (Output → AI SharePoint). Re-run the write test to capture the server's exact response, then disable it again.",
+          );
+        }
+      }
+    } catch (err) {
+      const safe = err instanceof AppError ? (err.userSummary ?? err.message) : err instanceof Error ? err.message : String(err);
+      void vscode.window.showErrorMessage(`Write test could not run: ${safe}`);
+    }
   });
 
   register("aiSharePoint.testContextSource", async (arg) => {

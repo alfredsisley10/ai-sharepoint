@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.50.0",
+  "version": "0.51.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -81,6 +81,12 @@
         "command": "aiSharePoint.changeSourceRole",
         "title": "Change Source Role (Managed / Reference)",
         "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.testWriteAccess",
+        "title": "Test Write Access (safe — creates & deletes a temp page)",
+        "category": "AI SharePoint",
+        "icon": "$(beaker)"
       },
       {
         "command": "aiSharePoint.testConnection",
@@ -1431,9 +1437,14 @@
           "group": "1_actions@1"
         },
         {
+          "command": "aiSharePoint.testWriteAccess",
+          "when": "view == aiSharePoint.sitesView && viewItem == managed-source-confluence",
+          "group": "1_actions@2"
+        },
+        {
           "command": "aiSharePoint.browseSource",
           "when": "view == aiSharePoint.sitesView && viewItem =~ /^managed-source/",
-          "group": "1_actions@2"
+          "group": "1_actions@3"
         },
         {
           "command": "aiSharePoint.changeSourceRole",
