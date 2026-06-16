@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.46.0 — 2026-06-16
+
+### Added — Confluence space manageability (entitlement) review (ADR-0044)
+- Audit whether the signed-in user can **read and write every page** in a space — the usual
+  blocker to a cleanup pass is **page-level restrictions** that exclude them. `confluenceEntitlements.ts`
+  reads each page's read/update restrictions, assesses access (an active restriction that doesn't
+  list the user blocks them; group membership is *conservatively* treated as a gap and the groups
+  are surfaced for verification), and reports the pages the user can't fully manage.
+- **`prepareAccessRequestNote`** turns the report into an access request to the space admins (sent
+  via comms, like owner notifications). Pure logic + REST IO unit-tested (4 new; 437 total).
+
 ## 0.45.0 — 2026-06-16
 
 ### Added — Confluence content cache + page-currency review (ADR-0042/0043)
