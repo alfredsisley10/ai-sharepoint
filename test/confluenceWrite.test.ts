@@ -112,3 +112,28 @@ test("deleteConfluencePage issues a DELETE (tolerates 204 No Content)", async ()
   assert.equal((calls[0].init as { method?: string }).method, "DELETE");
   assert.match(calls[0].url, /\/rest\/api\/content\/9$/);
 });
+
+test("writes carry the Atlassian XSRF header (X-Atlassian-Token: no-check)", async () => {
+  const header = (init: RequestInit) => (init.headers as Record<string, string>)["X-Atlassian-Token"];
+  const create = await withFetch(
+    () => ({ body: { id: "1", title: "T", version: { number: 1 } } }),
+    () => createConfluencePage(SRC, CRED, { spaceKey: "DEV", title: "T", body: "<p/>" }, 30000),
+  );
+  assert.equal(header(create.calls[0].init), "no-check");
+
+  const del = await withFetch(
+    () => ({ status: 204, body: undefined }),
+    () => deleteConfluencePage(SRC, CRED, "9", 30000),
+  );
+  assert.equal(header(del.calls[0].init), "no-check");
+
+  // The GET that reads the current version before an update need not carry it.
+  const upd = await withFetch(
+    (_url, init) =>
+      ((init as { method?: string }).method ?? "GET") === "GET"
+        ? { body: { id: "5", title: "Old", version: { number: 3 } } }
+        : { body: { id: "5", title: "New", version: { number: 4 } } },
+    () => updateConfluencePage(SRC, CRED, { id: "5", title: "New", body: "<p/>" }, 30000),
+  );
+  assert.equal(header(upd.calls[1].init), "no-check", "the PUT carries the header");
+});

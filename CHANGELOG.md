@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.50.0 — 2026-06-16
+
+### Fixed — Confluence writes failing with net::ERR_HTTP2_PROTOCOL_ERROR behind an inspecting proxy
+- **Symptom:** reads work, but publishing a page throws `net::ERR_HTTP2_PROTOCOL_ERROR`. Root cause
+  is the write path, not connectivity: an **SSL-inspecting corporate proxy** must forward the
+  POST/PUT **request body** over HTTP/2, and many such proxies mishandle (or DLP-reset) HTTP/2
+  uploads while GETs — no body — pass cleanly. The reset also **masks** the real status (often a 403).
+- **Atlassian XSRF header on writes** — every Confluence write (create/update/delete page, move/
+  archive, ownership labels) now sends `X-Atlassian-Token: no-check`, the documented requirement for
+  programmatic non-GET REST calls. This fixes the variant where a strict instance/proxy rejects the
+  write with a masked 403. Harmless when XSRF isn't enforced.
+- **Targeted diagnosis** — `fetchJson` now recognizes the transport-reset class
+  (`ERR_HTTP2_PROTOCOL_ERROR`/SPDY/QUIC/`ECONNRESET`/`EPROTO`) and, instead of a generic "network"
+  error, explains the read-vs-write asymmetry and the **fix that preserves SSL inspection**: set
+  `"http.electronFetch": false` (requests go over HTTP/1.1) while leaving `"http.systemCertificates"`
+  and your proxy on, so the OS trust store still validates the inspection certificate. It also points
+  at `aiSharePoint.logging.verboseWire` to capture the masked status. 6 new unit tests (485 total).
+
 ## 0.49.0 — 2026-06-16
 
 ### Added — Anonymized "lessons learned" capture & export (ADR-0041)

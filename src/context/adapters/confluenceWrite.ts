@@ -17,6 +17,19 @@ import { AppError } from "../../core/errors";
 
 const enc = encodeURIComponent;
 
+/**
+ * Atlassian XSRF guard for non-GET REST calls. Confluence (and a strict
+ * inspecting proxy in front of it) can reject a write that lacks it — and that
+ * rejection often arrives as an early HTTP/2 stream reset
+ * (net::ERR_HTTP2_PROTOCOL_ERROR) that MASKS the real 403, so reads succeed
+ * while "publish" fails. Sending it is harmless when XSRF isn't enforced, so
+ * every Confluence write carries it. (Atlassian docs: add `X-Atlassian-Token:
+ * no-check` to programmatic non-GET requests.)
+ */
+export const CONFLUENCE_WRITE_HEADERS: Record<string, string> = {
+  "X-Atlassian-Token": "no-check",
+};
+
 function base(source: Pick<ContextSource, "baseUrl">): string {
   return source.baseUrl.replace(/\/$/, "");
 }
@@ -103,7 +116,7 @@ export async function createConfluencePage(
     `${base(source)}/rest/api/content`,
     credential,
     timeoutMs,
-    undefined,
+    CONFLUENCE_WRITE_HEADERS,
     { method: "POST", body: buildCreateBody(page) },
   );
   return toResult(source, res);
@@ -157,7 +170,7 @@ export async function updateConfluencePage(
     `${base(source)}/rest/api/content/${enc(update.id)}`,
     credential,
     timeoutMs,
-    undefined,
+    CONFLUENCE_WRITE_HEADERS,
     { method: "PUT", body: buildUpdateBody(update.title, update.body, current.version + 1) },
   );
   return toResult(source, res);
@@ -174,7 +187,7 @@ export async function deleteConfluencePage(
     `${base(source)}/rest/api/content/${enc(pageId)}`,
     credential,
     timeoutMs,
-    undefined,
+    CONFLUENCE_WRITE_HEADERS,
     { method: "DELETE" },
   );
 }

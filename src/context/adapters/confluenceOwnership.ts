@@ -1,5 +1,6 @@
 import { ContextSource, ContextCredential } from "../types";
 import { fetchJson } from "../http";
+import { CONFLUENCE_WRITE_HEADERS } from "./confluenceWrite";
 
 /**
  * Confluence page-ownership construct (ADR-0039). Determines and manages the
@@ -237,7 +238,7 @@ export async function setConfluencePageOwners(
         `${base(source)}/rest/api/content/${enc(pageId)}/label?name=${enc(l)}`,
         credential,
         timeoutMs,
-        undefined,
+        CONFLUENCE_WRITE_HEADERS,
         { method: "DELETE" },
       );
     }
@@ -247,7 +248,7 @@ export async function setConfluencePageOwners(
     `${base(source)}/rest/api/content/${enc(pageId)}/label`,
     credential,
     timeoutMs,
-    undefined,
+    CONFLUENCE_WRITE_HEADERS,
     { method: "POST", body: [{ prefix: "global", name: label }] },
   );
   return label;

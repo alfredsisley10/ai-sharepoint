@@ -6,6 +6,7 @@ import {
   createConfluencePage,
   updateConfluencePage,
   ConfluenceWriteResult,
+  CONFLUENCE_WRITE_HEADERS,
 } from "./confluenceWrite";
 
 /**
@@ -62,7 +63,7 @@ export async function moveConfluencePageUnder(
     `${baseOf(source)}/rest/api/content/${enc(pageId)}/move/append/${enc(parentId)}`,
     credential,
     timeoutMs,
-    undefined,
+    CONFLUENCE_WRITE_HEADERS,
     { method: "PUT" },
   );
 }

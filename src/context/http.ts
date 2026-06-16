@@ -49,6 +49,43 @@ export function authHeaders(credential: ContextCredential): Record<string, strin
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Recognize the transport-reset error class — an SSL-inspecting proxy or an
+ * HTTP/2 intermediary resetting the stream (net::ERR_HTTP2_PROTOCOL_ERROR and
+ * friends) — and return targeted guidance. These overwhelmingly hit WRITES:
+ * POST/PUT/DELETE carry a request body that the inspecting proxy must forward
+ * over HTTP/2, and many such proxies mishandle (or DLP-reset) HTTP/2 uploads
+ * while GETs — no upload body — pass cleanly. That is exactly the "reads work,
+ * publishing throws a protocol error" shape. The reset also MASKS the real HTTP
+ * status (e.g. a 403), so the raw message names a protocol error rather than a
+ * code. Pure + unit-tested.
+ *
+ * The fix must NOT bypass VS Code's networking: reads succeed, so the OS trust
+ * store and proxy are already correct — forcing HTTP/1.1 via a hand-rolled
+ * client would drop the system CA and break the SSL-inspection handshake. The
+ * supported lever is the `http.electronFetch` setting (HTTP/1.1 via Node's
+ * fetch) WITH `http.systemCertificates`/proxy left on, which is what the
+ * guidance points at.
+ */
+export function diagnoseTransportError(
+  method: string,
+  rawMessage: string,
+): { message: string; summary: string } | undefined {
+  const m = rawMessage.toLowerCase();
+  const reset =
+    /err_http2_protocol_error|err_spdy_protocol_error|err_quic_protocol_error|err_connection_reset|econnreset|\beproto\b/.test(
+      m,
+    );
+  if (!reset) return undefined;
+  const isWrite = method.toUpperCase() !== "GET";
+  return {
+    message: `The connection was reset before the source replied (${rawMessage.trim()}).`,
+    summary: isWrite
+      ? "An SSL-inspecting proxy or HTTP/2 intermediary reset this WRITE. Reads (GET, no upload body) get through, which is why search works but publishing fails — and the reset usually MASKS the real status (often a 403). Try in order: (1) set \"http.electronFetch\": false in VS Code Settings so requests go over HTTP/1.1 — VS Code still uses the OS trust store (\"http.systemCertificates\": true) and your proxy, so SSL inspection keeps working; (2) confirm the proxy/WAF allows POST/PUT to the Confluence host and isn't DLP-blocking page uploads; (3) enable \"aiSharePoint.logging.verboseWire\" and retry to capture the masked status in the log; (4) check you can edit the page in the browser."
+      : "An SSL-inspecting proxy or HTTP/2 intermediary reset the connection. This is often transient — retry. If it persists, set \"http.electronFetch\": false (HTTP/1.1) while leaving \"http.systemCertificates\" and your proxy on so SSL inspection still works, and confirm the host is allowlisted on the proxy.",
+  };
+}
+
 export async function fetchJson<T>(
   url: string,
   credential: ContextCredential,
@@ -84,11 +121,11 @@ export async function fetchJson<T>(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    emitWire("http", "✗", `${method} ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
-    throw new AppError(
-      `Context request failed: ${err instanceof Error ? err.message : String(err)}`,
-      "network",
-    );
+    const raw = err instanceof Error ? err.message : String(err);
+    emitWire("http", "✗", `${method} ${safeUrl(url)} — ${raw} (${Date.now() - started}ms)`);
+    const diag = diagnoseTransportError(method, raw);
+    if (diag) throw new AppError(diag.message, "network", diag.summary);
+    throw new AppError(`Context request failed: ${raw}`, "network");
   }
   if (!res.ok && wireEnabled()) {
     emitWire("http", "✗", `${method} ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
