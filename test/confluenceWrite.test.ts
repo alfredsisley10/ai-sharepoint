@@ -10,6 +10,9 @@ import {
   normalizeLabel,
   addConfluenceLabels,
   removeConfluenceLabel,
+  normalizeTitle,
+  decodeEntities,
+  sanitizeStorageBody,
 } from "../src/context/adapters/confluenceWrite";
 import { ContextSource, ContextCredential } from "../src/context/types";
 
@@ -60,6 +63,44 @@ test("buildCreateBody / buildUpdateBody shape the storage payloads", () => {
     version: { number: 4 },
     body: { storage: { value: "<p>y</p>", representation: "storage" } },
   });
+});
+
+test("decodeEntities handles named + numeric entities", () => {
+  assert.equal(decodeEntities("R&amp;D &lt;v2&gt; &#39;x&#39; &#x41;"), "R&D <v2> 'x' A");
+  assert.equal(decodeEntities("no entities here"), "no entities here");
+});
+
+test("normalizeTitle yields plain text: strips HTML, decodes entities, fixes &", () => {
+  assert.equal(normalizeTitle("R&amp;D Process"), "R&D Process"); // the reported bug
+  assert.equal(normalizeTitle("<b>Release</b> Notes"), "Release Notes");
+  assert.equal(normalizeTitle("Plan &lt;v2&gt;"), "Plan <v2>");
+  assert.equal(normalizeTitle("Q&A"), "Q&A"); // a bare & stays literal
+  assert.equal(normalizeTitle("  spaced   out  "), "spaced out");
+});
+
+test("sanitizeStorageBody escapes bare & and self-closes void elements", () => {
+  assert.equal(sanitizeStorageBody("<p>Tom & Jerry</p>"), "<p>Tom &amp; Jerry</p>");
+  assert.equal(sanitizeStorageBody('<a href="x?a=1&b=2">L</a>'), '<a href="x?a=1&amp;b=2">L</a>');
+  assert.equal(sanitizeStorageBody("a<br>b<hr>c"), "a<br/>b<hr/>c");
+  assert.equal(sanitizeStorageBody('<img src="d.png">'), '<img src="d.png"/>');
+  // already-valid markup is left alone (idempotent)
+  assert.equal(sanitizeStorageBody("<p>A &amp; B</p><br/>"), "<p>A &amp; B</p><br/>");
+});
+
+test("sanitizeStorageBody leaves CDATA (code blocks) verbatim", () => {
+  const code = markdownToStorage("```js\nif (a && b) x = '<br>';\n```");
+  // the & and <br> inside the code macro's CDATA must NOT be altered
+  assert.match(sanitizeStorageBody(code), /a && b/);
+  assert.match(sanitizeStorageBody(code), /'<br>'/);
+});
+
+test("buildCreateBody normalizes a messy title and malformed body", () => {
+  const b = buildCreateBody({ spaceKey: "DEV", title: "R&amp;D & QA", body: "<p>x & y</p><br>" }) as {
+    title: string;
+    body: { storage: { value: string } };
+  };
+  assert.equal(b.title, "R&D & QA");
+  assert.equal(b.body.storage.value, "<p>x &amp; y</p><br/>");
 });
 
 test("markdownToStorage converts headings, paragraphs, lists, code, and inline spans", () => {

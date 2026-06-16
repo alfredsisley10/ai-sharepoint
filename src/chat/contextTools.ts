@@ -295,11 +295,13 @@ export function registerContextTools(
             return text("Creating a page needs the target spaceKey.");
           }
           // The body may be markdown (auto-converted, incl. fenced code →
-          // code macro, "- [ ]" → task list, "---" → rule) OR raw storage-format
-          // XHTML for full macro fidelity (Jira, draw.io, panels, layouts…).
-          // Honor an explicit format; otherwise treat bodies that already carry
-          // structured macros as storage.
-          const looksLikeStorage = /<ac:(structured-macro|task-list|layout|image|link)\b/.test(i.markdown);
+          // code macro, "- [ ]" → task list, "---" → rule) OR storage-format
+          // XHTML (macros, or hand-authored HTML). Honor an explicit format;
+          // otherwise detect storage — an ac: macro, ANY HTML closing tag, or a
+          // void element — so HTML the model emits renders as HTML instead of
+          // being escaped to literal text. Either way the body is sanitized
+          // (bare "&" escaped, void elements self-closed) before the write.
+          const looksLikeStorage = /<ac:|<\/[a-zA-Z]|<(?:br|hr|img|table|p|ul|ol|h[1-6]|blockquote|pre)\b/i.test(i.markdown);
           const body =
             i.format === "storage" || (i.format !== "markdown" && looksLikeStorage)
               ? i.markdown

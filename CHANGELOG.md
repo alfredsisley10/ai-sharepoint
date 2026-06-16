@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.60.0 — 2026-06-16
+
+### Fixed — Malformed Confluence page bodies & mis-encoded titles
+- The connector wrote the body and title to Confluence **without normalizing** them, so an LLM's
+  occasional bare `&` (illegal in storage-format XHTML), un-self-closed void element (`<br>`,
+  `<img>`), or HTML/entity-laden title (`<b>R&amp;D</b>`) produced a malformed page or a wrong title.
+  Now, at the single write boundary (`buildCreateBody`/`buildUpdateBody`, so **every** write path —
+  create, update, archive, remove-from-search — is covered):
+  - **`sanitizeStorageBody`** escapes bare ampersands and self-closes void elements, while leaving
+    code-macro **CDATA verbatim**. Idempotent (markdown output passes through unchanged).
+  - **`normalizeTitle`** strips HTML tags and decodes entities so the title is clean plain text —
+    `R&amp;D` → `R&D`, `<b>Release</b> Notes` → `Release Notes`.
+- The write tool's auto-detect now recognizes **HTML** (any closing tag / void element), so model-
+  emitted HTML renders as HTML instead of being escaped to literal text — and is sanitized regardless.
+- Tool description + system prompt now state the data contract: body = well-formed XHTML storage
+  (escape `&`, self-close void tags), title = plain text (no HTML/entities). 5 new tests (534 total).
+
 ## 0.59.0 — 2026-06-16
 
 ### Fixed — Stale cache after a Confluence write

@@ -77,13 +77,73 @@ interface ContentResponse {
   _links?: { webui?: string };
 }
 
-/** Create-content request body (pure, testable). */
+// ---------------------------------------------------------------------------
+// Write-data hygiene (ADR-0045). Confluence storage format is STRICT XHTML and
+// titles are PLAIN TEXT, but an LLM commonly emits a bare "&" (illegal in
+// XHTML), an un-self-closed void element (<br>, <img>), or a title carrying
+// HTML/entities ("<b>R&amp;D</b>"). These normalizers run on every write so a
+// well-meaning-but-imperfect body/title still produces a valid page.
+// ---------------------------------------------------------------------------
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'",
+};
+
+/** Decode HTML entities (named + numeric) to their characters. Pure. */
+export function decodeEntities(s: string): string {
+  return String(s ?? "").replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]*);/g, (m, ent: string) => {
+    if (ent[0] === "#") {
+      const code = ent[1] === "x" || ent[1] === "X" ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : m;
+    }
+    return NAMED_ENTITIES[ent] ?? m;
+  });
+}
+
+/** A Confluence page title is PLAIN TEXT. Strip any HTML tags, decode entities
+ *  to their characters (so "R&amp;D" → "R&D", not double-encoded), collapse
+ *  whitespace, and cap at Confluence's 255-char limit. Pure. */
+export function normalizeTitle(raw: string): string {
+  return decodeEntities(String(raw ?? "").replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 255);
+}
+
+const VOID_ELEMENTS = "br|hr|img|input|meta|link|col|area|base|source|wbr|embed|track|param";
+
+/** Escape ampersands that don't already start a valid entity — the #1 thing
+ *  that makes a storage body malformed XHTML. */
+function escapeBareAmpersands(s: string): string {
+  return s.replace(/&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#x[0-9a-fA-F]+);)/g, "&amp;");
+}
+
+/** Self-close void HTML elements the LLM writes unclosed (<br>, <img …>). */
+function selfCloseVoidElements(s: string): string {
+  return s.replace(new RegExp(`<(${VOID_ELEMENTS})\\b([^>]*?)(?<!/)>`, "gi"), (_m, tag, attrs) => `<${tag}${attrs}/>`);
+}
+
+/**
+ * Make a storage-format body well-formed enough for Confluence: escape bare
+ * ampersands and self-close void elements, WITHOUT touching verbatim CDATA
+ * (code-macro bodies, where "&" and "<br>" are literal text). Idempotent — a
+ * body produced by markdownToStorage passes through unchanged. Pure.
+ */
+export function sanitizeStorageBody(xhtml: string): string {
+  // Split on CDATA sections (odd indices) so they're preserved verbatim.
+  return String(xhtml ?? "")
+    .split(/(<!\[CDATA\[[\s\S]*?\]\]>)/)
+    .map((part, i) => (i % 2 === 1 ? part : selfCloseVoidElements(escapeBareAmpersands(part))))
+    .join("");
+}
+
+/** Create-content request body (pure, testable). Title + body are normalized. */
 export function buildCreateBody(page: ConfluencePageWrite): Record<string, unknown> {
   return {
     type: "page",
-    title: page.title,
+    title: normalizeTitle(page.title),
     space: { key: page.spaceKey },
-    body: { storage: { value: page.body, representation: "storage" } },
+    body: { storage: { value: sanitizeStorageBody(page.body), representation: "storage" } },
     ...(page.parentId ? { ancestors: [{ id: page.parentId }] } : {}),
   };
 }
@@ -97,9 +157,9 @@ export function buildUpdateBody(
 ): Record<string, unknown> {
   return {
     type: "page",
-    title,
+    title: normalizeTitle(title),
     version: { number: nextVersion },
-    body: { storage: { value: body, representation: "storage" } },
+    body: { storage: { value: sanitizeStorageBody(body), representation: "storage" } },
   };
 }
 
