@@ -21,6 +21,9 @@ import { sourceChatLabel, resolveSourceRef } from "../context/sourceRef";
 import { EXPORT_MAX_ROWS, EXPORT_TIMEOUT_MS, EXPORT_DIR } from "../context/exportData";
 import { markdownToStorage } from "../context/adapters/confluenceWrite";
 import { catalogByCategory, CapabilityReport, RenderedValidation } from "../context/adapters/confluenceMacros";
+import { OwnerResolution } from "../context/adapters/confluenceOwnership";
+import { ManageabilityReport } from "../context/adapters/confluenceEntitlements";
+import { CurrencyReport } from "../context/adapters/confluenceCurrency";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
@@ -81,6 +84,51 @@ function renderValidation(v: RenderedValidation): string {
     lines.push("- (none detected — a plain-text page)");
   }
   lines.push("", `Rendered text length: ${v.textLength} chars.`);
+  return lines.join("\n");
+}
+
+const UNVERIFIED_OWNER_NOTE =
+  "Note: active-user verification needs an LDAP/M365 directory (not wired) — owners are ranked by contribution volume, not filtered by who is still active.";
+
+function renderOwners(r: { resolution: OwnerResolution; labels: string[] }): string {
+  const { resolution } = r;
+  const lines = ["# Page owner(s)"];
+  lines.push(`- Owner(s): ${resolution.owners.length ? resolution.owners.join(", ") : "(none determined)"}`);
+  lines.push(`- Basis: ${resolution.basis}${resolution.note ? ` — ${resolution.note}` : ""}`);
+  if (r.labels.length) lines.push(`- Labels: ${r.labels.join(", ")}`);
+  if (resolution.considered?.length) {
+    lines.push(`- Top contributors: ${resolution.considered.slice(0, 5).map((c) => `${c.sam} (${c.count})`).join(", ")}`);
+  }
+  lines.push("", UNVERIFIED_OWNER_NOTE);
+  return lines.join("\n");
+}
+
+function renderManageability(r: { report: ManageabilityReport; note: string }): string {
+  const { report, note } = r;
+  const lines = [`# Space manageability — ${report.spaceKey} (as ${report.user})`];
+  lines.push(`Checked ${report.checkedPages} page(s); you can fully manage ${report.manageablePages}.`);
+  if (report.gaps.length) {
+    lines.push("", `## Pages you can't fully manage (${report.gaps.length})`);
+    for (const g of report.gaps.slice(0, 50)) lines.push(`- ${g.title} — missing **${g.missing.join("+")}** — ${g.url}`);
+    lines.push("", "## Access request (send to the space admins)", note);
+  } else {
+    lines.push("", `✅ ${note}`);
+  }
+  return lines.join("\n");
+}
+
+function renderCurrency(r: CurrencyReport): string {
+  const lines = [`# Page currency — “${r.title}”`, r.url, "", "## Links"];
+  if (r.brokenLinks.length) {
+    for (const b of r.brokenLinks) lines.push(`- ❌ ${b.url}${b.status ? ` (${b.status})` : b.error ? ` (${b.error})` : ""}`);
+  } else {
+    lines.push(`- ✅ ${r.workingLinks} link(s) reachable`);
+  }
+  if (r.uncheckedRelativeLinks) lines.push(`- ${r.uncheckedRelativeLinks} relative link(s) not checked`);
+  lines.push("", "## Ownership & age");
+  lines.push(`- Owner tag: ${r.hasOwnerLabel ? r.owners.map((o) => o.sam).join(", ") : "none"}`);
+  if (r.staleDays !== undefined) lines.push(`- Last updated ${r.staleDays} day(s) ago${r.staleDays > 365 ? " — **stale**" : ""}`);
+  lines.push("", UNVERIFIED_OWNER_NOTE);
   return lines.join("\n");
 }
 
@@ -317,6 +365,93 @@ export function registerContextTools(
           }
         },
       },
+    ),
+    // Governance — ARCHIVE a page (move under the space's Archive root). Write.
+    vscode.lm.registerTool<{ source?: string; pageId?: string }>("aisharepoint_archive_confluence_page", {
+      prepareInvocation(options) {
+        return {
+          invocationMessage: "Archiving a Confluence page",
+          confirmationMessages: {
+            title: `Archive Confluence page ${options.input.pageId ?? "?"}?`,
+            message: new vscode.MarkdownString(
+              "Moves the page under the space's **Archive** root (created if absent). Reversible — the page isn't deleted, just relocated.",
+            ),
+          },
+        };
+      },
+      async invoke(options) {
+        telemetry.record("tool.invoke", { tool: "aisharepoint_archive_confluence_page" });
+        try {
+          const i = options.input;
+          const source = resolveOrExplain(i.source);
+          if (source.type !== "confluence") return text(`"${source.displayName}" is a ${source.type} source — archiving targets Confluence.`);
+          if (!i.pageId?.trim()) return text("A pageId is required (search the source first to find it).");
+          const r = await service.archiveConfluencePage(source, i.pageId.trim());
+          telemetry.record("confluence.archive");
+          return text(`Archived page ${r.pageId} under "${r.archiveRootTitle}"${r.createdArchiveRoot ? " (created the Archive root)" : ""}.`);
+        } catch (err) {
+          errors.capture("tool:aisharepoint_archive_confluence_page", err);
+          return text(`Could not archive the page: ${redactError(err).message}`);
+        }
+      },
+    }),
+    // Governance — REMOVE FROM SEARCH (blank current content; history retained). Write.
+    vscode.lm.registerTool<{ source?: string; pageId?: string }>("aisharepoint_remove_confluence_page_from_search", {
+      prepareInvocation(options) {
+        return {
+          invocationMessage: "Removing a Confluence page from search",
+          confirmationMessages: {
+            title: `Remove page ${options.input.pageId ?? "?"} from search?`,
+            message: new vscode.MarkdownString(
+              "**Blanks the page's current content** so it drops out of search and navigation. The page is NOT deleted — Confluence keeps every prior version, so the original content is retained for compliance and is restorable. Usually done AFTER archiving.",
+            ),
+          },
+        };
+      },
+      async invoke(options) {
+        telemetry.record("tool.invoke", { tool: "aisharepoint_remove_confluence_page_from_search" });
+        try {
+          const i = options.input;
+          const source = resolveOrExplain(i.source);
+          if (source.type !== "confluence") return text(`"${source.displayName}" is a ${source.type} source — this targets Confluence.`);
+          if (!i.pageId?.trim()) return text("A pageId is required.");
+          const r = await service.removeConfluencePageFromSearch(source, i.pageId.trim());
+          telemetry.record("confluence.removeFromSearch");
+          return text(`Removed page ${r.id} from search (content blanked, now v${r.version}; prior versions retain the original). ${r.url}`);
+        } catch (err) {
+          errors.capture("tool:aisharepoint_remove_confluence_page_from_search", err);
+          return text(`Could not remove the page from search: ${redactError(err).message}`);
+        }
+      },
+    }),
+    // Governance — resolve page OWNER(S) (read).
+    vscode.lm.registerTool<{ source?: string; pageId?: string }>(
+      "aisharepoint_resolve_page_owners",
+      guarded("aisharepoint_resolve_page_owners", "Resolving Confluence page owner(s)", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — ownership targets Confluence.`;
+        if (!i.pageId?.trim()) return "A pageId is required (search the source first to find it).";
+        return renderOwners(await service.resolveConfluenceOwners(source, i.pageId.trim()));
+      }),
+    ),
+    // Governance — review SPACE MANAGEABILITY / entitlements (read).
+    vscode.lm.registerTool<{ source?: string; spaceKey?: string }>(
+      "aisharepoint_review_space_manageability",
+      guarded("aisharepoint_review_space_manageability", "Reviewing Confluence space manageability", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — this targets Confluence.`;
+        return renderManageability(await service.reviewConfluenceManageability(source, i.spaceKey?.trim() || undefined));
+      }),
+    ),
+    // Governance — review PAGE CURRENCY: broken links + owner tag + age (read).
+    vscode.lm.registerTool<{ source?: string; pageId?: string }>(
+      "aisharepoint_review_page_currency",
+      guarded("aisharepoint_review_page_currency", "Reviewing Confluence page currency", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — this targets Confluence.`;
+        if (!i.pageId?.trim()) return "A pageId is required.";
+        return renderCurrency(await service.reviewConfluenceCurrency(source, i.pageId.trim()));
+      }),
     ),
     vscode.lm.registerTool(
       "aisharepoint_db_schema",

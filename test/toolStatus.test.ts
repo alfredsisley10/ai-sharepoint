@@ -50,6 +50,29 @@ test("malformed/empty input degrades gracefully; unknown tools get a readable fa
   assert.equal(describeToolCall("aisharepoint_future_tool", {}), "Running future tool…");
 });
 
+test("Confluence governance tools get input-aware status lines", () => {
+  assert.equal(
+    describeToolCall("aisharepoint_archive_confluence_page", { pageId: "123" }),
+    "Archiving Confluence page 123 (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_remove_confluence_page_from_search", { pageId: "9" }),
+    "Removing Confluence page 9 from search (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_manage_confluence_labels", { action: "add", pageId: "1" }),
+    "Adding Confluence page label(s) (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_manage_confluence_labels", { action: "list", pageId: "1" }),
+    "Reading Confluence page label(s)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_review_space_manageability", { spaceKey: "ENG" }),
+    "Reviewing manageability of space ENG…",
+  );
+});
+
 test("long queries are truncated so the status line stays short", () => {
   const out = describeToolCall("aisharepoint_search_context", { query: "x".repeat(200) });
   assert.ok(out.length < 100, out);  // bounded, not the full 200-char query

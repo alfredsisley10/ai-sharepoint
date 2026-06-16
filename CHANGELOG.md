@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.56.0 — 2026-06-16
+
+### Added — Confluence governance lifecycle wired to chat tools
+- The governance constructs that existed only in the adapter layer are now driveable by @sharepoint,
+  so it can run the cleanup lifecycle the connector was built for, end to end:
+  - **`archive_confluence_page`** — move a page under the space's *Archive* root (created if absent).
+    Approval-gated write, bounded by the connector's write scope; reversible.
+  - **`remove_confluence_page_from_search`** — blank a page's current content so it leaves search;
+    Confluence keeps every prior version (compliance — never deleted). Approval-gated, scoped.
+  - **`resolve_page_owners`** — who owns a page (owner label, else top contributor on the page/space)
+    — i.e. who to notify about inaccurate content. Read.
+  - **`review_space_manageability`** — audit whether you can read+write every page in a space, and
+    draft an access-request note to the admins for the gaps. Read.
+  - **`review_page_currency`** — broken outbound links + owner tag + page age (flags >365 days). Read.
+- The system prompt now describes the lifecycle: review currency/owners → notify the owner via
+  `draft_communication` → archive → remove-from-search, all scope- and approval-gated.
+- **Known limitation, surfaced honestly:** owner *activity* checks (is the person still active) need
+  an LDAP/M365 directory that isn't wired yet — the owner/currency tools say so rather than asserting
+  someone is inactive. (Underlying adapters already unit-tested; 1 new status-line test, 518 total.)
+
 ## 0.55.0 — 2026-06-16
 
 ### Added — "Test Content Functionality" (rendered macro validation, Test-Write-Access style)

@@ -101,6 +101,22 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Preparing a ${i.channel === "teams" ? "Teams message" : "draft email"}${str(i.to) ? ` to ${short(String(i.to), 40)}` : ""}…`;
     case "aisharepoint_write_confluence_page":
       return `${i.action === "update" ? "Updating" : "Creating"} a Confluence page${str(i.title) ? ` “${short(String(i.title), 40)}”` : ""} (awaiting approval)…`;
+    case "aisharepoint_confluence_capabilities":
+      return "Discovering Confluence content capabilities…";
+    case "aisharepoint_validate_confluence_page":
+      return `Validating the rendered Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""}…`;
+    case "aisharepoint_manage_confluence_labels":
+      return `${i.action === "add" ? "Adding" : i.action === "remove" ? "Removing" : "Reading"} Confluence page label(s)${i.action && i.action !== "list" ? " (awaiting approval)" : ""}…`;
+    case "aisharepoint_archive_confluence_page":
+      return `Archiving Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""} (awaiting approval)…`;
+    case "aisharepoint_remove_confluence_page_from_search":
+      return `Removing Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""} from search (awaiting approval)…`;
+    case "aisharepoint_resolve_page_owners":
+      return `Resolving the owner(s) of Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""}…`;
+    case "aisharepoint_review_space_manageability":
+      return `Reviewing manageability of ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"}…`;
+    case "aisharepoint_review_page_currency":
+      return `Reviewing currency of Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""}…`;
     case "aisharepoint_site_overview":
       return `Reading ${str(i.site) ?? "the site"} overview…`;
     case "aisharepoint_inspect_site":

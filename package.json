@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.55.0",
+  "version": "0.56.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -865,6 +865,143 @@
                 "type": "string"
               },
               "description": "Labels to add or remove (required for add/remove)."
+            }
+          },
+          "required": [
+            "pageId"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_archive_confluence_page",
+        "displayName": "Archive Confluence Page",
+        "toolReferenceName": "spArchiveConfluence",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(archive)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Archive a Confluence page: move it under the space's \"Archive\" root page (created automatically if it doesn't exist). The usual FIRST cleanup step for out-of-date content (often followed later by remove-from-search). Approval-gated write, bounded by the connector's write scope. Reversible — the page is relocated, not deleted. Args: source (Confluence source name; optional if one), pageId (find via search_context). Returns the archive root it was moved under.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page to archive (required)."
+            }
+          },
+          "required": [
+            "pageId"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_remove_confluence_page_from_search",
+        "displayName": "Remove Confluence Page From Search",
+        "toolReferenceName": "spRemoveFromSearch",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(eye-closed)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Remove a Confluence page from search by BLANKING its current content, so it drops out of search and navigation. The page is NEVER deleted — Confluence keeps every prior version, so the original content is retained for compliance and is restorable. This is the step taken AFTER archiving when a page still shouldn't surface. Approval-gated write, bounded by the connector's write scope. Args: source (optional if one), pageId. Only do this when the user explicitly asks to remove a page from search / hide it.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page to remove from search (required)."
+            }
+          },
+          "required": [
+            "pageId"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_resolve_page_owners",
+        "displayName": "Resolve Confluence Page Owners",
+        "toolReferenceName": "spPageOwners",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(person)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Determine who OWNS a Confluence page: the owner label if one is set, otherwise the most prolific contributor on the page, otherwise in the space. Read-only. Use to find who to notify about a page (e.g. for cleanup of inaccurate content). NOTE: active-user filtering needs an LDAP/M365 directory which isn't wired, so owners are ranked by contribution volume, not filtered by who is still employed/active. Args: source (optional if one), pageId.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page whose owners to resolve (required)."
+            }
+          },
+          "required": [
+            "pageId"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_review_space_manageability",
+        "displayName": "Review Confluence Space Manageability",
+        "toolReferenceName": "spManageability",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(verified)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Audit whether the signed-in user can READ and WRITE every page in a Confluence space — the usual blocker to a cleanup pass is page-level restrictions. Returns the pages the user can't fully manage (with what's missing) and a ready-to-send access-request note for the space admins. Read-only. Args: source (optional if one), spaceKey (optional — defaults to the connector's managed space).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Space to audit (optional — defaults to the connector's managed space)."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_review_page_currency",
+        "displayName": "Review Confluence Page Currency",
+        "toolReferenceName": "spPageCurrency",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(history)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Review a Confluence page's currency: check its outbound links for dead/broken ones (HEAD/GET, bounded), report the owner tag, and the page's age (flagging >365 days stale). Read-only. Use when asked to check if a page is still up to date. NOTE: owner-ACTIVITY verification needs an LDAP/M365 directory (not wired) — owner names are reported as-is. Args: source (optional if one), pageId.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page to review (required)."
             }
           },
           "required": [

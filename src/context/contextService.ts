@@ -47,7 +47,25 @@ import {
   removeConfluenceLabel,
   ConfluenceWriteResult,
 } from "./adapters/confluenceWrite";
-import { getConfluencePageLabels } from "./adapters/confluenceOwnership";
+import {
+  getConfluencePageLabels,
+  getConfluencePageContributors,
+  getConfluenceSpaceContributors,
+  resolveOwners,
+  OwnerResolution,
+} from "./adapters/confluenceOwnership";
+import {
+  archiveConfluencePage as archiveConfluencePageAdapter,
+  removeConfluencePageFromSearch as removeConfluencePageFromSearchAdapter,
+  ArchiveResult,
+} from "./adapters/confluenceArchive";
+import {
+  reviewSpaceManageability,
+  getCurrentConfluenceUser,
+  prepareAccessRequestNote,
+  ManageabilityReport,
+} from "./adapters/confluenceEntitlements";
+import { reviewPageCurrency, CurrencyReport } from "./adapters/confluenceCurrency";
 import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
 import {
   probeConfluenceWriteAccess,
@@ -592,6 +610,112 @@ export class ContextService {
       for (const l of op.labels) await removeConfluenceLabel(source, credential, op.pageId, l, caps.timeoutMs);
       return { action: "remove", labels: await getConfluencePageLabels(source, credential, op.pageId, caps.timeoutMs) };
     });
+  }
+
+  /** Shared write-scope guard for page-targeted mutations (archive, remove,
+   *  labels): resolve the page's space and refuse if it's outside the managed
+   *  scope. Reads are global, so the meta lookup itself is never gated. */
+  private async enforceConfluenceWriteScope(
+    source: ContextSource,
+    credential: ContextCredential,
+    pageId: string,
+    caps: ReadCaps,
+  ): Promise<void> {
+    const scope = source.writeScope;
+    if (!scope || scope.kind === "instance") return;
+    const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
+    const gate = checkWriteScope(scope, { action: "update", pageId, spaceKey: meta.spaceKey });
+    if (!gate.allowed) {
+      throw new AppError(
+        `This managed Confluence connector may only write within ${describeWriteScope(scope)} — refused (${gate.reason}).`,
+        "config",
+      );
+    }
+  }
+
+  /** Archive a page: move it under the space's "Archive" root (created if
+   *  absent). A scoped, lockout-gated write — the first cleanup step. */
+  async archiveConfluencePage(source: ContextSource, pageId: string): Promise<ArchiveResult> {
+    if (source.type !== "confluence") throw new AppError("Archiving targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      await this.enforceConfluenceWriteScope(source, credential, pageId, caps);
+      return archiveConfluencePageAdapter(source, credential, pageId, caps.timeoutMs);
+    });
+  }
+
+  /** Remove a page from search by blanking its CURRENT content (Confluence keeps
+   *  every prior version for compliance — nothing is deleted). Scoped write. */
+  async removeConfluencePageFromSearch(source: ContextSource, pageId: string): Promise<ConfluenceWriteResult> {
+    if (source.type !== "confluence") throw new AppError("This targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      await this.enforceConfluenceWriteScope(source, credential, pageId, caps);
+      return removeConfluencePageFromSearchAdapter(source, credential, pageId, caps.timeoutMs);
+    });
+  }
+
+  /** Resolve a page's owner(s): the owner label if present, else the most
+   *  prolific contributor on the page, else in the space. A global READ.
+   *  Active-user filtering needs an LDAP/M365 directory (not wired here), so
+   *  this treats contributors as candidates by activity volume. */
+  async resolveConfluenceOwners(
+    source: ContextSource,
+    pageId: string,
+  ): Promise<{ resolution: OwnerResolution; labels: string[]; directoryWired: false }> {
+    if (source.type !== "confluence") throw new AppError("Ownership targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
+      const [labels, pageContributors] = await Promise.all([
+        getConfluencePageLabels(source, credential, pageId, caps.timeoutMs),
+        getConfluencePageContributors(source, credential, pageId, caps.timeoutMs),
+      ]);
+      const resolution = await resolveOwners({
+        pageLabels: labels,
+        pageContributors,
+        spaceContributors: () =>
+          meta.spaceKey
+            ? getConfluenceSpaceContributors(source, credential, meta.spaceKey, caps.timeoutMs)
+            : Promise.resolve([]),
+        isActive: async () => true,
+      });
+      return { resolution, labels, directoryWired: false as const };
+    });
+  }
+
+  /** Review whether the signed-in user can read+write every page in a space,
+   *  and prepare an access-request note for the admins. Global READ. */
+  async reviewConfluenceManageability(
+    source: ContextSource,
+    spaceKey?: string,
+  ): Promise<{ report: ManageabilityReport; note: string }> {
+    if (source.type !== "confluence") throw new AppError("Manageability targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const ws = source.writeScope;
+    const space = spaceKey ?? (ws?.kind === "space" ? ws.spaceKey : undefined);
+    if (!space) throw new AppError("A space key is required (this connector isn't space-scoped).", "config");
+    return this.tracked(source, false, async () => {
+      const user = await getCurrentConfluenceUser(source, credential, caps.timeoutMs);
+      const report = await reviewSpaceManageability(source, credential, space, user, caps);
+      return { report, note: prepareAccessRequestNote(report) };
+    });
+  }
+
+  /** Review a page's currency: broken links, owner tag, and age. Global READ.
+   *  Owner-activity verification needs an LDAP/M365 directory (not wired here);
+   *  owners are reported, activity left unverified. */
+  async reviewConfluenceCurrency(source: ContextSource, pageId: string): Promise<CurrencyReport> {
+    if (source.type !== "confluence") throw new AppError("Currency review targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      reviewPageCurrency(source, credential, pageId, async () => undefined, caps),
+    );
   }
 
   /** Non-destructive CONTENT FUNCTIONALITY test: author a throwaway page of
