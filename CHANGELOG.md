@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.59.0 — 2026-06-16
+
+### Fixed — Stale cache after a Confluence write
+- **Bug:** reads are cached read-through with a multi-minute TTL (default 15), but **no write
+  invalidated that cache** — so after creating/updating/moving/archiving/labeling a page, a
+  subsequent `search_context` / `get_context_item` kept serving the **pre-write** snapshot until the
+  TTL expired (a page just created wouldn't appear; an edited page showed old content).
+- **Fix:** every mutating Confluence operation now runs through `trackedWrite`, which drops that
+  source's cached reads on success, so the next read reflects the change immediately. Applied to page
+  write, archive, remove-from-search, move/re-parent, and label add/remove (a label *list* is a read
+  and doesn't invalidate). Hierarchy/ownership/currency reads were already uncached (always live).
+  New read→write→read freshness test (529 total).
+
 ## 0.58.0 — 2026-06-16
 
 ### Added — Confluence page hierarchy & relationships (`confluence_page_tree`)

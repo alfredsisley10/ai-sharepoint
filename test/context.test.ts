@@ -85,6 +85,23 @@ test("invalidateSource clears only that source's entries", () => {
   assert.equal(cache.get(TtlCache.key("s2", "search", "a")), 2);
 });
 
+test("read → write → read sees fresh data after the write invalidates the source cache", async () => {
+  // Contract enforced by ContextService.trackedWrite: a write drops the
+  // source's cached reads, so the next read reflects the change (within-TTL).
+  let nowMs = 0;
+  const cache = new TtlCache(() => nowMs);
+  const store: Record<string, string[]> = { ENG: ["Page A"] };
+  const search = () => cache.getOrLoad(TtlCache.key("s1", "search", "ENG"), 900_000, async () => [...store.ENG]);
+
+  assert.deepEqual(await search(), ["Page A"]); // cached
+  // a write happens (page created) — the model of ContextService.trackedWrite:
+  store.ENG.push("Page B");
+  // ...without invalidation the cached read would still be stale within the TTL:
+  assert.deepEqual(await search(), ["Page A"], "stale until invalidated");
+  cache.invalidateSource("s1"); // trackedWrite does this on success
+  assert.deepEqual(await search(), ["Page A", "Page B"], "fresh after invalidation");
+});
+
 // --- adapters (stubbed fetch) ---------------------------------------------------
 
 function withFetch<T>(

@@ -279,6 +279,17 @@ export class ContextService {
     }
   }
 
+  /** Like tracked(), but for WRITES: on success it drops THIS source's
+   *  read-through cache (search / item / answer / browse) so the next read
+   *  reflects the change instead of serving a stale pre-write snapshot. Reads
+   *  are cached (ADR-0011) with a multi-minute TTL, so without this a page just
+   *  created/edited/moved wouldn't show up until the TTL expired. */
+  private async trackedWrite<T>(source: ContextSource, run: () => Promise<T>): Promise<T> {
+    const result = await this.tracked(source, false, run);
+    this.cache.invalidateSource(source.id);
+    return result;
+  }
+
   /** Verify-on-connect / test (single deliberate read, ADR-0009). */
   async verify(
     source: ContextSource,
@@ -500,7 +511,7 @@ export class ContextService {
         "config",
       );
     };
-    return this.tracked(source, false, async () => {
+    return this.trackedWrite(source, async () => {
       if (op.action === "update") {
         if (!op.pageId) throw new AppError("Updating a Confluence page needs its pageId.", "config");
         // For a space/page scope, resolve the target page's space BEFORE the
@@ -597,7 +608,7 @@ export class ContextService {
     const caps = this.caps();
     const credential = await this.storedCredential(source);
     const scope = source.writeScope;
-    return this.tracked(source, false, async () => {
+    const result = await this.tracked(source, false, async () => {
       if (op.action === "list") {
         return { action: "list", labels: await getConfluencePageLabels(source, credential, op.pageId, caps.timeoutMs) };
       }
@@ -621,6 +632,9 @@ export class ContextService {
       for (const l of op.labels) await removeConfluenceLabel(source, credential, op.pageId, l, caps.timeoutMs);
       return { action: "remove", labels: await getConfluencePageLabels(source, credential, op.pageId, caps.timeoutMs) };
     });
+    // A label change is a mutation → drop the read cache so the next read is fresh.
+    if (op.action !== "list") this.cache.invalidateSource(source.id);
+    return result;
   }
 
   /** Shared write-scope guard for page-targeted mutations (archive, remove,
@@ -650,7 +664,7 @@ export class ContextService {
     if (source.type !== "confluence") throw new AppError("Archiving targets a Confluence source.", "config");
     const caps = this.caps();
     const credential = await this.storedCredential(source);
-    return this.tracked(source, false, async () => {
+    return this.trackedWrite(source, async () => {
       await this.enforceConfluenceWriteScope(source, credential, pageId, caps);
       return archiveConfluencePageAdapter(source, credential, pageId, caps.timeoutMs);
     });
@@ -662,7 +676,7 @@ export class ContextService {
     if (source.type !== "confluence") throw new AppError("This targets a Confluence source.", "config");
     const caps = this.caps();
     const credential = await this.storedCredential(source);
-    return this.tracked(source, false, async () => {
+    return this.trackedWrite(source, async () => {
       await this.enforceConfluenceWriteScope(source, credential, pageId, caps);
       return removeConfluencePageFromSearchAdapter(source, credential, pageId, caps.timeoutMs);
     });
@@ -691,7 +705,7 @@ export class ContextService {
     if (target === op.pageId) throw new AppError("A page can't be moved relative to itself.", "config");
     const caps = this.caps();
     const credential = await this.storedCredential(source);
-    return this.tracked(source, false, async () => {
+    return this.trackedWrite(source, async () => {
       // The page being moved AND the target must both be in scope — this blocks
       // re-parenting a page under a page in another (unmanaged) space.
       await this.enforceConfluenceWriteScope(source, credential, op.pageId, caps);
