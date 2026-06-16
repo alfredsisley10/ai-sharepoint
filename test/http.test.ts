@@ -39,17 +39,16 @@ async function captureInit(run: () => Promise<unknown>): Promise<RequestInit> {
   }
 }
 
-test("recognizes the HTTP/2 stream-reset class on a WRITE and points at the HTTP/1.1 lever", () => {
+test("recognizes the HTTP/2 stream-reset class on a WRITE with the read-vs-write asymmetry + caveat", () => {
   const d = diagnoseTransportError("POST", "net::ERR_HTTP2_PROTOCOL_ERROR");
   assert.ok(d, "should diagnose");
   assert.match(d!.message, /reset before the source replied/);
-  // Trust-preserving guidance: HTTP/1.1 via the setting, system certs left ON.
-  assert.match(d!.summary, /http\.electronFetch/);
-  assert.match(d!.summary, /http\.systemCertificates/i);
-  assert.match(d!.summary, /SSL inspection keeps working/i);
-  // Names the diagnostic toggle and the read-vs-write asymmetry.
   assert.match(d!.summary, /verboseWire/);
   assert.match(d!.summary, /search works but publishing fails/i);
+  // electronFetch is mentioned, but with the honest SSL-inspection caveat
+  // (turning it off can break TLS) — not as a guaranteed-safe fix.
+  assert.match(d!.summary, /http\.electronFetch/);
+  assert.match(d!.summary, /breaks TLS|trust store/i);
 });
 
 test("PUT/DELETE are treated as writes too", () => {
@@ -115,8 +114,11 @@ test("an 'XSRF check failed' 403 gets the CSRF-specific guidance", async () => {
   assert.ok(err instanceof AppError);
   assert.equal((err as AppError).code, "graph.forbidden");
   assert.match((err as AppError).userSummary ?? "", /X-Atlassian-Token/);
+  assert.match((err as AppError).userSummary ?? "", /User-Agent/);
   assert.match((err as AppError).userSummary ?? "", /Referer/);
-  assert.match((err as AppError).userSummary ?? "", /proxy|Base URL|electronFetch/);
+  assert.match((err as AppError).userSummary ?? "", /proxy|Base URL|verboseWire/);
+  // Must NOT tell an SSL-inspection user to disable electron fetch (breaks TLS).
+  assert.match((err as AppError).userSummary ?? "", /Keep "http\.electronFetch" ENABLED/);
 });
 
 test("writes present a same-origin Referer (CSRF: Origin/Referer must not both be null); reads do not", async () => {

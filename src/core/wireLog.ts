@@ -66,6 +66,11 @@ export function capDetail(s: string): string {
 const SECRET_KEY_RE =
   /pass(word)?|secret|token|credential|authorization|assertion|cookie|api[-_]?key|private[-_]?key|session/i;
 
+/** Headers whose NAME matches SECRET_KEY_RE but whose value is a fixed,
+ *  non-secret marker — never masked, so the wire log can be used to confirm
+ *  they actually left the client (e.g. the CSRF bypass token "no-check"). */
+const NON_SECRET_HEADER_RE = /^x-atlassian-token$/i;
+
 /** Mask secret-shaped keys recursively, then stringify + cap. Safe on
  *  any value (cycles fall back to a placeholder). */
 export function safeJson(value: unknown): string {
@@ -91,7 +96,7 @@ export function safeHeaders(headers: Record<string, string | undefined>): string
   const lines: string[] = [];
   for (const [k, v] of Object.entries(headers)) {
     if (v === undefined) continue;
-    if (SECRET_KEY_RE.test(k)) {
+    if (SECRET_KEY_RE.test(k) && !NON_SECRET_HEADER_RE.test(k)) {
       const scheme = v.match(/^(Basic|Bearer|Negotiate|NTLM)\b/i)?.[1];
       lines.push(`${k}: ${scheme ? `${scheme} ***` : "***"}`);
     } else {

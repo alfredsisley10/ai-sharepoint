@@ -1,6 +1,7 @@
 import { ContextSource, ContextCredential } from "../types";
 import { fetchJson } from "../http";
 import { AppError } from "../../core/errors";
+import { EXTENSION_VERSION } from "../../core/version";
 
 /**
  * Confluence write client (ADR-0038): create / update / delete pages in a
@@ -18,16 +19,27 @@ import { AppError } from "../../core/errors";
 const enc = encodeURIComponent;
 
 /**
- * Atlassian XSRF guard for non-GET REST calls. Confluence (and a strict
- * inspecting proxy in front of it) can reject a write that lacks it — and that
- * rejection often arrives as an early HTTP/2 stream reset
- * (net::ERR_HTTP2_PROTOCOL_ERROR) that MASKS the real 403, so reads succeed
- * while "publish" fails. Sending it is harmless when XSRF isn't enforced, so
- * every Confluence write carries it. (Atlassian docs: add `X-Atlassian-Token:
- * no-check` to programmatic non-GET requests.)
+ * Headers that make a Confluence WRITE behave like the Atlassian Python client
+ * (atlassian-python-api on `requests`), which succeeds where VS Code's Electron
+ * `fetch` fails its CSRF check:
+ *
+ *  - `X-Atlassian-Token: no-check` — the documented bypass for programmatic
+ *    non-GET REST calls (value must be exactly "no-check", with the hyphen).
+ *  - A NON-browser `User-Agent` — the decisive difference. Atlassian applies a
+ *    STRICTER CSRF path (Origin/Referer validation that rejects "both null")
+ *    when the request carries a BROWSER User-Agent, which Electron fetch sends
+ *    (Chrome). `requests` sends `python-requests/…` — a non-browser UA — so
+ *    Confluence treats it as a trusted REST client and `no-check` suffices.
+ *    Overriding the UA here reproduces that, while keeping Electron fetch on so
+ *    the OS trust store still validates the SSL-inspecting proxy. (Atlassian KB:
+ *    "REST API calls with a browser User-Agent header may fail CSRF checks.")
+ *
+ * A same-origin `Referer` is also presented on every write by the http layer —
+ * the other documented fix ("remove the User-Agent OR set Origin/Referer").
  */
 export const CONFLUENCE_WRITE_HEADERS: Record<string, string> = {
   "X-Atlassian-Token": "no-check",
+  "User-Agent": `ai-toolkit-confluence/${EXTENSION_VERSION}`,
 };
 
 function base(source: Pick<ContextSource, "baseUrl">): string {

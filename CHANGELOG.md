@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.53.0 — 2026-06-16
+
+### Fixed — Confluence "XSRF check failed" on writes, the way the Atlassian Python client avoids it
+- **Why the Python client (`atlassian-python-api`/`requests`) succeeds where we failed:** it sends a
+  **non-browser User-Agent**. Atlassian applies a *stricter* CSRF path (Origin/Referer validation
+  that rejects "both null") when a request carries a **browser User-Agent** — which VS Code's Electron
+  `fetch` sends (Chrome). `requests` sends `python-requests/…`, so Confluence treats it as a trusted
+  REST client and `X-Atlassian-Token: no-check` is sufficient.
+- **The mirror:** Confluence writes now override the **User-Agent** to a non-browser value
+  (`ai-toolkit-confluence/<version>`), alongside `X-Atlassian-Token: no-check` and the same-origin
+  `Referer` — reproducing the Python client **while keeping `http.electronFetch` enabled**, which the
+  SSL-inspecting proxy needs for the OS trust store. (Turning Electron fetch off was found to break
+  TLS for *all* Confluence calls, reads included, so guidance no longer recommends it for
+  SSL-inspection environments.)
+- **Verifiability:** the verbose wire log (`aiSharePoint.logging.verboseWire`) now shows
+  `X-Atlassian-Token` (its value `no-check` is a non-secret marker, previously masked) and the
+  `User-Agent`/`Referer`, so you can confirm the headers actually leave the client. An XSRF 403 now
+  explains this and points only at proxy header-stripping or a Server Base URL mismatch as remaining
+  causes. 2 new unit tests (495 total).
+
 ## 0.52.0 — 2026-06-16
 
 ### Fixed — Confluence writes rejected with "XSRF check failed"

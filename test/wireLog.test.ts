@@ -93,6 +93,12 @@ test("safeHeaders keeps schemes but never values; safeUrl masks creds and token 
   assert.match(rendered, /Accept: application\/json/);
   assert.match(rendered, /Cookie: \*\*\*/);
 
+  // X-Atlassian-Token matches the secret key regex (…token…) but its value is a
+  // fixed non-secret marker — shown so the wire log can confirm CSRF bypass.
+  const csrf = safeHeaders({ "X-Atlassian-Token": "no-check", "User-Agent": "ai-toolkit-confluence/0.0.0" });
+  assert.match(csrf, /X-Atlassian-Token: no-check/);
+  assert.match(csrf, /User-Agent: ai-toolkit-confluence/);
+
   // Built by concatenation (and asserted piecewise) so the repo's own
   // secret scan never sees a credential-shaped literal in source.
   const credUrl = ["https:/", "/u:secretpw", "@host/x"].join("");

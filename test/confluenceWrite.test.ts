@@ -113,19 +113,23 @@ test("deleteConfluencePage issues a DELETE (tolerates 204 No Content)", async ()
   assert.match(calls[0].url, /\/rest\/api\/content\/9$/);
 });
 
-test("writes carry the Atlassian XSRF header (X-Atlassian-Token: no-check)", async () => {
-  const header = (init: RequestInit) => (init.headers as Record<string, string>)["X-Atlassian-Token"];
+test("writes mirror the Python client: no-check token + a NON-browser User-Agent", async () => {
+  const header = (init: RequestInit, name: string) => (init.headers as Record<string, string>)[name];
   const create = await withFetch(
     () => ({ body: { id: "1", title: "T", version: { number: 1 } } }),
     () => createConfluencePage(SRC, CRED, { spaceKey: "DEV", title: "T", body: "<p/>" }, 30000),
   );
-  assert.equal(header(create.calls[0].init), "no-check");
+  assert.equal(header(create.calls[0].init, "X-Atlassian-Token"), "no-check");
+  const ua = header(create.calls[0].init, "User-Agent");
+  assert.match(ua, /ai-toolkit-confluence/);
+  // The decisive property: it must NOT look like a browser (no Mozilla/Chrome).
+  assert.doesNotMatch(ua, /Mozilla|Chrome|Safari|AppleWebKit/i);
 
   const del = await withFetch(
     () => ({ status: 204, body: undefined }),
     () => deleteConfluencePage(SRC, CRED, "9", 30000),
   );
-  assert.equal(header(del.calls[0].init), "no-check");
+  assert.equal(header(del.calls[0].init, "X-Atlassian-Token"), "no-check");
 
   // The GET that reads the current version before an update need not carry it.
   const upd = await withFetch(
@@ -135,5 +139,5 @@ test("writes carry the Atlassian XSRF header (X-Atlassian-Token: no-check)", asy
         : { body: { id: "5", title: "New", version: { number: 4 } } },
     () => updateConfluencePage(SRC, CRED, { id: "5", title: "New", body: "<p/>" }, 30000),
   );
-  assert.equal(header(upd.calls[1].init), "no-check", "the PUT carries the header");
+  assert.equal(header(upd.calls[1].init, "X-Atlassian-Token"), "no-check", "the PUT carries the header");
 });
