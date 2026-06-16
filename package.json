@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.56.0",
+  "version": "0.57.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -893,6 +893,51 @@
             "pageId": {
               "type": "string",
               "description": "The page to archive (required)."
+            }
+          },
+          "required": [
+            "pageId"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_move_confluence_page",
+        "displayName": "Move / Re-parent Confluence Page",
+        "toolReferenceName": "spMoveConfluence",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(type-hierarchy)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Move or re-order a Confluence page in the tree. TWO modes: (1) RE-PARENT — make the page a child of another page: position='append' (the default) with parentId=<new parent page id>. (2) RE-ORDER under the same parent — place the page before or after a sibling: position='before' or 'after' with targetId=<sibling page id>. Approval-gated write; BOTH the page and the target must be within the connector's managed scope (so a page can't be moved out of the managed space). Find page ids via search_context. Args: source (optional if one), pageId (the page to move), and either parentId (re-parent) or position+targetId (re-order). Returns the page's new parent.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page to move (required)."
+            },
+            "parentId": {
+              "type": "string",
+              "description": "Re-parent under this page id (used with position='append', the default)."
+            },
+            "position": {
+              "type": "string",
+              "enum": [
+                "append",
+                "before",
+                "after"
+              ],
+              "description": "append = make a child of parentId (re-parent, default); before/after = reorder relative to targetId sibling."
+            },
+            "targetId": {
+              "type": "string",
+              "description": "The sibling page id to place this page before/after (used with position='before'|'after')."
             }
           },
           "required": [

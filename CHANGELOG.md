@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.57.0 — 2026-06-16
+
+### Added — Move / re-parent and re-order Confluence pages
+- New **`move_confluence_page`** tool reorganizes the page tree two ways:
+  - **Re-parent** — make a page a child of another page (`position: "append"` + `parentId`).
+  - **Re-order** — place a page before/after a sibling under the same parent (`position: "before" |
+    "after"` + `targetId`).
+- The underlying move existed in the adapter (it powers Archive) but wasn't exposed; it's now
+  generalized to all three positions and wired as an approval-gated write. **Both** the page and the
+  target must be within the connector's managed scope, so a page can't be moved out of the managed
+  space. 2 new tests (520 total).
+
 ## 0.56.0 — 2026-06-16
 
 ### Added — Confluence governance lifecycle wired to chat tools

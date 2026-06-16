@@ -71,6 +71,14 @@ test("Confluence governance tools get input-aware status lines", () => {
     describeToolCall("aisharepoint_review_space_manageability", { spaceKey: "ENG" }),
     "Reviewing manageability of space ENG…",
   );
+  assert.equal(
+    describeToolCall("aisharepoint_move_confluence_page", { pageId: "1", parentId: "2" }),
+    "Re-parenting Confluence page 1 (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_move_confluence_page", { pageId: "1", position: "before", targetId: "2" }),
+    "Reordering Confluence page 1 (awaiting approval)…",
+  );
 });
 
 test("long queries are truncated so the status line stays short", () => {

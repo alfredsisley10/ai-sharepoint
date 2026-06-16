@@ -109,6 +109,8 @@ export function describeToolCall(name: string, input: unknown): string {
       return `${i.action === "add" ? "Adding" : i.action === "remove" ? "Removing" : "Reading"} Confluence page label(s)${i.action && i.action !== "list" ? " (awaiting approval)" : ""}…`;
     case "aisharepoint_archive_confluence_page":
       return `Archiving Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""} (awaiting approval)…`;
+    case "aisharepoint_move_confluence_page":
+      return `${i.position === "before" || i.position === "after" ? "Reordering" : "Re-parenting"} Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""} (awaiting approval)…`;
     case "aisharepoint_remove_confluence_page_from_search":
       return `Removing Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""} from search (awaiting approval)…`;
     case "aisharepoint_resolve_page_owners":

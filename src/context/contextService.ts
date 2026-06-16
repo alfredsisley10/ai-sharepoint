@@ -57,6 +57,8 @@ import {
 import {
   archiveConfluencePage as archiveConfluencePageAdapter,
   removeConfluencePageFromSearch as removeConfluencePageFromSearchAdapter,
+  moveConfluencePage as moveConfluencePageAdapter,
+  MovePosition,
   ArchiveResult,
 } from "./adapters/confluenceArchive";
 import {
@@ -654,6 +656,40 @@ export class ContextService {
     return this.tracked(source, false, async () => {
       await this.enforceConfluenceWriteScope(source, credential, pageId, caps);
       return removeConfluencePageFromSearchAdapter(source, credential, pageId, caps.timeoutMs);
+    });
+  }
+
+  /** Move / re-parent a page: "append" makes it a child of the target (the
+   *  common "move under" case); "before"/"after" reorder it as a sibling of the
+   *  target. Scoped write — BOTH the page and the target must be within the
+   *  managed scope, so a page can't be moved out of the managed space. Returns
+   *  the page's new title + parent. */
+  async moveConfluencePage(
+    source: ContextSource,
+    op: { pageId: string; parentId?: string; position?: MovePosition; targetId?: string },
+  ): Promise<{ pageId: string; title: string; parentId?: string }> {
+    if (source.type !== "confluence") throw new AppError("Moving pages targets a Confluence source.", "config");
+    const position: MovePosition = op.position ?? "append";
+    const target = position === "append" ? op.parentId ?? op.targetId : op.targetId ?? op.parentId;
+    if (!target) {
+      throw new AppError(
+        position === "append"
+          ? "Re-parenting needs the new parent page id (parentId)."
+          : "Reordering needs the sibling page id to move before/after (targetId).",
+        "config",
+      );
+    }
+    if (target === op.pageId) throw new AppError("A page can't be moved relative to itself.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      // The page being moved AND the target must both be in scope — this blocks
+      // re-parenting a page under a page in another (unmanaged) space.
+      await this.enforceConfluenceWriteScope(source, credential, op.pageId, caps);
+      await this.enforceConfluenceWriteScope(source, credential, target, caps);
+      await moveConfluencePageAdapter(source, credential, op.pageId, position, target, caps.timeoutMs);
+      const meta = await getConfluencePageMeta(source, credential, op.pageId, caps.timeoutMs);
+      return { pageId: meta.id, title: meta.title, ...(meta.parentId ? { parentId: meta.parentId } : {}) };
     });
   }
 

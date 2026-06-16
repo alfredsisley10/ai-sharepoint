@@ -51,7 +51,31 @@ export async function findRootArchivePage(
   return match?.id ? { id: String(match.id), title: String(match.title ?? ARCHIVE_ROOT_TITLE) } : undefined;
 }
 
-/** Move a page to be a child of `parentId` (Confluence content-safe move). */
+/** Where to place a moved page relative to the target: "append" makes it a
+ *  CHILD of the target (re-parent); "before"/"after" make it a SIBLING ordered
+ *  relative to the target. */
+export type MovePosition = "append" | "before" | "after";
+
+/** Move a page within a space: PUT /rest/api/content/{id}/move/{position}/{target}.
+ *  "append" re-parents under the target; "before"/"after" reorder as a sibling. */
+export async function moveConfluencePage(
+  source: ContextSource,
+  credential: ContextCredential,
+  pageId: string,
+  position: MovePosition,
+  targetId: string,
+  timeoutMs: number,
+): Promise<void> {
+  await fetchJson<unknown>(
+    `${baseOf(source)}/rest/api/content/${enc(pageId)}/move/${position}/${enc(targetId)}`,
+    credential,
+    timeoutMs,
+    CONFLUENCE_WRITE_HEADERS,
+    { method: "PUT" },
+  );
+}
+
+/** Move a page to be a child of `parentId` (re-parent). */
 export async function moveConfluencePageUnder(
   source: ContextSource,
   credential: ContextCredential,
@@ -59,13 +83,7 @@ export async function moveConfluencePageUnder(
   parentId: string,
   timeoutMs: number,
 ): Promise<void> {
-  await fetchJson<unknown>(
-    `${baseOf(source)}/rest/api/content/${enc(pageId)}/move/append/${enc(parentId)}`,
-    credential,
-    timeoutMs,
-    CONFLUENCE_WRITE_HEADERS,
-    { method: "PUT" },
-  );
+  return moveConfluencePage(source, credential, pageId, "append", parentId, timeoutMs);
 }
 
 export interface ArchiveResult {

@@ -395,6 +395,52 @@ export function registerContextTools(
         }
       },
     }),
+    // Governance — MOVE / RE-PARENT a page (re-parent under a page, or reorder). Write.
+    vscode.lm.registerTool<{ source?: string; pageId?: string; parentId?: string; position?: "append" | "before" | "after"; targetId?: string }>(
+      "aisharepoint_move_confluence_page",
+      {
+        prepareInvocation(options) {
+          const i = options.input;
+          const position = i.position ?? "append";
+          const target = position === "append" ? i.parentId ?? i.targetId : i.targetId ?? i.parentId;
+          const what =
+            position === "append"
+              ? `under parent ${target ?? "?"}`
+              : `${position} sibling ${target ?? "?"}`;
+          return {
+            invocationMessage: "Moving a Confluence page",
+            confirmationMessages: {
+              title: `Move page ${i.pageId ?? "?"} ${what}?`,
+              message: new vscode.MarkdownString(
+                position === "append"
+                  ? "Re-parents the page (makes it a child of the new parent). Stays within the managed space; reversible by moving it back."
+                  : "Reorders the page relative to a sibling under the same parent. Reversible.",
+              ),
+            },
+          };
+        },
+        async invoke(options) {
+          telemetry.record("tool.invoke", { tool: "aisharepoint_move_confluence_page" });
+          try {
+            const i = options.input;
+            const source = resolveOrExplain(i.source);
+            if (source.type !== "confluence") return text(`"${source.displayName}" is a ${source.type} source — moving pages targets Confluence.`);
+            if (!i.pageId?.trim()) return text("A pageId is required (search the source first to find it).");
+            const res = await service.moveConfluencePage(source, {
+              pageId: i.pageId.trim(),
+              ...(i.parentId ? { parentId: i.parentId.trim() } : {}),
+              ...(i.position ? { position: i.position } : {}),
+              ...(i.targetId ? { targetId: i.targetId.trim() } : {}),
+            });
+            telemetry.record("confluence.move", { position: i.position ?? "append" });
+            return text(`Moved page “${res.title}” (${res.pageId})${res.parentId ? ` — now a child of ${res.parentId}` : ""}.`);
+          } catch (err) {
+            errors.capture("tool:aisharepoint_move_confluence_page", err);
+            return text(`Could not move the page: ${redactError(err).message}`);
+          }
+        },
+      },
+    ),
     // Governance — REMOVE FROM SEARCH (blank current content; history retained). Write.
     vscode.lm.registerTool<{ source?: string; pageId?: string }>("aisharepoint_remove_confluence_page_from_search", {
       prepareInvocation(options) {

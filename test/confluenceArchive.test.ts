@@ -4,6 +4,8 @@ import {
   findRootArchivePage,
   archiveConfluencePage,
   removeConfluencePageFromSearch,
+  moveConfluencePage,
+  moveConfluencePageUnder,
 } from "../src/context/adapters/confluenceArchive";
 import { ContextSource, ContextCredential } from "../src/context/types";
 
@@ -119,4 +121,24 @@ test("removeConfluencePageFromSearch blanks the current content, keeps title + b
   assert.equal(body.title, "Old Doc"); // title preserved
   assert.equal(body.version.number, 5); // version bumped (history retains the original)
   assert.equal(result.version, 5);
+});
+
+test("moveConfluencePage PUTs to /move/{position}/{target} with the XSRF header", async () => {
+  for (const position of ["append", "before", "after"] as const) {
+    const { calls } = await withFetch(
+      () => ({ status: 200, body: undefined }),
+      () => moveConfluencePage(SRC, CRED, "100", position, "200", 30000),
+    );
+    assert.equal((calls[0].init as { method?: string }).method, "PUT");
+    assert.match(calls[0].url, new RegExp(`/rest/api/content/100/move/${position}/200$`));
+    assert.equal((calls[0].init.headers as Record<string, string>)["X-Atlassian-Token"], "no-check");
+  }
+});
+
+test("moveConfluencePageUnder re-parents via /move/append/", async () => {
+  const { calls } = await withFetch(
+    () => ({ status: 200, body: undefined }),
+    () => moveConfluencePageUnder(SRC, CRED, "100", "200", 30000),
+  );
+  assert.match(calls[0].url, /\/move\/append\/200$/);
 });
