@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.54.0 — 2026-06-16
+
+### Added — Full Confluence "Add more content" macro support (ADR-0043)
+- New `confluenceMacros.ts` gives the connector the whole rich-content vocabulary: a **catalog** of
+  macros/elements (code/markup, horizontal rule, status, info/note/warning/tip panels, expand, table
+  of contents, anchor, task lists, multi-column layouts, children/pagetree/include/excerpt, **Jira
+  issue/filter**, **draw.io**/Gliffy/Mermaid/PlantUML diagrams, images) with params, body type and
+  owning app; and pure **emitters** that produce correct storage-format XHTML.
+- **`confluence_capabilities` tool** — discovers the catalog AND what's actually in use/installed by
+  empirically scanning a space/page's storage format (the reliable signal for instance-specific apps
+  like draw.io), so @sharepoint designs advanced pages with elements that will really render.
+- **write_confluence_page** gains `format: "storage"` — author full-fidelity macro XHTML directly
+  (auto-detected when the body already contains `<ac:…>`). Markdown bodies now also auto-convert
+  fenced code → **code macro**, `- [ ]` → **task list**, and `---` → **horizontal rule**.
+
+### Added — Pull true rendered content & validate elements (the "[TOC]" fix)
+- The recurring bug — the assistant writing wiki/markdown shorthand like `[TOC]` (which Confluence
+  shows as the literal text, not a table of contents) — is now both **prevented** and **caught**:
+  - **Prevented:** the catalog/tool/prompt steer the model to emit real `<ac:structured-macro>`
+    elements, and `markdownToStorage` rescues a stray `[TOC]`/`{toc}` into the real toc macro.
+  - **Caught:** new **`validate_confluence_page` tool** pulls the page's **true rendered content**
+    (`body.view`, macros expanded), flags any shorthand that leaked as visible text, and inventories
+    the macros that actually rendered — the post-write confirmation that elements are as intended.
+- System prompt updated: design with `confluence_capabilities`, author storage-format, never emit
+  `[TOC]`/`{...}` shorthand, and `validate_confluence_page` after every write. 16 new tests (511 total).
+
 ## 0.53.0 — 2026-06-16
 
 ### Fixed — Confluence "XSRF check failed" on writes, the way the Atlassian Python client avoids it

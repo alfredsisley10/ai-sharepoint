@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.53.0",
+  "version": "0.54.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -710,7 +710,7 @@
           "sharepoint",
           "confluence"
         ],
-        "modelDescription": "Create or UPDATE a page in a Confluence space — the writable target that needs NO SharePoint tenant-admin consent (it uses the Confluence source's own API token). Approval-gated: the user must confirm before anything is written. To CREATE: action='create', source=<Confluence source name>, spaceKey, title, markdown (the body in Markdown — auto-converted to Confluence storage format), optional parentId. To UPDATE: action='update', source, pageId (find it first via search_context on that source), title, markdown — the page's version is read and bumped automatically. Returns the saved page's title, new version, and URL; Confluence keeps version history, so updates are reversible there. Use ONLY for a change the user explicitly asked to make.",
+        "modelDescription": "Create or UPDATE a page in a Confluence space — the writable target that needs NO SharePoint tenant-admin consent (it uses the Confluence source's own API token). Approval-gated: the user must confirm before anything is written. To CREATE: action='create', source=<Confluence source name>, spaceKey, title, markdown, optional parentId. To UPDATE: action='update', source, pageId (find it first via search_context on that source), title, markdown — the page's version is read and bumped automatically. ADVANCED ELEMENTS (table of contents, panels, status, task lists, Jira issue/filter, draw.io, expand, layouts) are Confluence MACROS in storage-format XHTML — call confluence_capabilities first to see the vocabulary and what's installed, then pass the storage XHTML as 'markdown' WITH format='storage'. NEVER write wiki/markdown shorthand like '[TOC]' or '{toc}' — Confluence renders those as the literal text, not a real element (use <ac:structured-macro ac:name=\"toc\"/>). With format='markdown' (default) the body auto-converts: fenced code → code macro, '- [ ]' → task list, '---' → rule, a stray '[TOC]' → toc macro. After a write, call validate_confluence_page with the returned pageId to confirm the elements rendered. Returns the saved page's title, new version, and URL; Confluence keeps version history, so updates are reversible. Use ONLY for a change the user explicitly asked to make.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -736,7 +736,15 @@
             },
             "markdown": {
               "type": "string",
-              "description": "Page body in Markdown (converted to Confluence storage format)."
+              "description": "Page body. Markdown (auto-converted) OR Confluence storage-format XHTML when format='storage' (for macros/advanced elements)."
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "markdown",
+                "storage"
+              ],
+              "description": "How to treat 'markdown': 'markdown' (default, auto-converted) or 'storage' (raw Confluence storage XHTML, for macros like toc/panels/jira/drawio/task-lists). Bodies already containing <ac:…> macros are treated as storage automatically."
             },
             "pageId": {
               "type": "string",
@@ -750,6 +758,67 @@
           "required": [
             "title",
             "markdown"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_confluence_capabilities",
+        "displayName": "Confluence Content Capabilities",
+        "toolReferenceName": "spConfluenceCapabilities",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(symbol-color)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Discover Confluence's 'Add more content' vocabulary so you can design advanced pages with REAL elements. Returns (a) the macro/element catalog you can author — code/markup, horizontal rule, status, info/note/warning/tip panels, expand, table of contents, anchor, task lists, multi-column layouts, children/pagetree/include/excerpt, Jira issue/filter, draw.io/Gliffy/Mermaid/PlantUML diagrams, images — each with its params, body type and owning app; (b) the elements EMPIRICALLY in use in a sampled space/page (the reliable signal of what's installed here); and (c) a best-effort list of installed apps. Call this BEFORE authoring a page with macros, then write the storage-format XHTML via write_confluence_page with format='storage'. Args: source (Confluence source name; optional if one), and optionally spaceKey or pageId (+subtree) to scope the sample; defaults to the connector's managed space.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Sample this space for elements in use (optional)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "Sample this page (optional)."
+            },
+            "subtree": {
+              "type": "boolean",
+              "description": "With pageId, sample the page's descendants too."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_validate_confluence_page",
+        "displayName": "Validate Rendered Confluence Page",
+        "toolReferenceName": "spValidateConfluencePage",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(check-all)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Pull a Confluence page's TRUE RENDERED content (body.view, macros expanded) and validate that elements rendered as intended. Flags wiki/markdown shorthand that LEAKED as visible text — e.g. a literal '[TOC]' or '{info}' that never became a real element — and inventories the macros that actually rendered. Call this AFTER write_confluence_page (pass the returned pageId) as the confirmation step; if it reports leaks, re-publish those elements as real storage-format macros (format='storage'). Args: source (Confluence source name; optional if one), pageId (required).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one is configured)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page to validate (required) — typically the id returned by write_confluence_page."
+            }
+          },
+          "required": [
+            "pageId"
           ]
         }
       },

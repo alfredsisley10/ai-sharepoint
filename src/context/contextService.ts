@@ -48,6 +48,14 @@ import {
 import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
 import { probeConfluenceWriteAccess, WriteProbeResult, WriteProbeTarget } from "./adapters/confluenceProbe";
 import {
+  discoverConfluenceMacros,
+  detectConfluenceApps,
+  validateConfluencePageRendered,
+  MACRO_CATALOG,
+  CapabilityReport,
+  RenderedValidation,
+} from "./adapters/confluenceMacros";
+import {
   verifyServiceNow,
   searchServiceNow,
   getServiceNowItem,
@@ -504,6 +512,53 @@ export class ContextService {
           : {};
     return this.tracked(source, false, () =>
       probeConfluenceWriteAccess(source, credential, target, caps.timeoutMs, new Date().toISOString()),
+    );
+  }
+
+  /** Discover the Confluence "Add more content" vocabulary available to this
+   *  connector: the known catalog, the macros empirically in use in a sampled
+   *  scope (the reliable "what's installed here" signal — needs only read
+   *  access), and a best-effort list of installed apps. Lockout-gated. When no
+   *  scope is given it falls back to the connector's own write scope so the
+   *  sample reflects the space being managed. */
+  async discoverConfluenceCapabilities(
+    source: ContextSource,
+    scope?: { spaceKey?: string; pageId?: string; subtree?: boolean },
+  ): Promise<CapabilityReport> {
+    if (source.type !== "confluence") {
+      throw new AppError("Capability discovery targets a Confluence source.", "config");
+    }
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const ws = source.writeScope;
+    const effective =
+      scope && (scope.spaceKey || scope.pageId)
+        ? scope
+        : ws?.kind === "space"
+          ? { spaceKey: ws.spaceKey }
+          : ws?.kind === "page"
+            ? { pageId: ws.pageId }
+            : {};
+    return this.tracked(source, false, async () => {
+      const { pagesSampled, used } = await discoverConfluenceMacros(source, credential, effective, caps);
+      const apps = await detectConfluenceApps(source, credential, caps);
+      return { pagesSampled, used, apps, catalog: MACRO_CATALOG };
+    });
+  }
+
+  /** Pull a page's TRUE RENDERED content (body.view) and validate it: flag any
+   *  wiki/markdown shorthand that leaked as visible text (e.g. a literal "[TOC]"
+   *  that never became a table of contents) and inventory the macros that
+   *  actually rendered. The post-write confirmation that elements are as
+   *  intended. Read-only, lockout-gated; not cached (validation must be live). */
+  async validateConfluencePage(source: ContextSource, pageId: string): Promise<RenderedValidation> {
+    if (source.type !== "confluence") {
+      throw new AppError("Rendered validation targets a Confluence source.", "config");
+    }
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      validateConfluencePageRendered(source, credential, pageId, caps),
     );
   }
 

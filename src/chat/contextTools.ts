@@ -20,6 +20,7 @@ import { redactError } from "../core/redaction";
 import { sourceChatLabel, resolveSourceRef } from "../context/sourceRef";
 import { EXPORT_MAX_ROWS, EXPORT_TIMEOUT_MS, EXPORT_DIR } from "../context/exportData";
 import { markdownToStorage } from "../context/adapters/confluenceWrite";
+import { catalogByCategory, CapabilityReport, RenderedValidation } from "../context/adapters/confluenceMacros";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
@@ -31,6 +32,56 @@ const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
 function text(s: string): vscode.LanguageModelToolResult {
   return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(s)]);
+}
+
+/** The Confluence "Add more content" capabilities, formatted for the model:
+ *  what's in use in this scope, then the full authorable vocabulary. */
+function renderCapabilities(r: CapabilityReport): string {
+  const lines: string[] = ["# Confluence content capabilities", `Sampled ${r.pagesSampled} page(s) for what's actually in use here.`];
+  if (r.apps.length) lines.push(`Apps detected (best-effort): ${r.apps.join(", ")}.`);
+  if (r.used.length) {
+    lines.push("", "## Elements already in use in this scope");
+    for (const u of r.used) {
+      lines.push(
+        `- \`${u.name}\`${u.count > 1 ? ` ×${u.count}` : ""}${u.spec ? ` — ${u.spec.label}` : " — app/plugin macro (not in the built-in catalog)"}${u.app ? ` [needs ${u.app}]` : ""}`,
+      );
+    }
+  }
+  lines.push("", "## Authorable vocabulary — emit these as STORAGE-FORMAT elements");
+  for (const g of catalogByCategory()) {
+    lines.push("", `### ${g.category}`);
+    for (const m of g.macros) {
+      lines.push(`- **${m.label}** (\`${m.name}\`${m.app ? `, needs ${m.app}` : ""}): ${m.description}`);
+    }
+  }
+  lines.push(
+    "",
+    'CRITICAL: author REAL storage-format elements — e.g. `<ac:structured-macro ac:name="toc"/>` — NEVER wiki/markdown shorthand like `[TOC]` or `{toc}`, which Confluence renders as the literal text "[TOC]". Pass the storage XHTML to write_confluence_page with format:"storage" (markdown bodies still auto-convert fenced code, "- [ ]" task lists, "---" rules, and a stray "[TOC]"). After writing, call validate_confluence_page with the returned pageId to confirm the elements rendered.',
+  );
+  return lines.join("\n");
+}
+
+/** The rendered-page validation, formatted for the model. */
+function renderValidation(v: RenderedValidation): string {
+  const lines: string[] = [`# Rendered validation — “${v.title}”`, v.url];
+  if (v.leaks.length) {
+    lines.push("", "## ⚠️ Leaked markup — these are NOT real Confluence elements");
+    for (const l of v.leaks) {
+      lines.push(
+        `- \`${l.markup}\` rendered as literal text. It was authored as shorthand; re-publish it as the real **${l.macro}** element, e.g. \`<ac:structured-macro ac:name="${l.macro}"/>\` (or the matching ac: element).`,
+      );
+    }
+  } else {
+    lines.push("", "✅ No leaked wiki/markdown shorthand — macro markup rendered as real elements.");
+  }
+  lines.push("", "## Elements that rendered");
+  if (v.rendered.length) {
+    for (const e of v.rendered) lines.push(`- ${e.name}${e.count > 1 ? ` ×${e.count}` : ""}`);
+  } else {
+    lines.push("- (none detected — a plain-text page)");
+  }
+  lines.push("", `Rendered text length: ${v.textLength} chars.`);
+  return lines.join("\n");
 }
 
 export function registerContextTools(
@@ -111,6 +162,7 @@ export function registerContextTools(
       markdown?: string;
       pageId?: string;
       parentId?: string;
+      format?: "markdown" | "storage";
     }>("aisharepoint_write_confluence_page", {
       prepareInvocation(options) {
         const i = options.input;
@@ -151,11 +203,21 @@ export function registerContextTools(
           if (action === "create" && !i.spaceKey?.trim()) {
             return text("Creating a page needs the target spaceKey.");
           }
+          // The body may be markdown (auto-converted, incl. fenced code →
+          // code macro, "- [ ]" → task list, "---" → rule) OR raw storage-format
+          // XHTML for full macro fidelity (Jira, draw.io, panels, layouts…).
+          // Honor an explicit format; otherwise treat bodies that already carry
+          // structured macros as storage.
+          const looksLikeStorage = /<ac:(structured-macro|task-list|layout|image|link)\b/.test(i.markdown);
+          const body =
+            i.format === "storage" || (i.format !== "markdown" && looksLikeStorage)
+              ? i.markdown
+              : markdownToStorage(i.markdown);
           const res = await service.writeConfluencePage(source, {
             action,
             ...(i.spaceKey ? { spaceKey: i.spaceKey.trim() } : {}),
             title: i.title.trim(),
-            body: markdownToStorage(i.markdown),
+            body,
             ...(i.pageId ? { pageId: i.pageId.trim() } : {}),
             ...(i.parentId ? { parentId: i.parentId.trim() } : {}),
           });
@@ -169,6 +231,40 @@ export function registerContextTools(
         }
       },
     }),
+    // Discover the "Add more content" vocabulary (macros/elements) + what's
+    // installed/in-use, so the model designs advanced pages with real elements.
+    vscode.lm.registerTool<{ source?: string; spaceKey?: string; pageId?: string; subtree?: boolean }>(
+      "aisharepoint_confluence_capabilities",
+      guarded("aisharepoint_confluence_capabilities", "Discovering Confluence content capabilities", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") {
+          return `"${source.displayName}" is a ${source.type} source — capability discovery targets a Confluence source.`;
+        }
+        const report = await service.discoverConfluenceCapabilities(source, {
+          ...(i.spaceKey ? { spaceKey: i.spaceKey } : {}),
+          ...(i.pageId ? { pageId: i.pageId } : {}),
+          ...(i.subtree ? { subtree: true } : {}),
+        });
+        return renderCapabilities(report);
+      }),
+    ),
+    // Pull the TRUE rendered content and validate elements rendered as intended
+    // (catches "[TOC]" leaking as literal text instead of a real table of
+    // contents). The post-write confirmation step.
+    vscode.lm.registerTool<{ source?: string; pageId?: string }>(
+      "aisharepoint_validate_confluence_page",
+      guarded("aisharepoint_validate_confluence_page", "Validating the rendered Confluence page", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") {
+          return `"${source.displayName}" is a ${source.type} source — validation targets a Confluence source.`;
+        }
+        if (!i.pageId?.trim()) {
+          return "A pageId is required (use the id returned by write_confluence_page, or search the source first).";
+        }
+        const v = await service.validateConfluencePage(source, i.pageId.trim());
+        return renderValidation(v);
+      }),
+    ),
     vscode.lm.registerTool(
       "aisharepoint_db_schema",
       guarded<{ source?: string; topic?: string }>(

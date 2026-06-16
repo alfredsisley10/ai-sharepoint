@@ -66,11 +66,35 @@ test("markdownToStorage converts headings, paragraphs, lists, code, and inline s
   assert.match(html, /<h1>Title<\/h1>/);
   assert.match(html, /<p>Hello <strong>bold<\/strong> and <a href="https:\/\/x">link<\/a>\.<\/p>/);
   assert.match(html, /<ul><li>a<\/li><li>b<\/li><\/ul>/);
-  assert.match(html, /<pre><code>code &lt;x&gt;<\/code><\/pre>/);
+  // A fenced block now becomes a real code macro (CDATA is verbatim, not escaped).
+  assert.match(html, /ac:name="code"><ac:plain-text-body><!\[CDATA\[code <x>\]\]><\/ac:plain-text-body>/);
 });
 
 test("markdownToStorage escapes HTML in body text", () => {
   assert.match(markdownToStorage("a < b & c"), /<p>a &lt; b &amp; c<\/p>/);
+});
+
+test("markdownToStorage emits real macros: fenced code → code macro, task list, hr, [TOC]", () => {
+  const code = markdownToStorage("```python\nprint(1)\n```");
+  assert.match(code, /ac:name="code"/);
+  assert.match(code, /ac:name="language">python/);
+  assert.match(code, /<!\[CDATA\[print\(1\)\]\]>/);
+  assert.doesNotMatch(code, /<pre>/);
+
+  const tasks = markdownToStorage("- [ ] todo\n- [x] done");
+  assert.match(tasks, /<ac:task-list>/);
+  assert.match(tasks, /incomplete<\/ac:task-status><ac:task-body>todo/);
+  assert.match(tasks, /complete<\/ac:task-status><ac:task-body>done/);
+
+  assert.match(markdownToStorage("above\n\n---\n\nbelow"), /<hr\/>/);
+});
+
+test("markdownToStorage rescues a literal [TOC]/{toc} into the real toc macro", () => {
+  for (const shorthand of ["[TOC]", "[[TOC]]", "{toc}", "{toc:maxLevel=2}"]) {
+    const out = markdownToStorage(`Intro\n\n${shorthand}\n\nBody`);
+    assert.match(out, /<ac:structured-macro ac:name="toc">/, `failed for ${shorthand}`);
+    assert.doesNotMatch(out, /\[TOC\]|\{toc/i);
+  }
 });
 
 test("createConfluencePage POSTs to the content API and maps the result", async () => {

@@ -2,6 +2,7 @@ import { ContextSource, ContextCredential } from "../types";
 import { fetchJson } from "../http";
 import { AppError } from "../../core/errors";
 import { EXTENSION_VERSION } from "../../core/version";
+import { codeBlock, taskList, horizontalRule, tableOfContents } from "./confluenceMacros";
 
 /**
  * Confluence write client (ADR-0038): create / update / delete pages in a
@@ -243,14 +244,36 @@ export function markdownToStorage(md: string): string {
   };
   while (i < lines.length) {
     const raw = lines[i];
-    const fence = raw.match(/^```/);
+    const fence = raw.match(/^```(\w[\w+-]*)?/);
     if (fence) {
       flushPara();
+      const lang = fence[1];
       const code: string[] = [];
       i += 1;
       while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
       i += 1; // closing fence
-      out.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+      // A fenced block becomes a proper code macro (syntax highlighting) rather
+      // than a bare <pre>, so the page reads like a hand-authored one.
+      out.push(codeBlock(code.join("\n"), lang));
+      continue;
+    }
+    // Thematic break (---, ***, ___) → horizontal rule. Checked before lists so
+    // "---" isn't mistaken for a "-" bullet.
+    if (/^\s*([-*_])\1{2,}\s*$/.test(raw)) {
+      flushPara();
+      out.push(horizontalRule());
+      i += 1;
+      continue;
+    }
+    // Safety net for the #1 authoring mistake: a literal "[TOC]" / "[[TOC]]" /
+    // "{toc}" line is MARKDOWN/wiki shorthand Confluence does NOT interpret — it
+    // renders as the visible text "[TOC]". Convert it to the REAL toc macro so a
+    // table of contents actually appears. (The catalog/guidance steer the model
+    // to emit real macros; this catches the slip.)
+    if (/^\s*(\[\[?\s*toc\s*\]?\]|\{toc(:[^}]*)?\})\s*$/i.test(raw)) {
+      flushPara();
+      out.push(tableOfContents());
+      i += 1;
       continue;
     }
     const heading = raw.match(/^(#{1,6})\s+(.*)$/);
@@ -259,6 +282,19 @@ export function markdownToStorage(md: string): string {
       const level = heading[1].length;
       out.push(`<h${level}>${line(heading[2])}</h${level}>`);
       i += 1;
+      continue;
+    }
+    // GitHub-style task list ("- [ ]" / "- [x]") → interactive Confluence task
+    // list. Checked before the plain bullet list so the checkboxes are kept.
+    if (/^\s*[-*]\s+\[[ xX]\]\s+/.test(raw)) {
+      flushPara();
+      const items: { text: string; done: boolean }[] = [];
+      while (i < lines.length && /^\s*[-*]\s+\[[ xX]\]\s+/.test(lines[i])) {
+        const mm = lines[i].match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/)!;
+        items.push({ text: mm[2], done: mm[1].toLowerCase() === "x" });
+        i += 1;
+      }
+      out.push(taskList(items));
       continue;
     }
     if (/^\s*[-*]\s+/.test(raw)) {
