@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.61.0",
+  "version": "0.62.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -1624,6 +1624,99 @@
           "required": [
             "list",
             "fields"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_sp_library_files",
+        "displayName": "SharePoint Files (browser session)",
+        "toolReferenceName": "spFiles",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(files)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Browse, read, upload, or delete files in a SharePoint document library using the user's BROWSER SESSION (needs a connected session — see sp_list_items). action='list' returns the files & sub-folders under a folder (folder = a server-relative path like '/sites/Eng/Shared Documents' OR a library display title, which is resolved to its root). action='read' returns a text file's content (file = the ServerRelativeUrl from a list result; for text/markdown/csv/json/xml). action='upload' creates or OVERWRITES a text file (folder + fileName + content; approval-gated). action='delete' removes a file (file = ServerRelativeUrl; approval-gated). Uploads/reads handle TEXT content; binary files aren't supported here. Always list first to get exact ServerRelativeUrls.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Site URL or web title of a connected session (optional when only one is connected)."
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "list",
+                "read",
+                "upload",
+                "delete"
+              ],
+              "description": "list/read are read-only; upload/delete write (approval-gated)."
+            },
+            "folder": {
+              "type": "string",
+              "description": "For list/upload: a server-relative folder path (starts with /) or a library display title."
+            },
+            "file": {
+              "type": "string",
+              "description": "For read/delete: the file's ServerRelativeUrl (from a list result)."
+            },
+            "fileName": {
+              "type": "string",
+              "description": "For upload: the file name to create (e.g. notes.md)."
+            },
+            "content": {
+              "type": "string",
+              "description": "For upload: the text content of the file."
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_sp_manage_page",
+        "displayName": "SharePoint Pages (browser session)",
+        "toolReferenceName": "spPages",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(browser)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "List, read, or create modern SharePoint pages using the user's BROWSER SESSION (needs a connected session — see sp_list_items). action='list' returns the site's pages (Id, Title, Url). action='read' returns a page's title + readable text (pageId from the list). action='create' creates AND PUBLISHES a new modern page with a single rich-text web part (title + body; body may be plain text or HTML; approval-gated). Note: modern-page authoring via the REST canvas is SharePoint-version sensitive and best-effort — if a create fails it reports why. Reading/listing are reliable.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Site URL or web title of a connected session (optional when only one is connected)."
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "list",
+                "read",
+                "create"
+              ],
+              "description": "list/read are read-only; create writes & publishes (approval-gated)."
+            },
+            "pageId": {
+              "type": "number",
+              "description": "For read: the page Id (from the list action)."
+            },
+            "title": {
+              "type": "string",
+              "description": "For create: the page title."
+            },
+            "body": {
+              "type": "string",
+              "description": "For create: the page body (plain text or HTML)."
+            }
+          },
+          "required": [
+            "action"
           ]
         }
       },

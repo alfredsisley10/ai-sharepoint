@@ -139,6 +139,21 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Reading SharePoint list${str(i.list) ? ` “${short(String(i.list), 40)}”` : ""} (browser session)…`;
     case "aisharepoint_sp_write_item":
       return `${i.action === "update" ? "Updating" : "Creating"} a SharePoint list item${str(i.list) ? ` in “${short(String(i.list), 40)}”` : ""} (browser session, awaiting approval)…`;
+    case "aisharepoint_sp_library_files":
+      switch (i.action) {
+        case "upload":
+          return `Uploading${str(i.fileName) ? ` “${short(String(i.fileName), 40)}”` : " a file"} to SharePoint (browser session, awaiting approval)…`;
+        case "delete":
+          return "Deleting a SharePoint file (browser session, awaiting approval)…";
+        case "read":
+          return "Reading a SharePoint file (browser session)…";
+        default:
+          return "Browsing SharePoint files (browser session)…";
+      }
+    case "aisharepoint_sp_manage_page":
+      return i.action === "create"
+        ? `Creating SharePoint page${str(i.title) ? ` “${short(String(i.title), 40)}”` : ""} (browser session, awaiting approval)…`
+        : "Reading SharePoint pages (browser session)…";
     case "aisharepoint_copilot_usage":
       return "Checking Copilot usage…";
     case "aisharepoint_write_site_files":

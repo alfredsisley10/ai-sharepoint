@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.62.0 — 2026-06-17
+
+### Added — browser-session writes now cover DOCUMENT LIBRARIES and MODERN PAGES (ADR-0046)
+- Builds straight on 0.61.0's no-admin browser-session foundation (your own `FedAuth`/`rtFa`
+  session + a `/_api/contextinfo` form digest) — so the same connected site can now manage files and
+  pages, not just list items, all under exactly your Web-UI permissions.
+- **Document libraries — `sp_library_files`:** `list` a folder's files & sub-folders (folder = a
+  server-relative path *or* a library title, resolved to its root), `read` a text file's content,
+  `upload` (create/overwrite) a text file, and `delete` a file. Upload/delete are approval-gated.
+  Server-relative paths with spaces/apostrophes are handled via OData path aliases
+  (`GetFolderByServerRelativeUrl(@f)?@f='…'`); uploads send the raw body (not JSON); reads pull
+  `/$value` as text; deletes tunnel `DELETE` through `POST` with `IF-MATCH`.
+- **Modern pages — `sp_manage_page`:** `list` the site's pages, `read` a page's title + extracted
+  text, and `create` (and publish) a modern page with a rich-text web part. Create is approval-gated.
+- **Honest scope:** file read/upload handle TEXT content (binary uploads aren't supported here yet);
+  list/read for both libraries and pages are reliable, but modern-page *authoring* through the REST
+  canvas (`CanvasContent1`) is SharePoint-version sensitive and therefore **best-effort** — a failed
+  create reports why rather than pretending it's impossible. 9 new unit tests (554 total).
+
 ## 0.61.0 — 2026-06-16
 
 ### Added — SharePoint write WITHOUT admin consent, via your browser session (ADR-0046)

@@ -140,6 +140,10 @@ const INSTRUCTIONS = [
   "the INTERNAL field names, then write with those exact keys. sp_write_item is approval-gated. If no",
   "session is connected and Graph write is blocked, tell the user to run that command (sessions",
   "expire in hours and need re-capturing).",
+  "The same browser session also manages DOCUMENT LIBRARIES (sp_library_files: list/read/upload/delete",
+  "text files — list a folder first to get exact ServerRelativeUrls) and MODERN PAGES (sp_manage_page:",
+  "list/read reliably; create-and-publish a text page is best-effort since the REST canvas is",
+  "version-sensitive). Upload/delete/create-page are approval-gated.",
 ].join(" ");
 
 /** Cap on tool-calling rounds per turn (each round is its own request).

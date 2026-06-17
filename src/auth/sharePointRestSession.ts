@@ -76,8 +76,16 @@ interface SpFetchInit {
   /** Required for writes (POST). */
   digest?: string;
   body?: unknown;
+  /** Raw (non-JSON) request body — file uploads send bytes/text as-is. */
+  rawBody?: string;
   /** Map a POST to an UPDATE (X-HTTP-Method: MERGE + IF-MATCH: *). */
   merge?: boolean;
+  /** Tunnel another verb through POST (DELETE/PUT) — also sends IF-MATCH: *. */
+  xHttpMethod?: "DELETE" | "PUT";
+  /** Override the Accept header (e.g. text/plain to read a file's $value). */
+  accept?: string;
+  /** Return the raw response text instead of JSON.parse (file content). */
+  returnText?: boolean;
   timeoutMs: number;
 }
 
@@ -85,10 +93,12 @@ interface SpFetchInit {
  *  diagnosis. Tolerates 204 (writes) and non-JSON. */
 export async function spFetch<T>(url: string, init: SpFetchInit): Promise<T> {
   const method = init.method ?? "GET";
+  const tunnel = init.merge ? "MERGE" : init.xHttpMethod;
   const headers = sessionHeaders(init.cookies, {
+    ...(init.accept ? { Accept: init.accept } : {}),
     ...(init.body !== undefined ? { "Content-Type": "application/json;odata=nometadata" } : {}),
     ...(init.digest ? { "X-RequestDigest": init.digest } : {}),
-    ...(init.merge ? { "X-HTTP-Method": "MERGE", "IF-MATCH": "*" } : {}),
+    ...(tunnel ? { "X-HTTP-Method": tunnel, "IF-MATCH": "*" } : {}),
   });
   if (wireEnabled()) emitWire("sharepoint", "→", `${method} ${safeUrl(url)}`, safeHeaders(headers));
   let res: Response;
@@ -96,7 +106,11 @@ export async function spFetch<T>(url: string, init: SpFetchInit): Promise<T> {
     res = await fetch(url, {
       method,
       headers,
-      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      ...(init.rawBody !== undefined
+        ? { body: init.rawBody }
+        : init.body !== undefined
+          ? { body: JSON.stringify(init.body) }
+          : {}),
       // First-party Referer (same as the Confluence CSRF fix) — SharePoint's
       // own CSRF defenses also reject a state-changing call with a null origin.
       referrer: `${new URL(url).origin}`,
@@ -120,6 +134,7 @@ export async function spFetch<T>(url: string, init: SpFetchInit): Promise<T> {
   if (!res.ok) {
     throw new AppError(`SharePoint request failed (${res.status}): ${parseSpError(text) ?? text.slice(0, 200)}`, "unknown");
   }
+  if (init.returnText) return text as unknown as T; // raw file content
   if (!text.trim()) return undefined as unknown as T; // 204 (write MERGE/DELETE)
   try {
     return JSON.parse(text) as T;
@@ -229,6 +244,234 @@ export async function updateListItem(
     merge: true,
     timeoutMs,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Document libraries (files & folders)
+// ---------------------------------------------------------------------------
+
+/** A SharePoint method-call/query alias for a server-relative path: fully
+ *  percent-encoded (spaces, unicode) with apostrophes doubled per OData. Using
+ *  the alias form `(@f)?@f='…'` avoids the fragility of inlining a path with
+ *  spaces into the URL. Pure. */
+export function spAlias(name: string, value: string): string {
+  return `${name}=${encodeURIComponent(`'${value.replace(/'/g, "''")}'`)}`;
+}
+
+export interface SpFile {
+  Name: string;
+  ServerRelativeUrl: string;
+  /** Bytes (SharePoint returns this as a string). */
+  Length?: string;
+  TimeLastModified?: string;
+  UniqueId?: string;
+}
+export interface SpFolder {
+  Name: string;
+  ServerRelativeUrl: string;
+  ItemCount?: number;
+}
+
+/** Resolve a document library's display title to its root folder's
+ *  server-relative URL, so callers can pass a friendly name OR a path. */
+export async function getLibraryRootFolder(
+  siteUrl: string,
+  libraryTitle: string,
+  cookies: string,
+  timeoutMs: number,
+): Promise<string> {
+  const res = await spFetch<{ ServerRelativeUrl?: string }>(
+    `${listPath(siteUrl, libraryTitle)}/RootFolder?$select=ServerRelativeUrl`,
+    { cookies, timeoutMs },
+  );
+  if (!res.ServerRelativeUrl) throw new AppError(`Library “${libraryTitle}” has no resolvable folder.`, "unknown");
+  return res.ServerRelativeUrl;
+}
+
+/** List the files and sub-folders directly under a server-relative folder. */
+export async function listFolder(
+  siteUrl: string,
+  folderServerRelativeUrl: string,
+  cookies: string,
+  timeoutMs: number,
+): Promise<{ files: SpFile[]; folders: SpFolder[] }> {
+  const base = `${apiBase(siteUrl)}/web/GetFolderByServerRelativeUrl(@f)`;
+  const f = spAlias("@f", folderServerRelativeUrl);
+  const files = await spFetch<{ value?: SpFile[] }>(
+    `${base}/Files?${f}&$select=Name,ServerRelativeUrl,Length,TimeLastModified,UniqueId`,
+    { cookies, timeoutMs },
+  );
+  const folders = await spFetch<{ value?: SpFolder[] }>(
+    `${base}/Folders?${f}&$select=Name,ServerRelativeUrl,ItemCount`,
+    { cookies, timeoutMs },
+  );
+  return {
+    files: files.value ?? [],
+    // SharePoint surfaces the system "Forms" folder — hide it from navigation.
+    folders: (folders.value ?? []).filter((x) => x.Name !== "Forms"),
+  };
+}
+
+/** Read a file's content as text (for text/markdown/csv/json/xml documents). */
+export async function readFileText(
+  siteUrl: string,
+  fileServerRelativeUrl: string,
+  cookies: string,
+  timeoutMs: number,
+): Promise<string> {
+  return spFetch<string>(
+    `${apiBase(siteUrl)}/web/GetFileByServerRelativeUrl(@f)/$value?${spAlias("@f", fileServerRelativeUrl)}`,
+    { cookies, accept: "text/plain", returnText: true, timeoutMs },
+  );
+}
+
+/** Upload (create or overwrite) a text file into a folder. */
+export async function uploadTextFile(
+  siteUrl: string,
+  folderServerRelativeUrl: string,
+  fileName: string,
+  content: string,
+  cookies: string,
+  digest: string,
+  timeoutMs: number,
+): Promise<SpFile> {
+  const url =
+    `${apiBase(siteUrl)}/web/GetFolderByServerRelativeUrl(@f)/Files/add(url='${encodeURIComponent(fileName.replace(/'/g, "''"))}',overwrite=true)` +
+    `?${spAlias("@f", folderServerRelativeUrl)}`;
+  return spFetch<SpFile>(url, { method: "POST", cookies, digest, rawBody: content, timeoutMs });
+}
+
+/** Delete a file by its server-relative URL. */
+export async function deleteFile(
+  siteUrl: string,
+  fileServerRelativeUrl: string,
+  cookies: string,
+  digest: string,
+  timeoutMs: number,
+): Promise<void> {
+  await spFetch<void>(
+    `${apiBase(siteUrl)}/web/GetFileByServerRelativeUrl(@f)?${spAlias("@f", fileServerRelativeUrl)}`,
+    { method: "POST", cookies, digest, xHttpMethod: "DELETE", timeoutMs },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Modern pages (Site Pages)
+// ---------------------------------------------------------------------------
+
+export interface SitePageSummary {
+  Id: number;
+  Title?: string;
+  FileName?: string;
+  Url?: string;
+  PromotedState?: number;
+}
+
+/** Build the CanvasContent1 for a single rich-text web part. The trailing
+ *  controlType-0 slice is the page-settings control SharePoint expects. Pure —
+ *  the version-sensitive part of page authoring, isolated for testing. */
+export function buildTextCanvas(html: string, id: string = randomId()): string {
+  return JSON.stringify([
+    {
+      controlType: 4,
+      id,
+      position: { controlIndex: 1, sectionIndex: 1, sectionFactor: 12, zoneIndex: 1, layoutIndex: 1 },
+      emphasis: {},
+      innerHTML: html,
+    },
+    { controlType: 0, pageSettingsSlice: { isDefaultDescription: true, isDefaultThumbnail: true } },
+  ]);
+}
+
+/** Extract readable text from a page's CanvasContent1 (strips the web-part
+ *  HTML). Best-effort — unknown web parts contribute nothing. Pure. */
+export function extractCanvasText(canvasContent1: string | null | undefined): string {
+  if (!canvasContent1) return "";
+  let controls: Array<{ controlType?: number; innerHTML?: string }>;
+  try {
+    controls = JSON.parse(canvasContent1) as typeof controls;
+  } catch {
+    return "";
+  }
+  return controls
+    .filter((c) => c.controlType === 4 && typeof c.innerHTML === "string")
+    .map((c) =>
+      String(c.innerHTML)
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function randomId(): string {
+  try {
+    return globalThis.crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+/** List the site's modern pages. */
+export async function listSitePages(siteUrl: string, cookies: string, timeoutMs: number): Promise<SitePageSummary[]> {
+  const res = await spFetch<{ value?: SitePageSummary[] }>(
+    `${apiBase(siteUrl)}/sitepages/pages?$select=Id,Title,FileName,Url,PromotedState`,
+    { cookies, timeoutMs },
+  );
+  return res.value ?? [];
+}
+
+/** Read a page's title + readable text content by id. */
+export async function getSitePage(
+  siteUrl: string,
+  pageId: number,
+  cookies: string,
+  timeoutMs: number,
+): Promise<{ Id: number; Title?: string; Url?: string; text: string }> {
+  const p = await spFetch<{ Id: number; Title?: string; Url?: string; CanvasContent1?: string }>(
+    `${apiBase(siteUrl)}/sitepages/pages(${pageId})`,
+    { cookies, timeoutMs },
+  );
+  return { Id: p.Id, ...(p.Title ? { Title: p.Title } : {}), ...(p.Url ? { Url: p.Url } : {}), text: extractCanvasText(p.CanvasContent1) };
+}
+
+/**
+ * Create a modern page with a single text web part and publish it. Best-effort:
+ * the SitePages create→savepage→publish dance is SharePoint-version sensitive,
+ * so failures here are reported plainly rather than presented as impossible.
+ * `bodyHtml` is the rich-text HTML (callers pass <p>…</p> etc).
+ */
+export async function createTextPage(
+  siteUrl: string,
+  title: string,
+  bodyHtml: string,
+  cookies: string,
+  digest: string,
+  timeoutMs: number,
+): Promise<{ Id: number; Url?: string }> {
+  const created = await spFetch<{ Id: number; Url?: string }>(`${apiBase(siteUrl)}/sitepages/pages`, {
+    method: "POST",
+    cookies,
+    digest,
+    body: { Title: title, PageLayoutType: "Article" },
+    timeoutMs,
+  });
+  await spFetch<unknown>(`${apiBase(siteUrl)}/sitepages/pages(${created.Id})/SavePage`, {
+    method: "POST",
+    cookies,
+    digest,
+    body: { Title: title, CanvasContent1: buildTextCanvas(bodyHtml) },
+    timeoutMs,
+  });
+  await spFetch<unknown>(`${apiBase(siteUrl)}/sitepages/pages(${created.Id})/Publish`, {
+    method: "POST",
+    cookies,
+    digest,
+    timeoutMs,
+  });
+  return { Id: created.Id, ...(created.Url ? { Url: created.Url } : {}) };
 }
 
 /** Quick shape check for a pasted SharePoint cookie capture. */

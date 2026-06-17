@@ -12,6 +12,16 @@ import {
   updateListItem,
   sharePointCookieIssue,
   SHAREPOINT_SESSION_USER_AGENT,
+  spAlias,
+  listFolder,
+  readFileText,
+  uploadTextFile,
+  deleteFile,
+  buildTextCanvas,
+  extractCanvasText,
+  listSitePages,
+  getSitePage,
+  createTextPage,
 } from "../src/auth/sharePointRestSession";
 
 const SITE = "https://contoso.sharepoint.com/sites/Eng";
@@ -123,6 +133,102 @@ test("updateListItem uses MERGE + IF-MATCH and tolerates a 204", async () => {
   assert.equal(h["IF-MATCH"], "*");
   assert.equal(h["X-RequestDigest"], "0xDIG");
   assert.match(calls[0].url, /\/items\(7\)$/);
+});
+
+// --- document libraries ----------------------------------------------------
+
+test("spAlias keeps the OData quote delimiters literal, encodes the path interior, doubles apostrophes", () => {
+  // encodeURIComponent leaves ' unreserved — exactly what @f='…' needs as delimiters.
+  assert.equal(spAlias("@f", "/sites/Eng/Shared Documents"), "@f='%2Fsites%2FEng%2FShared%20Documents'");
+  assert.match(spAlias("@f", "/a/O'Brien"), /O''Brien/); // interior ' doubled per OData
+});
+
+test("listFolder returns files and folders, hiding the system Forms folder", async () => {
+  const { result, calls } = await withFetch(
+    (url) =>
+      /\/Files\?/.test(url)
+        ? { body: JSON.stringify({ value: [{ Name: "a.txt", ServerRelativeUrl: "/x/a.txt" }] }) }
+        : { body: JSON.stringify({ value: [{ Name: "Sub", ServerRelativeUrl: "/x/Sub" }, { Name: "Forms", ServerRelativeUrl: "/x/Forms" }] }) },
+    () => listFolder(SITE, "/sites/Eng/Shared Documents", COOKIES, 30000),
+  );
+  assert.equal(result.files.length, 1);
+  assert.deepEqual(result.folders.map((f) => f.Name), ["Sub"]);
+  assert.match(calls[0].url, /GetFolderByServerRelativeUrl\(@f\)\/Files\?@f='/);
+});
+
+test("readFileText requests $value as text/plain and returns the raw body", async () => {
+  const { result, calls } = await withFetch(
+    () => ({ body: "line one\nline two" }),
+    () => readFileText(SITE, "/sites/Eng/Shared Documents/a.txt", COOKIES, 30000),
+  );
+  assert.equal(result, "line one\nline two");
+  assert.match(calls[0].url, /GetFileByServerRelativeUrl\(@f\)\/\$value\?@f=/);
+  assert.equal((calls[0].init.headers as Record<string, string>).Accept, "text/plain");
+});
+
+test("uploadTextFile POSTs the raw body to Files/add with overwrite", async () => {
+  const { result, calls } = await withFetch(
+    () => ({ body: JSON.stringify({ Name: "note.md", ServerRelativeUrl: "/x/note.md" }) }),
+    () => uploadTextFile(SITE, "/x", "note.md", "# Hello", COOKIES, "0xDIG", 30000),
+  );
+  assert.equal(result.Name, "note.md");
+  assert.match(calls[0].url, /Files\/add\(url='note\.md',overwrite=true\)/);
+  assert.equal((calls[0].init as { body?: string }).body, "# Hello");
+  // raw upload must NOT be sent as application/json
+  assert.equal((calls[0].init.headers as Record<string, string>)["Content-Type"], undefined);
+  assert.equal((calls[0].init.headers as Record<string, string>)["X-RequestDigest"], "0xDIG");
+});
+
+test("deleteFile tunnels DELETE through POST with IF-MATCH", async () => {
+  const { calls } = await withFetch(
+    () => ({ status: 204 }),
+    () => deleteFile(SITE, "/x/old.txt", COOKIES, "0xDIG", 30000),
+  );
+  const h = calls[0].init.headers as Record<string, string>;
+  assert.equal(h["X-HTTP-Method"], "DELETE");
+  assert.equal(h["IF-MATCH"], "*");
+});
+
+// --- modern pages ----------------------------------------------------------
+
+test("buildTextCanvas / extractCanvasText round-trip the text", () => {
+  const canvas = buildTextCanvas("<p>Hello <b>world</b></p>", "fixed-id");
+  const parsed = JSON.parse(canvas) as Array<{ controlType: number }>;
+  assert.equal(parsed[0].controlType, 4);
+  assert.equal(parsed[1].controlType, 0); // page-settings slice
+  assert.equal(extractCanvasText(canvas), "Hello world");
+  assert.equal(extractCanvasText("not json"), "");
+  assert.equal(extractCanvasText(undefined), "");
+});
+
+test("listSitePages unwraps the modern pages collection", async () => {
+  const { result, calls } = await withFetch(
+    () => ({ body: JSON.stringify({ value: [{ Id: 3, Title: "Home" }] }) }),
+    () => listSitePages(SITE, COOKIES, 30000),
+  );
+  assert.equal(result[0].Title, "Home");
+  assert.match(calls[0].url, /\/sitepages\/pages\?/);
+});
+
+test("getSitePage extracts readable text from CanvasContent1", async () => {
+  const { result } = await withFetch(
+    () => ({ body: JSON.stringify({ Id: 3, Title: "Home", CanvasContent1: buildTextCanvas("<p>Body text</p>") }) }),
+    () => getSitePage(SITE, 3, COOKIES, 30000),
+  );
+  assert.equal(result.Title, "Home");
+  assert.equal(result.text, "Body text");
+});
+
+test("createTextPage creates, saves, and publishes (three calls)", async () => {
+  const { result, calls } = await withFetch(
+    (url) => (/\/pages$/.test(url) ? { body: JSON.stringify({ Id: 9, Url: "SitePages/x.aspx" }) } : { status: 200, body: "{}" }),
+    () => createTextPage(SITE, "New Page", "<p>hi</p>", COOKIES, "0xDIG", 30000),
+  );
+  assert.equal(result.Id, 9);
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].url, /\/sitepages\/pages$/);
+  assert.match(calls[1].url, /\/sitepages\/pages\(9\)\/SavePage$/);
+  assert.match(calls[2].url, /\/sitepages\/pages\(9\)\/Publish$/);
 });
 
 test("a 403 surfaces a session-rejected auth error with the replayed cookie names", async () => {
