@@ -135,6 +135,10 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Listing pages of ${str(i.site) ?? "the site"}…`;
     case "aisharepoint_list_connections":
       return "Listing your SharePoint connections…";
+    case "aisharepoint_sp_list_items":
+      return `Reading SharePoint list${str(i.list) ? ` “${short(String(i.list), 40)}”` : ""} (browser session)…`;
+    case "aisharepoint_sp_write_item":
+      return `${i.action === "update" ? "Updating" : "Creating"} a SharePoint list item${str(i.list) ? ` in “${short(String(i.list), 40)}”` : ""} (browser session, awaiting approval)…`;
     case "aisharepoint_copilot_usage":
       return "Checking Copilot usage…";
     case "aisharepoint_write_site_files":

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.61.0 — 2026-06-16
+
+### Added — SharePoint write WITHOUT admin consent, via your browser session (ADR-0046)
+- **Why:** every OAuth path to a SharePoint write — Graph `Sites.ReadWrite.All`/`Sites.Manage.All`,
+  per-site `Sites.Selected`, even SharePoint REST `AllSites.Write` — needs **tenant-admin consent**,
+  so your real Web-UI permissions never reach the app's token. And the old site-owner escape hatch
+  (Azure ACS app-only via `appregnew`/`appinv`) was **fully retired 2026-04-02**.
+- **The no-admin path:** replay your own signed-in session. The new **"Connect SharePoint Site
+  (browser session)"** command captures your `FedAuth`/`rtFa` cookies (stored only in the OS
+  keychain), verifies them against `/_api/web` + `/_api/web/currentuser`, and from then on
+  @sharepoint can **read and write the site's lists** under exactly the permissions you have in the
+  browser — no admin consent, no app registration. This is the same proven pattern the connector
+  already uses for ServiceNow.
+- **Tools:** `sp_list_items` (read — also reveals the INTERNAL field names) and `sp_write_item`
+  (create/update a list item, approval-gated). Writes obtain a form digest from `/_api/contextinfo`
+  and use `X-RequestDigest` + `MERGE`/`IF-MATCH`, and present a first-party `Referer` (the same CSRF
+  hardening as the Confluence fix). 11 new unit tests (545 total).
+- **Caveats (stated honestly):** browser-session cookies expire in hours (re-run the command), and
+  some tenants' conditional access blocks cookie replay. This first increment covers **list items**;
+  modern pages/libraries are the next step.
+
 ## 0.60.0 — 2026-06-16
 
 ### Fixed — Malformed Confluence page bodies & mis-encoded titles

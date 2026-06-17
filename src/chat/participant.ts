@@ -133,6 +133,13 @@ const INSTRUCTIONS = [
   "NEVER claim the site changed until it succeeded; verify with site_overview after. Deletions",
   "stay opt-in. List CONTENT (items/documents) is not in the pipeline yet — say so when asked.",
   "Prefer SharePoint's no-code, out-of-the-box features so sites stay maintainable. Be concise.",
+  "SHAREPOINT WRITE without admin consent: if the user connected a site via its BROWSER SESSION",
+  "(the 'Connect SharePoint Site (browser session)' command), you can read & write its LISTS with",
+  "sp_list_items and sp_write_item — these replay the user's own signed-in session, so they work",
+  "with exactly the permissions the user has in the Web UI. ALWAYS call sp_list_items first to learn",
+  "the INTERNAL field names, then write with those exact keys. sp_write_item is approval-gated. If no",
+  "session is connected and Graph write is blocked, tell the user to run that command (sessions",
+  "expire in hours and need re-capturing).",
 ].join(" ");
 
 /** Cap on tool-calling rounds per turn (each round is its own request).

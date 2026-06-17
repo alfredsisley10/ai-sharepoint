@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.60.0",
+  "version": "0.61.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -70,6 +70,17 @@
         "title": "Add Managed Target (SharePoint or Confluence)",
         "category": "AI SharePoint",
         "icon": "$(add)"
+      },
+      {
+        "command": "aiSharePoint.connectSiteSession",
+        "title": "Connect SharePoint Site (browser session — no admin consent)",
+        "category": "AI SharePoint",
+        "icon": "$(key)"
+      },
+      {
+        "command": "aiSharePoint.disconnectSiteSession",
+        "title": "Disconnect SharePoint Browser Session",
+        "category": "AI SharePoint"
       },
       {
         "command": "aiSharePoint.openSourceInBrowser",
@@ -1530,6 +1541,89 @@
           },
           "required": [
             "note"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_sp_list_items",
+        "displayName": "Read SharePoint List (browser session)",
+        "toolReferenceName": "spListItems",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(table)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Read items from a SharePoint list using the user's BROWSER SESSION (the no-admin write path — only works after the user runs 'Connect SharePoint Site (browser session)'). Returns the items as JSON; the field KEYS are INTERNAL SharePoint field names (e.g. 'Title', 'Due_x0020_Date') — you MUST use those exact keys when writing with sp_write_item. Args: site (site URL or web title; optional if one session is connected), list (the list's display title, required), optional select (comma-separated internal field names), filter (OData $filter), top (max items). Use this to discover the field names before any write.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Site URL or web title of a connected browser session (optional when only one is connected)."
+            },
+            "list": {
+              "type": "string",
+              "description": "The list's display title (required)."
+            },
+            "select": {
+              "type": "string",
+              "description": "Comma-separated internal field names to return (optional)."
+            },
+            "filter": {
+              "type": "string",
+              "description": "OData $filter expression (optional), e.g. \"Status eq 'Open'\"."
+            },
+            "top": {
+              "type": "number",
+              "description": "Max items to return (default 50, cap 500)."
+            }
+          },
+          "required": [
+            "list"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_sp_write_item",
+        "displayName": "Write SharePoint List Item (browser session)",
+        "toolReferenceName": "spWriteItem",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Create or UPDATE a SharePoint list item using the user's BROWSER SESSION — the no-admin write path (needs a connected session; see sp_list_items). Approval-gated: the user confirms before the write. 'fields' is an object keyed by INTERNAL SharePoint field names (read the list first with sp_list_items to get them; e.g. {\"Title\":\"X\",\"Status\":\"Open\"}). To CREATE: action='create', site, list, fields. To UPDATE: action='update', site, list, itemId (from sp_list_items), fields (only the fields to change). Use ONLY for a change the user explicitly asked for. This writes under the user's own SharePoint permissions, so it can only do what they can do in the Web UI.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": {
+              "type": "string",
+              "description": "Site URL or web title of a connected browser session (optional when only one is connected)."
+            },
+            "list": {
+              "type": "string",
+              "description": "The list's display title (required)."
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update"
+              ],
+              "description": "Create a new item or update an existing one."
+            },
+            "itemId": {
+              "type": "number",
+              "description": "The item's Id (update only) — find it via sp_list_items."
+            },
+            "fields": {
+              "type": "object",
+              "description": "Object keyed by INTERNAL field names → values (required)."
+            }
+          },
+          "required": [
+            "list",
+            "fields"
           ]
         }
       },

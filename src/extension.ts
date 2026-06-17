@@ -13,6 +13,9 @@ import { tenantCacheHandle } from "./auth/msalCache";
 import { isSupportedSiteUrl } from "./auth/sharePointClient";
 import { SitesStore, SiteConnection } from "./auth/sitesStore";
 import { SiteAccess } from "./auth/siteAccess";
+import { SharePointSessionStore } from "./auth/sharePointSessionStore";
+import { registerSharePointSessionTools } from "./chat/sharePointSessionTools";
+import { verifySharePointSession, sharePointCookieIssue } from "./auth/sharePointRestSession";
 import { InstallIdStore } from "./diagnostics/installId";
 import { TelemetryService } from "./diagnostics/telemetry";
 import { ErrorReportStore } from "./diagnostics/errorReports";
@@ -217,6 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const meter = new UsageMeter(context.globalState);
   const copilot = new CopilotService(meter);
   const sites = new SitesStore(context.globalState, context.workspaceState);
+  const spSessions = new SharePointSessionStore(context.secrets, context.globalState);
   const registry = new AuthProviderRegistry(secrets, (info) => {
     void showDeviceCodePrompt(info.userCode, info.verificationUri);
   });
@@ -609,6 +613,10 @@ export function activate(context: vscode.ExtensionContext): void {
         nowIso,
       ),
     ),
+    ...tryRegister("sharepoint session tools", () =>
+      registerSharePointSessionTools(spSessions, telemetry, errors, () => contextService.caps().timeoutMs),
+    ),
+    spSessions,
     ...tryRegister("context tools", () =>
       registerContextTools(
         contextSources,
@@ -902,6 +910,71 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage(
       `✓ "${result.site.displayName}" reachable in ${result.latencyMs}ms as ${result.account} (read/connectivity check${conn.role === "managed" ? "; managed write-back goes through Pull → Apply" : ""}).`,
     );
+  });
+
+  // No-admin WRITE path (ADR-0046): connect a SharePoint site via the user's own
+  // signed-in BROWSER SESSION (FedAuth/rtFa cookies + form digest). Unlike Graph
+  // write (which needs tenant-admin consent), this replays the access the user
+  // already has in the Web UI.
+  register("aiSharePoint.connectSiteSession", async () => {
+    const url = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "SharePoint browser session — site URL",
+      placeHolder: "https://contoso.sharepoint.com/sites/Engineering",
+      validateInput: (v) => {
+        try {
+          return /\.sharepoint\.(com|us|cn|de)$/i.test(new URL(v.trim()).hostname) || new URL(v.trim()).protocol === "https:"
+            ? undefined
+            : "Enter the https:// site URL";
+        } catch {
+          return "Enter a valid https:// site URL";
+        }
+      },
+    });
+    if (!url) return;
+    const siteUrl = url.trim().replace(/\/+$/, "");
+    const cookies = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      password: true,
+      title: "SharePoint browser session — paste the Cookie header",
+      placeHolder: "FedAuth=…; rtFa=…; …",
+      prompt:
+        "In a signed-in SharePoint tab: DevTools → Network → click any request to the site → Request Headers → copy the WHOLE Cookie value. Some cookies are HttpOnly, so the Network request header is the reliable source. Stored only in your OS keychain; sessions expire in hours.",
+      validateInput: (v) => sharePointCookieIssue(v),
+    });
+    if (!cookies) return;
+    try {
+      const identity = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Verifying the SharePoint session…" },
+        () => verifySharePointSession(siteUrl, cookies, contextService.caps().timeoutMs),
+      );
+      await spSessions.connect(
+        { siteUrl, webTitle: identity.webTitle, account: identity.account, addedAt: nowIso(), lastVerifiedAt: nowIso() },
+        cookies,
+      );
+      telemetry.record("sp.session.connect");
+      void vscode.window.showInformationMessage(
+        `Connected "${identity.webTitle}" via browser session as ${identity.account}. @sharepoint can now read & write its lists (no admin consent). Re-run this when the session expires.`,
+      );
+    } catch (err) {
+      const safe = err instanceof AppError ? (err.userSummary ?? err.message) : err instanceof Error ? err.message : String(err);
+      void vscode.window.showErrorMessage(`Session verification failed: ${safe}`);
+    }
+  });
+
+  register("aiSharePoint.disconnectSiteSession", async () => {
+    const all = spSessions.list();
+    if (all.length === 0) {
+      void vscode.window.showInformationMessage("No SharePoint browser-session connections.");
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(
+      all.map((s) => ({ label: s.webTitle, description: s.siteUrl, s })),
+      { ignoreFocusOut: true, title: "Disconnect which SharePoint browser session?" },
+    );
+    if (!pick) return;
+    await spSessions.remove(pick.s.siteUrl);
+    void vscode.window.showInformationMessage(`Disconnected "${pick.s.webTitle}" (session cookies wiped from the keychain).`);
   });
 
   register("aiSharePoint.openSiteInBrowser", async (arg) => {
