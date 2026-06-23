@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.66.0 — 2026-06-23
+
+### Added — #2 extended project memory (dedup, reinforce, forget, curate)
+- The fifth and final enhancement. Project AI-managed memory was a single
+  bulleted blob with pure-oldest (FIFO) eviction and no way to remove a single
+  item — so the model re-saving the same learning quietly evicted genuinely
+  distinct ones, and a wrong memory could only be fixed by wiping everything.
+  Memory is now a real, self-maintaining store:
+  - **Dedup + reinforce on save**: a near-duplicate of an existing learning
+    (normalized / containment / token-overlap similarity) is merged and moved to
+    most-recent — keeping the richer phrasing — instead of stacking duplicates.
+    `remember_project_context` reports "added" vs "reinforced".
+  - **Forget**: a new `aisharepoint_forget_project_context` tool (confirmation-
+    gated) lets you say "forget that I want answers in German" and removes the
+    matching learning — AI-managed memory only, never your goals/instructions.
+  - **Curate**: a **"Manage Project Memory"** command to review and delete (or
+    add) individual learnings, instead of editing one big text blob.
+  - **Budget-aware (with #3)**: the project block is now split so AI-managed
+    memory is trimmed *before* your own goals/instructions when a prompt is over
+    a model's effective context, and the capacity grew (4k → 6k chars).
+- New pure memory engine (`rememberNote`/`forgetNotes`/`listNotes`/`similarNote`)
+  with 4 new unit tests (582 total).
+
+### Completed — all five pilot enhancements shipped
+#1 query timeouts (0.63), #5 result window (0.63), #4 proxy-safe words (0.64),
+#3 effective-context probing (0.65), #2 extended project memory (0.66).
+
 ## 0.65.0 — 2026-06-23
 
 ### Added — #3 effective-context probing & prompt budgeting

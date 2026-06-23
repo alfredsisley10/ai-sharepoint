@@ -100,8 +100,10 @@ const INSTRUCTIONS = [
   "result sets into chat, and don't read the exported file back unless asked about a slice.",
   "When the user teaches you durable, project-specific behavior (a preference, a rule, where to",
   "look), and a project is active, you may call remember_project_context to save it (they",
-  "approve) — it persists in the project's AI-managed context, separate from their own goals/",
-  "instructions, across sessions. Use it sparingly for lasting guidance, not per-turn detail.",
+  "approve) — it persists in the project's AI-managed memory, separate from their own goals/",
+  "instructions, across sessions. Saving is dedup-aware (a near-duplicate is reinforced, not",
+  "duplicated). When the user says a remembered behavior is wrong or no longer applies, call",
+  "forget_project_context to remove it. Use these sparingly for lasting guidance, not per-turn detail.",
   "When the user wants findings SHARED with someone, use draft_communication to prepare a Teams",
   "message or Outlook email. Before drafting a message that should reflect what was already said",
   "or decided (a status update, reply, or summary), GROUND it first: search the relevant",
@@ -401,27 +403,28 @@ async function answerWithModel(
   const history = formatHistory(context);
   const activeProject = deps.projects.active();
   // Project context: USER-DEFINED (goals + instructions) and AI-MANAGED
-  // (learned across sessions) are presented as separate, clearly-labeled
-  // blocks so the model never conflates them — and is told it may persist new
-  // learnings via remember_project_context (user-approved).
-  const projectBlock =
+  // (learned across sessions) are presented as separate, clearly-labeled blocks
+  // so the model never conflates them — and as separate budget sections (#2/#3)
+  // so AI-managed memory is trimmed before the user's own goals/instructions.
+  const projectUserBlock =
     activeProject &&
-    (activeProject.goals || activeProject.instructions || activeProject.aiContext)
+    (activeProject.goals || activeProject.instructions || !activeProject.aiContext)
       ? [
           `\n## Project: ${activeProject.name}${activeProject.description ? ` — ${activeProject.description}` : ""}`,
           activeProject.goals ? `\n### Goals (set by the user)\n${activeProject.goals}` : "",
           activeProject.instructions
             ? `\n### Instructions & reference context (set by the user)\n${activeProject.instructions}`
             : "",
-          activeProject.aiContext
-            ? `\n### AI-managed context — learnings you saved in earlier sessions (NOT user-authored; you may add to it via remember_project_context when the user teaches you durable, project-specific behavior, with their approval)\n${activeProject.aiContext}`
+          !activeProject.goals && !activeProject.instructions && !activeProject.aiContext
+            ? "_(no goals/instructions/memory set yet — you may propose saving durable learnings via remember_project_context, or drop them via forget_project_context)_"
             : "",
         ]
           .filter(Boolean)
           .join("\n")
-      : activeProject
-        ? `\n## Project: ${activeProject.name} (no goals/instructions/AI context set yet — you may propose saving durable learnings via remember_project_context)`
-        : "";
+      : "";
+  const projectAiBlock = activeProject?.aiContext
+    ? `${activeProject.goals || activeProject.instructions ? "" : `\n## Project: ${activeProject.name}`}\n### AI-managed memory — learnings you saved in earlier sessions (NOT user-authored; add via remember_project_context, correct/remove via forget_project_context, with the user's approval)\n${activeProject.aiContext}`
+    : "";
   const lessonsOn = deps.lessons.enabled();
   // Proxy-block avoidance (#4): a system note so the model avoids blocked words
   // in its REPLY, plus (below) defang/warn on the outgoing prompt itself.
@@ -429,9 +432,10 @@ async function answerWithModel(
   const proxyTerms = proxyMode === "off" ? [] : deps.proxyTerms.terms();
 
   // Assemble the prompt as labeled, prioritized sections so effective-context
-  // budgeting (#3) can drop the lowest-value ones (history first, then project
-  // memory, then connected data) when a model's real usable context is smaller
-  // than the prompt — instructions and the user's request are never dropped.
+  // budgeting (#3) drops the lowest-value ones first when a model's real usable
+  // context is smaller than the prompt. Drop order (lowest priority first):
+  // conversation history → AI-managed memory → user goals/instructions →
+  // connected data. Instructions and the user's request are never dropped.
   const sections: PromptSection[] = [
     { label: "instructions", text: INSTRUCTIONS, priority: 100, required: true },
     ...(lessonsOn ? [{ label: "lessons nudge", text: LESSONS_NUDGE, priority: 95, required: true }] : []),
@@ -439,8 +443,9 @@ async function answerWithModel(
       const nudge = buildProxyNudge(proxyTerms, proxyMode);
       return nudge ? [{ label: "proxy nudge", text: nudge, priority: 95, required: true }] : [];
     })(),
-    ...(projectBlock ? [{ label: "project memory", text: projectBlock, priority: 30 }] : []),
-    ...(contextBlock ? [{ label: "connected context", text: `\n## Connected context\n${contextBlock}`, priority: 40 }] : []),
+    ...(contextBlock ? [{ label: "connected context", text: `\n## Connected context\n${contextBlock}`, priority: 50 }] : []),
+    ...(projectUserBlock ? [{ label: "project goals/instructions", text: projectUserBlock, priority: 40 }] : []),
+    ...(projectAiBlock ? [{ label: "project memory", text: projectAiBlock, priority: 30 }] : []),
     ...(history ? [{ label: "conversation history", text: `\n## Conversation so far\n${history}`, priority: 20 }] : []),
     { label: "user request", text: `\n## User request\n${request.prompt}`, priority: 100, required: true },
   ];

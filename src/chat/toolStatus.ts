@@ -101,6 +101,10 @@ export function describeToolCall(name: string, input: unknown): string {
           ? "Removing a word from the proxy avoid-list…"
           : "Listing the proxy avoid-list…";
     }
+    case "aisharepoint_remember_project_context":
+      return "Saving a learning to the project's memory (awaiting approval)…";
+    case "aisharepoint_forget_project_context":
+      return "Forgetting a learning from the project's memory (awaiting approval)…";
     case "aisharepoint_list_sources":
       return "Listing your reference sources…";
     case "aisharepoint_list_bookmarks":

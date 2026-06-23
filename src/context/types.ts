@@ -169,23 +169,125 @@ export interface Project {
 
 export const INSTRUCTIONS_MAX_CHARS = 2_000;
 export const GOALS_MAX_CHARS = 1_000;
-export const AI_CONTEXT_MAX_CHARS = 4_000;
+export const AI_CONTEXT_MAX_CHARS = 6_000;
 
-/** Append one AI-learned note to a project's AI context (a bulleted log),
- *  trimming the oldest entries when it would exceed the cap. Pure. */
-export function appendAiNote(
-  existing: string | undefined,
-  note: string,
-  max = AI_CONTEXT_MAX_CHARS,
-): string {
-  const clean = note.trim().replace(/\s+/g, " ").slice(0, 400);
-  if (!clean) return existing ?? "";
-  const lines = (existing ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
-  lines.push(`- ${clean}`);
+/** Normalize a note for similarity comparison (lowercase, punctuation → space). */
+function normForCompare(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Content words (length > 2) of a note, for token-overlap similarity. */
+function tokenSet(s: string): Set<string> {
+  return new Set(normForCompare(s).split(" ").filter((w) => w.length > 2));
+}
+
+/**
+ * Are two memory notes near-duplicates? Conservative: exact-normalized,
+ * substring containment, or high token overlap (Jaccard ≥ threshold). Pure —
+ * underpins dedup on remember and matching on forget.
+ */
+export function similarNote(a: string, b: string, threshold = 0.8): boolean {
+  const na = normForCompare(a);
+  const nb = normForCompare(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length >= 8 && nb.length >= 8 && (na.includes(nb) || nb.includes(na))) return true;
+  const ta = tokenSet(a);
+  const tb = tokenSet(b);
+  if (ta.size === 0 || tb.size === 0) return false;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  const union = ta.size + tb.size - inter;
+  return union > 0 && inter / union >= threshold;
+}
+
+/** Parse a stored AI-context blob into individual note texts (bullets stripped). */
+export function listNotes(existing: string | undefined): string[] {
+  return (existing ?? "")
+    .split("\n")
+    .map((l) => l.replace(/^[-*]\s*/, "").trim())
+    .filter(Boolean);
+}
+
+/** Re-serialize notes to the bulleted blob, evicting the oldest (front) when
+ *  over the character cap. */
+function serializeNotes(notes: string[], max: number): string {
+  const lines = notes.map((n) => `- ${n}`);
   let out = lines.join("\n");
   while (out.length > max && lines.length > 1) {
     lines.shift();
     out = lines.join("\n");
   }
   return out.slice(-max);
+}
+
+export interface RememberResult {
+  text: string;
+  status: "added" | "reinforced";
+}
+
+/**
+ * Dedup-aware append (the heart of project memory): if a near-duplicate note
+ * already exists, drop it and re-add the more-informative phrasing at the end —
+ * "reinforced", so it moves to the front of the keep-queue and survives FIFO
+ * eviction — instead of stacking duplicates that crowd out distinct learnings.
+ * Otherwise append. Evicts the oldest when over the cap. Pure.
+ */
+export function rememberNote(
+  existing: string | undefined,
+  note: string,
+  max = AI_CONTEXT_MAX_CHARS,
+): RememberResult {
+  const clean = note.trim().replace(/\s+/g, " ").slice(0, 400);
+  if (!clean) return { text: existing ?? "", status: "added" };
+  const keep: string[] = [];
+  let reinforced = false;
+  let merged = clean;
+  for (const n of listNotes(existing)) {
+    if (similarNote(n, clean)) {
+      reinforced = true;
+      if (n.length > merged.length) merged = n; // keep the richer phrasing
+    } else {
+      keep.push(n);
+    }
+  }
+  keep.push(merged);
+  return { text: serializeNotes(keep, max), status: reinforced ? "reinforced" : "added" };
+}
+
+/** Append one AI-learned note to a project's AI context (dedup-aware). Pure;
+ *  kept as the legacy entry point — delegates to {@link rememberNote}. */
+export function appendAiNote(
+  existing: string | undefined,
+  note: string,
+  max = AI_CONTEXT_MAX_CHARS,
+): string {
+  return rememberNote(existing, note, max).text;
+}
+
+export interface ForgetResult {
+  text: string;
+  removed: string[];
+}
+
+/**
+ * Remove notes matching a query (looser similarity than dedup, plus substring),
+ * so the user can correct a wrong/stale memory — "forget that I prefer X" — or
+ * delete a specific item. Pure.
+ */
+export function forgetNotes(
+  existing: string | undefined,
+  query: string,
+  max = AI_CONTEXT_MAX_CHARS,
+): ForgetResult {
+  const q = query.trim();
+  if (!q) return { text: existing ?? "", removed: [] };
+  const nq = normForCompare(q);
+  const removed: string[] = [];
+  const keep = listNotes(existing).filter((n) => {
+    const hit = similarNote(n, q, 0.5) || (nq.length >= 4 && normForCompare(n).includes(nq));
+    if (hit) removed.push(n);
+    return !hit;
+  });
+  return { text: serializeNotes(keep, max), removed };
 }

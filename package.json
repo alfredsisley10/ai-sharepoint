@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.65.0",
+  "version": "0.66.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -388,6 +388,12 @@
         "title": "Show Learned Model Context Limits",
         "category": "AI SharePoint",
         "icon": "$(dashboard)"
+      },
+      {
+        "command": "aiSharePoint.manageProjectMemory",
+        "title": "Manage Project Memory",
+        "category": "AI SharePoint",
+        "icon": "$(sparkle)"
       },
       {
         "command": "aiSharePoint.exportLessons",
@@ -1567,13 +1573,37 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Persist a durable, project-specific learning into the ACTIVE project's AI-managed context (separate from the user's own goals/instructions) so it carries across sessions — e.g. 'the user wants app-ownership answers from the CMDB, citing sys_id', 'always answer in German'. The user approves each note in a confirmation dialog. Use sparingly for genuinely durable behavior the user taught you, not per-turn details. No-op if no project is active.",
+        "modelDescription": "Persist a durable, project-specific learning into the ACTIVE project's AI-managed context (separate from the user's own goals/instructions) so it carries across sessions — e.g. 'the user wants app-ownership answers from the CMDB, citing sys_id', 'always answer in German'. The user approves each note in a confirmation dialog. Saving is dedup-aware: a near-duplicate of an existing learning is merged/reinforced rather than duplicated. Use sparingly for genuinely durable behavior the user taught you, not per-turn details. No-op if no project is active.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "note": {
               "type": "string",
               "description": "One concise learning to remember for this project."
+            }
+          },
+          "required": [
+            "note"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_forget_project_context",
+        "displayName": "Forget Project Context",
+        "toolReferenceName": "spForget",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(trash)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Remove a saved learning from the ACTIVE project's AI-managed context when the user says a remembered behavior is wrong or no longer applies — e.g. 'forget that I want answers in German', 'stop citing the CMDB'. Pass text matching the learning to remove (quote the saved note shown in the project's AI-managed context for an exact match). The user approves the removal in a confirmation dialog. Only affects AI-managed memory, never the user's own goals/instructions. No-op if no project is active.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "note": {
+              "type": "string",
+              "description": "Text identifying the learning(s) to forget (matched by similarity/containment)."
             }
           },
           "required": [

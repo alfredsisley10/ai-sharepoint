@@ -54,14 +54,63 @@ export function registerProjectTools(
           }
           const note = (options.input.note ?? "").trim();
           if (!note) return text("Empty note — nothing to remember.");
-          await projects.appendAiContext(active.id, note);
-          telemetry.record("project.remember");
+          const result = await projects.rememberAiContext(active.id, note);
+          telemetry.record("project.remember", { status: result?.status ?? "added" });
           return text(
-            `Saved to "${active.name}" AI context. It will be included (clearly labeled as AI-managed) in future @sharepoint turns for this project.`,
+            result?.status === "reinforced"
+              ? `Reinforced an existing learning in "${active.name}" AI context (it matched something already saved, so no duplicate was created).`
+              : `Saved to "${active.name}" AI context. It will be included (clearly labeled as AI-managed) in future @sharepoint turns for this project.`,
           );
         } catch (err) {
           errors.capture("tool:aisharepoint_remember_project_context", err);
           return text(`Could not save the note: ${redactError(err).message}`);
+        }
+      },
+    }),
+    vscode.lm.registerTool<{ note: string }>("aisharepoint_forget_project_context", {
+      prepareInvocation(options) {
+        const active = projects.active();
+        return {
+          invocationMessage: "Forgetting a saved learning from the project's AI context",
+          confirmationMessages: {
+            title: active ? `Forget this from project "${active.name}"?` : "Forget this (no active project)?",
+            message: new vscode.MarkdownString(
+              [
+                active
+                  ? "Removes matching note(s) from the project's **AI-managed context** (your own goals/instructions are untouched):"
+                  : "There is no active project, so there's nothing to forget.",
+                "",
+                "```",
+                (options.input.note ?? "").slice(0, 400),
+                "```",
+              ].join("\n"),
+            ),
+          },
+        };
+      },
+      async invoke(options) {
+        telemetry.record("tool.invoke", { tool: "aisharepoint_forget_project_context" });
+        try {
+          const active = projects.active();
+          if (!active) {
+            return text("No active project — nothing to forget.");
+          }
+          const note = (options.input.note ?? "").trim();
+          if (!note) return text("Empty query — nothing to forget.");
+          const removed = await projects.forgetAiContext(active.id, note);
+          telemetry.record("project.forget", { count: removed.length });
+          return text(
+            removed.length === 0
+              ? `No saved learning matched that — nothing was removed from "${active.name}". The current learnings are:\n${
+                  projects.aiNotes(active.id).map((n) => `- ${n}`).join("\n") || "_(none)_"
+                }`
+              : `Removed ${removed.length} learning(s) from "${active.name}" AI context:\n${removed
+                  .map((n) => `- ${n}`)
+                  .join("\n")}`,
+          );
+        } catch (err) {
+          errors.capture("tool:aisharepoint_forget_project_context", err);
+          return text(`Could not forget the note: ${redactError(err).message}`);
         }
       },
     }),

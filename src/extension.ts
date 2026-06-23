@@ -5180,6 +5180,54 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  // #2 — review/curate the active project's AI-managed memory item by item
+  // (today the edit flow only lets you wipe the whole blob).
+  register("aiSharePoint.manageProjectMemory", async () => {
+    const active = projects.active();
+    if (!active) {
+      void vscode.window.showInformationMessage(
+        "No active project. Activate one in the Projects view to manage its AI-managed memory.",
+      );
+      return;
+    }
+    for (;;) {
+      const notes = projects.aiNotes(active.id);
+      const items: vscode.QuickPickItem[] = [
+        { label: "$(add) Add a learning…", alwaysShow: true },
+        ...(notes.length > 0
+          ? [
+              { label: "Saved learnings (click to remove)", kind: vscode.QuickPickItemKind.Separator } as vscode.QuickPickItem,
+              ...notes.map((n) => ({ label: n, description: "$(trash) remove" })),
+            ]
+          : [{ label: "_No learnings saved yet._", kind: vscode.QuickPickItemKind.Separator } as vscode.QuickPickItem]),
+      ];
+      const pick = await vscode.window.showQuickPick(items, {
+        title: `Project memory — ${active.name} (${notes.length} learning${notes.length === 1 ? "" : "s"})`,
+        placeHolder: "AI-managed learnings, separate from your goals/instructions. Esc to close.",
+      });
+      if (!pick || pick.kind === vscode.QuickPickItemKind.Separator) return;
+      if (pick.label.startsWith("$(add)")) {
+        const input = await vscode.window.showInputBox({
+          title: `Add a learning to "${active.name}" memory`,
+          prompt: "One concise, durable learning (dedup-aware — near-duplicates are merged).",
+          ignoreFocusOut: true,
+        });
+        if (input?.trim()) {
+          const r = await projects.rememberAiContext(active.id, input.trim());
+          void vscode.window.showInformationMessage(
+            r?.status === "reinforced" ? "Reinforced an existing learning (no duplicate)." : "Learning saved to project memory.",
+          );
+        }
+        continue;
+      }
+      const removed = await projects.forgetAiContext(active.id, pick.label);
+      if (removed.length > 0) {
+        const label = pick.label.length > 60 ? `${pick.label.slice(0, 60)}…` : pick.label;
+        void vscode.window.showInformationMessage(`Removed "${label}" from project memory.`);
+      }
+    }
+  });
+
   // #3 — show what @sharepoint has learned about each model's usable context.
   register("aiSharePoint.showModelLimits", async () => {
     const rows = modelLimits.list();

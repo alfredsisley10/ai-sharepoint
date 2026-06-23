@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ContextSource, Project, appendAiNote } from "./types";
+import { ContextSource, Project, rememberNote, forgetNotes, listNotes } from "./types";
 
 export type { Project } from "./types";
 export {
@@ -7,6 +7,9 @@ export {
   GOALS_MAX_CHARS,
   AI_CONTEXT_MAX_CHARS,
   appendAiNote,
+  rememberNote,
+  forgetNotes,
+  listNotes,
 } from "./types";
 
 
@@ -65,14 +68,34 @@ export class ProjectsStore {
     return sources.filter((s) => ids.has(s.id));
   }
 
-  /** AI-managed: append one learned note to the active (or named) project's
-   *  AI context — kept separate from the user-defined fields. */
-  async appendAiContext(projectId: string, note: string): Promise<boolean> {
+  /** AI-managed: dedup-aware remember — reports whether the note was newly
+   *  added or merged into (reinforced) an existing near-duplicate. Returns
+   *  undefined when the project is gone. */
+  async rememberAiContext(
+    projectId: string,
+    note: string,
+  ): Promise<{ status: "added" | "reinforced" } | undefined> {
     const project = this.get(projectId);
-    if (!project) return false;
-    const aiContext = appendAiNote(project.aiContext, note);
-    await this.upsert({ ...project, aiContext });
-    return true;
+    if (!project) return undefined;
+    const r = rememberNote(project.aiContext, note);
+    await this.upsert({ ...project, aiContext: r.text || undefined });
+    return { status: r.status };
+  }
+
+  /** AI-managed: forget notes matching a query. Returns the removed notes. */
+  async forgetAiContext(projectId: string, query: string): Promise<string[]> {
+    const project = this.get(projectId);
+    if (!project) return [];
+    const r = forgetNotes(project.aiContext, query);
+    if (r.removed.length > 0) {
+      await this.upsert({ ...project, aiContext: r.text || undefined });
+    }
+    return r.removed;
+  }
+
+  /** AI-managed: the project's saved learnings as individual items. */
+  aiNotes(projectId: string): string[] {
+    return listNotes(this.get(projectId)?.aiContext);
   }
 
   /** Replace/clear a project's AI-managed context (user reset). */
