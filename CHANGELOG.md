@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.65.0 — 2026-06-23
+
+### Added — #3 effective-context probing & prompt budgeting
+- Models exposed through Copilot/the VS Code LM API advertise a `maxInputTokens`,
+  but the EFFECTIVE usable context is often smaller — Copilot can clamp or
+  compress below the native max — so a prompt that nominally "fits" can fail or
+  silently lose context. @sharepoint assembles large prompts (instructions +
+  project memory + connected data + history), so it now:
+  - **Budgets the prompt** to each model's effective ceiling, dropping the
+    lowest-value sections first (conversation history → project memory →
+    connected context) while never touching the instructions or your actual
+    request, and prints a concise note of what it trimmed.
+  - **Learns each model's real ceiling over time** (the "probe"): a clean send
+    raises the model's known-good high-water mark; a send that fails with a
+    context-overflow error records a tighter cap — both persisted per model in a
+    new `ModelLimitsStore`. Overflow errors now also get specific guidance
+    instead of a generic failure.
+  - **`aiSharePoint.context.maxInputTokens`** override for environments with a
+    known hard clamp (`0` = auto-detect/learn), and a **"Show Learned Model
+    Context Limits"** command to see what's been recorded.
+- New `contextBudget` pure core (budgeting + per-model limit math) with 10 unit
+  tests (578 total). **Four of five enhancements shipped; only #2 (memory —
+  extend project memory) remains.**
+
 ## 0.64.0 — 2026-06-23
 
 ### Added — #4 corporate-proxy block avoidance ("words to avoid")

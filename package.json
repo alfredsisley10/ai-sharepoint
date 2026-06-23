@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.64.0",
+  "version": "0.65.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -382,6 +382,12 @@
         "title": "Manage Proxy Avoid-List",
         "category": "AI SharePoint",
         "icon": "$(shield)"
+      },
+      {
+        "command": "aiSharePoint.showModelLimits",
+        "title": "Show Learned Model Context Limits",
+        "category": "AI SharePoint",
+        "icon": "$(dashboard)"
       },
       {
         "command": "aiSharePoint.exportLessons",
@@ -2412,6 +2418,13 @@
           "maximum": 600,
           "order": 13,
           "markdownDescription": "Base timeout for a single database query/probe (seconds). Large join probes are automatically granted a longer, cost-estimated budget (up to ~2 minutes, or this value if higher) based on table row counts, so big joins finish instead of timing out at the default."
+        },
+        "aiSharePoint.context.maxInputTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "order": 13,
+          "markdownDescription": "Override the model's advertised input-context size (tokens) when Copilot clamps the effective usable context below the native max (#3). `0` = auto-detect: use the model's advertised limit and learn the real ceiling over time from successes and overflow failures. Set a value only if you know your environment's hard clamp."
         },
         "aiSharePoint.proxy.mode": {
           "type": "string",

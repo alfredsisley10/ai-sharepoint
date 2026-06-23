@@ -24,6 +24,7 @@ import { LessonsStore } from "./diagnostics/lessonsStore";
 import { registerLessonsTools } from "./chat/lessonsTools";
 import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
+import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
 import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
 import { SyncEngine } from "./sync/syncEngine";
@@ -220,6 +221,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const errors = new ErrorReportStore(context.globalState, nowIso);
   const lessons = new LessonsStore(context.globalState, EXTENSION_VERSION, nowIso);
   const blockedTerms = new BlockedTermsStore(context.globalState);
+  const modelLimits = new ModelLimitsStore(context.globalState, nowIso);
   const meter = new UsageMeter(context.globalState);
   const copilot = new CopilotService(meter);
   const sites = new SitesStore(context.globalState, context.workspaceState);
@@ -605,6 +607,7 @@ export function activate(context: vscode.ExtensionContext): void {
         errors,
         lessons,
         proxyTerms: blockedTerms,
+        modelLimits,
         log,
         now: nowIso,
       }),
@@ -5175,6 +5178,34 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       void vscode.window.showInformationMessage(`"${pick.label}" comes from settings — edit aiSharePoint.proxy.blockedTerms to change it.`);
     }
+  });
+
+  // #3 — show what @sharepoint has learned about each model's usable context.
+  register("aiSharePoint.showModelLimits", async () => {
+    const rows = modelLimits.list();
+    if (rows.length === 0) {
+      void vscode.window.showInformationMessage(
+        "No model context limits learned yet — they're recorded automatically as you chat.",
+      );
+      return;
+    }
+    const lines = rows
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map((r) => {
+        const parts = [
+          r.advertised ? `advertised ${r.advertised.toLocaleString()}` : undefined,
+          r.effectiveCap ? `learned cap ${r.effectiveCap.toLocaleString()}` : undefined,
+          r.knownGood ? `known-good ${r.knownGood.toLocaleString()}` : undefined,
+        ].filter(Boolean);
+        return `- **${r.key}** — ${parts.join(", ") || "no data"} _(input tokens)_`;
+      });
+    const doc = await vscode.workspace.openTextDocument({
+      language: "markdown",
+      content: `# Learned model context limits (#3)\n\n${lines.join(
+        "\n",
+      )}\n\n_“Learned cap” is recorded when a prompt overflows a model; “known-good” is the largest prompt that has succeeded. Prompts are budgeted to stay under the effective ceiling, trimming the lowest-value sections first._\n`,
+    });
+    await vscode.window.showTextDocument(doc, { preview: true });
   });
 
   register("aiSharePoint.showErrorReports", async () => {

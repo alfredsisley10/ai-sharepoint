@@ -13,6 +13,13 @@ import { ErrorReportStore } from "../diagnostics/errorReports";
 import { LessonsStore } from "../diagnostics/lessonsStore";
 import { BlockedTermsStore } from "../diagnostics/blockedTermsStore";
 import { buildProxyNudge, defang, scanForTerms, proxyBlockAdvice } from "../core/proxyShield";
+import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
+import {
+  PromptSection,
+  budgetSections,
+  effectiveInputCap,
+  looksLikeOverflow,
+} from "../core/contextBudget";
 import { redactError } from "../core/redaction";
 import { AppError, adviceFor } from "../core/errors";
 import { Logger } from "../core/log";
@@ -168,6 +175,7 @@ interface ChatDeps {
   errors: ErrorReportStore;
   lessons: LessonsStore;
   proxyTerms: BlockedTermsStore;
+  modelLimits: ModelLimitsStore;
   log: Logger;
   now: () => string;
 }
@@ -220,6 +228,11 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
       // An error that knows its own remediation (e.g. "your Splunk session
       // expired — re-capture the cookie") beats the generic per-code advice.
       let advice = (err instanceof AppError ? err.userSummary : undefined) ?? adviceFor(code);
+      // Effective-context overflow (#3): the prompt exceeded the model's real
+      // usable context. We've just recorded a tighter ceiling, so say so.
+      if (looksLikeOverflow(safe.message)) {
+        advice = `This looks like the model's context limit. @sharepoint has recorded a tighter budget for it and will trim more aggressively next time — start a new chat or narrow the request to recover now.`;
+      }
       // Learn over time (#4): repeated network-level chat failures are most
       // often the corporate proxy blocking message content, not connectivity.
       if (code === "network") {
@@ -414,15 +427,66 @@ async function answerWithModel(
   // in its REPLY, plus (below) defang/warn on the outgoing prompt itself.
   const proxyMode = deps.proxyTerms.mode();
   const proxyTerms = proxyMode === "off" ? [] : deps.proxyTerms.terms();
-  const prompt = [
-    INSTRUCTIONS,
-    lessonsOn ? LESSONS_NUDGE : "",
-    buildProxyNudge(proxyTerms, proxyMode),
-    projectBlock,
-    contextBlock ? `\n## Connected context\n${contextBlock}` : "",
-    history ? `\n## Conversation so far\n${history}` : "",
-    `\n## User request\n${request.prompt}`,
-  ].join("\n");
+
+  // Assemble the prompt as labeled, prioritized sections so effective-context
+  // budgeting (#3) can drop the lowest-value ones (history first, then project
+  // memory, then connected data) when a model's real usable context is smaller
+  // than the prompt — instructions and the user's request are never dropped.
+  const sections: PromptSection[] = [
+    { label: "instructions", text: INSTRUCTIONS, priority: 100, required: true },
+    ...(lessonsOn ? [{ label: "lessons nudge", text: LESSONS_NUDGE, priority: 95, required: true }] : []),
+    ...(() => {
+      const nudge = buildProxyNudge(proxyTerms, proxyMode);
+      return nudge ? [{ label: "proxy nudge", text: nudge, priority: 95, required: true }] : [];
+    })(),
+    ...(projectBlock ? [{ label: "project memory", text: projectBlock, priority: 30 }] : []),
+    ...(contextBlock ? [{ label: "connected context", text: `\n## Connected context\n${contextBlock}`, priority: 40 }] : []),
+    ...(history ? [{ label: "conversation history", text: `\n## Conversation so far\n${history}`, priority: 20 }] : []),
+    { label: "user request", text: `\n## User request\n${request.prompt}`, priority: 100, required: true },
+  ];
+
+  const countText = async (text: string): Promise<number> => {
+    try {
+      return await model.countTokens(text);
+    } catch {
+      return Math.ceil(text.length / 4); // tokenizer unavailable — rough estimate
+    }
+  };
+
+  const cfgOverride = vscode.workspace
+    .getConfiguration("aiSharePoint")
+    .get<number>("context.maxInputTokens", 0);
+  // A user-set override is an authoritative hard ceiling (they know their
+  // environment's clamp) and bypasses learning; otherwise budget to the model's
+  // advertised limit clamped by what we've learned about its real ceiling.
+  const cap =
+    cfgOverride > 0
+      ? effectiveInputCap(cfgOverride, undefined)
+      : effectiveInputCap(
+          model.maxInputTokens,
+          deps.modelLimits.effectiveLimit(modelKey, model.maxInputTokens),
+        );
+
+  const joinSections = (ss: PromptSection[]) => ss.map((s) => s.text).join("\n");
+  let prompt = joinSections(sections);
+  let inputTokens = await countText(prompt);
+  if (inputTokens > cap) {
+    // Over the model's effective budget — count each section and drop the
+    // lowest-priority ones until it fits, then tell the user what was dropped.
+    const counts = new Map<PromptSection, number>();
+    for (const s of sections) counts.set(s, await countText(s.text));
+    const r = budgetSections(sections, (s) => counts.get(s) ?? 0, cap);
+    if (r.dropped.length > 0) {
+      prompt = joinSections(r.kept);
+      inputTokens = await countText(prompt);
+      stream.markdown(
+        `> ℹ️ This turn was large for ${model.name} (~${cap.toLocaleString()} usable tokens). Trimmed ${r.dropped
+          .map((d) => d.label)
+          .join(", ")} to fit — start a new chat or narrow the request to keep everything.\n\n`,
+      );
+    }
+  }
+
   // Slip the request past a content-blocking proxy: defang every avoid-term in
   // the OUTGOING prompt (invisible to the model's meaning), or in warn mode just
   // flag the terms so the user can rephrase. The model-facing text is `outgoing`.
@@ -439,6 +503,7 @@ async function answerWithModel(
       );
     }
   }
+  if (outgoing !== prompt) inputTokens = await countText(outgoing);
 
   // This extension's tools (SharePoint + reference sources + bookmarks),
   // declared on the request so the model can call them from @sharepoint —
@@ -451,12 +516,6 @@ async function answerWithModel(
     .map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
 
   const messages = [vscode.LanguageModelChatMessage.User(outgoing)];
-  let inputTokens = 0;
-  try {
-    inputTokens = await model.countTokens(outgoing);
-  } catch {
-    // best-effort
-  }
 
   let sawText = false;
   for (let round = 0; ; round++) {
@@ -490,6 +549,16 @@ async function answerWithModel(
         }
       }
       ok = true;
+    } catch (sendErr) {
+      // Effective-context probing (#3): if the send failed because the prompt
+      // overflowed this model's real context, record a tighter ceiling so future
+      // turns budget down automatically. Then rethrow to the outer handler.
+      if (looksLikeOverflow(redactError(sendErr).message)) {
+        await deps.modelLimits
+          .recordOverflow(modelKey, model.maxInputTokens, inputTokens)
+          .catch(() => undefined);
+      }
+      throw sendErr;
     } finally {
       let outputTokens = 0;
       if (text) {
@@ -507,6 +576,13 @@ async function answerWithModel(
         "chat",
         ok,
       );
+      // A clean first-round send proves this prompt size works — raise the
+      // model's known-good high-water mark so we never over-trim below it.
+      if (ok && round === 0) {
+        await deps.modelLimits
+          .recordSuccess(modelKey, model.maxInputTokens, inputTokens)
+          .catch(() => undefined);
+      }
     }
 
     if (toolCalls.length === 0) {
