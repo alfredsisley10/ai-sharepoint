@@ -136,6 +136,17 @@ export const DEFAULT_CAPS: ReadCaps = {
   timeoutMs: 30_000,
 };
 
+/** Result-window (maxResults) bounds — the read-safety cap is user-configurable
+ *  (setting + mid-chat tool) but never unbounded (ADR-0012). */
+export const MAX_RESULT_WINDOW = 200;
+
+/** Query-timeout bounds (seconds). The base timeout is configurable; the
+ *  cost-aware probe scaler may grant up to the ceiling for a legitimately large
+ *  scan instead of dying at the flat default (#1). */
+export const MIN_QUERY_TIMEOUT_SECONDS = 5;
+export const MAX_QUERY_TIMEOUT_SECONDS = 600;
+export const DEFAULT_QUERY_TIMEOUT_SECONDS = 30;
+
 /** Project scope (Pillar 7): a named bundle of sources (bookmarks follow
  *  their sources) plus context for AI interactions. Non-secret; travels with
  *  the reference-config export. USER-DEFINED context (goals, instructions) is

@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.62.0",
+  "version": "0.63.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -1402,6 +1402,31 @@
         }
       },
       {
+        "name": "aisharepoint_set_result_window",
+        "displayName": "Set Result Window",
+        "toolReferenceName": "spResultWindow",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(list-ordered)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Tune the result window for THIS conversation — the maximum number of rows/results each reference-source query (database, Confluence, Jira, search) returns. Default is 25 (configurable), hard maximum 200. Call with `size` to raise/lower it when the user wants more or fewer results (e.g. 'show me up to 100 rows'); call with `reset: true` to revert to the configured default; call with no arguments to report the current window. The change lasts for the session only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "size": {
+              "type": "number",
+              "description": "New result window (1–200). Clamped to the maximum if higher."
+            },
+            "reset": {
+              "type": "boolean",
+              "description": "true = revert to the configured default window."
+            }
+          }
+        }
+      },
+      {
         "name": "aisharepoint_test_join",
         "displayName": "Test / Save a Database Join",
         "toolReferenceName": "spTestJoin",
@@ -2338,8 +2363,17 @@
           "type": "number",
           "default": 25,
           "minimum": 1,
+          "maximum": 200,
           "order": 13,
-          "markdownDescription": "Maximum results per reference-source query (ADR-0012 read-safety cap)."
+          "markdownDescription": "Default result window — the maximum rows/results per reference-source query (ADR-0012 read-safety cap). Tunable mid-conversation by asking @sharepoint to change the result window; the 200 ceiling always applies."
+        },
+        "aiSharePoint.context.queryTimeoutSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 600,
+          "order": 13,
+          "markdownDescription": "Base timeout for a single database query/probe (seconds). Large join probes are automatically granted a longer, cost-estimated budget (up to ~2 minutes, or this value if higher) based on table row counts, so big joins finish instead of timing out at the default."
         },
         "aiSharePoint.context.catalogTtlHours": {
           "type": "number",

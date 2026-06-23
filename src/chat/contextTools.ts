@@ -13,7 +13,7 @@ import {
   initialSampleSize,
   upsertRelationship,
 } from "../context/db/erDiagram";
-import { ContextSource } from "../context/types";
+import { ContextSource, MAX_RESULT_WINDOW } from "../context/types";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -242,6 +242,23 @@ export function registerContextTools(
   };
 
   return [
+    // Tune the result window (#5) mid-conversation: how many rows/results each
+    // reference-source query returns. Non-destructive — no approval gate.
+    vscode.lm.registerTool<{ size?: number; reset?: boolean }>(
+      "aisharepoint_set_result_window",
+      guarded("aisharepoint_set_result_window", "Adjusting the result window", async (input) => {
+        if (input.reset) {
+          service.setResultWindow(undefined);
+          return `Result window reset to the configured default (${service.resultWindow()}). It caps how many rows/results each reference-source query returns.`;
+        }
+        if (input.size === undefined || !Number.isFinite(input.size)) {
+          return `The result window is currently ${service.resultWindow()} (maximum ${MAX_RESULT_WINDOW}). Pass \`size\` to change it for this session, or \`reset: true\` to revert to the configured default.`;
+        }
+        const applied = service.setResultWindow(input.size) ?? service.resultWindow();
+        const clamped = applied !== Math.floor(input.size);
+        return `Result window set to ${applied} for this session${clamped ? ` (clamped to the ${MAX_RESULT_WINDOW} maximum)` : ""}. Subsequent reference-source queries return up to ${applied} results. Revert with \`reset: true\` or by reloading the window.`;
+      }),
+    ),
     // The one WRITE tool over the context framework: create/update a Confluence
     // page. Approval-gated (VS Code tool confirmation) before anything is
     // written — uses the source's own API token, no admin OAuth consent.
@@ -660,10 +677,12 @@ export function registerContextTools(
               )!;
               return { ...(t.schema ? { schema: t.schema } : {}), table: t.name, column };
             };
-            const sample = initialSampleSize(
-              schema.er?.rowEstimates?.[parsed.fromTable.toLowerCase()] ?? 0,
-              schema.er?.rowEstimates?.[parsed.toTable.toLowerCase()] ?? 0,
-            );
+            const rowsFrom = schema.er?.rowEstimates?.[parsed.fromTable.toLowerCase()] ?? 0;
+            const rowsTo = schema.er?.rowEstimates?.[parsed.toTable.toLowerCase()] ?? 0;
+            const sample = initialSampleSize(rowsFrom, rowsTo);
+            // Cost hint (#1): scale the probe timeout to the larger table so a
+            // big unindexed join gets time to finish instead of dying at 30s.
+            const cost = { scanRows: Math.max(rowsFrom, rowsTo) };
             // Cross-family user joins probe with the cast comparison — the
             // user asserted the join works, so test it the way it would run.
             const cast = Boolean(parsed.warning);
@@ -673,6 +692,7 @@ export function registerContextTools(
               endFor(parsed.toTable, parsed.toColumn),
               sample,
               cast,
+              cost,
             );
             const backward = await service.probeJoin(
               source,
@@ -680,6 +700,7 @@ export function registerContextTools(
               endFor(parsed.fromTable, parsed.fromColumn),
               sample,
               cast,
+              cost,
             );
             const graded = classifyJoin(forward, backward);
             const prior = schema.er?.report?.tested.find((t) => pairKey(t) === key);

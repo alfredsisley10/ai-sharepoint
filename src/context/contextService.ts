@@ -8,6 +8,10 @@ import {
   ContextItem,
   ReadCaps,
   DEFAULT_CAPS,
+  MAX_RESULT_WINDOW,
+  MIN_QUERY_TIMEOUT_SECONDS,
+  MAX_QUERY_TIMEOUT_SECONDS,
+  DEFAULT_QUERY_TIMEOUT_SECONDS,
 } from "./types";
 import { verifyConfluence, searchConfluence, getConfluencePage } from "./adapters/confluence";
 import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
@@ -24,6 +28,7 @@ import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
 import { verifyDb, searchDb, searchDbRaw, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, DbTlsOptions } from "./db/dbAdapters";
 import { JoinProbeEnd, JoinProbeCounts, RowEstimates } from "./db/erDiagram";
+import { planProbeBudget } from "./db/queryBudget";
 import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
 import {
   verifyPowerBi,
@@ -204,11 +209,40 @@ export class ContextService {
     return { method: "pat", secret: tokens.accessToken };
   }
 
-  caps(): ReadCaps {
+  /** Session-scoped result-window override (#5) — set mid-conversation via the
+   *  set_result_window tool; clears on reload. Takes precedence over the
+   *  configured default, still clamped to [1, MAX_RESULT_WINDOW]. */
+  private resultWindowOverride?: number;
+
+  /** Tune the result window for this session (mid-chat). Returns the clamped
+   *  value actually applied. Passing undefined reverts to the configured default. */
+  setResultWindow(n: number | undefined): number | undefined {
+    this.resultWindowOverride =
+      n === undefined ? undefined : Math.min(MAX_RESULT_WINDOW, Math.max(1, Math.floor(n)));
+    return this.resultWindowOverride;
+  }
+
+  /** The effective result window: session override, else configured default,
+   *  clamped to [1, MAX_RESULT_WINDOW]. */
+  resultWindow(): number {
+    if (this.resultWindowOverride !== undefined) return this.resultWindowOverride;
     const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    return Math.min(MAX_RESULT_WINDOW, Math.max(1, cfg.get<number>("context.maxResults", DEFAULT_CAPS.maxResults)));
+  }
+
+  /** The configured base query timeout (seconds → ms), clamped to sane bounds.
+   *  The cost-aware probe scaler may extend this per-probe for large scans. */
+  queryTimeoutMs(): number {
+    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    const secs = cfg.get<number>("context.queryTimeoutSeconds", DEFAULT_QUERY_TIMEOUT_SECONDS);
+    return Math.min(MAX_QUERY_TIMEOUT_SECONDS, Math.max(MIN_QUERY_TIMEOUT_SECONDS, Math.floor(secs))) * 1000;
+  }
+
+  caps(): ReadCaps {
     return {
       ...DEFAULT_CAPS,
-      maxResults: Math.max(1, cfg.get<number>("context.maxResults", DEFAULT_CAPS.maxResults)),
+      maxResults: this.resultWindow(),
+      timeoutMs: this.queryTimeoutMs(),
     };
   }
 
@@ -951,13 +985,24 @@ export class ContextService {
     to: JoinProbeEnd,
     sample: number | "full",
     cast = false,
+    /** Cost hint (#1): the larger participating table's estimated row count and
+     *  (when known) whether the to-side join column is indexed. Lets a large
+     *  unindexed join get a scaled timeout instead of dying at the flat default. */
+    cost?: { scanRows?: number; indexed?: boolean },
   ): Promise<JoinProbeCounts> {
     if (!ContextService.DB_TYPES.has(source.type)) {
       throw new AppError("Join probing applies to database sources only.", "config");
     }
     const credential = await this.storedCredential(source);
+    const base = this.caps();
+    const budget = planProbeBudget({
+      scanRows: cost?.scanRows ?? 0,
+      ...(cost?.indexed !== undefined ? { indexed: cost.indexed } : {}),
+      baseTimeoutMs: base.timeoutMs,
+    });
+    const caps = budget.timeoutMs === base.timeoutMs ? base : { ...base, timeoutMs: budget.timeoutMs };
     return this.tracked(source, false, () =>
-      probeJoinRate(source, credential, this.dbTls(), this.caps(), from, to, sample, cast),
+      probeJoinRate(source, credential, this.dbTls(), caps, from, to, sample, cast),
     );
   }
 

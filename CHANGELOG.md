@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.63.0 — 2026-06-23
+
+First two of a five-part schema/ER + interaction enhancement (the remaining
+three — memory items, effective-context probing, and proxy-blocked-word
+avoidance — follow in subsequent releases).
+
+### Added — #1 cost-aware query timeouts (joins that used to die at 30s now finish)
+- Join probes (the "Build ER Diagram" sweep and the test-join tool) issued a flat
+  30s request timeout, so large unindexed joins regularly timed out. They now get
+  a **cost-estimated timeout budget**: from the catalog row-count estimates the ER
+  model already collects, `planProbeBudget` sizes the timeout to the rows a probe
+  may scan (~200k rows/s, +setup), clamped to a ~2-minute ceiling (or the
+  configured base if higher). Small/indexed probes stay tight; a 10M-row join now
+  gets ~52s instead of dying at 30s. Fails open — no estimate ⇒ base timeout.
+- New **`aiSharePoint.context.queryTimeoutSeconds`** setting (default 30, 5–600) —
+  the base timeout for any DB query/probe, finally user-tunable. 7 new unit tests.
+
+### Added — #5 configurable & mid-conversation-tunable result window
+- `aiSharePoint.context.maxResults` now carries an explicit **maximum of 200**
+  (was unbounded above) and a clearer description.
+- New **`set_result_window`** chat tool: ask @sharepoint to raise/lower how many
+  rows/results each reference-source query returns for the session ("show me up to
+  100 rows"), reset to the configured default, or report the current window —
+  always clamped to the 200 ceiling.
+
 ## 0.62.0 — 2026-06-17
 
 ### Added — browser-session writes now cover DOCUMENT LIBRARIES and MODERN PAGES (ADR-0046)

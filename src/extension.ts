@@ -3568,8 +3568,11 @@ export function activate(context: vscode.ExtensionContext): void {
                 `${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn} (${sample === "full" ? "complete join" : `${sample}-value sample`})`,
               );
               const started = Date.now();
-              forward = await contextService.probeJoin(source, from, to, sample, c.cast === true);
-              backward = await contextService.probeJoin(source, to, from, sample, c.cast === true);
+              // Cost hint (#1): scale each probe's timeout to the larger table
+              // so big unindexed joins finish instead of timing out at 30s.
+              const cost = { scanRows: Math.max(rowsFrom, rowsTo) };
+              forward = await contextService.probeJoin(source, from, to, sample, c.cast === true, cost);
+              backward = await contextService.probeJoin(source, to, from, sample, c.cast === true, cost);
               const duration = Date.now() - started;
               if (duration >= ER_SLOW_PROBE_MS) {
                 slowStreak += 1;

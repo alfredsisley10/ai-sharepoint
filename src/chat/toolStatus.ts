@@ -87,6 +87,12 @@ export function describeToolCall(name: string, input: unknown): string {
         : `Probing join ${str(i.join) ? `“${short(String(i.join), 50)}”` : ""}…`;
     case "aisharepoint_vertex_answer":
       return `Asking ${src ?? "Vertex AI Search"}${query ? ` “${short(query)}”` : ""}…`;
+    case "aisharepoint_set_result_window":
+      return i.reset
+        ? "Resetting the result window to the default…"
+        : typeof i.size === "number"
+          ? `Setting the result window to ${i.size}…`
+          : "Checking the result window…";
     case "aisharepoint_list_sources":
       return "Listing your reference sources…";
     case "aisharepoint_list_bookmarks":
