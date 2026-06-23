@@ -11,6 +11,8 @@ import { ProjectsStore } from "../context/projectsStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { LessonsStore } from "../diagnostics/lessonsStore";
+import { BlockedTermsStore } from "../diagnostics/blockedTermsStore";
+import { buildProxyNudge, defang, scanForTerms, proxyBlockAdvice } from "../core/proxyShield";
 import { redactError } from "../core/redaction";
 import { AppError, adviceFor } from "../core/errors";
 import { Logger } from "../core/log";
@@ -165,6 +167,7 @@ interface ChatDeps {
   telemetry: TelemetryService;
   errors: ErrorReportStore;
   lessons: LessonsStore;
+  proxyTerms: BlockedTermsStore;
   log: Logger;
   now: () => string;
 }
@@ -216,7 +219,17 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
       const safe = redactError(err);
       // An error that knows its own remediation (e.g. "your Splunk session
       // expired — re-capture the cookie") beats the generic per-code advice.
-      const advice = (err instanceof AppError ? err.userSummary : undefined) ?? adviceFor(code);
+      let advice = (err instanceof AppError ? err.userSummary : undefined) ?? adviceFor(code);
+      // Learn over time (#4): repeated network-level chat failures are most
+      // often the corporate proxy blocking message content, not connectivity.
+      if (code === "network") {
+        const networkFailures = deps.errors
+          .list()
+          .filter((r) => r.context === "chat" && r.code === "network")
+          .reduce((n, r) => n + r.count, 0);
+        const pb = proxyBlockAdvice(networkFailures);
+        if (pb) advice = advice ? `${advice}\n\n${pb}` : pb;
+      }
       stream.markdown(
         `⚠️ **Something went wrong:** ${safe.message}${advice ? `\n\n${advice}` : ""}`,
       );
@@ -397,14 +410,35 @@ async function answerWithModel(
         ? `\n## Project: ${activeProject.name} (no goals/instructions/AI context set yet — you may propose saving durable learnings via remember_project_context)`
         : "";
   const lessonsOn = deps.lessons.enabled();
+  // Proxy-block avoidance (#4): a system note so the model avoids blocked words
+  // in its REPLY, plus (below) defang/warn on the outgoing prompt itself.
+  const proxyMode = deps.proxyTerms.mode();
+  const proxyTerms = proxyMode === "off" ? [] : deps.proxyTerms.terms();
   const prompt = [
     INSTRUCTIONS,
     lessonsOn ? LESSONS_NUDGE : "",
+    buildProxyNudge(proxyTerms, proxyMode),
     projectBlock,
     contextBlock ? `\n## Connected context\n${contextBlock}` : "",
     history ? `\n## Conversation so far\n${history}` : "",
     `\n## User request\n${request.prompt}`,
   ].join("\n");
+  // Slip the request past a content-blocking proxy: defang every avoid-term in
+  // the OUTGOING prompt (invisible to the model's meaning), or in warn mode just
+  // flag the terms so the user can rephrase. The model-facing text is `outgoing`.
+  let outgoing = prompt;
+  if (proxyMode === "defang" && proxyTerms.length > 0) {
+    const r = defang(prompt, proxyTerms);
+    outgoing = r.text;
+    if (r.hit.length > 0) stream.progress(`🛡️ Adjusted ${r.hit.length} term(s) to avoid proxy filtering`);
+  } else if (proxyMode === "warn" && proxyTerms.length > 0) {
+    const hits = scanForTerms(`${request.prompt}\n${contextBlock ?? ""}`, proxyTerms);
+    if (hits.length > 0) {
+      stream.markdown(
+        `> 🛡️ This message contains ${hits.length} word(s) a network proxy may block: ${hits.join(", ")}. Sending as-is — set \`aiSharePoint.proxy.mode\` to \`defang\` to slip past automatically, or rephrase.\n\n`,
+      );
+    }
+  }
 
   // This extension's tools (SharePoint + reference sources + bookmarks),
   // declared on the request so the model can call them from @sharepoint —
@@ -416,10 +450,10 @@ async function answerWithModel(
     .filter((t) => t.name !== "aisharepoint_capture_lesson" || lessonsOn)
     .map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
 
-  const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+  const messages = [vscode.LanguageModelChatMessage.User(outgoing)];
   let inputTokens = 0;
   try {
-    inputTokens = await model.countTokens(prompt);
+    inputTokens = await model.countTokens(outgoing);
   } catch {
     // best-effort
   }

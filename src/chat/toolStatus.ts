@@ -93,6 +93,14 @@ export function describeToolCall(name: string, input: unknown): string {
         : typeof i.size === "number"
           ? `Setting the result window to ${i.size}…`
           : "Checking the result window…";
+    case "aisharepoint_avoid_term": {
+      const a = i.action ?? (Array.isArray(i.terms) && i.terms.length ? "add" : "list");
+      return a === "add"
+        ? "Adding word(s) to the proxy avoid-list…"
+        : a === "remove"
+          ? "Removing a word from the proxy avoid-list…"
+          : "Listing the proxy avoid-list…";
+    }
     case "aisharepoint_list_sources":
       return "Listing your reference sources…";
     case "aisharepoint_list_bookmarks":

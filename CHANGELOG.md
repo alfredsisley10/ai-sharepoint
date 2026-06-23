@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.64.0 — 2026-06-23
+
+### Added — #4 corporate-proxy block avoidance ("words to avoid")
+- Corporate web proxies / DLP appliances routinely block an LLM request or reply
+  that merely CONTAINS a word they deem sensitive — a false positive on ordinary
+  vocabulary — and it surfaces as an opaque **network failure**, not a "content
+  blocked" message. This adds a proactive defence:
+  - A **words-to-avoid list**: the `aiSharePoint.proxy.blockedTerms` setting
+    (team-shareable) merged with a **runtime-learned list** you grow by asking
+    @sharepoint ("add 'foo' to the proxy avoid-list") or via the new **"AI
+    SharePoint: Manage Proxy Avoid-List"** command.
+  - `aiSharePoint.proxy.mode` (`warn` | `defang` | `off`, default `warn`): in
+    **defang** mode the outgoing prompt has an invisible zero-width separator
+    inserted into each avoid-word so the proxy's literal/regex match fails while
+    the model still reads it; **warn** flags the words so you can rephrase. A
+    matching system-prompt note steers the model away from emitting them in its
+    reply.
+  - **Learns over time**: repeated network-level chat failures are increasingly
+    attributed to a proxy content block (escalating guidance keyed off the
+    error-report count) rather than connectivity — pointing you to the avoid-list
+    and defang mode.
+- New `aisharepoint_avoid_term` tool, `proxyShield` pure core + `BlockedTermsStore`,
+  14 new unit tests (568 total). Three of the five enhancements now shipped;
+  #3 (effective-context probing) and #2 (memory, extending project memory) remain.
+
 ## 0.63.0 — 2026-06-23
 
 First two of a five-part schema/ER + interaction enhancement (the remaining

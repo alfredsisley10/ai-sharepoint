@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.63.0",
+  "version": "0.64.0",
   "publisher": "alfredsisley10",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -376,6 +376,12 @@
         "title": "Review Lessons Learned (anonymized)",
         "category": "AI SharePoint",
         "icon": "$(book)"
+      },
+      {
+        "command": "aiSharePoint.manageProxyTerms",
+        "title": "Manage Proxy Avoid-List",
+        "category": "AI SharePoint",
+        "icon": "$(shield)"
       },
       {
         "command": "aiSharePoint.exportLessons",
@@ -1746,6 +1752,38 @@
         }
       },
       {
+        "name": "aisharepoint_avoid_term",
+        "displayName": "Manage Proxy Avoid-List",
+        "toolReferenceName": "spAvoidTerm",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(shield)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Manage the words-to-avoid list for a corporate proxy that blocks LLM requests/responses containing certain words (false positives that surface as network failures). action='add' with `terms` to record word(s) the user says get blocked (e.g. after a network failure they suspect was a proxy block); action='remove' with `terms`; action='list' to show the current list and mode. Use 'add' when the user explicitly asks to avoid a word, or when a network failure recurs and the user identifies the likely trigger. The list is local; in `defang` mode (aiSharePoint.proxy.mode) listed words are auto-adjusted in outgoing messages to slip past the proxy.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "add",
+                "remove",
+                "list"
+              ],
+              "description": "add/remove word(s), or list the current avoid-list."
+            },
+            "terms": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Word(s)/phrase(s) to add or remove (for add/remove)."
+            }
+          }
+        }
+      },
+      {
         "name": "aisharepoint_capture_lesson",
         "displayName": "Capture Lesson Learned",
         "toolReferenceName": "spCaptureLesson",
@@ -2374,6 +2412,31 @@
           "maximum": 600,
           "order": 13,
           "markdownDescription": "Base timeout for a single database query/probe (seconds). Large join probes are automatically granted a longer, cost-estimated budget (up to ~2 minutes, or this value if higher) based on table row counts, so big joins finish instead of timing out at the default."
+        },
+        "aiSharePoint.proxy.mode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "warn",
+            "defang"
+          ],
+          "enumDescriptions": [
+            "No proxy-block avoidance.",
+            "Flag avoid-list words in your message before sending (you rephrase).",
+            "Automatically insert an invisible separator into avoid-list words so a content-blocking proxy's match fails, while the model still reads them."
+          ],
+          "default": "warn",
+          "order": 14,
+          "markdownDescription": "How @sharepoint handles words a corporate proxy may block (#4). `warn` flags them; `defang` auto-adjusts outgoing messages to slip past; `off` disables. Repeated network-level failures also trigger proxy-block guidance regardless of this setting."
+        },
+        "aiSharePoint.proxy.blockedTerms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "order": 14,
+          "markdownDescription": "Words/phrases a corporate proxy or DLP appliance tends to block (often false positives on ordinary vocabulary). @sharepoint avoids them per `aiSharePoint.proxy.mode`. You can also grow this list at runtime by asking @sharepoint to add a word, or via \"AI SharePoint: Manage Proxy Avoid-List\"."
         },
         "aiSharePoint.context.catalogTtlHours": {
           "type": "number",

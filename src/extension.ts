@@ -22,6 +22,8 @@ import { ErrorReportStore } from "./diagnostics/errorReports";
 import { DiagnosticsExportService } from "./diagnostics/exportService";
 import { LessonsStore } from "./diagnostics/lessonsStore";
 import { registerLessonsTools } from "./chat/lessonsTools";
+import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
+import { registerProxyTools } from "./chat/proxyTools";
 import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
 import { SyncEngine } from "./sync/syncEngine";
@@ -217,6 +219,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const telemetry = new TelemetryService(context.globalState, nowIso);
   const errors = new ErrorReportStore(context.globalState, nowIso);
   const lessons = new LessonsStore(context.globalState, EXTENSION_VERSION, nowIso);
+  const blockedTerms = new BlockedTermsStore(context.globalState);
   const meter = new UsageMeter(context.globalState);
   const copilot = new CopilotService(meter);
   const sites = new SitesStore(context.globalState, context.workspaceState);
@@ -500,6 +503,8 @@ export function activate(context: vscode.ExtensionContext): void {
     ...tryRegister("site-dev tools", () => registerSiteDevTools(sites, access, syncConfigs, telemetry, errors)),
     ...tryRegister("project tools", () => registerProjectTools(projects, telemetry, errors)),
     ...tryRegister("lessons tools", () => registerLessonsTools(lessons, telemetry, errors)),
+    ...tryRegister("proxy tools", () => registerProxyTools(blockedTerms, telemetry, errors)),
+    blockedTerms,
     lessons,
   );
   const projectsProvider = new ProjectsTreeProvider(projects, contextSources);
@@ -599,6 +604,7 @@ export function activate(context: vscode.ExtensionContext): void {
         telemetry,
         errors,
         lessons,
+        proxyTerms: blockedTerms,
         log,
         now: nowIso,
       }),
@@ -5128,6 +5134,46 @@ export function activate(context: vscode.ExtensionContext): void {
     if (ok === "Delete All") {
       await lessons.clear();
       void vscode.window.showInformationMessage("Cleared all captured lessons.");
+    }
+  });
+
+  // #4 — view/edit the words-to-avoid "memory" (corporate-proxy false positives).
+  register("aiSharePoint.manageProxyTerms", async () => {
+    for (;;) {
+      const learned = blockedTerms.learned();
+      const fromSettings = blockedTerms.configTerms().filter((t) => !learned.some((l) => l.toLowerCase() === t.toLowerCase()));
+      const items: vscode.QuickPickItem[] = [
+        { label: "$(add) Add word(s)…", alwaysShow: true },
+        ...(learned.length > 0 ? [{ label: "Learned (click to remove)", kind: vscode.QuickPickItemKind.Separator } as vscode.QuickPickItem] : []),
+        ...learned.map((t) => ({ label: t, description: "$(trash) remove" })),
+        ...(fromSettings.length > 0 ? [{ label: "From settings (read-only)", kind: vscode.QuickPickItemKind.Separator } as vscode.QuickPickItem] : []),
+        ...fromSettings.map((t) => ({ label: t, description: "aiSharePoint.proxy.blockedTerms" })),
+      ];
+      const pick = await vscode.window.showQuickPick(items, {
+        title: `Proxy avoid-list — mode: ${blockedTerms.mode()} (${blockedTerms.terms().length} word(s))`,
+        placeHolder: "Words a corporate proxy may block; defang mode auto-adjusts outgoing messages. Esc to close.",
+      });
+      if (!pick || pick.kind === vscode.QuickPickItemKind.Separator) return;
+      if (pick.label.startsWith("$(add)")) {
+        const input = await vscode.window.showInputBox({
+          title: "Add word(s) to the proxy avoid-list",
+          prompt: "Comma-separated words/phrases the proxy tends to block.",
+          ignoreFocusOut: true,
+        });
+        if (input) {
+          const added = await blockedTerms.add(...input.split(",").map((s) => s.trim()).filter(Boolean));
+          void vscode.window.showInformationMessage(
+            added.length > 0 ? `Added: ${added.join(", ")}.` : "Nothing added (already on the list).",
+          );
+        }
+        continue;
+      }
+      if (learned.some((l) => l.toLowerCase() === pick.label.toLowerCase())) {
+        await blockedTerms.remove(pick.label);
+        void vscode.window.showInformationMessage(`Removed "${pick.label}" from the avoid-list.`);
+        continue;
+      }
+      void vscode.window.showInformationMessage(`"${pick.label}" comes from settings — edit aiSharePoint.proxy.blockedTerms to change it.`);
     }
   });
 
