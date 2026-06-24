@@ -27,7 +27,16 @@ exactly which fields to set to ship under your own identity, then repackage.
 
 ---
 
-## Quick start
+## Easiest: the in-app command
+
+Open the **Support & Diagnostics** view (AI SharePoint activity bar) and click
+**"Rebrand / White-label…"** — or run **AI SharePoint: Rebrand / White-label This Extension…**
+from the Command Palette. It points at the extension's source folder (auto-detected if it's open
+in your workspace, otherwise you pick it), prompts for the new identity, applies every edit in
+this guide, optionally swaps the icon, warns before changing the extension ID, and offers to run
+`npm run package` for you. The manual steps below are the equivalent if you'd rather edit by hand.
+
+## Quick start (manual)
 
 For a **brand-new (greenfield)** deployment you may set your own identity; for an **existing**
 deployment leave `publisher`/`name` alone (see the warning above) and rebrand only the cosmetic

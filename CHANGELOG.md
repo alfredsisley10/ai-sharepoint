@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.67.0 — 2026-06-24
+
+### Added — in-app rebranding / white-label command
+- **Support & Diagnostics → "Rebrand / White-label…"** (command
+  `aiSharePoint.rebrandExtension`): a guided flow that executes the whole
+  REBRANDING.md checklist for you. It locates the extension's source folder
+  (auto-detected if open in the workspace, otherwise you pick it), prompts for
+  the new identity (publisher, name, display name, description, license holder,
+  support/security contacts), optionally swaps `media/icon.png`, applies every
+  edit, and offers to run `npm run package` to build the rebranded `.vsix`.
+- Guardrail baked in: if the change would alter the extension ID
+  (`publisher.name`), it shows a modal warning that this strands an existing
+  deployment's stored connectors/projects/credentials, and requires explicit
+  confirmation — the exact trap behind the 0.66.1 regression.
+- Pure, unit-tested core (`src/branding/rebrand.ts`) does the file transforms
+  (package.json fields preserved-formatting, LICENSE holder, doc contact
+  placeholders); 7 new tests (589 total). The installed extension can't
+  repackage itself, so the flow operates on the source tree by design.
+
 ## 0.66.2 — 2026-06-24
 
 ### Fixed — restore the extension identity so existing data reappears

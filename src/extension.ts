@@ -205,6 +205,7 @@ import { UsageStatusBar } from "./ui/statusBar";
 import { SitesTreeProvider } from "./ui/sitesView";
 import { UsageTreeProvider } from "./ui/usageView";
 import { SupportTreeProvider } from "./ui/supportView";
+import { runRebrandFlow } from "./branding/rebrandFlow";
 import { UsageDashboard } from "./ui/dashboard";
 import { registerChatParticipant } from "./chat/participant";
 import { registerLanguageModelTools } from "./chat/tools";
@@ -5383,6 +5384,10 @@ export function activate(context: vscode.ExtensionContext): void {
       .executeCommand("workbench.panel.output.focus")
       .then(undefined, () => undefined);
     log.show();
+  });
+
+  register("aiSharePoint.rebrandExtension", async () => {
+    await runRebrandFlow(log);
   });
 
   register("aiSharePoint.openUserGuide", () => openBundledDoc(context, "USER_GUIDE.md"));

@@ -114,6 +114,14 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
         command: { command: "aiSharePoint.rotateAnonymousId", title: "Rotate" },
       },
       {
+        id: "rebrand",
+        label: "Rebrand / White-label…",
+        icon: new vscode.ThemeIcon("paintcan"),
+        tooltip:
+          "Apply a new publisher/name/branding to the extension's source and repackage a white-labeled .vsix. Requires the extension source folder; warns before changing the extension ID (which would strand an existing deployment's data).",
+        command: { command: "aiSharePoint.rebrandExtension", title: "Rebrand" },
+      },
+      {
         id: "version",
         label: `AI SharePoint v${this.version}`,
         icon: new vscode.ThemeIcon("verified"),
