@@ -82,25 +82,34 @@ example URL in a prompt, not publisher identity. Leave them.
 
 ---
 
-## Optional: deeper rebrand (product name & internal namespace)
+## Full product rename (display name, handle, and identifiers)
 
-The user-visible product name is **AI SharePoint** and the chat assistant is invoked as
-**`@sharepoint`**. These are the *product* brand, not the publisher identity, so the quick-start
-rebrand leaves them in place. To change them as well:
+The product name **AI SharePoint** and the chat handle **`@sharepoint`** are the *product* brand
+(distinct from the publisher identity). The **in-app command renames them entirely** — it rewrites
+every brand token across the source tree (package.json, the compiled TS strings, docs) and offers
+to recompile. It asks two things beyond the cosmetic fields:
 
-- **Chat handle** (`@sharepoint`): `package.json` → `contributes.chatParticipants[0].name`
-  (and `fullName` / `description`). The participant `id` (`aiSharePoint.sharepoint`) is internal —
-  changing it is optional and has no user-facing effect.
-- **"AI SharePoint" display strings**: these appear in the UI (status bar, views, notifications)
-  from the compiled bundle. Search the source for `AI SharePoint` and adjust, then recompile.
+- **Product display name** — replaces `AI SharePoint` everywhere it appears.
+- **Chat handle** — replaces `@sharepoint` (and the participant `name`/`fullName`).
 
-> **Caveat — internal namespaces.** All 75 command IDs and 24 settings keys use the
-> `aiSharePoint.*` namespace, and the language-model tools use `aisharepoint_*`. These are stable
-> internal identifiers that users rarely see (settings show their human titles, not the keys).
-> Renaming the namespace is a code-wide find-and-replace that also **migrates users' existing
-> settings**, so most rebrands keep it as-is. Only change it if a fully namespaced fork is
-> required; if you do, update `package.json`, the TypeScript sources, and provide a settings
-> migration.
+Microsoft's product name **"SharePoint"** (as in "SharePoint Online", "your SharePoint sites") is
+*never* touched — only the distinctive brand tokens (`AI SharePoint`, `@sharepoint`, and the
+identifier prefixes below) are replaced.
+
+### Internal identifier namespaces — greenfield only
+
+The command also offers **"Also rename internal identifiers"**, which rewrites the
+`aiSharePoint.*` command/setting/view IDs (605+ refs), the `aisharepoint_*` tool names, and the
+`ai-sharepoint` schema/ids into a namespace derived from your new `name` (e.g. `contosoDocs.*`).
+This produces a fully namespaced fork that still compiles and bundles — **but it also changes the
+settings keys and stored-data keys**, so it carries the same greenfield-only warning as the
+extension ID: existing installs lose their settings and data. The command warns and requires
+confirmation before doing it. After a deep rename, update/skip the unit tests (they assert the old
+identifiers) and recompile.
+
+> If you only want to rename the product to users, choose **"Product name & handle only"** — it is
+> safe on any deployment and leaves all identifiers (and therefore all stored data and settings)
+> intact.
 
 ---
 

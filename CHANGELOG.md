@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.68.0 — 2026-06-24
+
+### Added — full product rename in the rebrand command
+- The **Rebrand / White-label** command (Support & Diagnostics) now renames the product
+  *entirely*, not just the publisher identity. It asks for a **product display name** and a
+  **chat handle**, then rewrites every brand token across the whole source tree (package.json,
+  the ~150 compiled TS sources, docs) and offers to recompile — so "AI SharePoint" and
+  `@sharepoint` become whatever you choose, end to end.
+- **Microsoft's "SharePoint" is never touched.** Only the distinctive brand tokens
+  (`AI SharePoint`, `@sharepoint`, and the `aiSharePoint`/`aisharepoint`/`ai-sharepoint`
+  identifier prefixes) are replaced; "SharePoint Online", "your SharePoint sites", etc. are
+  preserved. (Of 1,166 "SharePoint" occurrences, ~984 are Microsoft's and stay.)
+- Optional **"Also rename internal identifiers"** (greenfield-only, gated by a modal warning)
+  rewrites the `aiSharePoint.*` command/setting/view IDs, `aisharepoint_*` tool names, and
+  `ai-sharepoint` schema ids into a namespace derived from the new name. Validated end-to-end: a
+  deep rename of the tree still typechecks and bundles cleanly.
+- The rebrand engine excludes itself (`src/branding/**`) and the tests from the rewrite so the
+  find-tokens stay intact, and detects the source folder structurally (no hardcoded brand name).
+- Pure, unit-tested token engine (`src/branding/brandTokens.ts`) with the
+  "don't rename Microsoft SharePoint" guarantee; 6 new tests (595 total).
+
 ## 0.67.0 — 2026-06-24
 
 ### Added — in-app rebranding / white-label command
