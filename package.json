@@ -2,20 +2,14 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.66.0",
-  "publisher": "alfredsisley10",
+  "version": "0.66.1",
+  "publisher": "example-publisher",
   "license": "MIT",
+  "qna": false,
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#16243a",
     "theme": "dark"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/alfredsisley10/ai-sharepoint.git"
-  },
-  "bugs": {
-    "url": "https://github.com/alfredsisley10/ai-sharepoint/issues"
   },
   "engines": {
     "vscode": "^1.95.0"
@@ -2552,7 +2546,7 @@
     "check:native": "node scripts/check-native-deps.js",
     "scan:secrets": "node scripts/scan-secrets.js",
     "build:samples": "tsc -p tsconfig.test.json && node scripts/render-dashboard-sample.js",
-    "package": "vsce package --no-dependencies",
+    "package": "vsce package --no-dependencies --no-rewrite-relative-links",
     "vscode:prepublish": "node esbuild.js --production"
   },
   "dependencies": {

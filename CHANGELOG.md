@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.66.1 — 2026-06-24
+
+### Changed — white-label / anonymized packaging
+- The shipped VSIX no longer carries the original publisher identity or repository
+  links, so the build can be redistributed under any identity:
+  - `publisher` is a neutral placeholder (`example-publisher`); the Marketplace
+    `repository`/`bugs` links are removed and `qna` is disabled.
+  - LICENSE copyright generalized to "AI SharePoint contributors"; SUPPORT.md and
+    docs/SECURITY.md now point at "the channel your distributor provides" rather
+    than a specific account/repo.
+  - The `.github` issue-template security link was de-identified (repo-only; not
+    shipped in the VSIX).
+- Added **REBRANDING.md** (ships in the VSIX): a white-label guide listing every
+  identity surface and how to repackage under a new identity. README links to it.
+- The `package` script passes `--no-rewrite-relative-links` so `vsce package`
+  succeeds without a repository URL.
+- No functional/code changes (582 tests unchanged). The packaged VSIX was verified
+  to contain zero references to the original publisher or repository.
+
 ## 0.66.0 — 2026-06-23
 
 ### Added — #2 extended project memory (dedup, reinforce, forget, curate)

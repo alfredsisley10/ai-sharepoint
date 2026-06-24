@@ -1,5 +1,5 @@
 blank_issues_enabled: true
-contact_links:
-  - name: Security vulnerability
-    url: https://github.com/alfredsisley10/ai-sharepoint/security/advisories/new
-    about: Please report suspected vulnerabilities privately, never as public issues.
+# White-label note: this distribution carries no fixed publisher identity. If you publish this
+# repository under your own identity, add a contact_links entry pointing at your own private
+# security-reporting channel (see REBRANDING.md). Report vulnerabilities privately, never as
+# public issues.

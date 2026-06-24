@@ -120,6 +120,12 @@ telemetry setting by default (`aiSharePoint.diagnostics.usageCapture`), and erro
 disabled entirely. Data leaves the machine only through the explicit, previewed, leak-scanned
 diagnostics export. See [PRIVACY.md](docs/PRIVACY.md).
 
+## Redistributing / white-labeling
+
+This build ships without a fixed publisher identity or repository link. To distribute it under
+your own identity, see **[REBRANDING.md](REBRANDING.md)** — it lists every identity field to set
+and how to repackage the `.vsix`.
+
 ## License
 
 [MIT](LICENSE)

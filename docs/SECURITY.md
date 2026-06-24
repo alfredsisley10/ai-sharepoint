@@ -105,7 +105,10 @@ _Release 0.1.0. Audience: security reviewers and engineers. Companions:
 
 ## Reporting a vulnerability
 
-Open a **private** security advisory on the repository
-(`https://github.com/alfredsisley10/ai-sharepoint/security/advisories`) or contact the
-maintainer directly. Please do not file public issues for suspected vulnerabilities. Include an
-anonymized diagnostics bundle when relevant — it is designed to be safe to attach.
+Report privately to the security contact your distributor provides (for example, a private
+security-advisory channel or a dedicated security mailbox). Please do not file public issues for
+suspected vulnerabilities. Include an anonymized diagnostics bundle when relevant — it is
+designed to be safe to attach.
+
+> Rebranding or redistributing this build? Set your own security contact here as part of the
+> white-label steps in [REBRANDING.md](../REBRANDING.md).
