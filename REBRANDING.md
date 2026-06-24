@@ -1,33 +1,47 @@
 # Rebranding & white-labeling this extension
 
-This build ships **without a fixed publisher identity or repository link**. The `publisher`
-field carries a neutral placeholder (`example-publisher`), the marketplace `repository`/`bugs`
-links have been removed, the license copyright is held by "AI SharePoint contributors", and the
-support/security docs point at "the channel your distributor provides" rather than any specific
-account.
+This build is anonymized everywhere it can be **without breaking existing installs**: the
+Marketplace `repository`/`bugs` links are removed, the license copyright is held by "AI SharePoint
+contributors", the support/security docs point at "the channel your distributor provides" rather
+than any specific account, and Marketplace Q&A is disabled. The one identity field that is **not**
+anonymized is the `publisher` — and the section below explains why that is deliberate.
 
-A VS Code extension package (`.vsix`) **must** declare a `publisher` and a `name` — those two
-fields form the extension's identity (`publisher.name`) and cannot be blank. This guide is the
-"where anonymization is not possible" companion: it tells you exactly which fields to set to ship
-the extension under your own identity, then repackage.
+A VS Code extension package (`.vsix`) **must** declare a `publisher` and a `name`. Together they
+form the extension's identity, `publisher.name` (here `alfredsisley10.ai-sharepoint`), and they
+cannot be blank. This guide is the "where anonymization is not possible" companion: it tells you
+exactly which fields to set to ship under your own identity, then repackage.
 
-> You do **not** need to touch any source code to rebrand the publisher. The command,
-> walkthrough, and participant wiring derive their IDs from the extension identity at runtime, so
-> changing `package.json` is enough.
+> ## ⚠️ The extension ID is permanent — do not change it on an existing deployment
+>
+> VS Code keys **all of an extension's stored data and secrets** — site connectors, context
+> sources, projects, bookmarks, and saved credentials — to its identity `publisher.name`. If you
+> change the `publisher` (or `name`) and ship that to machines that already have the extension,
+> VS Code treats it as a **different extension** and gives it an empty store. Every user's existing
+> connectors, projects, and credentials are **stranded** under the old ID (not deleted, but
+> invisible to the new build).
+>
+> For this reason the `publisher` is fixed at **`alfredsisley10`** — the ID your existing
+> deployment's data already lives under. **Leave it as-is on any environment that already has
+> users.** Only pick a different publisher for a brand-new (greenfield) deployment with no existing
+> data, and then keep it stable forever. See **[Migrating an existing deployment](#migrating-an-existing-deployment-to-a-new-id)** if you must change it.
 
 ---
 
-## Quick start (minimum to ship under your own identity)
+## Quick start
+
+For a **brand-new (greenfield)** deployment you may set your own identity; for an **existing**
+deployment leave `publisher`/`name` alone (see the warning above) and rebrand only the cosmetic
+fields.
 
 1. Edit **`package.json`**:
-   - `"publisher"`: your Marketplace publisher ID (or any value for private/internal distribution).
-   - `"name"` / `"displayName"` / `"description"`: optional — your product naming.
-2. Replace the icon **`media/icon.png`** with your own (128×128 PNG recommended).
-3. Update the copyright holder in **`LICENSE`**.
+   - `"publisher"` / `"name"` — **greenfield only.** Forms the permanent extension ID. Choose once.
+   - `"displayName"` / `"description"` — safe to change anytime (cosmetic, not part of the ID).
+2. Replace the icon **`media/icon.png`** with your own (128×128 PNG recommended) — safe anytime.
+3. Update the copyright holder in **`LICENSE`** — safe anytime.
 4. Repackage:
    ```sh
    npm install
-   npm run package      # → ai-sharepoint-<version>.vsix  (vsce package --no-dependencies)
+   npm run package      # → ai-sharepoint-<version>.vsix
    ```
    The output `.vsix` is the only artifact you distribute.
 
@@ -39,8 +53,8 @@ That's it. Everything below is detail and optional deeper rebranding.
 
 | Surface | File / location | Default in this build | Action |
 | --- | --- | --- | --- |
-| **Publisher** (required) | `package.json` → `publisher` | `example-publisher` | Set to your publisher ID. Forms the extension ID `publisher.name`. |
-| **Internal name** (required) | `package.json` → `name` | `ai-sharepoint` | Optional. Lowercase, no spaces. Changes the `.vsix` filename. |
+| **Publisher** (required) | `package.json` → `publisher` | `alfredsisley10` | **Greenfield only** — forms the permanent extension ID `publisher.name`. Changing it on an existing deployment strands all stored data/secrets (see warning above). |
+| **Internal name** (required) | `package.json` → `name` | `ai-sharepoint` | **Greenfield only** — also part of the extension ID; same caveat as Publisher. Changes the `.vsix` filename. |
 | **Display name** | `package.json` → `displayName` | `AI SharePoint` | Optional. Shown in the Extensions view. |
 | **Description** | `package.json` → `description` | (SharePoint/Copilot blurb) | Optional. |
 | **Icon** | `media/icon.png` | bundled icon | Replace with your own PNG. |
@@ -78,6 +92,27 @@ rebrand leaves them in place. To change them as well:
 > settings**, so most rebrands keep it as-is. Only change it if a fully namespaced fork is
 > required; if you do, update `package.json`, the TypeScript sources, and provide a settings
 > migration.
+
+---
+
+## Migrating an existing deployment to a new ID
+
+If you must change the `publisher`/`name` on machines that already run the extension (e.g. to fully
+anonymize the publisher), the extension ID changes and the new build starts with an empty store.
+Plan a one-time migration; **secrets cannot be moved** and must be re-authenticated.
+
+1. **Before upgrading**, on each machine still running the old build, run
+   **AI SharePoint: Export Reference Config** — this writes a non-secret file containing your
+   context sources, bookmarks, and projects (with goals/instructions/AI memory).
+2. Install the new-ID build.
+3. Run **AI SharePoint: Import Reference Config** and select that file to restore sources,
+   bookmarks, and projects.
+4. **Re-add SharePoint site connectors and sign in again.** Site connections and all stored
+   credentials live in per-ID secret storage and do not transfer; re-authentication is interactive
+   (browser / device-code), so this restores access without data loss.
+
+The old ID's data remains on disk untouched, so you can roll back by reinstalling the old-ID build
+if needed.
 
 ---
 

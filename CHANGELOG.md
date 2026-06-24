@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.66.2 — 2026-06-24
+
+### Fixed — restore the extension identity so existing data reappears
+- **Regression in 0.66.1.** White-labeling changed the `publisher` (`alfredsisley10` →
+  `example-publisher`), which changes the extension ID `publisher.name`. VS Code keys every
+  extension's stored state and secrets to that ID, so upgrading an existing install in place gave
+  it a fresh, empty store — previously registered **site connectors, context sources, and
+  projects stopped appearing.** The data was never deleted; it was stranded under the old ID.
+- **Fix:** reverted `publisher` to `alfredsisley10` so the extension ID
+  (`alfredsisley10.ai-sharepoint`) again matches existing deployments. Reinstalling restores all
+  connectors, projects, and saved credentials with **no migration**. Every other anonymization from
+  0.66.1 is retained (no `repository`/`bugs` links, generic license, neutral support/security docs,
+  Marketplace Q&A disabled, REBRANDING.md).
+- **REBRANDING.md** now warns prominently that the extension ID is permanent for a deployment —
+  changing `publisher`/`name` on machines that already run the extension strands user data and
+  secrets — and documents the export/import migration path for greenfield re-identification.
+
 ## 0.66.1 — 2026-06-24
 
 ### Changed — white-label / anonymized packaging
