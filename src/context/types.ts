@@ -7,6 +7,7 @@
 export type ContextSourceType =
   | "confluence"
   | "jira"
+  | "github"
   | "ldap"
   | "mssql"
   | "postgres"

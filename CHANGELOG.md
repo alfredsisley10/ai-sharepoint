@@ -2,6 +2,22 @@
 
 ## 0.68.0 — 2026-06-24
 
+### Added — GitHub reference connector (github.com + Enterprise Server)
+- New read-only **GitHub** context source, for both **github.com (SaaS)** and on-prem
+  **GitHub Enterprise Server** (the REST base is derived from the deployment:
+  `api.github.com` vs `<host>/api/v3`). Add it via **Add Context Source → GitHub**: paste the
+  URL you browse to, then a **read-only Personal Access Token** (stored in the OS keychain like
+  every other source — so searching GitHub never goes through the git credential manager).
+- `@sharepoint` can **search** four GitHub corpora and **fetch** individual items through the
+  existing tools. Search: plain text → issues & PRs; a `code:` / `repos:` / `commits:` prefix →
+  that corpus; or JSON `{"type":"code|issues|repositories|commits","q":"…","limit":n}` (q takes
+  GitHub qualifiers like `repo:owner/name`, `org:`, `is:open`). Item ids: `owner/repo#123`
+  (issue/PR), `owner/repo@sha` (commit), `owner/repo:path` (file, optional `@ref`), `owner/repo`
+  (repository).
+- Reuses the shared read-safety caps (ADR-0012), verify-on-connect + auth-lockout protection
+  (ADR-0009), and Bearer-token HTTP path unchanged. Pure, unit-tested adapter
+  (`src/context/adapters/github.ts`); 10 new tests (607 total).
+
 ### Added — full product rename in the rebrand command
 - The **Rebrand / White-label** command (Support & Diagnostics) now renames the product
   *entirely*, not just the publisher identity. It asks for a **product display name** and a

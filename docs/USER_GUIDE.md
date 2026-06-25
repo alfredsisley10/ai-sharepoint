@@ -112,7 +112,8 @@ Role** · **Sign Out** (wipes the tenant's cached tokens from the keychain) · *
 Connection** (also wipes tokens unless another connection uses the same tenant).
 
 ### Reference Sources
-Your read-only context: Confluence, Jira, LDAP/AD, databases, Vertex AI Search, Power BI,
+Your read-only context: Confluence, Jira, GitHub (github.com or Enterprise Server), LDAP/AD,
+databases, Vertex AI Search, Power BI,
 Microsoft 365 Copilot, ServiceNow, Splunk. Add (+), test, browse & bookmark, schema tools, and the ER diagram all live
 here — see [Reference sources](#reference-sources-confluence--jira). When a project is active,
 the view header shows it and the list is scoped to that project's sources.
@@ -475,6 +476,27 @@ Connect your organization's **Vertex AI Search** app (the enterprise Gemini sear
 - **Search and analysis in chat**: plain searches return enterprise hits; ask for analysis and
   the `#spVertexAnswer` tool returns a **Gemini-grounded answer with citations** from your
   corpus (*"@sharepoint ask Vertex what our data-retention policy says"*).
+
+### GitHub
+
+Search and analyze your organization's GitHub content **read-only** — works for both
+**github.com** and on-prem **GitHub Enterprise Server**:
+
+- **Add** (Reference Sources → `+` → *GitHub*): paste the URL you browse to
+  (`https://github.com` or your Enterprise Server, e.g. `https://github.corp.example`) — the
+  deployment and REST endpoint are detected automatically. Then supply a **read-only Personal
+  Access Token**: fine-grained with *Contents/Issues/Metadata = Read*, or a classic token with
+  the read-only `repo` scope. It's stored only in your OS keychain and verified once
+  (lockout-safe) — so, unlike pushing a site repo, this **never** prompts the git credential
+  manager.
+- **Ask naturally**: plain text searches **issues & pull requests**
+  (*"@sharepoint find open PRs about the payments timeout in GH"*). Prefix **`code:`**,
+  **`repos:`**, or **`commits:`** to search those instead, or pass JSON
+  `{"type": "code|issues|repositories|commits", "q": "…", "limit": 25}`. The `q` accepts
+  GitHub's own qualifiers — `repo:owner/name`, `org:`, `is:open`, `language:`, `author:`.
+- **Fetch one item** by id: `owner/repo#123` (issue/PR), `owner/repo@<sha>` (commit),
+  `owner/repo:path/to/file` (file contents, optional `@ref`), or `owner/repo` (repository).
+  Pair the source with an alias like `GH` and chat reads the way you talk.
 
 ### ServiceNow
 
