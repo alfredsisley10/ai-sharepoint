@@ -2552,7 +2552,7 @@
     "check:native": "node scripts/check-native-deps.js",
     "scan:secrets": "node scripts/scan-secrets.js",
     "build:samples": "tsc -p tsconfig.test.json && node scripts/render-dashboard-sample.js",
-    "package": "vsce package --no-dependencies --no-rewrite-relative-links",
+    "package": "vsce package --no-dependencies --no-rewrite-relative-links --allow-missing-repository",
     "vscode:prepublish": "node esbuild.js --production"
   },
   "dependencies": {

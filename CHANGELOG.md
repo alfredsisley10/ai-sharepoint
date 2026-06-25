@@ -21,14 +21,24 @@
 - Pure, unit-tested token engine (`src/branding/brandTokens.ts`) with the
   "don't rename Microsoft SharePoint" guarantee; 6 new tests (595 total).
 
-### Fixed — rebrand "Repackage now" works on Windows, not just macOS/Linux
-- The rebrand flow's **Repackage now** button typed `npm install && npm run package`
-  into a terminal, which fails on the default **Windows PowerShell** (5.1): it rejects
-  `&&` with *"the token '&&' is not a valid statement separator in this version"*. The
-  command is now chosen for the resolved shell (`vscode.env.shell`) — a `;`-separated,
-  exit-code-guarded form for PowerShell (5.1 and 7+), and `&&` for cmd.exe and POSIX
-  shells (bash/zsh/fish on macOS & Linux). Pure, unit-tested helper (`repackageCommand`);
-  2 new tests (597 total).
+### Fixed — rebrand "Repackage now" is cross-platform, logged, and never a silent hang
+- **The `&&` crash on Windows.** The button typed `npm install && npm run package` into a
+  terminal, which fails on the default **Windows PowerShell** (5.1): it rejects `&&` with
+  *"the token '&&' is not a valid statement separator in this version"*.
+- **The silent hang.** Even once it started, the build appeared to hang indefinitely:
+  `vsce package` blocks on its interactive *"a 'repository' field is missing — continue?
+  [y/N]"* prompt (this manifest has no `repository` field), with no indication of what it
+  was waiting for. The `package` script now passes `--allow-missing-repository`, so neither
+  the in-app build nor a manual `npm run package` stalls on that prompt.
+- **No progress, unknown output location.** "Repackage now" now runs a small cross-platform
+  build driver (`scripts/rebrand-package.js`) invoked as a single token — so no shell
+  chaining operator is involved and the PowerShell limitation can't recur. It prints each
+  step (install, then package), streams the underlying tool output live so a slow install or
+  a failure is visible and diagnosable, fails fast with the exit code, and prints the
+  **absolute path of the generated `<name>-<version>.vsix`** (plus the `code
+  --install-extension` line). The rebrand-complete dialog now also states where the `.vsix`
+  will be written. A shell-aware inline command (`repackageCommand`, unit-tested) remains as
+  a fallback when the driver isn't present in the source tree. (597 tests.)
 
 ## 0.67.0 — 2026-06-24
 
