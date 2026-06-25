@@ -21,6 +21,15 @@
 - Pure, unit-tested token engine (`src/branding/brandTokens.ts`) with the
   "don't rename Microsoft SharePoint" guarantee; 6 new tests (595 total).
 
+### Fixed — rebrand "Repackage now" works on Windows, not just macOS/Linux
+- The rebrand flow's **Repackage now** button typed `npm install && npm run package`
+  into a terminal, which fails on the default **Windows PowerShell** (5.1): it rejects
+  `&&` with *"the token '&&' is not a valid statement separator in this version"*. The
+  command is now chosen for the resolved shell (`vscode.env.shell`) — a `;`-separated,
+  exit-code-guarded form for PowerShell (5.1 and 7+), and `&&` for cmd.exe and POSIX
+  shells (bash/zsh/fish on macOS & Linux). Pure, unit-tested helper (`repackageCommand`);
+  2 new tests (597 total).
+
 ## 0.67.0 — 2026-06-24
 
 ### Added — in-app rebranding / white-label command

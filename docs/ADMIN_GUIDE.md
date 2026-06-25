@@ -20,7 +20,7 @@ explicit, previewed, leak-scanned user export.
 ## 2. Deployment
 
 ### VSIX distribution
-Build (`npm ci && npm run package`) or take the CI artifact (`ai-sharepoint-<version>.vsix`), then:
+Build (run `npm ci`, then `npm run package`) or take the CI artifact (`ai-sharepoint-<version>.vsix`), then:
 
 - **Manual:** Extensions view → `…` → *Install from VSIX…*, or
   `code --install-extension ai-sharepoint-<version>.vsix`.

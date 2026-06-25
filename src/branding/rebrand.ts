@@ -94,6 +94,29 @@ export function replacePhrase(
   return { text: text.split(phrase).join(replacement.trim()), changed: true };
 }
 
+/**
+ * The shell command the rebrand flow types into a fresh terminal to install
+ * dependencies and build the `.vsix`. Must be cross-platform: PowerShell only
+ * gained the `&&` chaining operator in v7, so Windows PowerShell 5.1 — the
+ * default Windows shell — rejects `npm install && npm run package` with
+ * "the token '&&' is not a valid statement separator in this version". For
+ * PowerShell we emit a `;`-separated form guarded on the install exit code,
+ * which preserves the "only package if install succeeded" short-circuit and
+ * works in both 5.1 and 7+. cmd.exe and POSIX shells (bash/zsh/fish on macOS &
+ * Linux) all understand `&&`.
+ *
+ * @param shell the resolved default shell path (pass `vscode.env.shell`); may be
+ *   undefined/empty in environments without shell detection, in which case the
+ *   `&&` form is used (correct for macOS/Linux and Windows cmd.exe).
+ */
+export function repackageCommand(shell: string | undefined): string {
+  const s = (shell ?? "").toLowerCase();
+  const isPowerShell = s.includes("powershell") || s.includes("pwsh");
+  return isPowerShell
+    ? "npm install; if ($LASTEXITCODE -eq 0) { npm run package }"
+    : "npm install && npm run package";
+}
+
 /** Human-readable summary of what a rebrand will change, for confirmation. */
 export function summarizeBrand(before: BrandConfig, after: BrandConfig): string[] {
   const lines: string[] = [];

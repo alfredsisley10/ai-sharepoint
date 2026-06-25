@@ -52,7 +52,10 @@ fields.
    npm install
    npm run package      # → ai-sharepoint-<version>.vsix
    ```
-   The output `.vsix` is the only artifact you distribute.
+   Run these as two separate commands. On **Windows PowerShell** don't join them
+   with `&&` — PowerShell 5.1 rejects it (`the token '&&' is not a valid statement
+   separator`); the in-app **Repackage now** button picks the right syntax for your
+   shell automatically. The output `.vsix` is the only artifact you distribute.
 
 That's it. Everything below is detail and optional deeper rebranding.
 

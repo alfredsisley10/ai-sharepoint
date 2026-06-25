@@ -10,6 +10,7 @@ import {
   summarizeBrand,
   identityChanged,
   extensionId,
+  repackageCommand,
   SUPPORT_PHRASE,
   SECURITY_PHRASE,
 } from "./rebrand";
@@ -288,7 +289,9 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
   if (next === "Repackage now") {
     const term = vscode.window.createTerminal({ name: "Rebrand & package", cwd: root });
     term.show();
-    term.sendText("npm install && npm run package");
+    // Pick a chaining syntax the resolved shell understands — Windows PowerShell
+    // 5.1 rejects `&&`, so this is not hardcoded. See repackageCommand.
+    term.sendText(repackageCommand(vscode.env.shell));
   } else if (next === "Open REBRANDING.md") {
     try {
       await vscode.window.showTextDocument(vscode.Uri.joinPath(root, "REBRANDING.md"));

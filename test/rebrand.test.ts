@@ -8,6 +8,7 @@ import {
   rebrandPackageJson,
   rebrandLicense,
   replacePhrase,
+  repackageCommand,
   summarizeBrand,
   SUPPORT_PHRASE,
   SECURITY_PHRASE,
@@ -80,6 +81,35 @@ test("replacePhrase swaps distributor placeholders and reports change", () => {
   // missing phrase or empty replacement → unchanged
   assert.deepEqual(replacePhrase("already custom", SECURITY_PHRASE, "x"), { text: "already custom", changed: false });
   assert.equal(replacePhrase(support, SUPPORT_PHRASE, "   ").changed, false);
+});
+
+test("repackageCommand uses && on cmd.exe and POSIX shells (and when shell is unknown)", () => {
+  const both = "npm install && npm run package";
+  for (const shell of [
+    "/bin/bash",
+    "/bin/zsh",
+    "/usr/local/bin/fish",
+    "/bin/sh",
+    "C:\\WINDOWS\\System32\\cmd.exe",
+    "",
+    undefined,
+  ]) {
+    assert.equal(repackageCommand(shell), both);
+  }
+});
+
+test("repackageCommand avoids && on PowerShell — Windows 5.1 rejects && as a statement separator", () => {
+  const guarded = "npm install; if ($LASTEXITCODE -eq 0) { npm run package }";
+  for (const shell of [
+    "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", // Windows PowerShell 5.1 (default)
+    "C:\\Program Files\\PowerShell\\7\\pwsh.exe", // PowerShell 7+
+    "powershell.exe",
+    "pwsh",
+  ]) {
+    const cmd = repackageCommand(shell);
+    assert.equal(cmd, guarded);
+    assert.ok(!cmd.includes("&&"), `must not emit && for PowerShell shell ${shell}`);
+  }
 });
 
 test("summarizeBrand lists only the changed fields", () => {
