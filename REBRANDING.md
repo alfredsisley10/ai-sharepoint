@@ -33,8 +33,12 @@ Open the **Support & Diagnostics** view (AI SharePoint activity bar) and click
 **"Rebrand / White-label…"** — or run **AI SharePoint: Rebrand / White-label This Extension…**
 from the Command Palette. It points at the extension's source folder (auto-detected if it's open
 in your workspace, otherwise you pick it), prompts for the new identity, applies every edit in
-this guide, optionally swaps the icon, warns before changing the extension ID, and offers to run
-`npm run package` for you. The manual steps below are the equivalent if you'd rather edit by hand.
+this guide, optionally swaps the icon, warns before changing the extension ID, and offers to
+build the package for you. **Repackage now** opens a terminal that prints each step (dependency
+install, then packaging) with live progress, and finishes by printing the exact path of the
+generated `<name>-<version>.vsix` (written to the source folder) and the `code
+--install-extension` command to install it. The manual steps below are the equivalent if you'd
+rather edit by hand.
 
 ## Quick start (manual)
 
@@ -52,7 +56,10 @@ fields.
    npm install
    npm run package      # → ai-sharepoint-<version>.vsix
    ```
-   The output `.vsix` is the only artifact you distribute.
+   Run these as two separate commands. On **Windows PowerShell** don't join them
+   with `&&` — PowerShell 5.1 rejects it (`the token '&&' is not a valid statement
+   separator`); the in-app **Repackage now** button picks the right syntax for your
+   shell automatically. The output `.vsix` is the only artifact you distribute.
 
 That's it. Everything below is detail and optional deeper rebranding.
 

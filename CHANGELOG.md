@@ -2,6 +2,22 @@
 
 ## 0.68.0 — 2026-06-24
 
+### Added — GitHub reference connector (github.com + Enterprise Server)
+- New read-only **GitHub** context source, for both **github.com (SaaS)** and on-prem
+  **GitHub Enterprise Server** (the REST base is derived from the deployment:
+  `api.github.com` vs `<host>/api/v3`). Add it via **Add Context Source → GitHub**: paste the
+  URL you browse to, then a **read-only Personal Access Token** (stored in the OS keychain like
+  every other source — so searching GitHub never goes through the git credential manager).
+- `@sharepoint` can **search** four GitHub corpora and **fetch** individual items through the
+  existing tools. Search: plain text → issues & PRs; a `code:` / `repos:` / `commits:` prefix →
+  that corpus; or JSON `{"type":"code|issues|repositories|commits","q":"…","limit":n}` (q takes
+  GitHub qualifiers like `repo:owner/name`, `org:`, `is:open`). Item ids: `owner/repo#123`
+  (issue/PR), `owner/repo@sha` (commit), `owner/repo:path` (file, optional `@ref`), `owner/repo`
+  (repository).
+- Reuses the shared read-safety caps (ADR-0012), verify-on-connect + auth-lockout protection
+  (ADR-0009), and Bearer-token HTTP path unchanged. Pure, unit-tested adapter
+  (`src/context/adapters/github.ts`); 10 new tests (607 total).
+
 ### Added — full product rename in the rebrand command
 - The **Rebrand / White-label** command (Support & Diagnostics) now renames the product
   *entirely*, not just the publisher identity. It asks for a **product display name** and a
@@ -20,6 +36,25 @@
   find-tokens stay intact, and detects the source folder structurally (no hardcoded brand name).
 - Pure, unit-tested token engine (`src/branding/brandTokens.ts`) with the
   "don't rename Microsoft SharePoint" guarantee; 6 new tests (595 total).
+
+### Fixed — rebrand "Repackage now" is cross-platform, logged, and never a silent hang
+- **The `&&` crash on Windows.** The button typed `npm install && npm run package` into a
+  terminal, which fails on the default **Windows PowerShell** (5.1): it rejects `&&` with
+  *"the token '&&' is not a valid statement separator in this version"*.
+- **The silent hang.** Even once it started, the build appeared to hang indefinitely:
+  `vsce package` blocks on its interactive *"a 'repository' field is missing — continue?
+  [y/N]"* prompt (this manifest has no `repository` field), with no indication of what it
+  was waiting for. The `package` script now passes `--allow-missing-repository`, so neither
+  the in-app build nor a manual `npm run package` stalls on that prompt.
+- **No progress, unknown output location.** "Repackage now" now runs a small cross-platform
+  build driver (`scripts/rebrand-package.js`) invoked as a single token — so no shell
+  chaining operator is involved and the PowerShell limitation can't recur. It prints each
+  step (install, then package), streams the underlying tool output live so a slow install or
+  a failure is visible and diagnosable, fails fast with the exit code, and prints the
+  **absolute path of the generated `<name>-<version>.vsix`** (plus the `code
+  --install-extension` line). The rebrand-complete dialog now also states where the `.vsix`
+  will be written. A shell-aware inline command (`repackageCommand`, unit-tested) remains as
+  a fallback when the driver isn't present in the source tree. (597 tests.)
 
 ## 0.67.0 — 2026-06-24
 

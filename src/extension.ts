@@ -1694,6 +1694,7 @@ export function activate(context: vscode.ExtensionContext): void {
       [
         { label: "$(book) Confluence", value: "confluence" as ContextSourceType },
         { label: "$(issues) Jira", value: "jira" as ContextSourceType },
+        { label: "$(github) GitHub", description: "code, issues/PRs, repos & commits — Cloud or Enterprise Server (read-only)", value: "github" as ContextSourceType },
         {
           label: "$(organization) LDAP / Active Directory",
           description: "auto-discovers domain controllers via DNS",
@@ -2070,6 +2071,27 @@ export function activate(context: vscode.ExtensionContext): void {
       const u = new URL(entry.trim());
       baseUrl = `${u.protocol}//${u.host}`;
       deployment = /\.grafana\.net$/i.test(u.hostname) ? "cloud" : "datacenter";
+    } else if (typePick.value === "github") {
+      const entry = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "GitHub — the URL you open in your browser",
+        placeHolder: "https://github.com   or   https://github.corp.example   (GitHub Enterprise Server)",
+        prompt: "Search & read span the orgs/repos your token can see — code, issues/PRs, repositories, and commits. Read-only.",
+        validateInput: (v) => {
+          try {
+            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+          } catch {
+            return "Enter a valid https:// URL";
+          }
+        },
+      });
+      if (!entry) return;
+      const u = new URL(entry.trim());
+      baseUrl = `${u.protocol}//${u.host}`;
+      // github.com (and its api/uploads subdomains) is SaaS; anything else is GHES.
+      deployment = /(^|\.)github\.com$/i.test(u.hostname) ? "cloud" : "datacenter";
+      presetCredential = await promptContextCredential("github", deployment, undefined, baseUrl);
+      if (!presetCredential) return;
     } else if (typePick.value === "powerbi") {
       deployment = "cloud";
       // Pilot: users only know app.powerbi.com — confirm the portal, sign in
@@ -5740,6 +5762,28 @@ async function promptContextCredential(
   baseUrl?: string,
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
+  if (type === "github") {
+    // PAT only: GitHub's REST API takes the token as a Bearer credential. A
+    // read-only fine-grained or classic token works for both github.com and
+    // GHES; stored in the keychain — so this never involves the git credential
+    // manager. Point the user at THIS instance's token page (GHES or SaaS).
+    const tokenPage = (() => {
+      try {
+        return `${new URL(baseUrl ?? "https://github.com").origin}/settings/tokens`;
+      } catch {
+        return "https://github.com/settings/tokens";
+      }
+    })();
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "GitHub personal access token (read-only)",
+      password: true,
+      placeHolder: "github_pat_…  or  ghp_…",
+      prompt: `Create a READ-ONLY token at ${tokenPage} (Settings → Developer settings → Personal access tokens). Fine-grained: Contents, Issues, Metadata = Read-only. Classic: the read-only "repo" scope. Stored only in your OS keychain; verified with a single read (lockout-safe).`,
+    });
+    if (!secret?.trim()) return undefined;
+    return { method: "pat", secret: secret.trim() };
+  }
   if (type === "splunk") {
     // Splunk Web URL to open for SSO: the ?web= param if present, else the
     // typed browser URL, else the mgmt host on the default web port 8000.

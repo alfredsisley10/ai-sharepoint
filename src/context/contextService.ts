@@ -15,6 +15,7 @@ import {
 } from "./types";
 import { verifyConfluence, searchConfluence, getConfluencePage } from "./adapters/confluence";
 import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
+import { verifyGithub, searchGithub, getGithubItem } from "./adapters/github";
 import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
 import { listConfluenceSpaces, listAllConfluenceSpaces } from "./adapters/confluence";
 import {
@@ -340,6 +341,8 @@ export class ContextService {
           return verifyLdap(source, credential, this.ldapTls(), caps);
         case "jira":
           return verifyJira(source, credential, caps);
+        case "github":
+          return verifyGithub(source, credential, caps);
         case "vertexai":
           return verifyVertex(source, credential, caps);
         case "powerbi":
@@ -413,6 +416,8 @@ export class ContextService {
         return searchLdap(source, credential, query, this.ldapTls(), caps);
       case "jira":
         return searchJira(source, credential, query, caps);
+      case "github":
+        return searchGithub(source, credential, query, caps);
       case "vertexai":
         return searchVertex(source, credential, query, caps);
       case "powerbi":
@@ -506,6 +511,8 @@ export class ContextService {
               return getLdapEntry(source, credential, id, this.ldapTls(), caps);
             case "jira":
               return getJiraIssue(source, credential, id, caps);
+            case "github":
+              return getGithubItem(source, credential, id, caps);
             case "splunkobs":
               return getSplunkObsItem(source, credential, id, caps);
             case "grafana":

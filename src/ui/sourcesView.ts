@@ -78,28 +78,23 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     item.id = source.id;
     const locked = this.sources.isLockedOut(source.id);
     item.description = `${source.alias ? `“${source.alias}” · ` : ""}${source.type} · ${source.deployment}${locked ? " · locked" : ""}`;
-    const icon =
-      source.type === "jira"
-        ? "issues"
-        : source.type === "ldap"
-          ? "organization"
-          : source.type === "vertexai"
-            ? "search"
-            : source.type === "powerbi"
-              ? "graph"
-              : source.type === "servicenow"
-                ? "tools"
-                : source.type === "splunk"
-                  ? "pulse"
-                  : source.type === "splunkobs"
-                    ? "dashboard"
-                    : source.type === "grafana"
-                      ? "graph-line"
-                      : source.type === "m365copilot"
-                        ? "sparkle"
-                        : ["mssql", "postgres", "mysql", "mongodb"].includes(source.type)
-                          ? "database"
-                          : "book";
+    const ICON_BY_TYPE: Record<string, string> = {
+      jira: "issues",
+      github: "github",
+      ldap: "organization",
+      vertexai: "search",
+      powerbi: "graph",
+      servicenow: "tools",
+      splunk: "pulse",
+      splunkobs: "dashboard",
+      grafana: "graph-line",
+      m365copilot: "sparkle",
+      mssql: "database",
+      postgres: "database",
+      mysql: "database",
+      mongodb: "database",
+    };
+    const icon = ICON_BY_TYPE[source.type] ?? "book"; // confluence (and any future type) → book
     item.iconPath = new vscode.ThemeIcon(
       icon,
       locked

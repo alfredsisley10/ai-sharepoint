@@ -10,6 +10,7 @@ import {
   summarizeBrand,
   identityChanged,
   extensionId,
+  repackageCommand,
   SUPPORT_PHRASE,
   SECURITY_PHRASE,
 } from "./rebrand";
@@ -276,6 +277,8 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
     renameIdentifiers
       ? "Internal identifiers were renamed — run the unit tests (they reference the old names) and recompile before shipping."
       : "Recompile to bake the new product name into the bundle.",
+    "",
+    `"Repackage now" installs dependencies and builds the package in a terminal, printing each step. The result is ${after.name}-<version>.vsix in the source folder (${root.fsPath}) — the exact path is shown when it finishes.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -288,13 +291,32 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
   if (next === "Repackage now") {
     const term = vscode.window.createTerminal({ name: "Rebrand & package", cwd: root });
     term.show();
-    term.sendText("npm install && npm run package");
+    term.sendText(await resolveRepackageCommand(root));
   } else if (next === "Open REBRANDING.md") {
     try {
       await vscode.window.showTextDocument(vscode.Uri.joinPath(root, "REBRANDING.md"));
     } catch {
       /* doc may be absent in older copies */
     }
+  }
+}
+
+/**
+ * The terminal command for the "Repackage now" step. Prefers the logged,
+ * cross-platform build driver (scripts/rebrand-package.js) — it prints each step,
+ * streams output so a slow install or a failure is never a silent hang, and
+ * reports the exact output `.vsix` path. Invoked as a single token, so no shell
+ * chaining operator is involved (Windows PowerShell 5.1 rejects `&&`). Falls back
+ * to the shell-aware inline command if the driver isn't present in the source
+ * tree (e.g. an older or partial copy).
+ */
+async function resolveRepackageCommand(root: vscode.Uri): Promise<string> {
+  const driver = vscode.Uri.joinPath(root, "scripts", "rebrand-package.js");
+  try {
+    await vscode.workspace.fs.stat(driver);
+    return "node scripts/rebrand-package.js";
+  } catch {
+    return repackageCommand(vscode.env.shell);
   }
 }
 
