@@ -195,6 +195,8 @@ import { registerSiteDevTools } from "./chat/siteDevTools";
 import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
+import { MemoryStore } from "./context/memoryStore";
+import { MemoryItem, MemoryScope, normalizeMemoryInput } from "./context/memory";
 import { ContextBookmark } from "./context/types";
 import { discoverActiveDirectory } from "./context/ldap/discoveryHost";
 import { guessBindUpn, domainToBaseDn } from "./context/ldap/discovery";
@@ -378,6 +380,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const catalogs = new CatalogStore(context.globalStorageUri);
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
+  const memory = new MemoryStore(context.globalState);
   const syncConfigs = new SyncConfigStore(context.globalState);
 
   // First-run provisioning: seed any pre-defined connectors / projects /
@@ -756,6 +759,7 @@ export function activate(context: vscode.ExtensionContext): void {
         telemetry,
         errors,
         lessons,
+        memory,
         proxyTerms: blockedTerms,
         modelLimits,
         log,
@@ -4647,6 +4651,90 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage(
       `Imported ${done || "the selected items"}. Sign in to each site/source to activate (lockout-safe single verify).`,
     );
+  });
+
+  // Memory: per-entity notes (user + AI) that give @sharepoint extra context about
+  // a site/source. Managed here via a picker; injected into chat when in scope.
+  register("aiSharePoint.manageMemory", async (preselect?: unknown) => {
+    let scope: MemoryScope | undefined;
+    let label = "";
+    const node = preselect && typeof preselect === "object" ? (preselect as Partial<SiteConnection & ContextSource>) : undefined;
+    if (node && typeof node.siteUrl === "string" && typeof node.role === "string") {
+      scope = { kind: "site", key: node.siteUrl };
+      label = node.displayName || node.siteUrl;
+    } else if (node && typeof node.id === "string" && typeof node.type === "string") {
+      scope = { kind: "source", key: node.id };
+      label = node.displayName ?? node.id;
+    } else {
+      const choices = [
+        ...sites.list().map((c) => ({
+          label: c.displayName || c.siteUrl,
+          description: `site · ${c.siteUrl}`,
+          scope: { kind: "site" as const, key: c.siteUrl },
+        })),
+        ...contextSources.list().map((s) => ({
+          label: s.displayName,
+          description: `source · ${s.type}`,
+          scope: { kind: "source" as const, key: s.id },
+        })),
+      ];
+      if (choices.length === 0) {
+        void vscode.window.showInformationMessage("Add a managed site or reference source first — memory attaches to one.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(choices, {
+        title: "Manage memory — pick a site or source",
+        placeHolder: "Memory gives @sharepoint extra context about that site/source (used when it's in scope).",
+        ignoreFocusOut: true,
+      });
+      if (!pick) return;
+      scope = pick.scope;
+      label = pick.label;
+    }
+    // Manage loop: list items + add/edit/copy/delete.
+    for (;;) {
+      const items = memory.listForScope(scope);
+      const ADD = "$(add) Add a memory note…";
+      const chosen = await vscode.window.showQuickPick(
+        [
+          { label: ADD, alwaysShow: true } as vscode.QuickPickItem & { item?: MemoryItem },
+          ...items.map((m) => ({
+            label: `$(note) ${m.title}`,
+            description: m.origin === "ai" ? "AI-proposed" : "",
+            detail: m.text.length > 120 ? `${m.text.slice(0, 120)}…` : m.text,
+            item: m,
+          })),
+        ],
+        { title: `Memory for ${label} — ${items.length} note(s)`, placeHolder: "Pick a note to edit/copy/delete, or add one. Esc closes.", ignoreFocusOut: true },
+      );
+      if (!chosen) return;
+      if (chosen.label === ADD) {
+        const title = await vscode.window.showInputBox({ title: "New memory — short title", prompt: "e.g. Soft deletes", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+        if (!title) continue;
+        const text = await vscode.window.showInputBox({ title: "New memory — the note", prompt: "Context @sharepoint should know about this site/source", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+        if (!text) continue;
+        const norm = normalizeMemoryInput(title, text);
+        const at = nowIso();
+        await memory.add({ id: crypto.randomUUID(), scope, title: norm.title, text: norm.text, ...(norm.tags ? { tags: norm.tags } : {}), origin: "user", createdAt: at, updatedAt: at });
+        continue;
+      }
+      const m = chosen.item;
+      if (!m) continue;
+      const act = await vscode.window.showQuickPick(["Edit", "Copy", "Delete"], { title: `"${m.title}"${m.origin === "ai" ? " (AI-proposed)" : ""}`, placeHolder: m.text, ignoreFocusOut: true });
+      if (act === "Edit") {
+        const title = await vscode.window.showInputBox({ title: "Edit title", value: m.title, ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+        if (title === undefined) continue;
+        const text = await vscode.window.showInputBox({ title: "Edit note", value: m.text, ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+        if (text === undefined) continue;
+        const norm = normalizeMemoryInput(title, text);
+        await memory.update({ ...m, title: norm.title, text: norm.text, ...(norm.tags ? { tags: norm.tags } : {}), origin: "user", updatedAt: nowIso() });
+      } else if (act === "Copy") {
+        await vscode.env.clipboard.writeText(`${m.title}: ${m.text}`);
+        void vscode.window.showInformationMessage("Memory note copied to the clipboard.");
+      } else if (act === "Delete") {
+        await memory.remove(m.id);
+      }
+    }
   });
 
   register("aiSharePoint.discoverActiveDirectory", async () => {
