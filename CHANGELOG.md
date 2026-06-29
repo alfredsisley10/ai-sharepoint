@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.72.0 — 2026-06-29
+
+Completes the two items deferred from the 0.71.0 SDLC-review release.
+
+### Added — Command Palette gating
+- Item-scoped commands now appear in the Command Palette only when there's
+  something to act on, via new `hasSources` / `hasProjects` / `hasBookmarks`
+  context keys (joining the existing `hasSites`). Picker fallbacks are kept, so
+  gating only hides commands when the relevant collection is empty.
+- The transient communication-draft actions (review/edit/discard), which
+  require a specific draft and no-op from the palette, are now hidden there.
+
+### Added — Localization (i18n)
+- 134 contributed UI strings (command titles, category, view names, walkthrough
+  steps, and every setting description/enum) are externalized to
+  **package.nls.json**, so a `package.nls.<locale>.json` can fully translate the
+  UI. Rebrand-managed fields stay literal, and white-label rebranding still
+  rewrites the bundle correctly — verified end-to-end (including a deep,
+  identifier-renaming rebrand) by tests. The VSIX gate now requires the bundle
+  to ship.
+
 ## 0.71.0 — 2026-06-29
 
 Hardening release implementing the end-to-end SDLC review findings (P0–P2).
