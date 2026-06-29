@@ -180,6 +180,41 @@ test("reference-config is portable across white-labeled builds (neutral + legacy
   assert.equal(parsed.sources.length, 1, "cross-brand reference-config imported");
 });
 
+test("export/import round-trips managed sites — secret-free (URL, title, role only)", () => {
+  const exp = buildReferenceExport([], [], T0, undefined, undefined, [
+    { siteUrl: "https://contoso.sharepoint.com/sites/intra", displayName: "Intranet", role: "managed" },
+    { siteUrl: "https://contoso.sharepoint.com/sites/hr/", displayName: "HR", role: "reference" },
+  ]);
+  assert.equal(exp.sites?.length, 2);
+  // No credential/account/handle fields — only the allowlisted three.
+  assert.deepEqual(Object.keys(exp.sites![0]).sort(), ["displayName", "role", "siteUrl"]);
+  const parsed = parseReferenceImport(JSON.stringify(exp), T0, () => "x");
+  assert.equal(parsed.sites.length, 2);
+  assert.equal(parsed.sites[0].siteUrl, "https://contoso.sharepoint.com/sites/intra");
+  assert.equal(parsed.sites[1].siteUrl, "https://contoso.sharepoint.com/sites/hr", "trailing slash normalized");
+  assert.equal(parsed.sites[1].role, "reference");
+});
+
+test("import skips malformed/invalid sites and dedupes by URL", () => {
+  const doc = {
+    $schema: REFERENCE_EXPORT_SCHEMA,
+    exportedAt: T0,
+    notice: "",
+    sources: [],
+    bookmarks: [],
+    sites: [
+      { siteUrl: "https://a.sharepoint.com/sites/x", displayName: "X", role: "managed" },
+      { siteUrl: "https://a.sharepoint.com/sites/x/", displayName: "X dup", role: "managed" }, // dup after normalize
+      { siteUrl: "not a url", displayName: "Bad URL", role: "managed" },
+      { siteUrl: "https://b.com", displayName: "Bad role", role: "owner" },
+    ],
+  };
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => "x");
+  assert.equal(parsed.sites.length, 1, "one valid, deduped site");
+  assert.equal(parsed.sites[0].displayName, "X");
+  assert.ok(parsed.warnings.length >= 2, "malformed entries warned");
+});
+
 test("import skips malformed entries with warnings, keeps valid ones", () => {
   const doc = {
     $schema: REFERENCE_EXPORT_SCHEMA,

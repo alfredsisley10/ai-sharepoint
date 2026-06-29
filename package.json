@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.81.0",
+  "version": "0.82.0",
   "release": {
     "channel": "standard"
   },
@@ -583,7 +583,7 @@
       },
       {
         "view": "aiSharePoint.commsView",
-        "contents": "No drafts pending. Prepare a Teams chat or Outlook email — yourself or by asking @sharepoint to draft one — and it waits here until YOU approve sending it.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\nNothing is ever sent without your per-message approval (ADR-0025)."
+        "contents": "No Teams drafts pending. Prepare a message yourself or ask @sharepoint to draft one.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\n**Teams** drafts wait **here** in this outbox until YOU approve sending them. **Outlook** emails are saved straight to your **Outlook Drafts folder** — review and send them from Outlook (this view won't list them). Nothing is ever sent without your approval (ADR-0025)."
       },
       {
         "view": "aiSharePoint.projectsView",

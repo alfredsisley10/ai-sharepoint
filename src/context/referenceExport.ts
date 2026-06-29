@@ -50,6 +50,14 @@ export interface ExportedBookmark {
   kind: ContextBookmark["kind"];
 }
 
+/** A managed/reference SharePoint site descriptor — secret-free (URL + title +
+ *  role only). No credentials/tokens/accounts: the recipient signs in on import. */
+export interface ExportedSite {
+  siteUrl: string;
+  displayName: string;
+  role: "managed" | "reference";
+}
+
 export interface ReferenceExport {
   $schema: typeof REFERENCE_EXPORT_SCHEMA;
   exportedAt: string;
@@ -69,6 +77,9 @@ export interface ReferenceExport {
     aiContext?: string;
     sources: string[];
   }>;
+  /** Managed/reference SharePoint sites — secret-free descriptors; recipients
+   *  sign in on import. Optional so older importers (and the schema) tolerate it. */
+  sites?: ExportedSite[];
 }
 
 export const EXPORT_NOTICE =
@@ -82,6 +93,7 @@ export function buildReferenceExport(
   exportedAt: string,
   schemasById?: Map<string, SourceSchema>,
   projects?: Project[],
+  sites?: Array<{ siteUrl: string; displayName: string; role: "managed" | "reference" }>,
 ): ReferenceExport {
   const byId = new Map(sources.map((s) => [s.id, s.displayName]));
   const schemas: Record<string, SourceSchema> = {};
@@ -130,6 +142,10 @@ export function buildReferenceExport(
           })),
         }
       : {}),
+    // Explicit allowlist (secret-free by construction): URL, title, role only.
+    ...(sites && sites.length > 0
+      ? { sites: sites.map((s) => ({ siteUrl: s.siteUrl, displayName: s.displayName, role: s.role })) }
+      : {}),
   };
 }
 
@@ -141,6 +157,8 @@ export interface ParsedImport {
   schemas: Array<{ sourceId: string; schema: SourceSchema }>;
   /** Projects with memberships remapped onto regenerated ids. */
   projects: Project[];
+  /** Managed/reference sites to (re-)create; recipient signs in afterwards. */
+  sites: ExportedSite[];
 }
 
 const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai", "powerbi", "servicenow", "splunk", "splunkobs", "grafana", "m365copilot"]);
@@ -153,7 +171,7 @@ export function parseReferenceImport(
   importedAt: string,
   newId: () => string,
 ): ParsedImport {
-  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [] };
+  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [], sites: [] };
   let raw: ReferenceExport;
   try {
     raw = JSON.parse(json) as ReferenceExport;
@@ -268,6 +286,26 @@ export function parseReferenceImport(
         : {}),
       sourceIds,
     });
+  }
+
+  // Sites: secret-free descriptors → recreated on import; the recipient signs in
+  // afterwards (no credentials travel). Deduped within the file by URL.
+  const seenSiteUrls = new Set<string>();
+  for (const s of Array.isArray(raw.sites) ? raw.sites : []) {
+    if (!s || typeof s.siteUrl !== "string" || typeof s.displayName !== "string" || (s.role !== "managed" && s.role !== "reference")) {
+      out.warnings.push("Skipped a malformed site entry.");
+      continue;
+    }
+    const siteUrl = s.siteUrl.trim().replace(/\/+$/, "");
+    try {
+      if (!new URL(siteUrl).hostname) throw new Error("no host");
+    } catch {
+      out.warnings.push(`Skipped site "${s.displayName}" — not a valid URL.`);
+      continue;
+    }
+    if (seenSiteUrls.has(siteUrl.toLowerCase())) continue;
+    seenSiteUrls.add(siteUrl.toLowerCase());
+    out.sites.push({ siteUrl, displayName: s.displayName.trim().slice(0, 200) || siteUrl, role: s.role });
   }
   return out;
 }

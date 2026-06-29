@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.82.0 — 2026-06-29
+
+### Added — combined, selective export/import (sites + sources + projects)
+- **Export Sites, Sources & Projects** and **Import Sites, Sources & Projects** replace the
+  all-or-nothing reference-config commands. One grouped multi-select lets you pick **any subset** of
+  managed sites, reference sources, and projects to export; import lists the file's contents so you
+  choose what to bring in. Managed sites are now included as **secret-free descriptors** (URL, title,
+  role only — no credentials/accounts; the recipient signs in after import). Imported sites are
+  created unverified and deduped by URL; sources dedupe by name, projects by name. Still secret-free
+  by construction with the defense-in-depth leak scan, and still uses the portable
+  `reference-config/v1` format (sites are an optional, backward-compatible field).
+
+### Fixed — Communications view wording (Outlook drafts location)
+- The Communications view said drafts "wait here", which is only true for **Teams** (queued in the
+  in-extension outbox for your approval). **Outlook** emails are created straight in your **Outlook
+  Drafts** folder — the view now says so explicitly and notes it won't list them.
+
 ## 0.81.0 — 2026-06-29
 
 Two white-label correctness fixes: built-from-source VSIXs render their labels, and reference-config
