@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.74.0 — 2026-06-29
+
+Full-source white-label export, with a self-contained VSIX and CI scaffolding.
+
+### Added — self-contained VSIX + full-source export
+- The build now bundles the **entire source tree** into the VSIX as
+  `dist/source.zip` (via `scripts/bundle-source.js`; `node_modules`/`dist`/VCS excluded). So a
+  white-labeled copy can be maintained **without access to the original repository** — only
+  standard npm dependencies are restored from your registry.
+- The rebrand flow's outputs are now **what** (Rebranded `.vsix` · Minimal build components · **Full
+  source**) × **where** (a local folder to commit/merge yourself · push to enterprise GitHub).
+  "Full source" extracts `dist/source.zip` and produces a complete, rebranded, buildable tree;
+  the rebrand engine, tests, and CI tooling travel intact (not token-rewritten) so the copy can
+  itself rebrand and its tests stay meaningful.
+
+### Added — enterprise GitHub / CI guidance in exports
+- Every components / full-source export now includes a ready-to-run GitHub Actions workflow
+  (`.github/workflows/whitelabel-build.yml` — build, package, release-on-tag) and a
+  **`MAINTAINING.md`** with GitHub Enterprise Server / SaaS best practices: self-hosted runners,
+  private-registry `.npmrc` + CA trust, branch protection, tag-driven releases, dependency
+  hygiene, and distribution.
+
 ## 0.73.0 — 2026-06-29
 
 White-label flow reworked around a packaged `.vsix`, plus enterprise build resilience.

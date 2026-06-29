@@ -41,20 +41,36 @@ pitfalls below. The input `.vsix` is **never modified**, so re-running with diff
 always starts cleanly from the original (if you accidentally pick an already-white-labeled `.vsix`,
 the flow warns you).
 
-At the end you choose **what to produce**:
+At the end you choose **what to produce**, then **where to put it**.
+
+**What to produce:**
 
 - **Rebranded `.vsix`** — one file to install (`code --install-extension <file>`) or distribute.
-- **Minimal build components** — the pre-built, rebranded payload written to a folder with a
-  minimal `package.json` (only `@vscode/vsce` is needed to re-package — no esbuild/TypeScript/etc.)
-  and a `BUILD.md`. Hand it to a build team, or commit/merge the folder (a `.gitignore` is
-  included) into your own git repository.
-- **Push to enterprise GitHub** — create/update a repository on github.com or GitHub Enterprise
-  Server with those components, in one commit, for ongoing maintenance and management. You supply
-  the host, owner, repo name, visibility, and a one-time `repo`-scope token (never stored).
+- **Minimal build components** — the pre-built, rebranded payload with a minimal `package.json`
+  (only `@vscode/vsce` is needed to re-package — no esbuild/TypeScript/etc.) and a `BUILD.md`.
+  Smallest dependency surface; ideal for a build team or a locked-down registry.
+- **Full source** — the complete, rebranded source tree, extracted from the source that ships
+  **inside the VSIX** (`dist/source.zip`). This means a white-labeled copy can be maintained from
+  scratch **without access to the original repository** — only standard npm dependencies are
+  needed, restored from your registry. The rebrand engine, tests, and CI tooling travel intact
+  (and are deliberately not token-rewritten so the copy can itself rebrand and its tests stay
+  meaningful).
 
-To build the **standard** `.vsix` in the first place (the input to the rebrand), or to repackage
-the minimal components, see **Building behind a corporate registry** below. The manual steps
-further down are the equivalent edits if you'd rather rebrand by hand.
+**Where to put it** (for the components / full-source options):
+
+- **A local folder** — commit or merge it into a git repository yourself.
+- **Push to enterprise GitHub** — create/update a repository on github.com or GitHub Enterprise
+  Server in one commit. You supply the host, owner, repo name, visibility, and a one-time
+  `repo`-scope token (never stored).
+
+Both destinations include a ready-to-run **GitHub Actions** workflow
+(`.github/workflows/whitelabel-build.yml` — build, package, release-on-tag) and a **`MAINTAINING.md`**
+with GitHub Enterprise Server / SaaS recommendations (self-hosted runners, private-registry
+`.npmrc` + CA trust, branch protection, releases, dependency hygiene, distribution).
+
+To build the **standard** `.vsix` in the first place (the input to the rebrand), see **Building
+behind a corporate registry** below. The manual steps further down are the equivalent edits if
+you'd rather rebrand by hand.
 
 ## Building behind a corporate registry (SSL, proxies, withheld versions)
 
