@@ -665,6 +665,14 @@ export function activate(context: vscode.ExtensionContext): void {
       sites.list().some((c) => c.role === "managed") ||
         contextSources.list().some((s) => s.role === "managed"),
     );
+    // Gate item-scoped commands in the Command Palette so they only appear when
+    // there's something to act on (the commands keep their picker fallbacks, so
+    // this only hides them when the relevant collection is empty).
+    const setKey = (key: string, value: boolean) =>
+      void vscode.commands.executeCommand("setContext", key, value);
+    setKey("aiSharePoint.hasSources", contextSources.list().length > 0);
+    setKey("aiSharePoint.hasProjects", projects.list().length > 0);
+    setKey("aiSharePoint.hasBookmarks", bookmarks.list().length > 0);
     if (supportView)
       safeViewOp(() => {
         supportView.badge =
@@ -677,6 +685,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     sites.onDidChange(syncContext),
     errors.onDidChange(syncContext),
+    contextSources.onDidChange(syncContext),
+    projects.onDidChange(syncContext),
+    bookmarks.onDidChange(syncContext),
   );
 
   // Reflect the active project in the Reference Sources view header.

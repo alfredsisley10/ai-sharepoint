@@ -2272,6 +2272,106 @@
         {
           "command": "aiSharePoint.revertSiteToCommit",
           "when": "aiSharePoint.hasSites"
+        },
+        {
+          "command": "aiSharePoint.testContextSource",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.removeContextSource",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.editSourceAlias",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.openSourceInBrowser",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.changeSourceRole",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.testWriteAccess",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.testConfluenceFunctionality",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.loadSourceSchema",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.precacheSourceCatalog",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.indexSourceSchema",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.indexSourceContent",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.buildErDiagram",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.viewSourceSchema",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.resetSourceLockout",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.exportSearchResults",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.browseSource",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.addBookmark",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.editBookmark",
+          "when": "aiSharePoint.hasBookmarks"
+        },
+        {
+          "command": "aiSharePoint.editProject",
+          "when": "aiSharePoint.hasProjects"
+        },
+        {
+          "command": "aiSharePoint.removeProject",
+          "when": "aiSharePoint.hasProjects"
+        },
+        {
+          "command": "aiSharePoint.activateProject",
+          "when": "aiSharePoint.hasProjects"
+        },
+        {
+          "command": "aiSharePoint.manageProjectAiContext",
+          "when": "aiSharePoint.hasProjects"
+        },
+        {
+          "command": "aiSharePoint.reviewCommDraft",
+          "when": "false"
+        },
+        {
+          "command": "aiSharePoint.editCommDraft",
+          "when": "false"
+        },
+        {
+          "command": "aiSharePoint.discardCommDraft",
+          "when": "false"
         }
       ]
     },
