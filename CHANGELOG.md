@@ -2,6 +2,24 @@
 
 ## 0.68.0 — 2026-06-24
 
+### Added — optional anonymized external telemetry (Splunk HEC + OTEL)
+- **Opt-in, off by default.** When `aiSharePoint.telemetry.enabled` is on and an endpoint is
+  configured, the extension forwards *anonymized* usage counters to a **Splunk HEC** endpoint
+  and/or an **OTEL (OTLP/HTTP) metrics platform** (event counts exported as monotonic Sum
+  metrics to `<endpoint>/v1/metrics`). Settings: `telemetry.splunkHec.url`/`.token`,
+  `telemetry.otlp.endpoint`/`.headers` (machine-scoped; restricted in untrusted workspaces).
+- **Anonymization is guaranteed, not best-effort.** A strict sanitizer drops anything that
+  isn't a short categorical token, so only event names, enum dimensions (source type, error
+  **code**, tool name…), counts, and environment (extension/VS Code version, OS type/version,
+  an anonymous rotatable install id) are ever sent — **never** free-form text, queries, URLs,
+  paths, emails, content, credentials, PII, or error messages/bodies.
+- **Opportunistic.** Every send is timeout-bounded and fire-and-forget; a down, slow, or
+  misconfigured endpoint never blocks or breaks the extension. Respects the existing
+  `diagnostics.usageCapture` / VS Code telemetry stance. Hand-rolled OTLP JSON — no
+  OpenTelemetry SDK dependency (bundle stays pure-JS). New `error` (type-only) and `activate`
+  events feed troubleshooting/adoption metrics. Pure, unit-tested core
+  (`src/diagnostics/telemetrySink.ts`, `externalTelemetry.ts`); 9 new tests (625 total).
+
 ### Added — time-limited white-label builds (release expiry)
 - The **Rebrand / White-label** flow now asks for a **build validity window** (in days, blank =
   never expires) and an optional **upgrade URL**, and bakes a `release` manifest

@@ -207,6 +207,8 @@ import { UsageTreeProvider } from "./ui/usageView";
 import { SupportTreeProvider } from "./ui/supportView";
 import { runRebrandFlow } from "./branding/rebrandFlow";
 import { evaluateExpiry, setReleaseStatus, ReleaseManifest } from "./branding/releaseExpiry";
+import { ExternalTelemetry, readExternalTelemetryConfig } from "./diagnostics/externalTelemetry";
+import { TelemetryEnv } from "./diagnostics/telemetrySink";
 import { UsageDashboard } from "./ui/dashboard";
 import { registerChatParticipant } from "./chat/participant";
 import { registerLanguageModelTools } from "./chat/tools";
@@ -234,7 +236,27 @@ export function activate(context: vscode.ExtensionContext): void {
   const responses = vscode.window.createOutputChannel("AI SharePoint — Copilot");
   const secrets = new SecretStore(context.secrets);
   const installIds = new InstallIdStore(context.globalState);
-  const telemetry = new TelemetryService(context.globalState, nowIso);
+  // Optional, opt-in external telemetry (Splunk HEC / OTLP metrics). Anonymized
+  // and opportunistic — see externalTelemetry.ts. Env dimensions ride on every
+  // exported event. Configured via aiSharePoint.telemetry.* (off by default).
+  const telemetryEnv: TelemetryEnv = {
+    extVersion: EXTENSION_VERSION,
+    extChannel: releaseManifest?.channel,
+    vscodeVersion: vscode.version,
+    osType: os.type(),
+    osVersion: os.release(),
+    osPlatform: process.platform,
+    installId: installIds.get().id,
+  };
+  const externalTelemetry = new ExternalTelemetry(telemetryEnv, () =>
+    readExternalTelemetryConfig(<T,>(key: string, fallback: T) =>
+      vscode.workspace.getConfiguration("aiSharePoint").get<T>(key, fallback),
+    ),
+  );
+  externalTelemetry.start();
+  context.subscriptions.push({ dispose: () => externalTelemetry.dispose() });
+  const telemetry = new TelemetryService(context.globalState, nowIso, externalTelemetry);
+  telemetry.record("activate", { ...(releaseManifest?.channel ? { channel: releaseManifest.channel } : {}) });
   const errors = new ErrorReportStore(context.globalState, nowIso);
   const lessons = new LessonsStore(context.globalState, EXTENSION_VERSION, nowIso);
   const blockedTerms = new BlockedTermsStore(context.globalState);
@@ -674,6 +696,7 @@ export function activate(context: vscode.ExtensionContext): void {
           return await fn(...args);
         } catch (err) {
           const code = errors.capture(id, err);
+          telemetry.record("error", { code }); // error TYPE only — never the message/body
           log.error(`${id} failed`, err);
           if (code === "auth.cancelled") {
             return; // user backed out — not an error

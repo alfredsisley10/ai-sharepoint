@@ -38,6 +38,9 @@ export class TelemetryService {
   constructor(
     private readonly memento: vscode.Memento,
     private readonly now: () => string,
+    /** Optional external forwarder (Splunk HEC / OTLP). Receives the same
+     *  gating as local capture; it self-anonymizes and sends opportunistically. */
+    private readonly sink?: { emit(name: string, props?: Record<string, string | number | boolean>): void },
   ) {
     const raw = this.memento.get<TelemetryState>(KEY);
     this.state =
@@ -82,6 +85,13 @@ export class TelemetryService {
       this.state.recent.splice(0, this.state.recent.length - RECENT_CAP);
     }
     void this.memento.update(KEY, this.state);
+
+    // Forward to the external sink (opt-in; self-anonymizing, fire-and-forget).
+    try {
+      this.sink?.emit(name, props);
+    } catch {
+      /* a sink must never break local capture */
+    }
   }
 
   /** Aggregated counters + recent tail for the diagnostics bundle. */
