@@ -130,29 +130,42 @@ export function buildEnvironmentNotes(kind: ExportKind): string {
       "",
     );
   }
-  lines.push('## Windows: `npm warn cleanup` / "operation not permitted, rmdir"', "");
+  lines.push(
+    "## Install warnings you can ignore",
+    "",
+    "`npm install` prints **warnings, not errors** that don't affect the produced `.vsix` —",
+    "confirm a clean build with `npm run package`. The common ones:",
+    "",
+    "- **`npm warn deprecated …`** — transitive dependencies carry deprecation notices. Several sit",
+    "  deep under `@vscode/vsce` (e.g. `whatwg-encoding` via `cheerio`; `prebuild-install` via the",
+    "  **optional** `keytar`). They still work — the notices are the upstream authors' suggestions and",
+    "  clear when those tools update; nothing for you to do, and there's no safe manual override.",
+    "  `keytar` is optional and used only by `vsce publish` (marketplace login), **not** `vsce",
+    "  package`, so if its native binary can't be downloaded on a locked-down network, npm skips it",
+    "  and packaging still works.",
+  );
   if (kind === "source") {
     lines.push(
-      "These are **warnings, not errors — the install still succeeds.** npm fetches the",
-      "platform-specific binaries for several OSes (esbuild ships one per platform) and",
-      "prunes the ones this machine doesn't need; on Windows, antivirus, Explorer, or",
-      "OneDrive frequently hold those folders open, so the cleanup `rmdir` is denied and",
-      "npm logs `npm warn cleanup`. Confirm the build is fine by running `npm run package` —",
-      "it still produces the `.vsix`.",
+      "- **`npm warn cleanup` / \"operation not permitted, rmdir\" (Windows)** — while finishing an",
+      "  install npm removes temporary, **deduped, or unused nested** folders (e.g. the nested",
+      "  `readable-stream` copies under `tar-stream`, `bl`, … that npm dedupes to the top level, or",
+      "  the other-platform `esbuild` binaries it doesn't need). On Windows, antivirus / Explorer /",
+      "  OneDrive frequently hold one of those folders open, so the `rmdir` is denied. **Expect this",
+      "  many times** — one line per locked folder; they are all the same harmless thing, the leftover",
+      "  folders are inert, and the install still succeeds.",
       "",
-      "To minimize the noise: build in a **local, non-synced** folder (not OneDrive or a",
-      "synced Desktop), add it to your antivirus exclusions, and close editors/Explorer",
-      "windows on `node_modules`. For a clean retry: PowerShell",
-      "`Remove-Item -Recurse -Force node_modules` (cmd `rmdir /s /q node_modules`), then",
-      "`npm install --verbose`. Use `npm install` (not `npm ci`) so npm resolves this",
-      "platform's binaries.",
+      "To minimize Windows cleanup noise: build in a **local, non-synced** folder (not OneDrive or a",
+      "synced Desktop), add it to your antivirus exclusions, and close editors/Explorer windows on",
+      "`node_modules`. For a clean retry: PowerShell `Remove-Item -Recurse -Force node_modules` (cmd",
+      "`rmdir /s /q node_modules`), then `npm install --verbose`. Use `npm install` (not `npm ci`) so",
+      "npm resolves this platform's binaries. If you only need to package, the *Minimal build",
+      "components* export avoids the platform-binary churn entirely.",
     );
   } else {
     lines.push(
-      "If npm logs `npm warn cleanup` with \"operation not permitted, rmdir\", these are",
-      "**warnings, not errors** — npm couldn't delete a temporary folder (antivirus/Explorer/",
-      "OneDrive held it open) but the install still succeeds. Confirm with `npm run package`.",
-      "Building in a local, non-synced folder and excluding it from antivirus avoids the noise.",
+      "- **`npm warn cleanup` / \"operation not permitted, rmdir\" (Windows)** — npm couldn't delete a",
+      "  temporary folder (antivirus/Explorer/OneDrive held it open); the install still succeeds.",
+      "  Building in a local, non-synced folder and excluding it from antivirus avoids the noise.",
     );
   }
   lines.push("");

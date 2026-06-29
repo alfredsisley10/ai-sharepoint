@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.80.0 — 2026-06-29
+
+### Changed — the exported build guide now explains the benign `npm install` warnings
+- Enterprise Windows builds surface a stream of `npm warn …` lines that look alarming but don't
+  affect the produced `.vsix`. `MAINTAINING.md` / `BUILD.md` now cover them under
+  **"Install warnings you can ignore"**:
+  - **`npm warn deprecated …`** — transitive dependencies (several under `@vscode/vsce`, e.g.
+    `whatwg-encoding` via `cheerio`, and `prebuild-install` via the **optional** `keytar`) carry
+    deprecation notices. They still work and clear when the upstream tools update; there's no safe
+    manual override. `keytar` is optional and used only by `vsce publish` (not `vsce package`), so a
+    locked-down network that can't fetch its native binary simply skips it.
+  - **`npm warn cleanup` / "operation not permitted, rmdir" (Windows)** — npm prunes temporary,
+    deduped, or unused nested folders (the nested `readable-stream` copies under `tar-stream`, `bl`,
+    …, or other-platform `esbuild` binaries); antivirus/Explorer/OneDrive hold one open so the
+    `rmdir` is denied. This repeats once per locked folder — all the same harmless thing — and the
+    install still succeeds (confirm with `npm run package`).
+
 ## 0.79.0 — 2026-06-29
 
 More white-label export build resilience: a withheld dependency no longer blocks the build, and
