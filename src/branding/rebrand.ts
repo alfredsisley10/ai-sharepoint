@@ -10,6 +10,7 @@
  */
 
 import { ReleaseManifest } from "./releaseExpiry";
+import { BrandToken, applyBrandTokens } from "./brandTokens";
 
 export interface BrandConfig {
   /** Forms the extension ID `publisher.name` — PERMANENT once deployed. */
@@ -70,7 +71,11 @@ function setTopLevelString(raw: string, key: string, value: string): string {
  */
 export function setReleaseManifest(raw: string, manifest: ReleaseManifest): string {
   const value = JSON.stringify(manifest);
-  const existing = /^(\s*"release":\s*)\{[^\n]*\}/m;
+  // Match a `"release": { … }` block whether it's compact or multi-line (the
+  // canonical-formatted manifest expands it across lines). `[\s\S]*?` + the
+  // end-of-value lookahead mirror setProvisioningManifest; the release manifest
+  // is flat (no nested braces) so the non-greedy match ends at the right `}`.
+  const existing = /^(\s*"release":\s*)\{[\s\S]*?\}(?=,?\s*\n)/m;
   // Function replacements so a "$" in the manifest can't corrupt the output.
   if (existing.test(raw)) return raw.replace(existing, (_m, p1: string) => p1 + value);
   return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, (_m, p1: string) => `${p1}  "release": ${value},\n`);
@@ -102,6 +107,30 @@ export function rebrandPackageJson(raw: string, cfg: BrandConfig): string {
   out = setTopLevelString(out, "displayName", cfg.displayName);
   out = setTopLevelString(out, "description", cfg.description);
   return out;
+}
+
+/**
+ * The complete package.json rebrand, in the order the flow has always applied
+ * it: brand tokens → identity fields → chat participant name/fullName → release
+ * manifest → provisioning manifest. Extracted so the source-folder flow and the
+ * VSIX transform share one tested transform. `provisioning` undefined is a
+ * no-op (setProvisioningManifest leaves the text unchanged).
+ */
+export function rebrandPackageJsonFull(
+  pkgText: string,
+  tokens: BrandToken[],
+  after: BrandConfig,
+  handle: string,
+  release: ReleaseManifest,
+  provisioning?: unknown,
+): string {
+  let t = applyBrandTokens(pkgText, tokens);
+  t = rebrandPackageJson(t, after);
+  t = t.split('"name": "sharepoint"').join(`"name": ${JSON.stringify(handle)}`);
+  t = t.split('"fullName": "SharePoint"').join(`"fullName": ${JSON.stringify(after.displayName)}`);
+  t = setReleaseManifest(t, release);
+  t = setProvisioningManifest(t, provisioning);
+  return t;
 }
 
 /** Replace the copyright holder (keeping or updating the year) in an MIT-style

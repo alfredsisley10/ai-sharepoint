@@ -4,18 +4,11 @@ import { redactError } from "../core/redaction";
 import {
   BrandConfig,
   validateBrandConfig,
-  rebrandPackageJson,
-  rebrandLicense,
-  replacePhrase,
   summarizeBrand,
   identityChanged,
   extensionId,
-  repackageCommand,
-  setReleaseManifest,
-  setProvisioningManifest,
-  SUPPORT_PHRASE,
-  SECURITY_PHRASE,
 } from "./rebrand";
+import { rebrandVsix, readVsixPackageJson } from "./rebrandVsix";
 import { computeExpiry, ReleaseManifest } from "./releaseExpiry";
 import {
   ReleaseProfile,
@@ -40,9 +33,7 @@ export interface RebrandDeps {
 }
 import {
   DeepBrandConfig,
-  BrandToken,
   buildBrandTokens,
-  applyBrandTokens,
   validateDeepBrand,
   camelize,
 } from "./brandTokens";
@@ -51,27 +42,13 @@ const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const HANDLE_RE = /^[a-z0-9][a-z0-9-]*$/;
 const msg = (e: unknown) => redactError(e).message;
 
-// Dirs never rewritten. src/branding holds the rebrand engine itself — rewriting
-// it would corrupt the find-tokens; test/ isn't shipped and references tokens.
-const SKIP_DIRS = new Set([
-  "node_modules",
-  "dist",
-  "out-test",
-  "test",
-  "scripts",
-  ".git",
-  ".github",
-  ".vscode",
-  ".vscode-test",
-]);
-const REWRITE_EXTS = new Set([".ts", ".md", ".json", ".svg", ".html", ".css"]);
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-
 /**
  * "Rebrand This Extension" (Support & Diagnostics). Applies a new identity AND,
  * optionally, a full product rename (display name, chat handle, and — greenfield
- * only — the internal identifier namespaces) across the extension's SOURCE tree,
- * then offers to repackage. The executable counterpart to REBRANDING.md.
+ * only — the internal identifier namespaces) directly to a packaged .vsix: pick
+ * the built .vsix, get a rebranded .vsix back. No source tree and no build step —
+ * the bundle, manifest, package.json, and assets are transformed in place. The
+ * executable counterpart to REBRANDING.md.
  */
 export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promise<void> {
   const start = await vscode.window.showInformationMessage(
@@ -79,30 +56,52 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     {
       modal: true,
       detail:
-        "Applies a new identity and (optionally) a full product rename — display name, chat handle, even the internal identifiers — across the extension's SOURCE files, then can build a fresh .vsix. You need the extension's source folder; the installed copy can't rebrand itself.",
+        "Applies a new identity and (optionally) a full product rename — display name, chat handle, even the internal identifiers — directly to a packaged .vsix. Pick the built .vsix and you get a rebranded .vsix back: no source folder and no build step.",
     },
     "Continue",
   );
   if (start !== "Continue") return;
 
-  const root = await resolveSourceRoot();
-  if (!root) return;
+  const vsixUri = await pickVsix();
+  if (!vsixUri) return;
 
-  const pkgUri = vscode.Uri.joinPath(root, "package.json");
-  let pkgRaw: string;
+  let vsixBytes: Uint8Array;
   let pkg: {
     publisher?: string;
     name?: string;
     displayName?: string;
     description?: string;
+    version?: string;
+    release?: { channel?: string; productName?: string };
     contributes?: { chatParticipants?: Array<{ name?: string }> };
   };
   try {
-    pkgRaw = await readText(pkgUri);
-    pkg = JSON.parse(pkgRaw);
+    vsixBytes = await vscode.workspace.fs.readFile(vsixUri);
+    pkg = readVsixPackageJson(vsixBytes) as typeof pkg;
   } catch (e) {
-    void vscode.window.showErrorMessage(`Could not read a valid package.json there: ${msg(e)}`);
+    void vscode.window.showErrorMessage(`Could not read that .vsix: ${msg(e)}`);
     return;
+  }
+
+  // Always rebrand FROM the original standard build. The transform finds the
+  // original brand tokens ("AI SharePoint" / "@sharepoint" / "aiSharePoint") —
+  // once a VSIX is already white-labeled those tokens are gone, so re-branding
+  // it would only half-apply (the classic "restart with new names didn't update
+  // everything" trap). Because this flow never mutates the input and writes a
+  // NEW file, starting again from the standard VSIX always yields a complete,
+  // consistent rebrand — so steer the user back to it.
+  if (pkg.release?.channel === "whitelabel") {
+    const proceed = await vscode.window.showWarningMessage(
+      `This .vsix is already a white-label build${pkg.release.productName ? ` ("${pkg.release.productName}")` : ""}.`,
+      {
+        modal: true,
+        detail:
+          "Re-branding an already-branded VSIX can't fully rename strings that were already changed, so the result may mix identities. For a clean rebrand to NEW identifiers, start again from the ORIGINAL standard .vsix (this flow never modifies the file you pick).",
+      },
+      "Pick a different .vsix",
+      "Rebrand it anyway",
+    );
+    if (proceed !== "Rebrand it anyway") return;
   }
 
   const before: BrandConfig = {
@@ -113,9 +112,10 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
   };
   const currentHandle = pkg.contributes?.chatParticipants?.[0]?.name ?? "sharepoint";
 
-  // Reuse a saved release profile (repeatable re-releases) when one is present —
-  // its values pre-fill every prompt below so refreshing a release is quick.
-  const loaded = await maybeLoadProfile(root);
+  // A saved release profile (repeatable re-releases) lives next to the VSIX —
+  // reusing it pre-fills every prompt so refreshing a release is quick.
+  const profileDir = vscode.Uri.joinPath(vsixUri, "..");
+  const loaded = await maybeLoadProfile(profileDir);
   const seedId = loaded?.identity;
 
   // --- gather the new identity + product naming -----------------------------
@@ -277,67 +277,11 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
   );
   if (apply !== "Apply") return;
 
-  // --- apply ----------------------------------------------------------------
+  // --- apply: transform the chosen VSIX in place ----------------------------
   const tokens = buildBrandTokens(deep);
-  const written: string[] = [];
-  const skipped: string[] = [];
 
-  // package.json: brand tokens, then identity fields, then participant name/fullName.
-  try {
-    let text = applyBrandTokens(pkgRaw, tokens);
-    text = rebrandPackageJson(text, after);
-    text = text.split('"name": "sharepoint"').join(`"name": ${JSON.stringify(deep.handle)}`);
-    text = text.split('"fullName": "SharePoint"').join(`"fullName": ${JSON.stringify(after.displayName)}`);
-    text = setReleaseManifest(text, release);
-    text = setProvisioningManifest(text, hasProvisioning ? provisioningManifest : undefined);
-    await writeText(pkgUri, text);
-    written.push("package.json");
-  } catch (e) {
-    log.error("rebrand: package.json", e);
-    void vscode.window.showErrorMessage(`Could not update package.json: ${msg(e)}. No files were changed.`);
-    return;
-  }
-
-  // Whole-tree brand-token rewrite (src, docs, README, etc.).
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Rebranding source files…" },
-    async () => {
-      const result = await rewriteTree(root, tokens, log);
-      written.push(`${result.changed} source file(s)`);
-      if (result.errors > 0) skipped.push(`${result.errors} file(s) unreadable`);
-    },
-  );
-
-  // LICENSE: brand tokens (renames "AI SharePoint contributors"), then explicit holder.
-  await editFile(
-    root,
-    "LICENSE",
-    (t) => {
-      let r = applyBrandTokens(t, tokens);
-      if (after.licenseHolder) r = rebrandLicense(r, after.licenseHolder);
-      return r;
-    },
-    written,
-    skipped,
-    log,
-  );
-
-  // Distributor contact placeholders.
-  if (after.supportContact || after.securityContact) {
-    await editFile(
-      root,
-      "SUPPORT.md",
-      (t) => replacePhrase(replacePhrase(t, SUPPORT_PHRASE, after.supportContact).text, SECURITY_PHRASE, after.securityContact).text,
-      written,
-      skipped,
-      log,
-    );
-  }
-  if (after.securityContact) {
-    await editFile(root, "docs/SECURITY.md", (t) => replacePhrase(t, SECURITY_PHRASE, after.securityContact).text, written, skipped, log);
-  }
-
-  // Optional icon swap.
+  // Optional icon swap (replaces extension/media/icon.png inside the VSIX).
+  let newIcon: Uint8Array | undefined;
   const icon = await vscode.window.showOpenDialog({
     title: "Select a new icon PNG (Cancel to keep the current icon)",
     canSelectMany: false,
@@ -345,20 +289,51 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
   });
   if (icon && icon[0]) {
     try {
-      const bytes = await vscode.workspace.fs.readFile(icon[0]);
-      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(root, "media", "icon.png"), bytes);
-      written.push("media/icon.png");
+      newIcon = await vscode.workspace.fs.readFile(icon[0]);
     } catch (e) {
       log.error("rebrand: icon", e);
-      skipped.push("media/icon.png (copy failed)");
+      void vscode.window.showWarningMessage(`Could not read that icon: ${msg(e)}. Keeping the current icon.`);
     }
   }
 
-  log.info(`Rebranded to "${after.displayName}" (${extensionId(after.publisher, after.name)})${renameIdentifiers ? `, namespace ${deep.idNamespace}` : ""}`);
+  // Where to write the rebranded VSIX — default next to the input.
+  const version = typeof pkg.version === "string" ? pkg.version : "0.0.0";
+  const outUri = await vscode.window.showSaveDialog({
+    title: "Save the rebranded VSIX",
+    defaultUri: vscode.Uri.joinPath(profileDir, `${after.name}-${version}.vsix`),
+    filters: { "VS Code Extension": ["vsix"] },
+  });
+  if (!outUri) return;
 
-  // Offer to save a reusable release profile (no secrets) for the next refresh.
+  try {
+    const outBytes = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Rebranding to "${after.displayName}"…` },
+      () =>
+        Promise.resolve(
+          rebrandVsix(vsixBytes, {
+            tokens,
+            after,
+            handle: deep.handle,
+            release,
+            ...(hasProvisioning ? { provisioning: provisioningManifest } : {}),
+            ...(newIcon ? { newIcon } : {}),
+          }),
+        ),
+    );
+    await vscode.workspace.fs.writeFile(outUri, outBytes);
+  } catch (e) {
+    log.error("rebrand: vsix", e);
+    void vscode.window.showErrorMessage(`Could not produce the rebranded VSIX: ${msg(e)}. The original .vsix was not modified.`);
+    return;
+  }
+
+  log.info(
+    `Rebranded VSIX written: ${outUri.fsPath} ("${after.displayName}", ${extensionId(after.publisher, after.name)})${renameIdentifiers ? `, namespace ${deep.idNamespace}` : ""}`,
+  );
+
+  // Offer to save a reusable release profile (no secrets) next to the VSIX.
   await saveProfileMaybe(
-    root,
+    profileDir,
     {
       version: 1,
       identity: {
@@ -380,156 +355,32 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
 
   // --- finish ---------------------------------------------------------------
   const detail = [
-    `Updated: ${written.join(", ")}.`,
-    skipped.length ? `Skipped: ${skipped.join(", ")}.` : "",
-    "",
+    `Wrote ${outUri.fsPath}.`,
+    release.expiresAt
+      ? `This build expires ${release.expiresAt.slice(0, 10)} (${release.validityDays} days — users must upgrade after that).`
+      : "This build never expires.",
     renameIdentifiers
-      ? "Internal identifiers were renamed — run the unit tests (they reference the old names) and recompile before shipping."
-      : "Recompile to bake the new product name into the bundle.",
+      ? "Internal identifiers were renamed — this is a distinct extension ID, so existing installs of the original keep their own data."
+      : "",
     "",
-    `"Repackage now" installs dependencies and builds the package in a terminal, printing each step. The result is ${after.name}-<version>.vsix in the source folder (${root.fsPath}) — the exact path is shown when it finishes.`,
+    `Install it with:  code --install-extension "${outUri.fsPath}"`,
   ]
     .filter(Boolean)
     .join("\n");
-  const next = await vscode.window.showInformationMessage(
-    `Rebrand applied: "${after.displayName}".`,
-    { modal: true, detail },
-    "Repackage now",
-    "Open REBRANDING.md",
-  );
-  if (next === "Repackage now") {
-    const term = vscode.window.createTerminal({ name: "Rebrand & package", cwd: root });
-    term.show();
-    term.sendText(await resolveRepackageCommand(root));
-  } else if (next === "Open REBRANDING.md") {
-    try {
-      await vscode.window.showTextDocument(vscode.Uri.joinPath(root, "REBRANDING.md"));
-    } catch {
-      /* doc may be absent in older copies */
-    }
-  }
+  await vscode.window.showInformationMessage(`Rebrand complete: "${after.displayName}".`, { modal: true, detail }, "OK");
 }
 
-/**
- * The terminal command for the "Repackage now" step. Prefers the logged,
- * cross-platform build driver (scripts/rebrand-package.js) — it prints each step,
- * streams output so a slow install or a failure is never a silent hang, and
- * reports the exact output `.vsix` path. Invoked as a single token, so no shell
- * chaining operator is involved (Windows PowerShell 5.1 rejects `&&`). Falls back
- * to the shell-aware inline command if the driver isn't present in the source
- * tree (e.g. an older or partial copy).
- */
-async function resolveRepackageCommand(root: vscode.Uri): Promise<string> {
-  const driver = vscode.Uri.joinPath(root, "scripts", "rebrand-package.js");
-  try {
-    await vscode.workspace.fs.stat(driver);
-    return "node scripts/rebrand-package.js";
-  } catch {
-    return repackageCommand(vscode.env.shell);
-  }
-}
-
-// --- tree rewrite ----------------------------------------------------------
-
-async function rewriteTree(
-  root: vscode.Uri,
-  tokens: BrandToken[],
-  log: Logger,
-): Promise<{ changed: number; scanned: number; errors: number }> {
-  let changed = 0;
-  let scanned = 0;
-  let errors = 0;
-
-  async function walk(dir: vscode.Uri): Promise<void> {
-    let entries: [string, vscode.FileType][];
-    try {
-      entries = await vscode.workspace.fs.readDirectory(dir);
-    } catch (e) {
-      errors++;
-      log.error("rebrand: readdir", e);
-      return;
-    }
-    for (const [n, type] of entries) {
-      // Never follow symlinks (files OR dirs): writing token-substituted content
-      // back through a link could clobber a file outside the source root.
-      if (type & vscode.FileType.SymbolicLink) continue;
-      if (type === vscode.FileType.Directory) {
-        if (SKIP_DIRS.has(n)) continue;
-        if (dir.path.endsWith("/src") && n === "branding") continue; // engine self-protection
-        await walk(vscode.Uri.joinPath(dir, n));
-        continue;
-      }
-      if (n === "package.json" || n === "package-lock.json") continue; // package.json handled explicitly
-      const ext = n.slice(n.lastIndexOf("."));
-      if (!REWRITE_EXTS.has(ext)) continue;
-      const uri = vscode.Uri.joinPath(dir, n);
-      try {
-        const stat = await vscode.workspace.fs.stat(uri);
-        if (stat.size > MAX_FILE_BYTES) continue;
-        scanned++;
-        const text = await readText(uri);
-        const out = applyBrandTokens(text, tokens);
-        if (out !== text) {
-          await writeText(uri, out);
-          changed++;
-        }
-      } catch (e) {
-        errors++;
-        log.error(`rebrand: ${n}`, e);
-      }
-    }
-  }
-
-  await walk(root);
-  return { changed, scanned, errors };
+/** Pick the .vsix to rebrand (the built standard package). */
+async function pickVsix(): Promise<vscode.Uri | undefined> {
+  const picked = await vscode.window.showOpenDialog({
+    title: "Select the .vsix to rebrand",
+    canSelectMany: false,
+    filters: { "VS Code Extension": ["vsix"] },
+  });
+  return picked?.[0];
 }
 
 // --- helpers ---------------------------------------------------------------
-
-async function resolveSourceRoot(): Promise<vscode.Uri | undefined> {
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    if (await looksLikeSource(folder.uri)) {
-      const use = await vscode.window.showInformationMessage(
-        "Use the extension source in this workspace folder?",
-        { modal: true, detail: folder.uri.fsPath },
-        "Use this folder",
-        "Pick another…",
-      );
-      if (use === "Use this folder") return folder.uri;
-      if (use === undefined) return undefined;
-      break;
-    }
-  }
-  const picked = await vscode.window.showOpenDialog({
-    title: "Select the extension source folder (containing package.json)",
-    canSelectFiles: false,
-    canSelectFolders: true,
-    canSelectMany: false,
-  });
-  if (!picked || !picked[0]) return undefined;
-  if (await looksLikeSource(picked[0], true)) return picked[0];
-  void vscode.window.showErrorMessage("That folder isn't the extension source (no package.json with contributes). Pick the source root.");
-  return undefined;
-}
-
-/** Identify the extension source structurally (no hardcoded brand name, so it
- *  survives a prior rename): a package.json with `contributes`, alongside the
- *  rebranding guide or a chat-participant contribution. */
-async function looksLikeSource(dir: vscode.Uri, lenient = false): Promise<boolean> {
-  try {
-    const json = JSON.parse(await readText(vscode.Uri.joinPath(dir, "package.json")));
-    if (!json?.contributes) return false;
-    if (lenient) return true;
-    try {
-      await vscode.workspace.fs.stat(vscode.Uri.joinPath(dir, "REBRANDING.md"));
-      return true;
-    } catch {
-      return !!json.contributes.chatParticipants;
-    }
-  } catch {
-    return false;
-  }
-}
 
 async function ask(
   prompt: string,
@@ -722,28 +573,4 @@ async function gatherProvisioning(
   if (help.userGuide || help.welcome) content.help = help;
 
   return content;
-}
-
-async function editFile(
-  root: vscode.Uri,
-  rel: string,
-  transform: (text: string) => string,
-  written: string[],
-  skipped: string[],
-  log: Logger,
-): Promise<void> {
-  const uri = vscode.Uri.joinPath(root, ...rel.split("/"));
-  try {
-    const before = await readText(uri);
-    const after = transform(before);
-    if (after === before) {
-      skipped.push(`${rel} (no change)`);
-      return;
-    }
-    await writeText(uri, after);
-    written.push(rel);
-  } catch (e) {
-    log.error(`rebrand: ${rel}`, e);
-    skipped.push(`${rel} (${msg(e)})`);
-  }
 }
