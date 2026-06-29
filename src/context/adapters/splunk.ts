@@ -67,6 +67,8 @@ const BLOCKED_SPL = [
   "script",
   "runshellscript",
   "dump",
+  "rest", // can POST to splunkd management endpoints
+  "map", // can invoke a mutating saved search by name (not caught by text scan)
 ] as const;
 
 const BLOCKED_RE = new RegExp(
@@ -74,12 +76,25 @@ const BLOCKED_RE = new RegExp(
   "i",
 );
 
+/** Strip SPL block comments (```…```) and collapse whitespace BEFORE scanning,
+ *  so the barrier can't be slipped past by inserting a comment between a pipe
+ *  and a blocked command (e.g. `| ```x``` delete`). Splunk ignores the comments
+ *  at execution, so scanning the stripped form matches what actually runs. */
+function normalizeSplForScan(spl: string): string {
+  return spl.replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ");
+}
+
 export function splIssue(spl: string): string | undefined {
   if (!spl.trim()) return "Empty SPL query.";
   if (spl.length > 8_000) return "SPL query too long (max 8000 chars).";
-  const m = spl.match(BLOCKED_RE);
+  const scan = normalizeSplForScan(spl);
+  const m = scan.match(BLOCKED_RE);
   if (m) {
-    return `The SPL command "${m[1]}" is blocked — this connector is read-only (no delete/collect/output*/send*/script commands).`;
+    return `The SPL command "${m[1]}" is blocked — this connector is read-only (no delete/collect/output*/send*/rest/map/script commands).`;
+  }
+  // `… into <dest>` (e.g. `tstats … into <namespace>`) writes — block it.
+  if (/\|\s*[^|]*\binto\b/i.test(scan)) {
+    return "The SPL `into` clause is blocked — this connector is read-only (it would write to a collection/index).";
   }
   return undefined;
 }

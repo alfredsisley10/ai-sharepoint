@@ -6,6 +6,15 @@ import {
   sanitizeExportFileName,
 } from "../src/context/exportData";
 
+test("rowsToCsv neutralizes formula-injection cells (= + - @) without losing the value", () => {
+  const csv = rowsToCsv([{ a: "=SUM(A1:A2)", b: "+1", c: "-2", d: "@x", e: "normal" }]);
+  const dataRow = csv.split("\n")[1];
+  assert.ok(dataRow.includes("'=SUM(A1:A2)"));
+  assert.ok(dataRow.includes("'+1"));
+  assert.ok(dataRow.includes("'@x"));
+  assert.ok(dataRow.includes("normal"));
+});
+
 test("rowsToCsv escapes RFC-4180 style and aligns ragged rows via a header union", () => {
   const csv = rowsToCsv([
     { id: 1, name: 'He said "hi", twice', note: "line1\nline2" },
