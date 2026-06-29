@@ -23,6 +23,7 @@ import {
 } from "./rebrand";
 import { ReleaseManifest } from "./releaseExpiry";
 import { exportScaffoldFiles } from "./exportScaffold";
+import { ORIGIN_BRAND, OriginBrand, rebrandOriginModule } from "./originBrand";
 
 export interface VsixRebrandOptions {
   /** Brand tokens from buildBrandTokens(deep). */
@@ -43,6 +44,8 @@ export interface VsixRebrandOptions {
 const MANIFEST = "extension.vsixmanifest";
 const PKG_JSON = "extension/package.json";
 const ICON = "extension/media/icon.png";
+/** The full source tree the build bundles into the VSIX (scripts/bundle-source.js). */
+const SOURCE_ARCHIVE = "extension/dist/source.zip";
 /** Text assets whose brand tokens should be rewritten. The bundle (.js), the
  *  NLS bundle + manifest (.json), docs (.md/.txt), and inline art (.svg/.css/
  *  .html). `[Content_Types].xml` is intentionally excluded (structural OPC). */
@@ -96,6 +99,12 @@ function transformEntry(name: string, data: Uint8Array, opts: VsixRebrandOptions
   }
   if (name === MANIFEST) {
     return strToU8(rebrandVsixManifest(strFromU8(data), opts));
+  }
+  if (name === SOURCE_ARCHIVE) {
+    // The VSIX embeds the full source tree so a copy can be maintained without
+    // the original repo. Rebrand it too — otherwise the white-labeled .vsix
+    // would still carry the ORIGINAL source (prior identifiers) inside it.
+    return zipSync(rebrandSourceArchive(data, opts), { level: 6 });
   }
   if (!TEXT_RE.test(name)) return data; // binary (icons) + [Content_Types].xml unchanged
 
@@ -205,6 +214,7 @@ export function minimalBuildComponents(
   for (const [name, data] of Object.entries(entries)) {
     if (!name.startsWith("extension/")) continue; // drop vsixmanifest / [Content_Types].xml (vsce regenerates them)
     const rel = name.slice("extension/".length);
+    if (rel === "dist/source.zip") continue; // not needed to vsce-package — keeps the build-team handoff minimal
     out[rel] = rel === "package.json" ? strToU8(minimalPackageJson(strFromU8(data))) : data;
   }
   out[".vscodeignore"] = strToU8(BUILD_VSCODEIGNORE);
@@ -219,44 +229,93 @@ export function readVsixSourceArchive(vsix: Uint8Array): Uint8Array | undefined 
   return unzipSync(vsix)["extension/dist/source.zip"];
 }
 
-// Paths whose brand tokens must NOT be rewritten when exporting source: the
-// rebrand engine itself (its find-tokens are literal data — rewriting them
-// would corrupt it), and the test/tooling/CI trees (they reference the old
-// identifiers and string fixtures on purpose). They are still EMITTED so the
-// tree builds; only token substitution is skipped.
-const SOURCE_SKIP_REWRITE = [
-  "src/branding/",
-  "test/",
-  "test-integration/",
-  "scripts/",
-  ".github/",
-  "node_modules/",
-  "dist/",
-  "out/",
-  "out-test/",
-];
+// Emitted verbatim (no token rewrite). Build tooling carries no brand
+// identifiers; build artifacts shouldn't be in the archive at all but are
+// excluded defensively. NOTE the rebrand engine + tests are deliberately NOT
+// here — they ARE token-rewritten so no prior identifiers survive. The engine's
+// literal find-tokens live ONLY in src/branding/originBrand.ts, which is
+// regenerated for the new brand (so the engine stays correct and clean).
+const SOURCE_SKIP_REWRITE = ["scripts/", "node_modules/", "dist/", "out/", "out-test/"];
 const SOURCE_TEXT_RE = /\.(ts|js|cjs|mjs|json|md|txt|svg|css|html|ya?ml)$/i;
+
+// Origin-coupled files that must NOT ship in an anonymized copy. CHANGELOG.md
+// (the original release narrative) is replaced with a fresh one; REBRANDING.md
+// (names the origin and documents the origin's white-label mechanism) and the
+// origin's own .github (CI / issue templates) are dropped — the export supplies
+// its own build workflow + MAINTAINING.md via exportScaffoldFiles().
+const SOURCE_DROP = [/^REBRANDING\.md$/i, /^\.github\//];
+const ORIGIN_MODULE = "src/branding/originBrand.ts";
+const SOURCE_CHANGELOG = "CHANGELOG.md";
+
+/** The new brand expressed as an OriginBrand, for regenerating originBrand.ts in
+ *  the exported source. Identifier fields run through the tokens (so display-only
+ *  rebrands correctly leave the aiSharePoint/ai-sharepoint identifiers intact),
+ *  while displayName/handle/publisher come straight from the chosen identity. */
+function deriveExportBrand(opts: VsixRebrandOptions): OriginBrand {
+  const t = opts.tokens;
+  return {
+    displayName: opts.after.displayName,
+    handle: opts.handle,
+    namespace: applyBrandTokens(ORIGIN_BRAND.namespace, t),
+    namespaceLower: applyBrandTokens(ORIGIN_BRAND.namespaceLower, t),
+    kebab: applyBrandTokens(ORIGIN_BRAND.kebab, t),
+    publisher: opts.after.publisher,
+  };
+}
+
+/** A clean changelog for the white-labeled copy (the original release history is
+ *  the origin's, and naming/dating it would leak lineage). */
+function freshChangelog(after: BrandConfig): string {
+  return [
+    "# Changelog",
+    "",
+    `All notable changes to ${after.displayName} are documented here.`,
+    "",
+    "## Unreleased",
+    "",
+    `- Initial white-label build of ${after.displayName}.`,
+    "",
+  ].join("\n");
+}
 
 /**
  * Rebrand a full-source archive (the VSIX's dist/source.zip) into a complete,
- * buildable, rebranded source tree (repo-relative path → bytes). Mirrors the
- * old in-place source rewrite: brand tokens across product source/docs,
- * identity + release + provisioning into package.json, LICENSE-holder and
- * support/security contacts — while leaving the rebrand engine, tests, and CI
- * tooling untouched (token-wise). Build-ready GitHub Actions + a MAINTAINING.md
- * are added.
+ * buildable, FULLY ANONYMIZED source tree (repo-relative path → bytes): brand
+ * tokens across product source/docs/tests, identity + release + provisioning
+ * into package.json, LICENSE-holder and support/security contacts, and the
+ * publisher/owner replaced everywhere it appears. The rebrand engine is rewritten
+ * too — its literal find-tokens live ONLY in src/branding/originBrand.ts, which
+ * is regenerated for the NEW brand, so no prior identifiers remain and the copy's
+ * own rebrand engine targets its new brand. Origin-coupled files are dropped
+ * (REBRANDING.md, the origin's .github) or replaced (a fresh CHANGELOG), and a
+ * build-ready GitHub Actions workflow + MAINTAINING.md are added.
  */
 export function rebrandSourceArchive(sourceZip: Uint8Array, opts: VsixRebrandOptions): Record<string, Uint8Array> {
   const files = unzipSync(sourceZip);
+  const exportBrand = deriveExportBrand(opts);
+  /** The publisher/owner is not a brand token; replace it explicitly in any
+   *  rewritten text so no prior owner string survives. */
+  const dropOwner = (text: string): string => text.split(ORIGIN_BRAND.publisher).join(opts.after.publisher);
   const out: Record<string, Uint8Array> = {};
   for (const [name, data] of Object.entries(files)) {
+    if (SOURCE_DROP.some((re) => re.test(name))) continue; // origin-coupled — not shipped
+    if (name === ORIGIN_MODULE) {
+      // Regenerate the engine's single source of truth → the NEW brand: the copy
+      // carries no prior identifiers and rebrands FROM its own brand.
+      out[name] = strToU8(rebrandOriginModule(strFromU8(data), exportBrand));
+      continue;
+    }
+    if (name === SOURCE_CHANGELOG) {
+      out[name] = strToU8(freshChangelog(opts.after));
+      continue;
+    }
     if (SOURCE_SKIP_REWRITE.some((p) => name.startsWith(p))) {
-      out[name] = data; // present, but not token-rewritten (engine/test/CI safety)
+      out[name] = data; // verbatim (no brand identifiers)
       continue;
     }
     if (name === "package.json") {
       out[name] = strToU8(
-        rebrandPackageJsonFull(strFromU8(data), opts.tokens, opts.after, opts.handle, opts.release, opts.provisioning),
+        dropOwner(rebrandPackageJsonFull(strFromU8(data), opts.tokens, opts.after, opts.handle, opts.release, opts.provisioning)),
       );
       continue;
     }
@@ -267,7 +326,7 @@ export function rebrandSourceArchive(sourceZip: Uint8Array, opts: VsixRebrandOpt
       out[name] = data; // binary (icons, etc.)
       continue;
     }
-    let text = applyBrandTokens(strFromU8(data), opts.tokens);
+    let text = dropOwner(applyBrandTokens(strFromU8(data), opts.tokens));
     const lower = name.toLowerCase();
     if (/(^|\/)license(\.[a-z0-9]+)?$/.test(lower) && opts.after.licenseHolder) {
       text = rebrandLicense(text, opts.after.licenseHolder);

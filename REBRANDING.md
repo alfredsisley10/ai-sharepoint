@@ -52,9 +52,15 @@ At the end you choose **what to produce**, then **where to put it**.
 - **Full source** — the complete, rebranded source tree, extracted from the source that ships
   **inside the VSIX** (`dist/source.zip`). This means a white-labeled copy can be maintained from
   scratch **without access to the original repository** — only standard npm dependencies are
-  needed, restored from your registry. The rebrand engine, tests, and CI tooling travel intact
-  (and are deliberately not token-rewritten so the copy can itself rebrand and its tests stay
-  meaningful).
+  needed, restored from your registry. The export is **fully anonymized**: product code, the
+  rebrand engine, and the unit tests are all token-rewritten to your brand (the engine's literal
+  find-tokens live in one module, `src/branding/originBrand.ts`, which is regenerated for your
+  brand — so the copy carries no prior identifiers, keeps a green test suite, and its own rebrand
+  engine targets *your* brand). The publisher/owner is replaced everywhere, origin-coupled files
+  are removed (the original `CHANGELOG` is replaced with a fresh one; `REBRANDING.md` and the
+  origin's `.github` are dropped), and no `.git` history is ever included. The same anonymization
+  is applied to the source embedded in a rebranded **`.vsix`**, so an installed copy carries no
+  prior identifiers either.
 
 **Where to put it** (for the components / full-source options):
 

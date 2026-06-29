@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.76.0 — 2026-06-29
+
+Full anonymization of white-labeled source — no prior identifiers or commit history.
+
+### Fixed — the embedded source carried the original identity
+- The source tree bundled inside the VSIX (`dist/source.zip`) — and therefore the **Full source**
+  export and the source embedded in a rebranded **`.vsix`** — previously kept the original brand in
+  the rebrand engine and its tests (they were emitted but deliberately *not* token-rewritten), and
+  the publisher/owner (`alfredsisley10`) survived because it isn't a brand token. A white-labeled
+  copy could thus reveal its origin. Now the export is **fully anonymized**:
+  - The rebrand engine's literal find-tokens are consolidated into a single module
+    (`src/branding/originBrand.ts`); the export **regenerates** it for the new brand, so the engine
+    and its unit tests anonymize together (and keep a green suite), and the copy's own rebrand
+    engine correctly targets *its* brand.
+  - Product code, engine, docs, and tests are token-rewritten; the **publisher/owner is replaced
+    everywhere** it appears (it is not a brand token).
+  - Origin-coupled files are removed: the original `CHANGELOG` is replaced with a fresh one, and
+    `REBRANDING.md` and the origin's `.github` (CI / issue templates) are dropped — the export
+    already supplies its own build workflow + `MAINTAINING.md`.
+  - The source embedded in a rebranded `.vsix` is rebranded too (it was passing through unchanged),
+    so an installed white-labeled copy carries no prior identifiers either.
+- **Commit history is never bundled** — `scripts/bundle-source.js` is allowlist-based, so `.git`
+  metadata (authors, emails, SHAs) cannot leak into the archive. A test enforces this, and a new
+  anonymization test runs the **real** source through the export and asserts that *no* origin
+  identifier (`AI SharePoint`, `@sharepoint`, `aiSharePoint`, `ai-sharepoint`, `alfredsisley10`)
+  survives in any file.
+
 ## 0.75.0 — 2026-06-29
 
 White-label usability and correctness polish.

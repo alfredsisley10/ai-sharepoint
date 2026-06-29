@@ -16,31 +16,55 @@ import {
 import { buildBrandTokens } from "../src/branding/brandTokens";
 import { BrandConfig } from "../src/branding/rebrand";
 import { ReleaseManifest } from "../src/branding/releaseExpiry";
+// Origin-side fixtures come from ORIGIN_BRAND (the single source of truth), so
+// these tests hardcode NO prior identifiers and stay correct after export.
+import { ORIGIN_BRAND } from "../src/branding/originBrand";
+
+// Every distinctive origin identifier that must NOT survive a white-label export.
+// (Bare "SharePoint"/"sharepoint" — Microsoft's product — is deliberately absent.)
+const ORIGIN_LITERALS = [
+  ORIGIN_BRAND.displayName,
+  `@${ORIGIN_BRAND.handle}`,
+  ORIGIN_BRAND.namespace,
+  ORIGIN_BRAND.namespaceLower,
+  ORIGIN_BRAND.kebab,
+  ORIGIN_BRAND.publisher,
+];
+
+/** Assert no prior identifier survives anywhere in a rebranded file map. */
+function assertAnonymized(files: Record<string, Uint8Array>, context = "") {
+  for (const [name, bytes] of Object.entries(files)) {
+    const body = strFromU8(bytes);
+    for (const lit of ORIGIN_LITERALS) {
+      assert.ok(!body.includes(lit), `${context}${name} leaks origin identifier "${lit}"`);
+    }
+  }
+}
 
 const MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0">
   <Metadata>
-    <Identity Language="en-US" Id="ai-sharepoint" Version="0.72.0" Publisher="alfredsisley10" />
-    <DisplayName>AI SharePoint</DisplayName>
-    <Description xml:space="preserve">Govern SharePoint with AI SharePoint.</Description>
+    <Identity Language="en-US" Id="${ORIGIN_BRAND.kebab}" Version="0.72.0" Publisher="${ORIGIN_BRAND.publisher}" />
+    <DisplayName>${ORIGIN_BRAND.displayName}</DisplayName>
+    <Description xml:space="preserve">Govern SharePoint with ${ORIGIN_BRAND.displayName}.</Description>
     <Tags>sharepoint,copilot</Tags>
   </Metadata>
 </PackageManifest>`;
 
 const PKG = JSON.stringify(
   {
-    publisher: "alfredsisley10",
-    name: "ai-sharepoint",
-    displayName: "AI SharePoint",
+    publisher: ORIGIN_BRAND.publisher,
+    name: ORIGIN_BRAND.kebab,
+    displayName: ORIGIN_BRAND.displayName,
     version: "0.72.0",
-    description: "Govern SharePoint with AI SharePoint.",
-    contributes: { chatParticipants: [{ name: "sharepoint", fullName: "SharePoint" }] },
+    description: `Govern SharePoint with ${ORIGIN_BRAND.displayName}.`,
+    contributes: { chatParticipants: [{ name: ORIGIN_BRAND.handle, fullName: "SharePoint" }] },
   },
   null,
   2,
 );
 
-const BUNDLE = `console.log("AI SharePoint @sharepoint aiSharePoint ai-sharepoint reads a SharePoint site");`;
+const BUNDLE = `console.log("${ORIGIN_BRAND.displayName} @${ORIGIN_BRAND.handle} ${ORIGIN_BRAND.namespace} ${ORIGIN_BRAND.kebab} reads a SharePoint site");`;
 const ICON = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]); // fake PNG bytes
 
 function fixtureVsix(): Uint8Array {
@@ -50,7 +74,9 @@ function fixtureVsix(): Uint8Array {
     "extension/package.json": strToU8(PKG),
     "extension/dist/extension.js": strToU8(BUNDLE),
     "extension/media/icon.png": ICON,
-    "extension/readme.md": strToU8("# AI SharePoint\n\n**Govern SharePoint with AI SharePoint.**\n\nUse @sharepoint."),
+    "extension/readme.md": strToU8(
+      `# ${ORIGIN_BRAND.displayName}\n\n**Govern SharePoint with ${ORIGIN_BRAND.displayName}.**\n\nUse @${ORIGIN_BRAND.handle}.`,
+    ),
   });
 }
 
@@ -170,6 +196,18 @@ test("minimalBuildComponents: pre-built payload at root, vsce-only package.json,
   assert.match(strFromU8(files["BUILD.md"]), /Contoso Docs/);
 });
 
+test("minimalBuildComponents drops the bundled source archive (not needed to vsce-package)", () => {
+  const vsix = zipSync({
+    "extension.vsixmanifest": strToU8(MANIFEST),
+    "extension/package.json": strToU8(PKG),
+    "extension/dist/extension.js": strToU8(BUNDLE),
+    "extension/dist/source.zip": fixtureSourceZip(),
+  });
+  const files = minimalBuildComponents(vsix, deepOpts());
+  assert.ok(!("dist/source.zip" in files), "source archive omitted from the minimal handoff");
+  assert.ok("dist/extension.js" in files, "pre-built bundle kept");
+});
+
 test("minimalPackageJson keeps identity/contributes but strips the build surface", () => {
   const out = JSON.parse(
     minimalPackageJson(JSON.stringify({ name: "x", displayName: "X", main: "./dist/extension.js", contributes: { a: 1 }, dependencies: { pg: "^8" }, devDependencies: { esbuild: "^0.28", prettier: "^3" }, scripts: { "vscode:prepublish": "node esbuild.js" } })),
@@ -181,39 +219,121 @@ test("minimalPackageJson keeps identity/contributes but strips the build surface
   assert.ok(!("vscode:prepublish" in out.scripts), "no source build step (bundle is pre-built)");
 });
 
+/** A realistic originBrand.ts module the export must regenerate in place. */
+function originBrandModuleFixture(): string {
+  return [
+    "export interface OriginBrand {",
+    "  displayName: string;",
+    "  handle: string;",
+    "  namespace: string;",
+    "  namespaceLower: string;",
+    "  kebab: string;",
+    "  publisher: string;",
+    "}",
+    "",
+    "export const ORIGIN_BRAND: OriginBrand = {",
+    `  displayName: ${JSON.stringify(ORIGIN_BRAND.displayName)},`,
+    `  handle: ${JSON.stringify(ORIGIN_BRAND.handle)},`,
+    `  namespace: ${JSON.stringify(ORIGIN_BRAND.namespace)},`,
+    `  namespaceLower: ${JSON.stringify(ORIGIN_BRAND.namespaceLower)},`,
+    `  kebab: ${JSON.stringify(ORIGIN_BRAND.kebab)},`,
+    `  publisher: ${JSON.stringify(ORIGIN_BRAND.publisher)},`,
+    "};",
+    "",
+  ].join("\n");
+}
+
 function fixtureSourceZip(): Uint8Array {
   return zipSync({
-    "src/extension.ts": strToU8('// AI SharePoint @sharepoint aiSharePoint reads a SharePoint site'),
-    "src/branding/brandTokens.ts": strToU8('const FIND = "AI SharePoint"; // @sharepoint aiSharePoint'),
-    "test/foo.test.ts": strToU8('assert("AI SharePoint")'),
+    "src/extension.ts": strToU8(
+      `// ${ORIGIN_BRAND.displayName} @${ORIGIN_BRAND.handle} ${ORIGIN_BRAND.namespace} reads a SharePoint site`,
+    ),
+    // The engine's single source of truth — must be regenerated to the new brand.
+    "src/branding/originBrand.ts": strToU8(originBrandModuleFixture()),
+    // A non-source-of-truth engine file — its comments must be token-rewritten.
+    "src/branding/brandTokens.ts": strToU8(
+      `// rebrand engine for ${ORIGIN_BRAND.displayName}; finds @${ORIGIN_BRAND.handle} and ${ORIGIN_BRAND.namespace}`,
+    ),
+    // A test file — must be token-rewritten (it ships into the maintained copy).
+    "test/foo.test.ts": strToU8(`assert(id.startsWith("${ORIGIN_BRAND.namespace}"))`),
+    // Build tooling — emitted verbatim (carries no brand identifiers).
+    "scripts/build.js": strToU8("// build helper — no brand here"),
     "package.json": strToU8(PKG),
-    "LICENSE": strToU8("Copyright (c) 2026 AI SharePoint contributors"),
+    // Origin-coupled docs/CI — dropped or replaced.
+    "CHANGELOG.md": strToU8(`# Changelog\n\n## 0.1.0\n- ${ORIGIN_BRAND.displayName} by ${ORIGIN_BRAND.publisher}\n`),
+    "REBRANDING.md": strToU8(`# Rebranding\n\nPublisher fixed at ${ORIGIN_BRAND.publisher}.\n`),
+    ".github/workflows/ci.yml": strToU8(`name: CI for ${ORIGIN_BRAND.kebab}\n`),
+    LICENSE: strToU8(`Copyright (c) 2026 ${ORIGIN_BRAND.displayName} contributors`),
     "media/icon.png": ICON,
   });
 }
 
-test("rebrandSourceArchive: rewrites product source, SPARES the engine + tests, rebrands package.json", () => {
+test("rebrandSourceArchive: anonymizes product/engine/tests, regenerates originBrand.ts, drops origin-coupled files", () => {
   const out = rebrandSourceArchive(fixtureSourceZip(), deepOpts());
-  // Product source is token-rewritten (deep rename).
-  assert.match(strFromU8(out["src/extension.ts"]), /Contoso Docs @contosodocs contosoDocs/);
-  assert.match(strFromU8(out["src/extension.ts"]), /reads a SharePoint site/, "Microsoft 'SharePoint' preserved");
-  // The rebrand engine's literal find-tokens MUST survive verbatim.
-  assert.match(strFromU8(out["src/branding/brandTokens.ts"]), /"AI SharePoint"/);
-  // Tests are emitted but not rewritten (they assert on the old strings).
-  assert.equal(strFromU8(out["test/foo.test.ts"]), 'assert("AI SharePoint")');
-  // package.json fully rebranded; LICENSE holder updated.
-  assert.equal(JSON.parse(strFromU8(out["package.json"])).displayName, "Contoso Docs");
-  // Build-ready scaffolding is included.
+  const text = (p: string) => strFromU8(out[p]);
+
+  // Product source token-rewritten (deep rename); Microsoft 'SharePoint' preserved.
+  assert.match(text("src/extension.ts"), /Contoso Docs @contosodocs contosoDocs/);
+  assert.match(text("src/extension.ts"), /reads a SharePoint site/, "Microsoft 'SharePoint' preserved");
+
+  // The engine's single source of truth is regenerated to the NEW brand…
+  const origin = text("src/branding/originBrand.ts");
+  assert.match(origin, /displayName: "Contoso Docs"/);
+  assert.match(origin, /handle: "contosodocs"/);
+  assert.match(origin, /namespace: "contosoDocs"/);
+  assert.match(origin, /kebab: "contoso-docs"/);
+  assert.match(origin, /publisher: "contoso"/);
+
+  // …and the engine + tests no longer mention the original brand.
+  assert.match(text("src/branding/brandTokens.ts"), /Contoso Docs.*@contosodocs.*contosoDocs/);
+  assert.match(text("test/foo.test.ts"), /startsWith\("contosoDocs"\)/);
+
+  // package.json fully rebranded; build tooling emitted verbatim; binary passes through.
+  assert.equal(JSON.parse(text("package.json")).displayName, "Contoso Docs");
+  assert.equal(text("scripts/build.js"), "// build helper — no brand here");
+  assert.deepEqual([...out["media/icon.png"]], [...ICON]);
+
+  // CHANGELOG replaced with a fresh one (no original history); REBRANDING + origin .github dropped.
+  assert.match(text("CHANGELOG.md"), /Initial white-label build of Contoso Docs/);
+  assert.doesNotMatch(text("CHANGELOG.md"), /0\.1\.0/, "original release history gone");
+  assert.ok(!("REBRANDING.md" in out), "origin-coupled rebranding doc dropped");
+  assert.ok(!(".github/workflows/ci.yml" in out), "origin CI dropped");
+
+  // Build-ready scaffolding added.
   assert.ok(".github/workflows/whitelabel-build.yml" in out);
   assert.ok("MAINTAINING.md" in out);
-  assert.match(strFromU8(out["MAINTAINING.md"]), /GitHub Enterprise Server/);
-  // Binary passes through.
-  assert.deepEqual([...out["media/icon.png"]], [...ICON]);
+  assert.match(text("MAINTAINING.md"), /GitHub Enterprise Server/);
+
+  // THE GUARANTEE: no prior identifier survives anywhere in the exported source.
+  assertAnonymized(out);
+});
+
+test("rebrandSourceArchive replaces the publisher/owner even though it isn't a brand token", () => {
+  const out = rebrandSourceArchive(
+    zipSync({ "docs/notes.md": strToU8(`Maintained by ${ORIGIN_BRAND.publisher}. See @${ORIGIN_BRAND.handle}.`) }),
+    deepOpts(),
+  );
+  assert.match(strFromU8(out["docs/notes.md"]), /Maintained by contoso\. See @contosodocs\./);
 });
 
 test("rebrandSourceArchive licenseHolder rewrites the LICENSE copyright", () => {
   const out = rebrandSourceArchive(fixtureSourceZip(), deepOpts({ after: { ...after, licenseHolder: "Contoso Inc." } }));
   assert.match(strFromU8(out["LICENSE"]), /Copyright \(c\) 2026 Contoso Inc\./);
+});
+
+test("rebrandVsix rebrands the source tree embedded in the .vsix (no prior identifiers inside)", () => {
+  const vsix = zipSync({
+    "extension.vsixmanifest": strToU8(MANIFEST),
+    "[Content_Types].xml": strToU8("<Types/>"),
+    "extension/package.json": strToU8(PKG),
+    "extension/dist/extension.js": strToU8(BUNDLE),
+    "extension/dist/source.zip": fixtureSourceZip(),
+  });
+  const out = unzipSync(rebrandVsix(vsix, deepOpts()));
+  // The embedded archive is still a valid zip and was itself rebranded.
+  const inner = unzipSync(out["extension/dist/source.zip"]);
+  assert.match(strFromU8(inner["src/extension.ts"]), /Contoso Docs @contosodocs/);
+  assertAnonymized(inner, "embedded source: ");
 });
 
 test("readVsixSourceArchive returns the bundled source, or undefined when absent", () => {
@@ -227,7 +347,7 @@ test("readVsixSourceArchive returns the bundled source, or undefined when absent
 });
 
 test("readVsixPackageJson reads the manifest; rejects a non-extension zip", () => {
-  assert.equal(readVsixPackageJson(fixtureVsix()).name, "ai-sharepoint");
+  assert.equal(readVsixPackageJson(fixtureVsix()).name, ORIGIN_BRAND.kebab);
   const notExt = zipSync({ "foo.txt": strToU8("hi") });
   assert.throws(() => readVsixPackageJson(notExt), /not a vs code extension vsix/i);
 });

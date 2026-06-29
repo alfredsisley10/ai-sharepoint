@@ -1,22 +1,25 @@
 /**
  * Brand-token engine for a FULL product rename (white-label). Renaming the
- * product entirely from "AI SharePoint" means rewriting brand tokens across the
- * whole source tree — package.json, compiled TS strings, docs — then recompiling.
+ * product entirely means rewriting brand tokens across the whole source tree —
+ * package.json, compiled TS strings, docs — then recompiling.
+ *
+ * The find-tokens (what we search for) come from `ORIGIN_BRAND` — the single
+ * place the current product's distinctive identifiers live — so a white-label
+ * export anonymizes the engine by regenerating that one module:
+ *   - ORIGIN_BRAND.displayName     → the new display name
+ *   - "@" + ORIGIN_BRAND.handle    → the new chat handle
+ *   - ORIGIN_BRAND.namespace       → the camelCase identifier namespace  (command/setting/view IDs)
+ *   - ORIGIN_BRAND.namespaceLower  → the lowercase tool/folder prefix     (aisharepoint_* tools)
+ *   - ORIGIN_BRAND.kebab           → the kebab id                         (schema ids, .vsix name)
  *
  * The hard rule: the word **"SharePoint"** on its own is Microsoft's product
- * (the thing this extension integrates with) and must NEVER be renamed. Only our
- * own distinctive brand tokens are replaced:
- *   - "AI SharePoint"  → the new display name
- *   - "@sharepoint"    → the new chat handle
- *   - "aiSharePoint"   → the camelCase identifier namespace  (command/setting/view IDs)
- *   - "aisharepoint"   → the lowercase tool/folder prefix     (aisharepoint_* tools)
- *   - "ai-sharepoint"  → the kebab id                         (schema ids, .vsix name)
- *
- * The last three are INTERNAL identifiers that also key stored settings and
- * data; renaming them strands an existing deployment (like the extension ID), so
- * it is opt-in and greenfield-only. All pure and unit-tested; the flow walks the
- * tree and applies these.
+ * (the thing this extension integrates with) and must NEVER be renamed — it is
+ * deliberately not a token. The last three (identifier) tokens also key stored
+ * settings and data; renaming them strands an existing deployment (like the
+ * extension ID), so it is opt-in and greenfield-only. All pure and unit-tested;
+ * the flow walks the tree and applies these.
  */
+import { ORIGIN_BRAND } from "./originBrand";
 
 export interface DeepBrandConfig {
   /** New product display name (replaces "AI SharePoint"). */
@@ -74,15 +77,15 @@ export function validateDeepBrand(cfg: Partial<DeepBrandConfig>): string[] {
  *  tokens only when `renameIdentifiers` is set. */
 export function buildBrandTokens(cfg: DeepBrandConfig): BrandToken[] {
   const tokens: BrandToken[] = [
-    { find: "AI SharePoint", replace: cfg.displayName },
-    { find: "@sharepoint", replace: `@${cfg.handle}` },
+    { find: ORIGIN_BRAND.displayName, replace: cfg.displayName },
+    { find: `@${ORIGIN_BRAND.handle}`, replace: `@${cfg.handle}` },
   ];
   if (cfg.renameIdentifiers) {
     const ns = cfg.idNamespace || camelize(cfg.kebabName);
     tokens.push(
-      { find: "aiSharePoint", replace: ns },
-      { find: "ai-sharepoint", replace: cfg.kebabName },
-      { find: "aisharepoint", replace: ns.toLowerCase() },
+      { find: ORIGIN_BRAND.namespace, replace: ns },
+      { find: ORIGIN_BRAND.kebab, replace: cfg.kebabName },
+      { find: ORIGIN_BRAND.namespaceLower, replace: ns.toLowerCase() },
     );
   }
   return tokens;
