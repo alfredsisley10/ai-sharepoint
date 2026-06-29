@@ -3,6 +3,7 @@ import { BlockedTermsStore } from "../diagnostics/blockedTermsStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 
 /**
  * Proxy avoid-list management as a chat tool (#4) — lets the user grow the
@@ -33,6 +34,7 @@ export function registerProxyTools(
           };
         },
         async invoke(o) {
+          if (releaseExpired()) return text(expiredNotice());
           telemetry.record("tool.invoke", { tool: "aisharepoint_avoid_term" });
           try {
             const action = o.input.action ?? (o.input.terms?.length ? "add" : "list");

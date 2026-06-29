@@ -4,6 +4,7 @@ import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { LessonCategory } from "../diagnostics/lessons";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 
 /**
  * The capture_lesson tool (ADR-0041): when @sharepoint self-corrects or finds a
@@ -37,6 +38,7 @@ export function registerLessonsTools(
         };
       },
       async invoke(options) {
+        if (releaseExpired()) return text(expiredNotice());
         telemetry.record("tool.invoke", { tool: "aisharepoint_capture_lesson" });
         try {
           if (!lessons.enabled()) {

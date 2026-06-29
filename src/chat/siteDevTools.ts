@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { SitesStore, SiteConnection } from "../auth/sitesStore";
 import { SiteAccess } from "../auth/siteAccess";
 import { SyncConfigStore } from "../sync/syncConfigStore";
@@ -81,6 +82,7 @@ export function registerSiteDevTools(
         };
       },
       async invoke(options) {
+        if (releaseExpired()) return text(expiredNotice());
         telemetry.record("tool.invoke", { tool: "aisharepoint_write_site_files" });
         try {
           const conn = resolveManaged(options.input.site);
@@ -151,6 +153,7 @@ export function registerSiteDevTools(
         },
       }),
       async invoke(options) {
+        if (releaseExpired()) return text(expiredNotice());
         telemetry.record("tool.invoke", { tool: "aisharepoint_pull_site" });
         try {
           const conn = resolveManaged(options.input.site);
@@ -189,6 +192,7 @@ export function registerSiteDevTools(
         },
       }),
       async invoke(options) {
+        if (releaseExpired()) return text(expiredNotice());
         telemetry.record("tool.invoke", { tool: "aisharepoint_apply_site" });
         try {
           const conn = resolveManaged(options.input.site);
