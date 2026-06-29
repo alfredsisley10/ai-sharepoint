@@ -364,9 +364,12 @@ test("exported build guides: cross-platform, --verbose, OS trust store, strict-s
   // Withheld/quarantined newer versions (the prettier-3.9.3 failure).
   assert.match(maintaining, /prettier-3\.9\.3\.tgz/, "names the concrete withheld-version failure");
   assert.match(maintaining, /no `package-lock\.json`/, "explains the dropped lockfile");
-  // Windows npm warn cleanup is explained as benign.
-  assert.match(maintaining, /npm warn cleanup/, "explains the benign Windows cleanup warning");
+  // Benign install warnings (deprecations + Windows cleanup) are explained.
   assert.match(maintaining, /warnings, not errors/i, "reassures the warnings are non-fatal");
+  assert.match(maintaining, /npm warn deprecated/, "explains benign transitive deprecation warnings");
+  assert.match(maintaining, /keytar/, "notes keytar is optional (vsce package doesn't need it)");
+  assert.match(maintaining, /npm warn cleanup/, "explains the benign Windows cleanup warning");
+  assert.match(maintaining, /readable-stream/, "names the deduped-nested-folder cleanup case");
 
   const build = strFromU8(minimalBuildComponents(fixtureVsix(), deepOpts())["BUILD.md"]);
   assert.match(build, /npm install --verbose/);
