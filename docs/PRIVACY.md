@@ -1,14 +1,15 @@
 # AI SharePoint — Privacy & Data Notice
 
-_Release 0.1.0 · This notice is bundled with the extension (Support view → “Privacy & Data
-Notice”) so it is available offline and version-matched._
+_This notice is bundled with the extension (Support view → “Privacy & Data Notice”) so it is
+available offline and version-matched._
 
 ## The one-sentence version
 
-This extension **transmits nothing on its own**: everything it records stays on your machine,
-and the only way any of it leaves is the **Export Diagnostics Bundle** command — which shows you
-the exact content first, anonymizes it at capture time, and refuses to export if a final scan
-finds anything secret-shaped.
+This extension **transmits nothing on its own by default**: everything it records stays on your
+machine. Data leaves only by your choice, two ways — the **Export Diagnostics Bundle** command
+(shows you the exact content first, anonymizes it at capture time, and refuses to export if a
+final scan finds anything secret-shaped), or **opt-in usage telemetry** to a Splunk/OTEL endpoint
+*you* configure (off by default; anonymized categorical metrics only — never content or PII).
 
 ## What the extension stores locally
 
@@ -17,7 +18,7 @@ finds anything secret-shaped.
 | Site connection descriptors | VS Code extension storage (global) | Site URL, display name, role, auth method id, tenant host, your UPN as last-signed-in account, timestamps | Remove via *Remove Site Connection* |
 | Auth tokens / MSAL cache | **OS keychain** (via VS Code SecretStorage), one entry per tenant | Access/refresh tokens issued to you | Wipe via *Sign Out* / *Remove Connection* |
 | Activity ledger | Extension storage | Per-day aggregates + a short tail of recent records: model id, token counts, task label (e.g. `chat`), success flag. **Never prompt or response text**, and no billing estimates | *Reset Copilot Activity Counters* |
-| Feature-usage counters | Extension storage | Event names (e.g. `command`, `chat.request`) with counts per day; tiny allowlisted properties | `diagnostics.usageCapture` setting; *defaults to following VS Code's telemetry setting* even though nothing is transmitted |
+| Feature-usage counters | Extension storage | Event names (e.g. `command`, `chat.request`) with counts per day; tiny allowlisted properties | `diagnostics.usageCapture` setting; *defaults to following VS Code's telemetry setting*. Stored locally; only forwarded off-machine if you opt into external telemetry (below) |
 | Error reports | Extension storage | Classified code (e.g. `graph.forbidden`), **redacted** message and stack (no tokens, emails, GUIDs, IPs, hostnames, or user paths; stack frames keep file basenames only), occurrence counts | `diagnostics.errorCapture` setting; *Clear Error Reports* |
 | Anonymous install identity | Extension storage | A random UUID + a random hash salt. **Not** `machineId`, not hardware-derived | *Rotate Anonymous Install ID* |
 
@@ -40,7 +41,8 @@ folder on your machine and are **not** part of the diagnostics bundle.
 |---|---|---|
 | Microsoft Entra / Microsoft Graph | Standard sign-in flows; delegated read requests for sites you connect | When you connect/test/ask about a site |
 | GitHub Copilot (via VS Code's Language Model API) | Your chat/ask prompts plus, when relevant, site context (site name, description, list names, page titles) | When you use AI features |
-| Anyone else | **Nothing.** No telemetry endpoint, no crash uploader, no update pings | — |
+| Your Splunk HEC / OTEL endpoint (**opt-in, off by default**) | Anonymized, categorical usage metrics + environment (event name, OS/VS Code version, extension version, anonymous install id). **Never** free-form text, prompts, content, or PII — non-categorical values are dropped before send | Only if you enable external telemetry and configure an endpoint (*Support & Diagnostics → Usage Telemetry*) |
+| Anyone else | **Nothing.** We host no telemetry endpoint, crash uploader, or update pings — external telemetry goes only to an endpoint *you* own | — |
 
 Copilot traffic is governed by your organization's GitHub Copilot data policies — this extension
 adds no extra AI data path.

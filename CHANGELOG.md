@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.71.0 — 2026-06-29
+
+Hardening release implementing the end-to-end SDLC review findings (P0–P2).
+
+### Security
+- **SharePoint snapshot pagination + delete safety (P0).** List/page/column reads now follow
+  `@odata.nextLink` so sites with >50 lists/pages or lists with >100 columns are captured in full;
+  a pathological collection that overflows the page cap marks the snapshot **truncated**, and
+  write-back then **refuses all deletions** (an incomplete view can't tell an orphan from an
+  unread item).
+- **Query-guard hardening (P0/P1).** Mongo `$where`/`$function`/`$out`/`$merge` rejected; SPL
+  comment-bypass + `rest`/`map`/`into` blocked; extra dangerous SQL functions denied; CQL/JQL
+  free-text escaped; CSV formula-injection neutralized in exports.
+- **Release-expiry gate** applied uniformly to every language-model tool.
+- **OAuth loopback flow** now carries a CSRF `state` parameter, verified before the code is
+  redeemed. **LDAP raw-filter passthrough is off by default** behind a machine-scoped opt-in
+  (`aiSharePoint.ldap.allowRawFilters`) — free text can no longer inject filter syntax.
+- **MSAL silent acquisition selects the cached account by UPN** (multi-account safety); telemetry
+  forwards only redacted props; more settings are `scope: machine` + workspace-restricted.
+
+### Fixed (correctness)
+- Auth-provider reuse + silent-acquisition coalescing end a refresh-token **stampede** that caused
+  surprise sign-in prompts. Graph **401** is now distinct from 403 and triggers one forced-refresh
+  retry. Outlook send cleans up an orphaned draft on failure. The usage ledger serializes writes.
+  The chat path honors the Copilot entitlement circuit breaker. First-run provisioning can no
+  longer throw an unhandled rejection.
+
+### Tooling / docs
+- **ESLint** (type-aware correctness rules), **Prettier**, **coverage**, **npm audit**, a
+  **cross-OS CI matrix**, a **VSIX-content gate**, and a `@vscode/test-electron` integration
+  smoke test.
+- **Copy Support Info** command; the Projects walkthrough step gets its own illustration.
+- Documentation accuracy pass: corrected the "transmits nothing" / "no telemetry" / "no write
+  path" claims to reflect opt-in telemetry and human-approved write-back; README tool count
+  (40+, reads free / writes approval-gated); added **CONTRIBUTING.md**; reconciled ADR numbering
+  (created the missing 0024/0045/0046, consolidated the duplicate 0030, added the GitHub-connector
+  ADR 0047).
+
 ## 0.70.0 — 2026-06-29
 
 ### Added — Usage Telemetry management UI + secret-safe storage

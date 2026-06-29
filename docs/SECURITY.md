@@ -1,6 +1,6 @@
 # AI SharePoint — Security
 
-_Release 0.1.0. Audience: security reviewers and engineers. Companions:
+_Audience: security reviewers and engineers. Companions:
 [ADMIN_GUIDE.md](ADMIN_GUIDE.md) (deployment) and [PRIVACY.md](PRIVACY.md) (data handling)._
 
 ## Architecture in one diagram
@@ -50,9 +50,13 @@ _Release 0.1.0. Audience: security reviewers and engineers. Companions:
   `auth.additionalAuthorityHosts` are `"scope": "machine"` (a repository's `.vscode/settings.json`
   cannot set them) **and** are declared in
   `capabilities.untrustedWorkspaces.restrictedConfigurations`.
-- **Least privilege:** one delegated scope — `Sites.Read.All`. Users can never read more than
-  their own SharePoint permissions allow; there is **no write scope and no write code path** in
-  this release.
+- **Least privilege:** reads use a single delegated scope — `Sites.Read.All`; users can never read
+  more than their own SharePoint permissions allow. Optional **write-back** (ADR-0021) is the only
+  write path and is **human-driven, not AI-driven**: it requests a write scope only on the first
+  write — `Sites.Selected` by default (an admin grants the app each target site) or, when an org
+  configures it, tenant-wide `Sites.ReadWrite.All`/`Sites.Manage.All` — and every change is
+  previewed, drift-checked, and snapshot-guarded before it is applied. The chat/agent surface holds
+  no write tools (see *AI surface*).
 
 ## AI surface
 
