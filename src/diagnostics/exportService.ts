@@ -198,40 +198,86 @@ export class DiagnosticsExportService {
     };
   }
 
-  /** Anonymized snapshot of this extension's settings (never raw org values). */
+  /**
+   * Anonymized snapshot of EVERY contributed setting (never raw org values).
+   * The key list is read from this build's manifest, so the bundle stays
+   * complete as settings are added — no hand-maintained allowlist to drift out
+   * of date (which previously left most settings out of support bundles).
+   *
+   * Classification is safe-by-default: booleans/numbers and fixed `enum`
+   * strings are shown raw (categorical, non-identifying); any free-form string
+   * or array element that could carry org identity (URLs, hosts, DNs, client
+   * ids, model names) is one-way hashed; empty/default values are labeled.
+   */
   private settingsSnapshot(
     salt: string,
   ): Record<string, string | number | boolean | string[]> {
     const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    const out: Record<string, string | number | boolean | string[]> = {};
+
+    for (const [fullKey, meta] of this.contributedSettings()) {
+      const key = fullKey.replace(/^aiSharePoint\./, "");
+      const value = cfg.get(key);
+      if (typeof value === "boolean" || typeof value === "number") {
+        out[key] = value; // categorical / non-identifying
+      } else if (typeof value === "string") {
+        const isDefault = meta.default !== undefined && value === meta.default;
+        if (value === "") out[key] = "(empty)";
+        else if (Array.isArray(meta.enum)) out[key] = value; // fixed vocabulary
+        else if (isDefault) out[key] = "(default)";
+        else out[key] = anonToken(value, salt); // free-form → hash
+      } else if (Array.isArray(value)) {
+        out[key] = value.length === 0
+          ? []
+          : value.map((v) => (typeof v === "string" ? anonToken(v, salt) : String(v)));
+      } else if (value !== undefined && value !== null) {
+        out[key] = "(configured)"; // object/other — presence only
+      }
+    }
+
+    // Bespoke, more-readable views for the two auth settings support relies on.
     const authority = cfg.get<string>(
       "auth.tenantAuthority",
       "https://login.microsoftonline.com/common",
     );
-    let authorityView = "default(common)";
     try {
       const u = new URL(authority);
       const tenantSeg = u.pathname.replace(/^\/|\/$/g, "");
       const wellKnown = ["common", "organizations", "consumers", ""];
-      authorityView = `${u.hostname}/${
+      out["auth.tenantAuthority"] = `${u.hostname}/${
         wellKnown.includes(tenantSeg) ? tenantSeg || "(root)" : anonToken(tenantSeg, salt)
       }`;
     } catch {
-      authorityView = "invalid-url";
+      out["auth.tenantAuthority"] = "invalid-url";
     }
     const clientId = cfg.get<string>("auth.clientId", "").trim();
-    return {
-      "copilot.preferredModelFamily":
-        cfg.get<string>("copilot.preferredModelFamily", "") || "(economy-first default)",
-      "auth.tenantAuthority": authorityView,
-      "auth.clientId":
-        !clientId || clientId === GRAPH_POWERSHELL_CLIENT_ID
-          ? "(default first-party app)"
-          : anonToken(clientId, salt),
-      "auth.additionalAuthorityHosts": cfg
-        .get<string[]>("auth.additionalAuthorityHosts", [])
-        .map((h) => anonToken(h, salt)),
-      "diagnostics.usageCapture": cfg.get<string>("diagnostics.usageCapture", "followVSCode"),
-      "diagnostics.errorCapture": cfg.get<boolean>("diagnostics.errorCapture", true),
-    };
+    out["auth.clientId"] =
+      !clientId || clientId === GRAPH_POWERSHELL_CLIENT_ID
+        ? "(default first-party app)"
+        : anonToken(clientId, salt);
+
+    return out;
+  }
+
+  /** All `aiSharePoint.*` settings declared in this build's manifest, with the
+   *  bits of schema (default, enum) the snapshot needs to classify each value. */
+  private contributedSettings(): Map<string, { default?: unknown; enum?: unknown[] }> {
+    const map = new Map<string, { default?: unknown; enum?: unknown[] }>();
+    const contributes = (this.ctx.extension.packageJSON as {
+      contributes?: { configuration?: unknown };
+    }).contributes;
+    const blocks = Array.isArray(contributes?.configuration)
+      ? contributes!.configuration
+      : contributes?.configuration
+        ? [contributes.configuration]
+        : [];
+    for (const block of blocks as Array<{ properties?: Record<string, { default?: unknown; enum?: unknown[] }> }>) {
+      for (const [key, schema] of Object.entries(block?.properties ?? {})) {
+        if (key.startsWith("aiSharePoint.")) {
+          map.set(key, { default: schema?.default, enum: schema?.enum });
+        }
+      }
+    }
+    return map;
   }
 }

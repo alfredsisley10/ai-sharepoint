@@ -54,6 +54,35 @@ export class CopilotService {
     this.gate.reset();
   }
 
+  /**
+   * Entitlement helpers for callers that drive `model.sendRequest` directly
+   * (the chat participant) instead of going through `ask()`. Without these the
+   * chat path neither honored an open pause nor tripped it on a refusal, so the
+   * circuit breaker only worked for command-driven traffic.
+   */
+  /** Throw `copilot.entitlement` if the local pause is open (fail fast). */
+  ensureEntitled(): void {
+    this.assertEntitled();
+  }
+
+  /** A direct send succeeded — entitlement proven, close any stale pause. */
+  noteEntitlementSuccess(): void {
+    this.gate.reset();
+  }
+
+  /** If `err` is entitlement-shaped, open the pause and throw the standardized
+   *  `copilot.entitlement` error; otherwise return so the caller rethrows. */
+  raiseIfEntitlementFailure(err: unknown): void {
+    if (!isEntitlementFailure(err)) return;
+    const reason = err instanceof Error ? err.message : String(err);
+    this.gate.open(reason, Date.now());
+    throw new AppError(
+      `GitHub Copilot rejected the request as not authorized: ${reason}`,
+      "copilot.entitlement",
+      'Copilot answered "not authorized for this feature" — the subscription/seat may have lapsed, or an organization policy disables it. Requests are paused ~5 min so the refusal isn\'t hammered; run "Check Copilot Status" to retry sooner.',
+    );
+  }
+
   /** Fail FAST (no Copilot traffic) while the entitlement pause is open. */
   private assertEntitled(): void {
     const block = this.gate.check(Date.now());

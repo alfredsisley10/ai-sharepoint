@@ -21,6 +21,12 @@ export interface SharePointAuthProvider {
   /**
    * Cache-only acquisition: resolves null instead of prompting. Used by chat
    * and agent tools so background context reads never pop a browser window.
+   * `forceRefresh` bypasses the cached access token and re-mints from the
+   * refresh token — used to recover from a Graph 401 (token expired/revoked
+   * mid-request) without an interactive prompt.
    */
-  acquireTokenSilent?(scopes: string[]): Promise<AccessToken | null>;
+  acquireTokenSilent?(
+    scopes: string[],
+    opts?: { forceRefresh?: boolean },
+  ): Promise<AccessToken | null>;
 }

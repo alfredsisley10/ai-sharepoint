@@ -74,7 +74,10 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
   }
 
   /** Cache-only acquisition for background reads (chat/tool context). */
-  async acquireTokenSilent(scopes: string[]): Promise<AccessToken | null> {
+  async acquireTokenSilent(
+    scopes: string[],
+    opts?: { forceRefresh?: boolean },
+  ): Promise<AccessToken | null> {
     const accounts = await this.pca.getTokenCache().getAllAccounts();
     if (accounts.length === 0) {
       return null;
@@ -83,6 +86,7 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
       const silent = await this.pca.acquireTokenSilent({
         account: accounts[0],
         scopes,
+        forceRefresh: opts?.forceRefresh ?? false,
       });
       return this.toAccessToken(silent);
     } catch {

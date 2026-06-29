@@ -66,6 +66,61 @@ test("getLists hidden lists filtered; first page only when no nextLink", async (
   }
 });
 
+test("401 triggers one forced-refresh retry, then succeeds with the new token", async () => {
+  const silentCalls: Array<{ force: boolean }> = [];
+  const refreshingAuth: SharePointAuthProvider = {
+    id: "test",
+    displayName: "Test",
+    supportsSilentRefresh: true,
+    async acquireToken(): Promise<AccessToken> {
+      return { token: "stale", expiresOn: null, account: "me@x" };
+    },
+    async acquireTokenSilent(_scopes, opts): Promise<AccessToken | null> {
+      silentCalls.push({ force: Boolean(opts?.forceRefresh) });
+      return { token: opts?.forceRefresh ? "fresh" : "stale", expiresOn: null, account: "me@x" };
+    },
+  };
+
+  const seenTokens: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    const authz = String((init?.headers as Record<string, string>)?.Authorization ?? "");
+    seenTokens.push(authz);
+    if (authz.includes("stale")) {
+      return new Response("expired", { status: 401, statusText: "Unauthorized" });
+    }
+    return new Response(JSON.stringify({ id: "s1", webUrl: "https://x.sharepoint.com" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const site = await new SharePointClient(refreshingAuth).getSite("https://x.sharepoint.com/sites/m");
+    assert.equal(site.id, "s1");
+    // First attempt used the stale token (401); the retry forced a refresh.
+    assert.ok(seenTokens.some((t) => t.includes("stale")));
+    assert.ok(seenTokens.some((t) => t.includes("fresh")));
+    assert.deepEqual(silentCalls, [{ force: true }], "exactly one forced-refresh re-mint");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a second 401 is not retried again and surfaces as auth.failed", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("nope", { status: 401, statusText: "Unauthorized" })) as typeof fetch;
+  try {
+    await assert.rejects(
+      () => new SharePointClient(auth).getSite("https://x.sharepoint.com/sites/m"),
+      (err: unknown) => (err as { code?: string }).code === "auth.failed",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("getPages reports truncation when the page cap is exceeded", async () => {
   // Every response carries a nextLink, so the cap (MAX_PAGES) is the only exit.
   const { urls, restore } = mockGraph(() => ({

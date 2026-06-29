@@ -39,6 +39,10 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
 
   private readonly pca: PublicClientApplication;
   private readonly crypto = new CryptoProvider();
+  /** Coalesces concurrent silent acquisitions for the same scopes so a burst of
+   *  background reads redeems the rotating refresh token once, not N times in
+   *  parallel (the second-layer stampede guard alongside provider reuse). */
+  private readonly inFlightSilent = new Map<string, Promise<AccessToken | null>>();
 
   constructor(
     secrets: SecretStore,
@@ -64,11 +68,29 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
   }
 
   /** Cache-only acquisition for background reads (chat/tool context). */
-  acquireTokenSilent(scopes: string[]): Promise<AccessToken | null> {
-    return this.trySilent(scopes);
+  acquireTokenSilent(
+    scopes: string[],
+    opts?: { forceRefresh?: boolean },
+  ): Promise<AccessToken | null> {
+    return this.trySilent(scopes, opts?.forceRefresh ?? false);
   }
 
-  private async trySilent(scopes: string[]): Promise<AccessToken | null> {
+  private trySilent(scopes: string[], forceRefresh = false): Promise<AccessToken | null> {
+    // A forced refresh must not be served by an in-flight cached-token read.
+    const key = `${forceRefresh ? "force:" : ""}${[...scopes].sort().join(" ")}`;
+    const pending = this.inFlightSilent.get(key);
+    if (pending) return pending;
+    const run = this.trySilentUncoalesced(scopes, forceRefresh).finally(() => {
+      this.inFlightSilent.delete(key);
+    });
+    this.inFlightSilent.set(key, run);
+    return run;
+  }
+
+  private async trySilentUncoalesced(
+    scopes: string[],
+    forceRefresh: boolean,
+  ): Promise<AccessToken | null> {
     const accounts = await this.pca.getTokenCache().getAllAccounts();
     if (accounts.length === 0) {
       return null;
@@ -77,6 +99,7 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
       const result = await this.pca.acquireTokenSilent({
         account: accounts[0],
         scopes,
+        forceRefresh,
       });
       return this.toAccessToken(result);
     } catch {

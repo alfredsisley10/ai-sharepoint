@@ -28,14 +28,24 @@ export class UsageMeter {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.emitter.event;
   private ledger: LedgerV3;
+  /** Serializes Memento writes so concurrent record()/reset() calls cannot
+   *  interleave their async updates and clobber each other (lost-update guard).
+   *  recordInto() mutates the shared in-memory ledger synchronously, so each
+   *  queued write persists the latest merged state. */
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly state: vscode.Memento) {
     this.ledger = migrateLedger(this.state.get(LEDGER_KEY));
   }
 
-  private async save(): Promise<void> {
-    await this.state.update(LEDGER_KEY, this.ledger);
-    this.emitter.fire();
+  private save(): Promise<void> {
+    this.writeChain = this.writeChain
+      .catch(() => undefined)
+      .then(() => this.state.update(LEDGER_KEY, this.ledger))
+      .then(() => {
+        this.emitter.fire();
+      });
+    return this.writeChain;
   }
 
   /** Record a completed/failed request. */

@@ -218,7 +218,23 @@ export class SharePointClient {
     return { ok: true, site, account, latencyMs: Date.now() - started };
   }
 
-  protected async acquire(scopes: string[] = [SITES_READ_SCOPE]): Promise<string> {
+  protected async acquire(
+    scopes: string[] = [SITES_READ_SCOPE],
+    forceRefresh = false,
+  ): Promise<string> {
+    // A 401 retry asks for a forced silent re-mint from the refresh token; this
+    // recovers an expired/revoked access token without an interactive prompt.
+    if (forceRefresh && this.auth.acquireTokenSilent) {
+      const refreshed = await this.auth.acquireTokenSilent(scopes, { forceRefresh: true });
+      if (refreshed) return refreshed.token;
+      if (this.silentOnly) {
+        throw new AppError(
+          "Sign-in expired for this site. Run 'AI SharePoint: Test Site Connection' to sign in again.",
+          "auth.failed",
+        );
+      }
+      // Foreground: fall through to a (possibly interactive) re-acquire.
+    }
     if (this.silentOnly) {
       const silent = this.auth.acquireTokenSilent
         ? await this.auth.acquireTokenSilent(scopes)
@@ -238,16 +254,18 @@ export class SharePointClient {
     return this.request<T>("GET", path);
   }
 
-  /** Shared Graph request machinery: timeout, single 429/503 retry, error
-   *  taxonomy. Write methods (SharePointWriteClient) pass write scopes. */
+  /** Shared Graph request machinery: timeout, single 429/503 retry, one 401
+   *  forced-refresh retry, error taxonomy. Write methods (SharePointWriteClient)
+   *  pass write scopes. */
   protected async request<T>(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
     scopes?: string[],
     retried = false,
+    authRetried = false,
   ): Promise<T> {
-    const token = await this.acquire(scopes);
+    const token = await this.acquire(scopes, authRetried);
     const started = Date.now();
     if (wireEnabled() && !retried) {
       // The token itself never reaches the wire log — scheme only.
@@ -298,7 +316,14 @@ export class SharePointClient {
         Number(res.headers.get("Retry-After")) || 2,
       );
       await new Promise((r) => setTimeout(r, retryAfter * 1000));
-      return this.request<T>(method, path, body, scopes, true);
+      return this.request<T>(method, path, body, scopes, true, authRetried);
+    }
+
+    // 401 (unauthorized) usually means the access token expired or was revoked
+    // mid-flight — distinct from 403 (genuine permission denial). Retry once
+    // with a forced token re-mint before surfacing an auth error.
+    if (res.status === 401 && !authRetried) {
+      return this.request<T>(method, path, body, scopes, retried, true);
     }
 
     if (!res.ok) {
@@ -310,13 +335,15 @@ export class SharePointClient {
         wireEnabled() ? capDetail(errBody) : undefined,
       );
       const code =
-        res.status === 403 || res.status === 401
-          ? "graph.forbidden"
-          : res.status === 404
-            ? "graph.notFound"
-            : res.status === 429 || res.status === 503
-              ? "graph.throttled"
-              : "graph.error";
+        res.status === 401
+          ? "auth.failed"
+          : res.status === 403
+            ? "graph.forbidden"
+            : res.status === 404
+              ? "graph.notFound"
+              : res.status === 429 || res.status === 503
+                ? "graph.throttled"
+                : "graph.error";
       throw new AppError(
         `Graph request failed (${res.status} ${res.statusText}): ${errBody.slice(0, 500)}`,
         code,

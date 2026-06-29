@@ -404,6 +404,11 @@ async function answerWithModel(
   const model = request.model ?? (await deps.copilot.pickDefaultModel());
   const modelKey = model.family || model.id;
 
+  // Honor the entitlement circuit breaker before any expensive context reads.
+  // When the chat UI supplies request.model, pickDefaultModel() (which also
+  // checks) is skipped, so the chat path would otherwise ignore an open pause.
+  deps.copilot.ensureEntitled();
+
   const contextBlock = await buildSiteContext(deps, request, stream);
   const history = formatHistory(context);
   const activeProject = deps.projects.active();
@@ -559,7 +564,13 @@ async function answerWithModel(
         }
       }
       ok = true;
+      deps.copilot.noteEntitlementSuccess(); // entitlement proven this turn
     } catch (sendErr) {
+      // A Copilot "not authorized" refusal trips the shared circuit breaker so
+      // subsequent turns/commands fail fast instead of re-hitting it (throws a
+      // copilot.entitlement error); anything else falls through to the existing
+      // overflow handling and rethrow.
+      deps.copilot.raiseIfEntitlementFailure(sendErr);
       // Effective-context probing (#3): if the send failed because the prompt
       // overflowed this model's real context, record a tighter ceiling so future
       // turns budget down automatically. Then rethrow to the outer handler.
