@@ -113,20 +113,7 @@ export class ExternalTelemetry {
   }
 }
 
-/** Read the external-telemetry config from VS Code settings (opt-in). Returns
- *  undefined unless the master switch is on AND at least one endpoint is set. */
-export function readExternalTelemetryConfig(
-  get: <T>(key: string, fallback: T) => T,
-): ExternalTelemetryConfig | undefined {
-  if (!get<boolean>("telemetry.enabled", false)) return undefined;
-  const cfg: ExternalTelemetryConfig = {};
-  const splunkUrl = get<string>("telemetry.splunkHec.url", "").trim();
-  const splunkToken = get<string>("telemetry.splunkHec.token", "").trim();
-  if (splunkUrl && splunkToken) cfg.splunk = { url: splunkUrl, token: splunkToken };
-  const otlpEndpoint = get<string>("telemetry.otlp.endpoint", "").trim();
-  if (otlpEndpoint) {
-    const headers = get<Record<string, string>>("telemetry.otlp.headers", {});
-    cfg.otlp = { endpoint: otlpEndpoint, ...(headers && typeof headers === "object" ? { headers } : {}) };
-  }
-  return cfg.splunk || cfg.otlp ? cfg : undefined;
-}
+// The external-telemetry connection config now lives in the OS keychain
+// (telemetryConfig.ts / TelemetryConfigStore) — never in settings — so it is not
+// viewable in settings.json and never appears in a diagnostics export. The
+// effective ExternalTelemetryConfig is derived by effectiveTelemetryConfig().

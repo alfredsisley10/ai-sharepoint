@@ -46,13 +46,32 @@ export interface ProvisionedHelp {
   welcome?: string;
 }
 
+/**
+ * Telemetry connection baked into a whitelabel build. Endpoints are plaintext
+ * (not secret); tokens are OBFUSCATED (secretObfuscation.ts) so they never
+ * appear readable in package.json. On first run the extension de-obfuscates them
+ * into the OS keychain. The committed release profile stores only the
+ * non-secret fields (see stripProfileSecrets).
+ */
+export interface ProvisionedTelemetry {
+  enabled?: boolean;
+  splunkHecUrl?: string;
+  /** Obfuscated Splunk HEC token blob. */
+  splunkHecTokenObfuscated?: string;
+  otlpEndpoint?: string;
+  otlpHeaderName?: string;
+  /** Obfuscated OTLP auth-header value blob. */
+  otlpHeaderValueObfuscated?: string;
+}
+
 /** The bake-in payload, minus the per-build id (which is stamped at apply). */
 export interface ProvisioningContent {
-  /** aiSharePoint.* setting defaults (e.g. telemetry endpoints, usability). */
+  /** aiSharePoint.* usability setting defaults (non-secret). */
   settings?: Record<string, unknown>;
   connectors?: ProvisionedConnector[];
   projects?: ProvisionedProject[];
   help?: ProvisionedHelp;
+  telemetry?: ProvisionedTelemetry;
 }
 
 /** What's baked into package.json; `id` makes first-run seeding idempotent. */
@@ -106,20 +125,21 @@ export function serializeReleaseProfile(profile: ReleaseProfile): string {
   return `${JSON.stringify({ ...profile, version: 1 }, null, 2)}\n`;
 }
 
-/** Map the wizard's telemetry choices to aiSharePoint.telemetry.* setting defaults
- *  (endpoints only — never a token/secret, which must not ship in a VSIX). */
-export function telemetrySettings(t: {
-  enabled?: boolean;
-  splunkHecUrl?: string;
-  otlpEndpoint?: string;
-  otlpHeaders?: Record<string, string>;
-}): Record<string, unknown> {
-  const s: Record<string, unknown> = {};
-  if (t.enabled) s["telemetry.enabled"] = true;
-  if (t.splunkHecUrl?.trim()) s["telemetry.splunkHec.url"] = t.splunkHecUrl.trim();
-  if (t.otlpEndpoint?.trim()) s["telemetry.otlp.endpoint"] = t.otlpEndpoint.trim();
-  if (t.otlpHeaders && Object.keys(t.otlpHeaders).length) s["telemetry.otlp.headers"] = t.otlpHeaders;
-  return s;
+/** Strip baked secrets (obfuscated tokens) from provisioning content before it
+ *  is written to the COMMITTED release profile — endpoints/flags stay, the
+ *  obfuscated token blobs never land in the repo. */
+export function stripProfileSecrets(content: ProvisioningContent): ProvisioningContent {
+  if (!content.telemetry) return content;
+  const t = content.telemetry;
+  return {
+    ...content,
+    telemetry: {
+      ...(t.enabled !== undefined ? { enabled: t.enabled } : {}),
+      ...(t.splunkHecUrl ? { splunkHecUrl: t.splunkHecUrl } : {}),
+      ...(t.otlpEndpoint ? { otlpEndpoint: t.otlpEndpoint } : {}),
+      ...(t.otlpHeaderName ? { otlpHeaderName: t.otlpHeaderName } : {}),
+    },
+  };
 }
 
 /** Stamp a provisioning manifest from profile content + a per-build id. Omits
@@ -130,6 +150,9 @@ export function buildProvisioningManifest(content: ProvisioningContent, id: stri
   if (content.connectors && content.connectors.length) m.connectors = content.connectors;
   if (content.projects && content.projects.length) m.projects = content.projects;
   if (content.help && (content.help.userGuide || content.help.welcome)) m.help = content.help;
+  if (content.telemetry && (content.telemetry.enabled || content.telemetry.splunkHecUrl || content.telemetry.otlpEndpoint)) {
+    m.telemetry = content.telemetry;
+  }
   return m;
 }
 
@@ -150,6 +173,7 @@ export interface ProvisioningPlan {
   projects: ProvisionedProject[];
   settings: Record<string, unknown>;
   help?: ProvisionedHelp;
+  telemetry?: ProvisionedTelemetry;
 }
 
 export function connectorKey(c: { alias?: string; baseUrl: string }): string {
@@ -185,5 +209,6 @@ export function planProvisioning(
     projects,
     settings,
     ...(manifest.help && (manifest.help.userGuide || manifest.help.welcome) ? { help: manifest.help } : {}),
+    ...(manifest.telemetry ? { telemetry: manifest.telemetry } : {}),
   };
 }

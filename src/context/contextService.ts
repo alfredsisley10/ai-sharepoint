@@ -228,25 +228,30 @@ export class ContextService {
   private async githubCredential(
     source: ContextSource,
     credential: ContextCredential,
+    interactive: boolean,
   ): Promise<ContextCredential> {
     if (credential.method === "github-oauth") {
       const { providerId, scopes } = JSON.parse(credential.secret) as {
         providerId: string;
         scopes: string[];
       };
-      const session =
-        (await vscode.authentication.getSession(providerId, scopes, { silent: true })) ??
-        (await vscode.authentication.getSession(providerId, scopes, { createIfNone: true }));
-      if (!session) {
+      // Background reads (search/getItem, agent-mode tool calls) must NEVER pop a
+      // sign-in — only reuse an existing session silently. We prompt (createIfNone)
+      // solely on an explicit connect/test (verify with fresh=true). Otherwise a
+      // missing session is a clear, actionable error, not a surprise dialog.
+      const session = await vscode.authentication.getSession(providerId, scopes, { silent: true });
+      const live =
+        session ?? (interactive ? await vscode.authentication.getSession(providerId, scopes, { createIfNone: true }) : undefined);
+      if (!live) {
         throw new AppError(
           "GitHub sign-in is required for this source.",
           "auth.failed",
           providerId === "github-enterprise"
-            ? "Sign in to GitHub Enterprise Server (check the github-enterprise.uri setting points at your instance)."
-            : "Sign in to GitHub via the Accounts menu.",
+            ? 'Run "Test Context Source" to sign in to GitHub Enterprise Server (and check the github-enterprise.uri setting points at your instance).'
+            : 'Run "Test Context Source" to sign in to GitHub (Accounts menu, bottom-left).',
         );
       }
-      return { method: "pat", secret: session.accessToken };
+      return { method: "pat", secret: live.accessToken };
     }
     if (credential.method === "github-app") {
       const cached = this.githubAppTokens.get(source.id);
@@ -397,7 +402,7 @@ export class ContextService {
         case "jira":
           return verifyJira(source, credential, caps);
         case "github":
-          return this.githubCredential(source, credential).then((c) => verifyGithub(source, c, caps));
+          return this.githubCredential(source, credential, fresh).then((c) => verifyGithub(source, c, caps));
         case "vertexai":
           return verifyVertex(source, credential, caps);
         case "powerbi":
@@ -472,7 +477,7 @@ export class ContextService {
       case "jira":
         return searchJira(source, credential, query, caps);
       case "github":
-        return this.githubCredential(source, credential).then((c) =>
+        return this.githubCredential(source, credential, false).then((c) =>
           searchGithub(source, c, query, caps),
         );
       case "vertexai":
@@ -569,7 +574,7 @@ export class ContextService {
             case "jira":
               return getJiraIssue(source, credential, id, caps);
             case "github":
-              return this.githubCredential(source, credential).then((c) =>
+              return this.githubCredential(source, credential, false).then((c) =>
                 getGithubItem(source, c, id, caps),
               );
             case "splunkobs":

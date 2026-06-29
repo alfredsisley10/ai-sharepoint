@@ -8,7 +8,8 @@ import {
   seriesKey,
   TelemetryEnv,
 } from "../src/diagnostics/telemetrySink";
-import { ExternalTelemetry, readExternalTelemetryConfig } from "../src/diagnostics/externalTelemetry";
+import { ExternalTelemetry } from "../src/diagnostics/externalTelemetry";
+import { effectiveTelemetryConfig, telemetryStatus } from "../src/diagnostics/telemetryConfig";
 
 const ENV: TelemetryEnv = {
   extVersion: "0.68.0",
@@ -108,18 +109,31 @@ test("seriesKey is stable regardless of dimension order", () => {
   assert.equal(seriesKey("e", { a: "1", b: "2" }), seriesKey("e", { b: "2", a: "1" }));
 });
 
-test("readExternalTelemetryConfig is opt-in and needs a configured endpoint", () => {
-  const get = (cfg: Record<string, unknown>) => <T,>(k: string, fb: T) => (k in cfg ? (cfg[k] as T) : fb);
-  assert.equal(readExternalTelemetryConfig(get({})), undefined); // disabled
-  assert.equal(readExternalTelemetryConfig(get({ "telemetry.enabled": true })), undefined); // no endpoint
+test("effectiveTelemetryConfig is opt-in, needs an endpoint, and maps the OTLP header", () => {
+  assert.equal(effectiveTelemetryConfig(undefined), undefined);
+  assert.equal(effectiveTelemetryConfig({ enabled: false, splunkHecUrl: "https://h", splunkHecToken: "t" }), undefined);
+  assert.equal(effectiveTelemetryConfig({ enabled: true }), undefined); // no usable endpoint
   assert.deepEqual(
-    readExternalTelemetryConfig(get({ "telemetry.enabled": true, "telemetry.splunkHec.url": "https://h/event", "telemetry.splunkHec.token": "t" })),
+    effectiveTelemetryConfig({ enabled: true, splunkHecUrl: "https://h/event", splunkHecToken: "t" }),
     { splunk: { url: "https://h/event", token: "t" } },
   );
   assert.deepEqual(
-    readExternalTelemetryConfig(get({ "telemetry.enabled": true, "telemetry.otlp.endpoint": "https://o:4318" })),
-    { otlp: { endpoint: "https://o:4318", headers: {} } },
+    effectiveTelemetryConfig({ enabled: true, otlpEndpoint: "https://o:4318", otlpHeaderName: "X-Api-Key", otlpHeaderValue: "k" }),
+    { otlp: { endpoint: "https://o:4318", headers: { "X-Api-Key": "k" } } },
   );
+  // splunk url without a token → not usable
+  assert.equal(effectiveTelemetryConfig({ enabled: true, splunkHecUrl: "https://h" }), undefined);
+});
+
+test("telemetryStatus reports set/not-set without exposing secret values", () => {
+  const st = telemetryStatus({ enabled: true, splunkHecUrl: "https://h/event", splunkHecToken: "supersecret", otlpHeaderName: "X-Api-Key", otlpHeaderValue: "k" });
+  assert.equal(st.enabled, true);
+  assert.equal(st.splunkUrl, "https://h/event");
+  assert.equal(st.splunkTokenSet, true);
+  assert.equal(st.otlpHeaderSet, true);
+  // the status object must never carry the secret values
+  assert.equal(JSON.stringify(st).includes("supersecret"), false);
+  assert.equal(JSON.stringify(st).includes("\"k\""), false);
 });
 
 test("ExternalTelemetry.emit sends an anonymized Splunk event, no free-form fields", async () => {

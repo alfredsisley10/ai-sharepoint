@@ -207,10 +207,12 @@ import { UsageTreeProvider } from "./ui/usageView";
 import { SupportTreeProvider } from "./ui/supportView";
 import { runRebrandFlow } from "./branding/rebrandFlow";
 import { evaluateExpiry, setReleaseStatus, ReleaseManifest } from "./branding/releaseExpiry";
-import { ExternalTelemetry, readExternalTelemetryConfig } from "./diagnostics/externalTelemetry";
+import { ExternalTelemetry, ExternalTelemetryConfig } from "./diagnostics/externalTelemetry";
 import { TelemetryEnv } from "./diagnostics/telemetrySink";
+import { TelemetryConfigStore, effectiveTelemetryConfig, StoredTelemetryConfig, telemetryStatus, TelemetryStatus } from "./diagnostics/telemetryConfig";
 import { applyProvisioning, ProvisioningEffects } from "./branding/provisioning";
 import { ProvisioningManifest, connectorKey } from "./branding/releaseProfile";
+import { deobfuscateSecret } from "./diagnostics/secretObfuscation";
 import { UsageDashboard } from "./ui/dashboard";
 import { registerChatParticipant } from "./chat/participant";
 import { registerLanguageModelTools } from "./chat/tools";
@@ -250,13 +252,20 @@ export function activate(context: vscode.ExtensionContext): void {
     osPlatform: process.platform,
     installId: installIds.get().id,
   };
-  const externalTelemetry = new ExternalTelemetry(telemetryEnv, () =>
-    readExternalTelemetryConfig(<T,>(key: string, fallback: T) =>
-      vscode.workspace.getConfiguration("aiSharePoint").get<T>(key, fallback),
-    ),
-  );
-  externalTelemetry.start();
+  // Connection config lives in the OS keychain (never settings/exportable);
+  // a cached holder feeds the sink synchronously and is refreshed on change.
+  const telemetryConfigStore = new TelemetryConfigStore(secrets);
+  let telemetryConfig: ExternalTelemetryConfig | undefined;
+  let telemetryStatusCache: TelemetryStatus = telemetryStatus(undefined);
+  const externalTelemetry = new ExternalTelemetry(telemetryEnv, () => telemetryConfig);
   context.subscriptions.push({ dispose: () => externalTelemetry.dispose() });
+  const refreshTelemetry = async (): Promise<void> => {
+    const stored = await telemetryConfigStore.load();
+    telemetryConfig = effectiveTelemetryConfig(stored);
+    telemetryStatusCache = telemetryStatus(stored);
+    externalTelemetry.start(); // no-op unless an OTLP endpoint is configured
+  };
+  void refreshTelemetry();
   const telemetry = new TelemetryService(context.globalState, nowIso, externalTelemetry);
   telemetry.record("activate", { ...(releaseManifest?.channel ? { channel: releaseManifest.channel } : {}) });
   const errors = new ErrorReportStore(context.globalState, nowIso);
@@ -421,12 +430,30 @@ export function activate(context: vscode.ExtensionContext): void {
         ),
       applySetting: (key, value) => Promise.resolve(cfg().update(key, value, vscode.ConfigurationTarget.Global)),
       setHelp: (help) => Promise.resolve(context.globalState.update("aiSharePoint.provisionedHelp", help)),
+      seedTelemetry: async (t) => {
+        // Non-destructive: never overwrite a user-configured telemetry connection.
+        if (await telemetryConfigStore.load()) return false;
+        const stored: StoredTelemetryConfig = { enabled: Boolean(t.enabled) };
+        if (t.splunkHecUrl) stored.splunkHecUrl = t.splunkHecUrl;
+        if (t.otlpEndpoint) stored.otlpEndpoint = t.otlpEndpoint;
+        if (t.otlpHeaderName) stored.otlpHeaderName = t.otlpHeaderName;
+        // De-obfuscate baked tokens straight into the keychain (never settings).
+        try {
+          if (t.splunkHecTokenObfuscated) stored.splunkHecToken = deobfuscateSecret(t.splunkHecTokenObfuscated);
+          if (t.otlpHeaderValueObfuscated) stored.otlpHeaderValue = deobfuscateSecret(t.otlpHeaderValueObfuscated);
+        } catch (e) {
+          log.warn(`Provisioned telemetry token could not be de-obfuscated: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        await telemetryConfigStore.save(stored);
+        await refreshTelemetry();
+        return true;
+      },
       markApplied: (id) => Promise.resolve(context.globalState.update("aiSharePoint.provisionedId", id)),
     };
     void applyProvisioning(provisioningManifest, provisioningFx).then((r) => {
       if (!r.applied) return;
       log.info(
-        `Provisioned ${r.connectors} connector(s), ${r.projects} project(s), ${r.settings} setting default(s)${r.help ? ", custom help" : ""}.`,
+        `Provisioned ${r.connectors} connector(s), ${r.projects} project(s), ${r.settings} setting default(s)${r.help ? ", custom help" : ""}${r.telemetry ? ", telemetry endpoint" : ""}.`,
       );
       const welcome = context.globalState.get<{ welcome?: string }>("aiSharePoint.provisionedHelp")?.welcome;
       if (welcome) void vscode.window.showInformationMessage(welcome);
@@ -450,7 +477,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const verboseWireOn = () =>
     vscode.workspace.getConfiguration("aiSharePoint").get<boolean>("logging.verboseWire", false);
-  const supportProvider = new SupportTreeProvider(errors, version, verboseWireOn);
+  const supportProvider = new SupportTreeProvider(errors, version, verboseWireOn, () => telemetryStatusCache);
 
   // --- Verbose wire logging (pilot): full request/response detail from
   // every integration. Redaction is layered: structural at each tap (auth
@@ -5509,6 +5536,112 @@ export function activate(context: vscode.ExtensionContext): void {
       .executeCommand("workbench.panel.output.focus")
       .then(undefined, () => undefined);
     log.show();
+  });
+
+  register("aiSharePoint.manageTelemetry", async () => {
+    // Connection details (incl. tokens) are stored in the OS keychain and never
+    // shown again: secret fields are write-only and the menu only reports
+    // set/not-set, never a saved value.
+    for (;;) {
+      const stored = await telemetryConfigStore.load();
+      const cur: StoredTelemetryConfig = stored ?? { enabled: false };
+      const st = telemetryStatus(stored);
+      const items: Array<vscode.QuickPickItem & { action: string }> = [
+        {
+          label: st.enabled ? "$(check) Telemetry enabled" : "$(circle-slash) Telemetry disabled",
+          description: st.active ? "actively sending" : st.enabled ? "enabled — configure an endpoint" : "click to enable",
+          action: "toggle",
+        },
+        { label: "$(server) Splunk HEC URL", description: st.splunkUrl ?? "not set", action: "splunkUrl" },
+        { label: "$(key) Splunk HEC token", description: st.splunkTokenSet ? "•••••• set" : "not set", action: "splunkToken" },
+        { label: "$(dashboard) OTEL OTLP endpoint", description: st.otlpEndpoint ?? "not set", action: "otlpEndpoint" },
+        { label: "$(key) OTEL auth header", description: st.otlpHeaderSet ? `•••••• set (${cur.otlpHeaderName})` : "not set", action: "otlpHeader" },
+        { label: "$(beaker) Send a test event now", action: "test" },
+        { label: "$(trash) Clear all telemetry settings", action: "clear" },
+        { label: "$(close) Done", action: "done" },
+      ];
+      const pick = await vscode.window.showQuickPick(items, {
+        ignoreFocusOut: true,
+        title: "Usage Telemetry (Splunk / OTEL) — anonymized, opt-in",
+        placeHolder: "Stored in your OS keychain — never shown again, never in settings or a diagnostics export.",
+      });
+      if (!pick || pick.action === "done") return;
+
+      if (pick.action === "toggle") {
+        await telemetryConfigStore.save({ ...cur, enabled: !cur.enabled });
+      } else if (pick.action === "splunkUrl") {
+        const v = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Splunk HEC URL (blank to clear)",
+          value: cur.splunkHecUrl ?? "",
+          placeHolder: "https://splunk.corp.example:8088/services/collector/event",
+        });
+        if (v === undefined) continue;
+        await telemetryConfigStore.save({ ...cur, splunkHecUrl: v.trim() || undefined });
+      } else if (pick.action === "splunkToken") {
+        const v = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          password: true,
+          title: "Splunk HEC token (write-only — never shown again)",
+          placeHolder: cur.splunkHecToken ? "type to replace; leave blank to keep the current token" : "paste the HEC token",
+        });
+        if (v === undefined) continue;
+        if (v.trim()) await telemetryConfigStore.save({ ...cur, splunkHecToken: v.trim() });
+      } else if (pick.action === "otlpEndpoint") {
+        const v = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "OTEL OTLP/HTTP endpoint (blank to clear)",
+          value: cur.otlpEndpoint ?? "",
+          placeHolder: "https://otel-collector.corp.example:4318",
+        });
+        if (v === undefined) continue;
+        await telemetryConfigStore.save({ ...cur, otlpEndpoint: v.trim() || undefined });
+      } else if (pick.action === "otlpHeader") {
+        const name = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "OTLP auth header NAME (blank to clear the header)",
+          value: cur.otlpHeaderName ?? "",
+          placeHolder: "X-Api-Key",
+        });
+        if (name === undefined) continue;
+        if (!name.trim()) {
+          await telemetryConfigStore.save({ ...cur, otlpHeaderName: undefined, otlpHeaderValue: undefined });
+        } else {
+          const val = await vscode.window.showInputBox({
+            ignoreFocusOut: true,
+            password: true,
+            title: `OTLP auth header VALUE for "${name.trim()}" (write-only)`,
+            placeHolder: cur.otlpHeaderValue ? "type to replace; leave blank to keep the current value" : "paste the header value",
+          });
+          if (val === undefined) continue;
+          await telemetryConfigStore.save({
+            ...cur,
+            otlpHeaderName: name.trim(),
+            ...(val.trim() ? { otlpHeaderValue: val.trim() } : {}),
+          });
+        }
+      } else if (pick.action === "test") {
+        await refreshTelemetry();
+        if (!telemetryConfig) {
+          void vscode.window.showWarningMessage("Telemetry isn't active yet — enable it and configure a Splunk and/or OTEL endpoint first.");
+          continue;
+        }
+        telemetry.record("telemetry.test", {});
+        externalTelemetry.flush();
+        void vscode.window.showInformationMessage("Sent a test telemetry event (opportunistic — verify it arrived in your Splunk / OTEL platform).");
+        continue;
+      } else if (pick.action === "clear") {
+        const ok = await vscode.window.showWarningMessage(
+          "Clear all telemetry connection settings, including the saved token?",
+          { modal: true },
+          "Clear",
+        );
+        if (ok !== "Clear") continue;
+        await telemetryConfigStore.clear();
+      }
+      await refreshTelemetry();
+      supportProvider.refresh();
+    }
   });
 
   register("aiSharePoint.rebrandExtension", async () => {

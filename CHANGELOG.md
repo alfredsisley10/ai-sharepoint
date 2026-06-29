@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.70.0 — 2026-06-29
+
+### Added — Usage Telemetry management UI + secret-safe storage
+- New **Support & Diagnostics → Usage Telemetry** entry (command *AI SharePoint: Manage Usage
+  Telemetry (Splunk / OTEL)*): enable/disable, set the Splunk HEC URL/token and OTLP
+  endpoint/auth-header, send a test event, or clear everything — all from one guided menu.
+- **Connection details now live in the OS keychain, never in settings.** The five
+  `aiSharePoint.telemetry.*` settings were removed; the config is stored via SecretStorage. As a
+  result it is **not viewable in settings.json, not in a diagnostics export, and tokens are never
+  redisplayed** — secret fields are write-only and the UI reports only set/not-set.
+
+### Added — obfuscated HEC/OTLP token baking for whitelabel builds
+- The rebrand wizard can now **pre-package a Splunk HEC token / OTLP auth header**. Baked tokens
+  are **AES-obfuscated** (not plaintext in `package.json`) and, on first run, de-obfuscated into
+  the OS keychain — never written to settings, never exported. The saved release profile keeps
+  endpoints only (no tokens). **Honest limitation:** the de-obfuscation key ships in the build,
+  so this defeats casual inspection, not a determined reverse-engineer — treat baked tokens as
+  low-privilege, rotatable, ingest-only. (See `REBRANDING.md`.)
+
+### Fixed
+- **Unexpected GitHub sign-in prompts.** A `github-oauth` reference source resolved its token by
+  falling back to an interactive `getSession`, so background reads (agent-mode tool calls, view
+  refreshes) could pop a sign-in with no user gesture. Background reads are now silent-only and
+  fail with a clear "run Test Context Source to sign in" message; only an explicit connect/test
+  prompts.
+- **Get-Started walkthrough centering.** The "metered & budgeted" chip label (it overflowed its
+  pill) and the 2×2-squares-with-sparkle app icon are now centered in the first walkthrough tile.
+
+5 new tests (637 total); typecheck, secret-scan, and native-dep gates green.
+
 ## 0.69.0 — 2026-06-29
 
 ### Added — whitelabel config wizard, reusable release profile & first-run provisioning

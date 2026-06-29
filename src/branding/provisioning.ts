@@ -3,6 +3,7 @@ import {
   ProvisionedConnector,
   ProvisionedProject,
   ProvisionedHelp,
+  ProvisionedTelemetry,
   planProvisioning,
 } from "./releaseProfile";
 
@@ -23,6 +24,9 @@ export interface ProvisioningEffects {
   seedProject(project: ProvisionedProject): Promise<void>;
   applySetting(key: string, value: unknown): Promise<void>;
   setHelp(help: ProvisionedHelp): Promise<void>;
+  /** De-obfuscate baked tokens into the OS keychain (non-destructive: a no-op if
+   *  the user already configured telemetry). Returns whether anything was seeded. */
+  seedTelemetry(telemetry: ProvisionedTelemetry): Promise<boolean>;
   markApplied(id: string): Promise<void>;
 }
 
@@ -32,13 +36,14 @@ export interface ProvisioningResult {
   projects: number;
   settings: number;
   help: boolean;
+  telemetry: boolean;
 }
 
 export async function applyProvisioning(
   manifest: ProvisioningManifest | undefined,
   fx: ProvisioningEffects,
 ): Promise<ProvisioningResult> {
-  const none: ProvisioningResult = { applied: false, connectors: 0, projects: 0, settings: 0, help: false };
+  const none: ProvisioningResult = { applied: false, connectors: 0, projects: 0, settings: 0, help: false, telemetry: false };
   if (!manifest) return none;
 
   const userSetSettingKeys = new Set(
@@ -64,6 +69,10 @@ export async function applyProvisioning(
     await fx.setHelp(plan.help);
     help = true;
   }
+  let telemetry = false;
+  if (plan.telemetry) {
+    telemetry = await fx.seedTelemetry(plan.telemetry);
+  }
   await fx.markApplied(manifest.id);
-  return { applied: true, connectors: plan.connectors.length, projects: plan.projects.length, settings, help };
+  return { applied: true, connectors: plan.connectors.length, projects: plan.projects.length, settings, help, telemetry };
 }

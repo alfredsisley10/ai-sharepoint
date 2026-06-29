@@ -3,7 +3,7 @@ import * as assert from "node:assert/strict";
 import {
   parseReleaseProfile,
   serializeReleaseProfile,
-  telemetrySettings,
+  stripProfileSecrets,
   buildProvisioningManifest,
   connectorKey,
   planProvisioning,
@@ -28,13 +28,34 @@ test("parseReleaseProfile validates identity; serialize round-trips", () => {
   assert.throws(() => parseReleaseProfile(JSON.stringify({ identity: { publisher: "p" } })), /name/);
 });
 
-test("telemetrySettings maps endpoints (no token) and omits empties", () => {
-  assert.deepEqual(telemetrySettings({ enabled: true, splunkHecUrl: "https://h/event", otlpEndpoint: "https://o:4318" }), {
-    "telemetry.enabled": true,
-    "telemetry.splunkHec.url": "https://h/event",
-    "telemetry.otlp.endpoint": "https://o:4318",
+test("stripProfileSecrets drops obfuscated tokens but keeps endpoints/flags", () => {
+  const content = {
+    telemetry: {
+      enabled: true,
+      splunkHecUrl: "https://h/event",
+      splunkHecTokenObfuscated: "v1.aaa.bbb.ccc.ddd",
+      otlpEndpoint: "https://o:4318",
+      otlpHeaderName: "X-Api-Key",
+      otlpHeaderValueObfuscated: "v1.eee.fff.ggg.hhh",
+    },
+  };
+  const safe = stripProfileSecrets(content);
+  assert.deepEqual(safe.telemetry, {
+    enabled: true,
+    splunkHecUrl: "https://h/event",
+    otlpEndpoint: "https://o:4318",
+    otlpHeaderName: "X-Api-Key",
   });
-  assert.deepEqual(telemetrySettings({ enabled: false }), {});
+  // the obfuscated blobs must not survive into the committed profile
+  assert.equal(JSON.stringify(safe).includes("Obfuscated"), false);
+});
+
+test("buildProvisioningManifest carries telemetry when configured", () => {
+  const m = buildProvisioningManifest({ telemetry: { enabled: true, splunkHecUrl: "https://h", splunkHecTokenObfuscated: "v1.x" } }, "b1");
+  assert.equal(m.telemetry?.splunkHecUrl, "https://h");
+  assert.equal(m.telemetry?.splunkHecTokenObfuscated, "v1.x");
+  // empty telemetry omitted
+  assert.ok(!("telemetry" in buildProvisioningManifest({ telemetry: {} }, "b2")));
 });
 
 test("buildProvisioningManifest stamps id and omits empty sections", () => {
@@ -99,6 +120,7 @@ test("applyProvisioning seeds once, skipping what already exists, then marks app
   const seededProjects: unknown[] = [];
   const appliedSettings: Record<string, unknown> = {};
   let help: unknown;
+  let seededTelemetry: unknown;
   let markedId: string | undefined;
   const fx: ProvisioningEffects = {
     appliedId: () => undefined,
@@ -109,26 +131,32 @@ test("applyProvisioning seeds once, skipping what already exists, then marks app
     seedProject: async (p) => void seededProjects.push(p),
     applySetting: async (k, v) => void (appliedSettings[k] = v),
     setHelp: async (h) => void (help = h),
+    seedTelemetry: async (t) => {
+      seededTelemetry = t;
+      return true;
+    },
     markApplied: async (id) => void (markedId = id),
   };
   const manifest: ProvisioningManifest = {
     id: "b1",
-    settings: { "telemetry.enabled": true },
+    settings: { "context.someToggle": true },
     connectors: [
       { type: "github", displayName: "GH", baseUrl: "https://github.com", alias: "GH" }, // exists → skipped
       { type: "jira", displayName: "Jira", baseUrl: "https://j", alias: "JIRA" },
     ],
     projects: [{ name: "Default" }],
     help: { welcome: "hi" },
+    telemetry: { enabled: true, splunkHecUrl: "https://h", splunkHecTokenObfuscated: "v1.x" },
   };
   const result = await applyProvisioning(manifest, fx);
-  assert.deepEqual(result, { applied: true, connectors: 1, projects: 1, settings: 1, help: true });
+  assert.deepEqual(result, { applied: true, connectors: 1, projects: 1, settings: 1, help: true, telemetry: true });
   assert.equal(seededConnectors.length, 1);
-  assert.deepEqual(appliedSettings, { "telemetry.enabled": true });
+  assert.deepEqual(appliedSettings, { "context.someToggle": true });
   assert.deepEqual(help, { welcome: "hi" });
+  assert.deepEqual(seededTelemetry, { enabled: true, splunkHecUrl: "https://h", splunkHecTokenObfuscated: "v1.x" });
   assert.equal(markedId, "b1");
 
   // Second run (already applied id) seeds nothing.
   const fx2: ProvisioningEffects = { ...fx, appliedId: () => "b1" };
-  assert.deepEqual(await applyProvisioning(manifest, fx2), { applied: false, connectors: 0, projects: 0, settings: 0, help: false });
+  assert.deepEqual(await applyProvisioning(manifest, fx2), { applied: false, connectors: 0, projects: 0, settings: 0, help: false, telemetry: false });
 });

@@ -23,11 +23,13 @@ import {
   ProvisionedConnector,
   ProvisionedProject,
   ProvisionedHelp,
+  ProvisionedTelemetry,
   parseReleaseProfile,
   serializeReleaseProfile,
-  telemetrySettings,
+  stripProfileSecrets,
   buildProvisioningManifest,
 } from "./releaseProfile";
+import { obfuscateSecret } from "../diagnostics/secretObfuscation";
 
 /** Optional runtime snapshots the wizard can offer to BAKE into the build:
  *  the user's current reference sources (as non-secret connector descriptors)
@@ -371,7 +373,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
         renameIdentifiers,
       },
       ...(days > 0 ? { expiry: { validityDays: days, ...(upgradeUrl ? { upgradeUrl } : {}) } } : {}),
-      ...(hasProvisioning ? { provisioning } : {}),
+      ...(hasProvisioning ? { provisioning: stripProfileSecrets(provisioning) } : {}),
     },
     log,
   );
@@ -564,6 +566,11 @@ async function yesNo(title: string, detail: string, def = false): Promise<boolea
   return pick.label === "Yes";
 }
 
+/** Prompt for a secret (masked input). Returns "" if left blank, undefined if cancelled. */
+async function askSecret(prompt: string): Promise<string | undefined> {
+  return vscode.window.showInputBox({ prompt, password: true, ignoreFocusOut: true });
+}
+
 /** Load whitelabel.profile.json (if present) and ask whether to reuse it, so a
  *  refreshed release is a quick, repeatable pass over pre-filled prompts. */
 async function maybeLoadProfile(root: vscode.Uri): Promise<ReleaseProfile | undefined> {
@@ -624,23 +631,42 @@ async function gatherProvisioning(
 ): Promise<ProvisioningContent | undefined> {
   const content: ProvisioningContent = {};
 
-  // 1) Telemetry endpoints (endpoints only — never a token/secret in the VSIX).
-  const seedHasTelemetry = Boolean(seed?.settings && Object.keys(seed.settings).some((k) => k.startsWith("telemetry.")));
+  // 1) Telemetry (Splunk HEC / OTEL). Endpoints + the enabled flag bake plaintext;
+  //    any token entered here is OBFUSCATED into the build and de-obfuscated into
+  //    the OS keychain on first run. The committed profile keeps endpoints only.
+  const seedTel = seed?.telemetry;
   const wantTelemetry = await yesNo(
-    "Bake in anonymized telemetry (Splunk HEC / OTEL) defaults?",
-    "Endpoints only — the Splunk token / OTLP auth header is set per deployment, never embedded in the VSIX.",
-    seedHasTelemetry,
+    "Pre-configure anonymized telemetry (Splunk HEC / OTEL)?",
+    "Endpoints bake in plaintext; any token you enter is obfuscated in the VSIX and moved to the keychain on first run.",
+    Boolean(seedTel?.enabled || seedTel?.splunkHecUrl || seedTel?.otlpEndpoint),
   );
   if (wantTelemetry === undefined) return undefined;
   if (wantTelemetry) {
-    const splunk = await ask("Splunk HEC URL (blank to skip)", String(seed?.settings?.["telemetry.splunkHec.url"] ?? ""), undefined, true);
-    if (splunk === undefined) return undefined;
-    const otlp = await ask("OTEL OTLP/HTTP endpoint (blank to skip)", String(seed?.settings?.["telemetry.otlp.endpoint"] ?? ""), undefined, true);
-    if (otlp === undefined) return undefined;
-    const settings = telemetrySettings({ enabled: Boolean(splunk.trim() || otlp.trim()), splunkHecUrl: splunk, otlpEndpoint: otlp });
-    if (Object.keys(settings).length) content.settings = settings;
-  } else if (seed?.settings) {
-    content.settings = seed.settings;
+    const tel: ProvisionedTelemetry = { enabled: true };
+    const splunkUrl = await ask("Splunk HEC URL (blank to skip Splunk)", seedTel?.splunkHecUrl ?? "", undefined, true);
+    if (splunkUrl === undefined) return undefined;
+    if (splunkUrl.trim()) {
+      tel.splunkHecUrl = splunkUrl.trim();
+      const token = await askSecret("Splunk HEC token to bake in (write-only — obfuscated in the build; blank to skip)");
+      if (token === undefined) return undefined;
+      if (token.trim()) tel.splunkHecTokenObfuscated = obfuscateSecret(token.trim());
+    }
+    const otlpEndpoint = await ask("OTEL OTLP/HTTP endpoint (blank to skip OTEL)", seedTel?.otlpEndpoint ?? "", undefined, true);
+    if (otlpEndpoint === undefined) return undefined;
+    if (otlpEndpoint.trim()) {
+      tel.otlpEndpoint = otlpEndpoint.trim();
+      const hName = await ask("OTLP auth header name (optional, e.g. X-Api-Key)", seedTel?.otlpHeaderName ?? "", undefined, true);
+      if (hName === undefined) return undefined;
+      if (hName.trim()) {
+        tel.otlpHeaderName = hName.trim();
+        const hVal = await askSecret(`OTLP auth header value for "${hName.trim()}" (write-only — obfuscated; blank to skip)`);
+        if (hVal === undefined) return undefined;
+        if (hVal.trim()) tel.otlpHeaderValueObfuscated = obfuscateSecret(hVal.trim());
+      }
+    }
+    if (tel.splunkHecUrl || tel.otlpEndpoint) content.telemetry = tel;
+  } else if (seedTel) {
+    content.telemetry = seedTel; // keep endpoints from the profile (it carries no tokens)
   }
 
   // 2) Pre-defined connectors — a snapshot of the current reference sources.
