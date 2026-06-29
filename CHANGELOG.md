@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.79.0 — 2026-06-29
+
+More white-label export build resilience: a withheld dependency no longer blocks the build, and
+the completion message points at the enterprise build steps.
+
+### Fixed — a withheld formatter/linter version blocked the whole build
+- `0.77.0` dropped the lockfile so installs could fall back to a prior version, but that doesn't
+  help when an enterprise registry **lists** the newest version yet **blocks only its tarball** —
+  npm still resolves the newest in range and 404s (the persistent `could not find
+  prettier-3.9.3.tgz`). The exported `package.json` now moves the build-nonessential dev tools
+  (`prettier`, `eslint`, `typescript-eslint`, `@eslint/js`) to **`optionalDependencies`**, so
+  `npm install` **skips them with a warning** when their tarball is withheld and the VSIX still
+  builds (it needs only `esbuild` + `typescript` + `@vscode/vsce`). `MAINTAINING.md` explains this
+  and, for a *required* tool that's blocked, how to pin a prior version or use the **Minimal build
+  components** export (no toolchain at all).
+
+### Changed — the "export ready" message points to the enterprise build steps
+- After writing an export folder, the completion dialog no longer just shows
+  `npm install && npm run package` (insufficient on Windows or behind a corporate registry). It now
+  shows a **shell-appropriate** quick command with `--verbose` (PowerShell-safe), states that a bare
+  `npm install` may not be enough in an enterprise environment, and offers an **Open BUILD.md /
+  MAINTAINING.md** button — the guide that covers the OS trust store, the `--strict-ssl=false`
+  fallback, withheld-version handling, and Windows notes.
+
 ## 0.78.0 — 2026-06-29
 
 ### Fixed — white-label wizard could concatenate the old + new description

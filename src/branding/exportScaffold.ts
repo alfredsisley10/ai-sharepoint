@@ -117,8 +117,16 @@ export function buildEnvironmentNotes(kind: ExportKind): string {
       "major base (`^X.0.0`), so `npm install` resolves the newest version your registry",
       "*actually has* — automatically falling back to the prior (N-1) release when the latest",
       "is withheld. After a clean install, **commit the generated `package-lock.json`** to your",
-      "repo for reproducible builds. If a build later fails on a missing tarball, delete",
-      "`package-lock.json` and re-run `npm install` to re-resolve against your registry.",
+      "repo for reproducible builds.",
+      "",
+      "Formatting/linting tools (`prettier`, `eslint`) are **`optionalDependencies`** here, so if",
+      "their newest tarball is blocked, `npm install` **skips them with a warning and the VSIX still",
+      "builds** — the build needs only `esbuild` + `typescript` + `@vscode/vsce`. If a *required*",
+      "build tool is listed but only its tarball is blocked (npm picks that newest version and 404s),",
+      "pin the prior release — e.g. `npm install --save-dev typescript@<prior-version>` — or run",
+      "`node scripts/preflight-deps.js` to see which versions your registry can actually install.",
+      "Tip: the *Minimal build components* export carries no toolchain at all (only `@vscode/vsce`),",
+      "sidestepping this entirely if you just need to re-package.",
       "",
     );
   }
