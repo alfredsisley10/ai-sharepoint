@@ -27,13 +27,20 @@ export class SyncEngine {
     progress?.("Resolving site…");
     const site = await client.getSite(conn.siteUrl);
 
+    // Any collection that overflows the pagination cap makes the whole snapshot
+    // an incomplete view — write-back then refuses deletions (ADR-0021 §4).
+    let truncated = false;
+    const markTruncated = () => {
+      truncated = true;
+    };
+
     progress?.("Reading lists…");
-    const lists = await client.getLists(site.id);
+    const lists = await client.getLists(site.id, markTruncated);
     const listsWithColumns: SiteSnapshotInput["lists"] = [];
     for (const list of lists) {
       let columns: unknown[] = [];
       try {
-        columns = await client.getListColumns(site.id, list.id);
+        columns = await client.getListColumns(site.id, list.id, markTruncated);
       } catch {
         this.log.warn(`Columns unreadable for a list; schema captured without columns.`);
       }
@@ -49,7 +56,7 @@ export class SyncEngine {
     let pages: SiteSnapshotInput["pages"] = [];
     let pagesUnavailable = false;
     try {
-      const pageList = await client.getPages(site.id);
+      const pageList = await client.getPages(site.id, markTruncated);
       for (const page of pageList) {
         progress?.(`Reading page: ${page.title}`);
         try {
@@ -70,7 +77,7 @@ export class SyncEngine {
       pages = [];
     }
 
-    return { site, lists: listsWithColumns, pages, pagesUnavailable };
+    return { site, lists: listsWithColumns, pages, pagesUnavailable, truncated };
   }
 
   /** Serialize + diff against the folder. Pure read — writes nothing. */

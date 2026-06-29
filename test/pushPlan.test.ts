@@ -152,6 +152,17 @@ test("deletions: genericList collected as opt-in deletion; library protected wit
   assert.ok(hasWork(plan, true));
 });
 
+test("truncated snapshot suppresses ALL deletions and warns (incomplete view ≠ orphan)", () => {
+  // Empty repo against a non-empty live site would normally orphan everything.
+  const plan = buildPushPlan(parseDesiredState(new Map()), current({ truncated: true }));
+  assert.deepEqual(plan.deletions, [], "no deletions may be derived from a partial snapshot");
+  assert.ok(!hasWork(plan, true), "even with opt-in there is nothing destructive to do");
+  assert.ok(
+    plan.warnings.some((w) => /partial snapshot/i.test(w) && /deletions are disabled/i.test(w)),
+    "a loud truncation warning is surfaced",
+  );
+});
+
 // --- plan: pages ----------------------------------------------------------------
 
 test("page canvas drift → updatePage with canvas; title-only drift → title update", () => {
