@@ -61,454 +61,454 @@
     "commands": [
       {
         "command": "aiSharePoint.connectSite",
-        "title": "Connect SharePoint Site",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.connectSite.title%",
+        "category": "%category%",
         "icon": "$(add)"
       },
       {
         "command": "aiSharePoint.addManagedTarget",
-        "title": "Add Managed Target (SharePoint or Confluence)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.addManagedTarget.title%",
+        "category": "%category%",
         "icon": "$(add)"
       },
       {
         "command": "aiSharePoint.connectSiteSession",
-        "title": "Connect SharePoint Site (browser session — no admin consent)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.connectSiteSession.title%",
+        "category": "%category%",
         "icon": "$(key)"
       },
       {
         "command": "aiSharePoint.disconnectSiteSession",
-        "title": "Disconnect SharePoint Browser Session",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.disconnectSiteSession.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.openSourceInBrowser",
-        "title": "Open Source in Browser",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.openSourceInBrowser.title%",
+        "category": "%category%",
         "icon": "$(link-external)"
       },
       {
         "command": "aiSharePoint.changeSourceRole",
-        "title": "Change Source Role (Managed / Reference)",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.changeSourceRole.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.testWriteAccess",
-        "title": "Test Write Access (safe — creates & deletes a temp page)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.testWriteAccess.title%",
+        "category": "%category%",
         "icon": "$(beaker)"
       },
       {
         "command": "aiSharePoint.testConfluenceFunctionality",
-        "title": "Test Content Functionality (safe — renders & checks page elements)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.testConfluenceFunctionality.title%",
+        "category": "%category%",
         "icon": "$(symbol-color)"
       },
       {
         "command": "aiSharePoint.testConnection",
-        "title": "Test Site Connection",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.testConnection.title%",
+        "category": "%category%",
         "icon": "$(plug)"
       },
       {
         "command": "aiSharePoint.openSiteInBrowser",
-        "title": "Open Site in Browser",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.openSiteInBrowser.title%",
+        "category": "%category%",
         "icon": "$(link-external)"
       },
       {
         "command": "aiSharePoint.copySiteUrl",
-        "title": "Copy Site URL",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.copySiteUrl.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.changeSiteRole",
-        "title": "Change Connection Role (managed/reference)",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.changeSiteRole.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.signOutSite",
-        "title": "Sign Out of Site (wipe cached credentials)",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.signOutSite.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.removeSite",
-        "title": "Remove Site Connection",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.removeSite.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.refreshSites",
-        "title": "Refresh Sites View",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.refreshSites.title%",
+        "category": "%category%",
         "icon": "$(refresh)"
       },
       {
         "command": "aiSharePoint.configureSiteRepo",
-        "title": "Configure Site Repository (Git)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.configureSiteRepo.title%",
+        "category": "%category%",
         "icon": "$(repo)"
       },
       {
         "command": "aiSharePoint.pullSiteToRepo",
-        "title": "Pull Site to Repository (preview first)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.pullSiteToRepo.title%",
+        "category": "%category%",
         "icon": "$(cloud-download)"
       },
       {
         "command": "aiSharePoint.pushSiteRepo",
-        "title": "Push Site Repository to GitHub/GHES",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.pushSiteRepo.title%",
+        "category": "%category%",
         "icon": "$(repo-push)"
       },
       {
         "command": "aiSharePoint.applyRepoToSharePoint",
-        "title": "Apply Repository to SharePoint (write-back)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.applyRepoToSharePoint.title%",
+        "category": "%category%",
         "icon": "$(cloud-upload)"
       },
       {
         "command": "aiSharePoint.revertSiteToCommit",
-        "title": "Revert Site to Commit…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.revertSiteToCommit.title%",
+        "category": "%category%",
         "icon": "$(history)"
       },
       {
         "command": "aiSharePoint.addContextSource",
-        "title": "Add Context Source (Confluence/Jira/GitHub/LDAP/Databases/Vertex/Power BI/ServiceNow/Splunk/Observability/Grafana)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.addContextSource.title%",
+        "category": "%category%",
         "icon": "$(add)"
       },
       {
         "command": "aiSharePoint.testContextSource",
-        "title": "Test Context Source",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.testContextSource.title%",
+        "category": "%category%",
         "icon": "$(plug)"
       },
       {
         "command": "aiSharePoint.removeContextSource",
-        "title": "Remove Context Source",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.removeContextSource.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.editSourceAlias",
-        "title": "Edit Alias & Description",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.editSourceAlias.title%",
+        "category": "%category%",
         "icon": "$(tag)"
       },
       {
         "command": "aiSharePoint.loadSourceSchema",
-        "title": "Load/Refresh Database Schema",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.loadSourceSchema.title%",
+        "category": "%category%",
         "icon": "$(database)"
       },
       {
         "command": "aiSharePoint.precacheSourceCatalog",
-        "title": "Pre-cache Source Catalog (spaces/projects/queues)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.precacheSourceCatalog.title%",
+        "category": "%category%",
         "icon": "$(cloud-download)"
       },
       {
         "command": "aiSharePoint.draftTeamsMessage",
-        "title": "Draft Teams Message…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.draftTeamsMessage.title%",
+        "category": "%category%",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "aiSharePoint.draftOutlookEmail",
-        "title": "Draft Outlook Email…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.draftOutlookEmail.title%",
+        "category": "%category%",
         "icon": "$(mail)"
       },
       {
         "command": "aiSharePoint.reviewCommDraft",
-        "title": "Review & Send Communication Draft…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.reviewCommDraft.title%",
+        "category": "%category%",
         "icon": "$(send)"
       },
       {
         "command": "aiSharePoint.editCommDraft",
-        "title": "Edit Communication Draft",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.editCommDraft.title%",
+        "category": "%category%",
         "icon": "$(edit)"
       },
       {
         "command": "aiSharePoint.discardCommDraft",
-        "title": "Discard Communication Draft",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.discardCommDraft.title%",
+        "category": "%category%",
         "icon": "$(trash)"
       },
       {
         "command": "aiSharePoint.configureTeamsWebhook",
-        "title": "Configure Teams Webhook (no admin consent)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.configureTeamsWebhook.title%",
+        "category": "%category%",
         "icon": "$(plug)"
       },
       {
         "command": "aiSharePoint.testCommsMethod",
-        "title": "Test Communication Method (end-to-end)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.testCommsMethod.title%",
+        "category": "%category%",
         "icon": "$(beaker)"
       },
       {
         "command": "aiSharePoint.indexSourceSchema",
-        "title": "Index Database Schema (Copilot summaries)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.indexSourceSchema.title%",
+        "category": "%category%",
         "icon": "$(sparkle)"
       },
       {
         "command": "aiSharePoint.buildErDiagram",
-        "title": "Build Database ER Diagram (probe join rates)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.buildErDiagram.title%",
+        "category": "%category%",
         "icon": "$(type-hierarchy)"
       },
       {
         "command": "aiSharePoint.viewSourceSchema",
-        "title": "View Database Schema & Semantic Index",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.viewSourceSchema.title%",
+        "category": "%category%",
         "icon": "$(table)"
       },
       {
         "command": "aiSharePoint.resetSourceLockout",
-        "title": "Reset Source Auth Lockout",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.resetSourceLockout.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.clearContextCache",
-        "title": "Clear Reference-Source Cache",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.clearContextCache.title%",
+        "category": "%category%",
         "icon": "$(clear-all)"
       },
       {
         "command": "aiSharePoint.exportSearchResults",
-        "title": "Export Context Search Results to File…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.exportSearchResults.title%",
+        "category": "%category%",
         "icon": "$(export)"
       },
       {
         "command": "aiSharePoint.discoverActiveDirectory",
-        "title": "Discover Active Directory (DNS)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.discoverActiveDirectory.title%",
+        "category": "%category%",
         "icon": "$(search)"
       },
       {
         "command": "aiSharePoint.exportReferenceConfig",
-        "title": "Export Reference Config (secret-free)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.exportReferenceConfig.title%",
+        "category": "%category%",
         "icon": "$(export)"
       },
       {
         "command": "aiSharePoint.importReferenceConfig",
-        "title": "Import Reference Config…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.importReferenceConfig.title%",
+        "category": "%category%",
         "icon": "$(cloud-download)"
       },
       {
         "command": "aiSharePoint.browseSource",
-        "title": "Browse Source & Add Bookmark…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.browseSource.title%",
+        "category": "%category%",
         "icon": "$(bookmark)"
       },
       {
         "command": "aiSharePoint.addBookmark",
-        "title": "Add Bookmark",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.addBookmark.title%",
+        "category": "%category%",
         "icon": "$(bookmark)"
       },
       {
         "command": "aiSharePoint.runBookmark",
-        "title": "Run Bookmark",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.runBookmark.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.removeBookmark",
-        "title": "Remove Bookmark",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.removeBookmark.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.editBookmark",
-        "title": "Edit Bookmark (name & query)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.editBookmark.title%",
+        "category": "%category%",
         "icon": "$(edit)"
       },
       {
         "command": "aiSharePoint.installCopilotChat",
-        "title": "Install GitHub Copilot Chat",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.installCopilotChat.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.checkCopilotStatus",
-        "title": "Check Copilot Status",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.checkCopilotStatus.title%",
+        "category": "%category%",
         "icon": "$(pulse)"
       },
       {
         "command": "aiSharePoint.listModels",
-        "title": "List Copilot Models (relative cost)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.listModels.title%",
+        "category": "%category%",
         "icon": "$(circuit-board)"
       },
       {
         "command": "aiSharePoint.askCopilot",
-        "title": "Ask Copilot",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.askCopilot.title%",
+        "category": "%category%",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "aiSharePoint.showUsage",
-        "title": "Show Copilot Activity Dashboard",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.showUsage.title%",
+        "category": "%category%",
         "icon": "$(dashboard)"
       },
       {
         "command": "aiSharePoint.resetUsage",
-        "title": "Reset Copilot Activity Counters",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.resetUsage.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.exportDiagnostics",
-        "title": "Export Diagnostics Bundle (anonymized)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.exportDiagnostics.title%",
+        "category": "%category%",
         "icon": "$(export)"
       },
       {
         "command": "aiSharePoint.reviewLessons",
-        "title": "Review Lessons Learned (anonymized)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.reviewLessons.title%",
+        "category": "%category%",
         "icon": "$(book)"
       },
       {
         "command": "aiSharePoint.manageProxyTerms",
-        "title": "Manage Proxy Avoid-List",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.manageProxyTerms.title%",
+        "category": "%category%",
         "icon": "$(shield)"
       },
       {
         "command": "aiSharePoint.showModelLimits",
-        "title": "Show Learned Model Context Limits",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.showModelLimits.title%",
+        "category": "%category%",
         "icon": "$(dashboard)"
       },
       {
         "command": "aiSharePoint.manageProjectMemory",
-        "title": "Manage Project Memory",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.manageProjectMemory.title%",
+        "category": "%category%",
         "icon": "$(sparkle)"
       },
       {
         "command": "aiSharePoint.exportLessons",
-        "title": "Export Lessons Learned (anonymized)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.exportLessons.title%",
+        "category": "%category%",
         "icon": "$(export)"
       },
       {
         "command": "aiSharePoint.clearLessons",
-        "title": "Delete Captured Lessons",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.clearLessons.title%",
+        "category": "%category%",
         "icon": "$(trash)"
       },
       {
         "command": "aiSharePoint.showErrorReports",
-        "title": "Show Error Reports",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.showErrorReports.title%",
+        "category": "%category%",
         "icon": "$(bug)"
       },
       {
         "command": "aiSharePoint.clearErrorReports",
-        "title": "Delete Error Reports",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.clearErrorReports.title%",
+        "category": "%category%",
         "icon": "$(trash)"
       },
       {
         "command": "aiSharePoint.rotateAnonymousId",
-        "title": "Rotate Anonymous Install ID",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.rotateAnonymousId.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.copySupportInfo",
-        "title": "Copy Support Info (version + install ID)",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.copySupportInfo.title%",
+        "category": "%category%",
         "icon": "$(copy)"
       },
       {
         "command": "aiSharePoint.openLogs",
-        "title": "Open Extension Logs",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.openLogs.title%",
+        "category": "%category%",
         "icon": "$(output)"
       },
       {
         "command": "aiSharePoint.rebrandExtension",
-        "title": "Rebrand / White-label This Extension…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.rebrandExtension.title%",
+        "category": "%category%",
         "icon": "$(paintcan)"
       },
       {
         "command": "aiSharePoint.openUserGuide",
-        "title": "Open User Guide",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.openUserGuide.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.openPrivacyNotice",
-        "title": "Open Privacy & Data Notice",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.openPrivacyNotice.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.openWalkthrough",
-        "title": "Open Getting Started Walkthrough",
-        "category": "AI SharePoint"
+        "title": "%aiSharePoint.openWalkthrough.title%",
+        "category": "%category%"
       },
       {
         "command": "aiSharePoint.toggleVerboseLogging",
-        "title": "Toggle Verbose Wire Logging",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.toggleVerboseLogging.title%",
+        "category": "%category%",
         "icon": "$(eye)"
       },
       {
         "command": "aiSharePoint.manageTelemetry",
-        "title": "Manage Usage Telemetry (Splunk / OTEL)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.manageTelemetry.title%",
+        "category": "%category%",
         "icon": "$(broadcast)"
       },
       {
         "command": "aiSharePoint.indexSourceContent",
-        "title": "Index Database Content Types (sampled values)…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.indexSourceContent.title%",
+        "category": "%category%",
         "icon": "$(beaker)"
       },
       {
         "command": "aiSharePoint.createProject",
-        "title": "Projects: Create Project…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.createProject.title%",
+        "category": "%category%",
         "icon": "$(new-folder)"
       },
       {
         "command": "aiSharePoint.switchProject",
-        "title": "Projects: Switch Project / All Sources",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.switchProject.title%",
+        "category": "%category%",
         "icon": "$(folder-opened)"
       },
       {
         "command": "aiSharePoint.editProject",
-        "title": "Projects: Edit Project…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.editProject.title%",
+        "category": "%category%",
         "icon": "$(edit)"
       },
       {
         "command": "aiSharePoint.removeProject",
-        "title": "Projects: Remove Project…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.removeProject.title%",
+        "category": "%category%",
         "icon": "$(trash)"
       },
       {
         "command": "aiSharePoint.activateProject",
-        "title": "Projects: Activate Project",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.activateProject.title%",
+        "category": "%category%",
         "icon": "$(check)"
       },
       {
         "command": "aiSharePoint.manageProjectAiContext",
-        "title": "Projects: Manage AI Context…",
-        "category": "AI SharePoint",
+        "title": "%aiSharePoint.manageProjectAiContext.title%",
+        "category": "%category%",
         "icon": "$(sparkle)"
       }
     ],
@@ -516,7 +516,7 @@
       "activitybar": [
         {
           "id": "aiSharePoint",
-          "title": "AI SharePoint",
+          "title": "%viewsContainer.aiSharePoint.title%",
           "icon": "media/activity-icon.svg"
         }
       ]
@@ -525,37 +525,37 @@
       "aiSharePoint": [
         {
           "id": "aiSharePoint.sitesView",
-          "name": "Managed Sites",
+          "name": "%view.aiSharePoint.sitesView.name%",
           "icon": "media/activity-icon.svg",
           "contextualTitle": "Managed Sites (SharePoint or Confluence)"
         },
         {
           "id": "aiSharePoint.sourcesView",
-          "name": "Reference Sources",
+          "name": "%view.aiSharePoint.sourcesView.name%",
           "icon": "media/activity-icon.svg",
           "contextualTitle": "Reference Sources (read-only)"
         },
         {
           "id": "aiSharePoint.projectsView",
-          "name": "Projects",
+          "name": "%view.aiSharePoint.projectsView.name%",
           "icon": "media/activity-icon.svg",
           "contextualTitle": "Projects (scopes & AI context)"
         },
         {
           "id": "aiSharePoint.usageView",
-          "name": "Copilot Activity",
+          "name": "%view.aiSharePoint.usageView.name%",
           "icon": "media/activity-icon.svg",
           "contextualTitle": "Copilot Activity (local request counts)"
         },
         {
           "id": "aiSharePoint.commsView",
-          "name": "Communications",
+          "name": "%view.aiSharePoint.commsView.name%",
           "icon": "media/activity-icon.svg",
           "contextualTitle": "Communications (drafts pending approval)"
         },
         {
           "id": "aiSharePoint.supportView",
-          "name": "Support & Diagnostics",
+          "name": "%view.aiSharePoint.supportView.name%",
           "icon": "media/activity-icon.svg",
           "contextualTitle": "Support & Diagnostics"
         }
@@ -2378,13 +2378,13 @@
     "walkthroughs": [
       {
         "id": "aiSharePoint.gettingStarted",
-        "title": "Get started with AI SharePoint",
-        "description": "Connect a site, chat with @sharepoint, stay in control of Copilot spend, and know exactly what leaves your machine (nothing, unless you export it).",
+        "title": "%walkthrough.aiSharePoint.gettingStarted.title%",
+        "description": "%walkthrough.aiSharePoint.gettingStarted.description%",
         "steps": [
           {
             "id": "installCopilot",
-            "title": "Install GitHub Copilot Chat",
-            "description": "AI features run through your own Copilot entitlement via the VS Code Language Model API — provided by the **GitHub Copilot Chat** extension (marketplace search: “github copilot chat”). No extra keys, nothing routed through third parties.\nThis step completes automatically when Copilot Chat is installed and you are signed in.\n[Install GitHub Copilot Chat](command:aiSharePoint.installCopilotChat)\n[Check Copilot Status](command:aiSharePoint.checkCopilotStatus)",
+            "title": "%walkthrough.aiSharePoint.gettingStarted.step.installCopilot.title%",
+            "description": "%walkthrough.aiSharePoint.gettingStarted.step.installCopilot.description%",
             "media": {
               "image": "media/walkthrough/copilot.svg",
               "altText": "Copilot powers AI SharePoint through your own entitlement"
@@ -2396,8 +2396,8 @@
           },
           {
             "id": "connectSite",
-            "title": "Connect a SharePoint site",
-            "description": "Sign in with your Microsoft account (browser or device-code) and connect a site as **managed** or read-only **reference**. Credentials are cached only in your OS keychain.\n[Connect a Site](command:aiSharePoint.connectSite)",
+            "title": "%walkthrough.aiSharePoint.gettingStarted.step.connectSite.title%",
+            "description": "%walkthrough.aiSharePoint.gettingStarted.step.connectSite.description%",
             "media": {
               "image": "media/walkthrough/connect.svg",
               "altText": "Connect a SharePoint site"
@@ -2408,8 +2408,8 @@
           },
           {
             "id": "chat",
-            "title": "Chat with @sharepoint",
-            "description": "Ask **@sharepoint** about your sites in the Chat view — try `/site` for a live overview. In agent mode, Copilot can call the read-only tools itself: site overviews, pages, reference sources (Confluence/Jira/LDAP), bookmarks, and usage.\n[Open Chat](command:workbench.action.chat.open?%22%40sharepoint%20%2Fhelp%22)",
+            "title": "%walkthrough.aiSharePoint.gettingStarted.step.chat.title%",
+            "description": "%walkthrough.aiSharePoint.gettingStarted.step.chat.description%",
             "media": {
               "image": "media/walkthrough/chat.svg",
               "altText": "Chat with @sharepoint"
@@ -2420,8 +2420,8 @@
           },
           {
             "id": "projects",
-            "title": "Organize work into Projects",
-            "description": "The **Projects** view groups reference sources into a named scope, carries your **goals & instructions** for @sharepoint, and keeps a separate **AI-managed context** the assistant learns over time (you approve each saved note). Activate a project to scope chat and the Reference Sources view to it — everything travels with Export/Import Reference Config.\n[Open the Projects View](command:aiSharePoint.projectsView.focus)\n[Create a Project](command:aiSharePoint.createProject)",
+            "title": "%walkthrough.aiSharePoint.gettingStarted.step.projects.title%",
+            "description": "%walkthrough.aiSharePoint.gettingStarted.step.projects.description%",
             "media": {
               "image": "media/walkthrough/projects.svg",
               "altText": "The Projects view"
@@ -2432,8 +2432,8 @@
           },
           {
             "id": "activity",
-            "title": "See what the extension asked Copilot",
-            "description": "The Copilot Activity view and dashboard show factual, locally measured request counts (today, this month, by model and task). Premium-request consumption against your plan is **not** estimated — your GitHub billing page is the authoritative source.\n[Open Activity Dashboard](command:aiSharePoint.showUsage)",
+            "title": "%walkthrough.aiSharePoint.gettingStarted.step.activity.title%",
+            "description": "%walkthrough.aiSharePoint.gettingStarted.step.activity.description%",
             "media": {
               "image": "media/walkthrough/budget.svg",
               "altText": "Copilot activity counters"
@@ -2444,8 +2444,8 @@
           },
           {
             "id": "diagnostics",
-            "title": "Diagnostics that respect your enterprise",
-            "description": "Usage counters and redacted error reports are stored **locally only**. When you need support, export an **anonymized bundle** — previewed and leak-scanned before a single byte is written.\n[Export Diagnostics Bundle](command:aiSharePoint.exportDiagnostics)\n[Privacy & Data Notice](command:aiSharePoint.openPrivacyNotice)",
+            "title": "%walkthrough.aiSharePoint.gettingStarted.step.diagnostics.title%",
+            "description": "%walkthrough.aiSharePoint.gettingStarted.step.diagnostics.description%",
             "media": {
               "image": "media/walkthrough/diagnostics.svg",
               "altText": "Anonymized diagnostics export"
@@ -2458,27 +2458,27 @@
       }
     ],
     "configuration": {
-      "title": "AI SharePoint",
+      "title": "%config.section.0.title%",
       "properties": {
         "aiSharePoint.copilot.preferredModelFamily": {
           "type": "string",
           "default": "",
           "order": 2,
-          "markdownDescription": "Model family this extension uses by default (set via **AI SharePoint: List Copilot Models**). Empty = cheapest entitled model (economy-first policy)."
+          "markdownDescription": "%config.aiSharePoint.copilot.preferredModelFamily.markdownDescription%"
         },
         "aiSharePoint.auth.tenantAuthority": {
           "type": "string",
           "default": "https://login.microsoftonline.com/common",
           "scope": "machine",
           "order": 6,
-          "markdownDescription": "Microsoft Entra ID authority for sign-in (MSAL public client). Machine-scoped: workspaces cannot override it. The host must be a known Microsoft login endpoint or listed in `#aiSharePoint.auth.additionalAuthorityHosts#`."
+          "markdownDescription": "%config.aiSharePoint.auth.tenantAuthority.markdownDescription%"
         },
         "aiSharePoint.auth.clientId": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "order": 7,
-          "markdownDescription": "Optional custom Entra application (client) ID for tenants that block the default Microsoft Graph PowerShell first-party app. Requires a public-client app registration with `http://localhost` redirect and delegated `Sites.Read.All` — see the Admin Guide."
+          "markdownDescription": "%config.aiSharePoint.auth.clientId.markdownDescription%"
         },
         "aiSharePoint.auth.additionalAuthorityHosts": {
           "type": "array",
@@ -2488,7 +2488,7 @@
           "default": [],
           "scope": "machine",
           "order": 8,
-          "markdownDescription": "Extra allowed sign-in authority hosts (beyond the built-in Microsoft login endpoints). Machine-scoped."
+          "markdownDescription": "%config.aiSharePoint.auth.additionalAuthorityHosts.markdownDescription%"
         },
         "aiSharePoint.diagnostics.usageCapture": {
           "type": "string",
@@ -2498,25 +2498,25 @@
             "off"
           ],
           "enumDescriptions": [
-            "Capture local usage counters only while VS Code telemetry is enabled (defers to your org's telemetry stance).",
-            "Always capture locally.",
-            "Never capture."
+            "%config.aiSharePoint.diagnostics.usageCapture.enumDescriptions.0%",
+            "%config.aiSharePoint.diagnostics.usageCapture.enumDescriptions.1%",
+            "%config.aiSharePoint.diagnostics.usageCapture.enumDescriptions.2%"
           ],
           "default": "followVSCode",
           "order": 9,
-          "markdownDescription": "Local feature-usage counters for the diagnostics bundle. **Nothing is ever transmitted by the extension** — data leaves the machine only via your explicit export, or the opt-in external telemetry you configure under **Support & Diagnostics → Usage Telemetry** (command: *AI SharePoint: Manage Usage Telemetry*). External telemetry also honors this setting / your VS Code telemetry stance."
+          "markdownDescription": "%config.aiSharePoint.diagnostics.usageCapture.markdownDescription%"
         },
         "aiSharePoint.diagnostics.errorCapture": {
           "type": "boolean",
           "default": true,
           "order": 10,
-          "markdownDescription": "Store redacted error reports locally for the diagnostics bundle. Disable to keep no error history at all."
+          "markdownDescription": "%config.aiSharePoint.diagnostics.errorCapture.markdownDescription%"
         },
         "aiSharePoint.lessons.capture": {
           "type": "boolean",
           "default": false,
           "order": 10.5,
-          "markdownDescription": "**Opt-in, default off.** Let @sharepoint record *anonymized, generalized* interaction lessons when it self-corrects (e.g. \"when the user says 'my Confluence space', scope to their personal space, not global\") into a local ledger you can review and export. The lessons are scrubbed of tenant/user identifiers and **nothing is ever transmitted by the extension** — they leave the machine only when you explicitly export the file to share with the plugin developer (\"AI SharePoint: Export Lessons Learned\")."
+          "markdownDescription": "%config.aiSharePoint.lessons.capture.markdownDescription%"
         },
         "aiSharePoint.sync.allowedRemoteHosts": {
           "type": "array",
@@ -2528,7 +2528,7 @@
           ],
           "scope": "machine",
           "order": 11,
-          "markdownDescription": "Git hosts that site repositories may push to (ADR-0019). Add your GitHub Enterprise Server host, e.g. `github.corp.example`. Machine-scoped: workspaces cannot override it."
+          "markdownDescription": "%config.aiSharePoint.sync.allowedRemoteHosts.markdownDescription%"
         },
         "aiSharePoint.sync.writePermissionMode": {
           "type": "string",
@@ -2537,19 +2537,19 @@
             "all"
           ],
           "enumDescriptions": [
-            "Sites.Selected (recommended, least privilege): an admin grants the app access to ONLY the specific site(s). Requires a one-time per-site grant — see the Admin Guide.",
-            "Sites.ReadWrite.All + Sites.Manage.All: tenant-wide delegated write across every site you can access. Simpler, but usually needs broad admin consent."
+            "%config.aiSharePoint.sync.writePermissionMode.enumDescriptions.0%",
+            "%config.aiSharePoint.sync.writePermissionMode.enumDescriptions.1%"
           ],
           "default": "selected",
           "order": 11,
-          "markdownDescription": "Graph permission the write-back (*Apply to SharePoint*) requests (ADR-0037). **`selected`** asks for `Sites.Selected` — far more likely to be approved, but an admin must grant the app access to each target site (`Grant-PnPAzureADAppSitePermission`, or `POST /sites/{id}/permissions`; see the Admin Guide §4). **`all`** asks for the tenant-wide `Sites.ReadWrite.All` + `Sites.Manage.All`."
+          "markdownDescription": "%config.aiSharePoint.sync.writePermissionMode.markdownDescription%"
         },
         "aiSharePoint.context.cacheTtlMinutes": {
           "type": "number",
           "default": 15,
           "minimum": 0,
           "order": 12,
-          "markdownDescription": "How long reference-source results are cached locally (ADR-0011). 0 disables caching."
+          "markdownDescription": "%config.aiSharePoint.context.cacheTtlMinutes.markdownDescription%"
         },
         "aiSharePoint.context.maxResults": {
           "type": "number",
@@ -2557,7 +2557,7 @@
           "minimum": 1,
           "maximum": 200,
           "order": 13,
-          "markdownDescription": "Default result window — the maximum rows/results per reference-source query (ADR-0012 read-safety cap). Tunable mid-conversation by asking @sharepoint to change the result window; the 200 ceiling always applies."
+          "markdownDescription": "%config.aiSharePoint.context.maxResults.markdownDescription%"
         },
         "aiSharePoint.context.queryTimeoutSeconds": {
           "type": "number",
@@ -2565,14 +2565,14 @@
           "minimum": 5,
           "maximum": 600,
           "order": 13,
-          "markdownDescription": "Base timeout for a single database query/probe (seconds). Large join probes are automatically granted a longer, cost-estimated budget (up to ~2 minutes, or this value if higher) based on table row counts, so big joins finish instead of timing out at the default."
+          "markdownDescription": "%config.aiSharePoint.context.queryTimeoutSeconds.markdownDescription%"
         },
         "aiSharePoint.context.maxInputTokens": {
           "type": "number",
           "default": 0,
           "minimum": 0,
           "order": 13,
-          "markdownDescription": "Override the model's advertised input-context size (tokens) when Copilot clamps the effective usable context below the native max (#3). `0` = auto-detect: use the model's advertised limit and learn the real ceiling over time from successes and overflow failures. Set a value only if you know your environment's hard clamp."
+          "markdownDescription": "%config.aiSharePoint.context.maxInputTokens.markdownDescription%"
         },
         "aiSharePoint.proxy.mode": {
           "type": "string",
@@ -2582,13 +2582,13 @@
             "defang"
           ],
           "enumDescriptions": [
-            "No proxy-block avoidance.",
-            "Flag avoid-list words in your message before sending (you rephrase).",
-            "Automatically insert an invisible separator into avoid-list words so a content-blocking proxy's match fails, while the model still reads them."
+            "%config.aiSharePoint.proxy.mode.enumDescriptions.0%",
+            "%config.aiSharePoint.proxy.mode.enumDescriptions.1%",
+            "%config.aiSharePoint.proxy.mode.enumDescriptions.2%"
           ],
           "default": "warn",
           "order": 14,
-          "markdownDescription": "How @sharepoint handles words a corporate proxy may block (#4). `warn` flags them; `defang` auto-adjusts outgoing messages to slip past; `off` disables. Repeated network-level failures also trigger proxy-block guidance regardless of this setting."
+          "markdownDescription": "%config.aiSharePoint.proxy.mode.markdownDescription%"
         },
         "aiSharePoint.proxy.blockedTerms": {
           "type": "array",
@@ -2597,62 +2597,62 @@
           },
           "default": [],
           "order": 14,
-          "markdownDescription": "Words/phrases a corporate proxy or DLP appliance tends to block (often false positives on ordinary vocabulary). @sharepoint avoids them per `aiSharePoint.proxy.mode`. You can also grow this list at runtime by asking @sharepoint to add a word, or via \"AI SharePoint: Manage Proxy Avoid-List\"."
+          "markdownDescription": "%config.aiSharePoint.proxy.blockedTerms.markdownDescription%"
         },
         "aiSharePoint.context.catalogTtlHours": {
           "type": "number",
           "default": 24,
           "minimum": 1,
           "order": 13,
-          "markdownDescription": "How long a pre-cached source catalog (Confluence spaces / Jira projects+queues) stays fresh. After expiry the next browse offers a refresh; the expired copy remains usable."
+          "markdownDescription": "%config.aiSharePoint.context.catalogTtlHours.markdownDescription%"
         },
         "aiSharePoint.context.catalogCheckpointSeconds": {
           "type": "number",
           "default": 15,
           "minimum": 5,
           "order": 13,
-          "markdownDescription": "While pre-caching a large catalog, ask every N seconds whether to continue. Loading pauses while the prompt waits, so the source system is never overtaxed."
+          "markdownDescription": "%config.aiSharePoint.context.catalogCheckpointSeconds.markdownDescription%"
         },
         "aiSharePoint.context.allowSchemaIndexing": {
           "type": "boolean",
           "default": true,
           "scope": "machine",
           "order": 13,
-          "markdownDescription": "Allow building **semantic schema indexes** of database sources with Copilot (ADR-0024). Only table/column **names and types** are ever sent — never row data — and always behind an explicit per-source consent. Set `false` to disable organization-wide."
+          "markdownDescription": "%config.aiSharePoint.context.allowSchemaIndexing.markdownDescription%"
         },
         "aiSharePoint.ldap.tlsRejectUnauthorized": {
           "type": "boolean",
           "default": true,
           "scope": "machine",
           "order": 14,
-          "markdownDescription": "Validate LDAPS/StartTLS server certificates for LDAP/Active Directory sources (ADR-0020). Keep **true** in production. If LDAPS uses an internal CA not in Node's bundle, prefer installing the CA; only disable for isolated lab testing."
+          "markdownDescription": "%config.aiSharePoint.ldap.tlsRejectUnauthorized.markdownDescription%"
         },
         "aiSharePoint.ldap.useStartTls": {
           "type": "boolean",
           "default": false,
           "scope": "machine",
           "order": 15,
-          "markdownDescription": "For `ldap://` (port 389) sources, upgrade the connection with StartTLS before binding. Ignored for `ldaps://` (implicit TLS)."
+          "markdownDescription": "%config.aiSharePoint.ldap.useStartTls.markdownDescription%"
         },
         "aiSharePoint.ldap.caCertificatesFile": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "order": 16,
-          "markdownDescription": "Path to a PEM CA bundle trusted for LDAPS/StartTLS connections (e.g. your corporate root + intermediates), **appended** to Node's defaults and the OS trust store. Machine-scoped. Use when the OS-store API is unavailable on your VS Code runtime — see Admin Guide §7."
+          "markdownDescription": "%config.aiSharePoint.ldap.caCertificatesFile.markdownDescription%"
         },
         "aiSharePoint.ldap.allowRawFilters": {
           "type": "boolean",
           "default": false,
           "scope": "machine",
           "order": 17,
-          "markdownDescription": "Allow a search query that is itself a parenthesized LDAP filter (e.g. `(&(objectClass=user)(department=Sales))`) to be passed through verbatim. **Off by default**: every query is otherwise escaped as an Ambiguous Name Resolution match, so free text — including a chat-driven search — can never inject filter syntax. Enable only for trusted, expert-driven directory queries. Machine-scoped."
+          "markdownDescription": "%config.aiSharePoint.ldap.allowRawFilters.markdownDescription%"
         },
         "aiSharePoint.logging.verboseWire": {
           "type": "boolean",
           "default": false,
           "order": 30,
-          "markdownDescription": "Log the **full request/response detail of every integration** — Microsoft Graph (SharePoint, Teams, Outlook), Confluence/Jira, LDAP/Active Directory, SQL Server/PostgreSQL/MySQL/MongoDB, Vertex AI Search, Power BI, MSAL sign-in traffic, and Copilot prompts/responses — to the *AI SharePoint* output channel. **Secrets are redacted in layers**: authorization headers are reduced to their scheme, token-endpoint bodies are withheld entirely, credential-shaped fields are masked, and every line passes the global redaction filter. Database/LDAP **result data is summarized (counts/columns), not dumped**. Local only; never included in diagnostics exports. Expect large output — enable only while debugging."
+          "markdownDescription": "%config.aiSharePoint.logging.verboseWire.markdownDescription%"
         },
         "aiSharePoint.ldap.dnsServers": {
           "type": "array",
@@ -2662,14 +2662,14 @@
           "default": [],
           "scope": "machine",
           "order": 16,
-          "markdownDescription": "**Machine-scoped.** Internal DNS server IPs used for Active Directory **SRV lookups** (e.g. `[\"10.0.0.53\", \"10.0.1.53\"]`). Set this when LDAP works in the office but fails on VPN: Node's resolver bypasses Windows NRPT / VPN split-DNS rules, so pointing SRV queries directly at corporate DNS by IP makes discovery deterministic everywhere. Empty = system resolver."
+          "markdownDescription": "%config.aiSharePoint.ldap.dnsServers.markdownDescription%"
         },
         "aiSharePoint.servicenow.oauthClientId": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "order": 17,
-          "markdownDescription": "**Machine-scoped.** OAuth client ID for **ServiceNow browser sign-in** — from a one-time Application Registry entry (System OAuth → *Create an OAuth API endpoint for external clients*) with redirect URL `http://localhost:51725/callback`. Users then sign in via their browser SSO session; no passwords or hand-issued tokens. Leave empty to hide the browser option."
+          "markdownDescription": "%config.aiSharePoint.servicenow.oauthClientId.markdownDescription%"
         }
       }
     }

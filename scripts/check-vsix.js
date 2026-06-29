@@ -40,7 +40,7 @@ const files = res.stdout
   // vsce prints paths with forward slashes already; normalize just in case.
   .map((f) => f.replace(/\\/g, "/"));
 
-const required = ["package.json", "dist/extension.js", "media/icon.png"];
+const required = ["package.json", "package.nls.json", "dist/extension.js", "media/icon.png"];
 const forbidden = [
   /^src\//,
   /^test\//,
