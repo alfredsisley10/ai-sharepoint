@@ -15,7 +15,8 @@ import {
 } from "./types";
 import { verifyConfluence, searchConfluence, getConfluencePage } from "./adapters/confluence";
 import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
-import { verifyGithub, searchGithub, getGithubItem } from "./adapters/github";
+import { verifyGithub, searchGithub, getGithubItem, githubApiBase } from "./adapters/github";
+import { parseGithubAppSecret, mintInstallationToken, InstallationToken } from "./adapters/githubAuth";
 import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
 import { listConfluenceSpaces, listAllConfluenceSpaces } from "./adapters/confluence";
 import {
@@ -210,6 +211,60 @@ export class ContextService {
     return { method: "pat", secret: tokens.accessToken };
   }
 
+  /** Cached GitHub App installation tokens (per source) — they live ~1h, so we
+   *  reuse until near expiry instead of minting on every read. */
+  private readonly githubAppTokens = new Map<string, InstallationToken>();
+
+  /**
+   * Resolve a GitHub source's stored credential into an ephemeral Bearer
+   * credential for the adapter. Three auth methods, all reducing to a token:
+   *  - `pat`          → the pasted token, as-is.
+   *  - `github-oauth` → a fresh access token from VS Code's GitHub sign-in
+   *                     (provider "github" for github.com, "github-enterprise"
+   *                     for GHES); no token for the user to manage.
+   *  - `github-app`   → a short-lived installation token minted from the app's
+   *                     private key (cached until near expiry).
+   */
+  private async githubCredential(
+    source: ContextSource,
+    credential: ContextCredential,
+  ): Promise<ContextCredential> {
+    if (credential.method === "github-oauth") {
+      const { providerId, scopes } = JSON.parse(credential.secret) as {
+        providerId: string;
+        scopes: string[];
+      };
+      const session =
+        (await vscode.authentication.getSession(providerId, scopes, { silent: true })) ??
+        (await vscode.authentication.getSession(providerId, scopes, { createIfNone: true }));
+      if (!session) {
+        throw new AppError(
+          "GitHub sign-in is required for this source.",
+          "auth.failed",
+          providerId === "github-enterprise"
+            ? "Sign in to GitHub Enterprise Server (check the github-enterprise.uri setting points at your instance)."
+            : "Sign in to GitHub via the Accounts menu.",
+        );
+      }
+      return { method: "pat", secret: session.accessToken };
+    }
+    if (credential.method === "github-app") {
+      const cached = this.githubAppTokens.get(source.id);
+      if (cached && cached.expiresAtMs - 60_000 > Date.now()) {
+        return { method: "pat", secret: cached.token };
+      }
+      const minted = await mintInstallationToken(
+        githubApiBase(source),
+        parseGithubAppSecret(credential.secret),
+        Math.floor(Date.now() / 1000),
+        this.caps().timeoutMs,
+      );
+      this.githubAppTokens.set(source.id, minted);
+      return { method: "pat", secret: minted.token };
+    }
+    return credential; // pat (or any already-Bearer token)
+  }
+
   /** Session-scoped result-window override (#5) — set mid-conversation via the
    *  set_result_window tool; clears on reload. Takes precedence over the
    *  configured default, still clamped to [1, MAX_RESULT_WINDOW]. */
@@ -342,7 +397,7 @@ export class ContextService {
         case "jira":
           return verifyJira(source, credential, caps);
         case "github":
-          return verifyGithub(source, credential, caps);
+          return this.githubCredential(source, credential).then((c) => verifyGithub(source, c, caps));
         case "vertexai":
           return verifyVertex(source, credential, caps);
         case "powerbi":
@@ -417,7 +472,9 @@ export class ContextService {
       case "jira":
         return searchJira(source, credential, query, caps);
       case "github":
-        return searchGithub(source, credential, query, caps);
+        return this.githubCredential(source, credential).then((c) =>
+          searchGithub(source, c, query, caps),
+        );
       case "vertexai":
         return searchVertex(source, credential, query, caps);
       case "powerbi":
@@ -512,7 +569,9 @@ export class ContextService {
             case "jira":
               return getJiraIssue(source, credential, id, caps);
             case "github":
-              return getGithubItem(source, credential, id, caps);
+              return this.githubCredential(source, credential).then((c) =>
+                getGithubItem(source, c, id, caps),
+              );
             case "splunkobs":
               return getSplunkObsItem(source, credential, id, caps);
             case "grafana":

@@ -33,6 +33,8 @@ export type ContextDeployment = "cloud" | "datacenter";
 export type ContextAuthMethod =
   | "basic"
   | "pat"
+  | "github-oauth"
+  | "github-app"
   | "ldap-simple"
   | "ntlm"
   | "gcloud-sso"

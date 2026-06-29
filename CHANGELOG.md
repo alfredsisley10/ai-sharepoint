@@ -2,12 +2,67 @@
 
 ## 0.68.0 — 2026-06-24
 
+### Added — whitelabel config wizard, reusable release profile & first-run provisioning
+- The **Rebrand / White-label** flow now steps through **what gets baked into the build**, not
+  just identity: anonymized **telemetry** endpoints (Splunk HEC / OTLP — endpoints only, never a
+  token), **pre-defined connectors** (a snapshot of your current reference sources as non-secret
+  descriptors — users add their own credentials), **project/memory defaults**, and **custom help
+  content** (a User Guide markdown + first-run welcome) for the target environment.
+- **Reusable release profile.** At the end the wizard offers to save `whitelabel.profile.json`
+  (no secrets) to the source folder; next time it offers to **reuse** it, pre-filling every
+  prompt so refreshing a release is a quick, repeatable pass. Commit it so the release team
+  shares it.
+- **First-run provisioning.** A whitelabeled build carries a `provisioning` manifest in its
+  package.json; on first activation the extension seeds the baked connectors, projects, setting
+  defaults, and custom help **once** (tracked by manifest id) and **never clobbers** anything the
+  user already has. "Open User Guide" shows the custom guide when present.
+- **Build both, repeatably.** Documented the release-team flow in `REBRANDING.md`: build the
+  **standard** VSIX from the clean tree, then reuse the profile to rebrand + build the
+  **whitelabeled** VSIX, then revert the tree (`git checkout`) — producing both artifacts each
+  release. Pure, unit-tested core (`src/branding/releaseProfile.ts`, `provisioning.ts`); 7 new
+  tests (632 total).
+
+### Added — optional anonymized external telemetry (Splunk HEC + OTEL)
+- **Opt-in, off by default.** When `aiSharePoint.telemetry.enabled` is on and an endpoint is
+  configured, the extension forwards *anonymized* usage counters to a **Splunk HEC** endpoint
+  and/or an **OTEL (OTLP/HTTP) metrics platform** (event counts exported as monotonic Sum
+  metrics to `<endpoint>/v1/metrics`). Settings: `telemetry.splunkHec.url`/`.token`,
+  `telemetry.otlp.endpoint`/`.headers` (machine-scoped; restricted in untrusted workspaces).
+- **Anonymization is guaranteed, not best-effort.** A strict sanitizer drops anything that
+  isn't a short categorical token, so only event names, enum dimensions (source type, error
+  **code**, tool name…), counts, and environment (extension/VS Code version, OS type/version,
+  an anonymous rotatable install id) are ever sent — **never** free-form text, queries, URLs,
+  paths, emails, content, credentials, PII, or error messages/bodies.
+- **Opportunistic.** Every send is timeout-bounded and fire-and-forget; a down, slow, or
+  misconfigured endpoint never blocks or breaks the extension. Respects the existing
+  `diagnostics.usageCapture` / VS Code telemetry stance. Hand-rolled OTLP JSON — no
+  OpenTelemetry SDK dependency (bundle stays pure-JS). New `error` (type-only) and `activate`
+  events feed troubleshooting/adoption metrics. Pure, unit-tested core
+  (`src/diagnostics/telemetrySink.ts`, `externalTelemetry.ts`); 9 new tests (625 total).
+
+### Added — time-limited white-label builds (release expiry)
+- The **Rebrand / White-label** flow now asks for a **build validity window** (in days, blank =
+  never expires) and an optional **upgrade URL**, and bakes a `release` manifest
+  (`channel`/`builtAt`/`validityDays`/`expiresAt`/`upgradeUrl`) into the rebranded package.json.
+  Distributors can guarantee users move to newer releases on a cadence.
+- At activation the extension reads the manifest and, within the last 14 days, shows a
+  **warning** (with a "Get the latest version" action); once **expired**, the AI surfaces — the
+  `@`chat participant and every language-model tool — refuse with an upgrade message while
+  diagnostics, settings, and the rebrand command stay available. The **standard build never
+  expires**, and evaluation **fails open** on missing/malformed data so a bad date can't brick
+  the extension. Pure, unit-tested core (`src/branding/releaseExpiry.ts`); 6 new tests
+  (616 total).
+
 ### Added — GitHub reference connector (github.com + Enterprise Server)
 - New read-only **GitHub** context source, for both **github.com (SaaS)** and on-prem
   **GitHub Enterprise Server** (the REST base is derived from the deployment:
   `api.github.com` vs `<host>/api/v3`). Add it via **Add Context Source → GitHub**: paste the
-  URL you browse to, then a **read-only Personal Access Token** (stored in the OS keychain like
-  every other source — so searching GitHub never goes through the git credential manager).
+  URL you browse to, then pick **any of GitHub's authentication methods** — all stored in the OS
+  keychain, none touching the git credential manager: **Sign in with GitHub (OAuth)** via VS
+  Code's built-in GitHub / GitHub Enterprise provider (no token to create), a **read-only
+  Personal Access Token** (classic or fine-grained), or a **GitHub App installation** (App ID +
+  installation ID + private key → short-lived installation tokens minted and cached
+  automatically). All three work on Cloud and Enterprise Server.
 - `@sharepoint` can **search** four GitHub corpora and **fetch** individual items through the
   existing tools. Search: plain text → issues & PRs; a `code:` / `repos:` / `commits:` prefix →
   that corpus; or JSON `{"type":"code|issues|repositories|commits","q":"…","limit":n}` (q takes
@@ -16,7 +71,7 @@
   (repository).
 - Reuses the shared read-safety caps (ADR-0012), verify-on-connect + auth-lockout protection
   (ADR-0009), and Bearer-token HTTP path unchanged. Pure, unit-tested adapter
-  (`src/context/adapters/github.ts`); 10 new tests (607 total).
+  (`src/context/adapters/github.ts`, `githubAuth.ts`); 13 new tests (610 total).
 
 ### Added — full product rename in the rebrand command
 - The **Rebrand / White-label** command (Support & Diagnostics) now renames the product

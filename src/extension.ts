@@ -206,6 +206,11 @@ import { SitesTreeProvider } from "./ui/sitesView";
 import { UsageTreeProvider } from "./ui/usageView";
 import { SupportTreeProvider } from "./ui/supportView";
 import { runRebrandFlow } from "./branding/rebrandFlow";
+import { evaluateExpiry, setReleaseStatus, ReleaseManifest } from "./branding/releaseExpiry";
+import { ExternalTelemetry, readExternalTelemetryConfig } from "./diagnostics/externalTelemetry";
+import { TelemetryEnv } from "./diagnostics/telemetrySink";
+import { applyProvisioning, ProvisioningEffects } from "./branding/provisioning";
+import { ProvisioningManifest, connectorKey } from "./branding/releaseProfile";
 import { UsageDashboard } from "./ui/dashboard";
 import { registerChatParticipant } from "./chat/participant";
 import { registerLanguageModelTools } from "./chat/tools";
@@ -215,10 +220,45 @@ const nowIso = () => new Date().toISOString();
 
 export function activate(context: vscode.ExtensionContext): void {
   const log = new Logger("AI SharePoint");
+
+  // Release expiry (white-label time-limited builds): read the manifest baked
+  // into package.json and, if past its date, gate the AI surfaces with an
+  // upgrade prompt. Fails open on a missing/standard build or malformed data.
+  const releaseManifest = (context.extension.packageJSON as { release?: ReleaseManifest }).release;
+  const expiry = evaluateExpiry(releaseManifest, Date.now());
+  setReleaseStatus(expiry);
+  if (expiry.message) {
+    const items = expiry.upgradeUrl ? ["Get the latest version"] : [];
+    const open = (choice?: string) => {
+      if (choice && expiry.upgradeUrl) void vscode.env.openExternal(vscode.Uri.parse(expiry.upgradeUrl));
+    };
+    if (expiry.state === "expired") void vscode.window.showErrorMessage(expiry.message, ...items).then(open);
+    else if (expiry.state === "warn") void vscode.window.showWarningMessage(expiry.message, ...items).then(open);
+  }
   const responses = vscode.window.createOutputChannel("AI SharePoint — Copilot");
   const secrets = new SecretStore(context.secrets);
   const installIds = new InstallIdStore(context.globalState);
-  const telemetry = new TelemetryService(context.globalState, nowIso);
+  // Optional, opt-in external telemetry (Splunk HEC / OTLP metrics). Anonymized
+  // and opportunistic — see externalTelemetry.ts. Env dimensions ride on every
+  // exported event. Configured via aiSharePoint.telemetry.* (off by default).
+  const telemetryEnv: TelemetryEnv = {
+    extVersion: EXTENSION_VERSION,
+    extChannel: releaseManifest?.channel,
+    vscodeVersion: vscode.version,
+    osType: os.type(),
+    osVersion: os.release(),
+    osPlatform: process.platform,
+    installId: installIds.get().id,
+  };
+  const externalTelemetry = new ExternalTelemetry(telemetryEnv, () =>
+    readExternalTelemetryConfig(<T,>(key: string, fallback: T) =>
+      vscode.workspace.getConfiguration("aiSharePoint").get<T>(key, fallback),
+    ),
+  );
+  externalTelemetry.start();
+  context.subscriptions.push({ dispose: () => externalTelemetry.dispose() });
+  const telemetry = new TelemetryService(context.globalState, nowIso, externalTelemetry);
+  telemetry.record("activate", { ...(releaseManifest?.channel ? { channel: releaseManifest.channel } : {}) });
   const errors = new ErrorReportStore(context.globalState, nowIso);
   const lessons = new LessonsStore(context.globalState, EXTENSION_VERSION, nowIso);
   const blockedTerms = new BlockedTermsStore(context.globalState);
@@ -330,6 +370,68 @@ export function activate(context: vscode.ExtensionContext): void {
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
   const syncConfigs = new SyncConfigStore(context.globalState);
+
+  // First-run provisioning: seed any pre-defined connectors / projects /
+  // setting defaults / custom help baked into this (whitelabeled) build. Runs
+  // once per manifest id, never clobbers what the user already has, and the
+  // store change events refresh the views. Connectors seed WITHOUT credentials —
+  // the user supplies those on first use (ADR-0009 verify-on-connect).
+  const provisioningManifest = (context.extension.packageJSON as { provisioning?: ProvisioningManifest }).provisioning;
+  if (provisioningManifest) {
+    const cfg = () => vscode.workspace.getConfiguration("aiSharePoint");
+    const provisioningFx: ProvisioningEffects = {
+      appliedId: () => context.globalState.get<string>("aiSharePoint.provisionedId"),
+      existingConnectorKeys: () =>
+        new Set(contextSources.list().map((s) => connectorKey({ alias: s.alias, baseUrl: s.baseUrl }))),
+      existingProjectNames: () => new Set(projects.list().map((p) => p.name.trim().toLowerCase())),
+      userHasSetting: (key) => {
+        const i = cfg().inspect(key);
+        return (
+          i?.globalValue !== undefined ||
+          i?.workspaceValue !== undefined ||
+          i?.workspaceFolderValue !== undefined
+        );
+      },
+      seedConnector: (c) => {
+        const source: ContextSource = {
+          id: crypto.randomUUID(),
+          type: c.type as ContextSourceType,
+          displayName: c.displayName,
+          ...(c.alias ? { alias: c.alias } : {}),
+          ...(c.description ? { description: c.description } : {}),
+          baseUrl: c.baseUrl,
+          deployment: (c.deployment ?? "datacenter") as ContextDeployment,
+          authMethod: (c.authMethod ?? "pat") as ContextSource["authMethod"],
+          addedAt: nowIso(),
+          role: "reference",
+        };
+        return Promise.resolve(contextSources.upsert(source));
+      },
+      seedProject: (p) =>
+        Promise.resolve(
+          projects.upsert({
+            id: crypto.randomUUID(),
+            name: p.name,
+            ...(p.description ? { description: p.description } : {}),
+            ...(p.goals ? { goals: p.goals } : {}),
+            ...(p.instructions ? { instructions: p.instructions } : {}),
+            ...(p.aiContext ? { aiContext: p.aiContext } : {}),
+            sourceIds: [],
+          }),
+        ),
+      applySetting: (key, value) => Promise.resolve(cfg().update(key, value, vscode.ConfigurationTarget.Global)),
+      setHelp: (help) => Promise.resolve(context.globalState.update("aiSharePoint.provisionedHelp", help)),
+      markApplied: (id) => Promise.resolve(context.globalState.update("aiSharePoint.provisionedId", id)),
+    };
+    void applyProvisioning(provisioningManifest, provisioningFx).then((r) => {
+      if (!r.applied) return;
+      log.info(
+        `Provisioned ${r.connectors} connector(s), ${r.projects} project(s), ${r.settings} setting default(s)${r.help ? ", custom help" : ""}.`,
+      );
+      const welcome = context.globalState.get<{ welcome?: string }>("aiSharePoint.provisionedHelp")?.welcome;
+      if (welcome) void vscode.window.showInformationMessage(welcome);
+    });
+  }
 
   const sitesProvider = new SitesTreeProvider(sites, contextSources);
   const sourcesProvider = new SourcesTreeProvider(
@@ -658,6 +760,7 @@ export function activate(context: vscode.ExtensionContext): void {
           return await fn(...args);
         } catch (err) {
           const code = errors.capture(id, err);
+          telemetry.record("error", { code }); // error TYPE only — never the message/body
           log.error(`${id} failed`, err);
           if (code === "auth.cancelled") {
             return; // user backed out — not an error
@@ -5409,10 +5512,41 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   register("aiSharePoint.rebrandExtension", async () => {
-    await runRebrandFlow(log);
+    // Offer the user's current reference sources + projects as bake-in defaults
+    // (non-secret descriptors only — credentials are never captured).
+    await runRebrandFlow(log, {
+      currentConnectors: contextSources
+        .list()
+        .filter((s) => s.role !== "managed")
+        .map((s) => ({
+          type: s.type,
+          displayName: s.displayName,
+          ...(s.alias ? { alias: s.alias } : {}),
+          ...(s.description ? { description: s.description } : {}),
+          baseUrl: s.baseUrl,
+          deployment: s.deployment,
+          authMethod: s.authMethod,
+        })),
+      currentProjects: projects.list().map((p) => ({
+        name: p.name,
+        ...(p.description ? { description: p.description } : {}),
+        ...(p.goals ? { goals: p.goals } : {}),
+        ...(p.instructions ? { instructions: p.instructions } : {}),
+        ...(p.aiContext ? { aiContext: p.aiContext } : {}),
+      })),
+    });
   });
 
-  register("aiSharePoint.openUserGuide", () => openBundledDoc(context, "USER_GUIDE.md"));
+  register("aiSharePoint.openUserGuide", async () => {
+    // A whitelabeled build can bake custom help for its target environment.
+    const help = context.globalState.get<{ userGuide?: string }>("aiSharePoint.provisionedHelp");
+    if (help?.userGuide) {
+      const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: help.userGuide });
+      await vscode.window.showTextDocument(doc, { preview: true });
+      return;
+    }
+    return openBundledDoc(context, "USER_GUIDE.md");
+  });
   register("aiSharePoint.openPrivacyNotice", () => openBundledDoc(context, "PRIVACY.md"));
 
   register("aiSharePoint.openWalkthrough", async () => {
@@ -5763,26 +5897,120 @@ async function promptContextCredential(
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
   if (type === "github") {
-    // PAT only: GitHub's REST API takes the token as a Bearer credential. A
-    // read-only fine-grained or classic token works for both github.com and
-    // GHES; stored in the keychain — so this never involves the git credential
-    // manager. Point the user at THIS instance's token page (GHES or SaaS).
-    const tokenPage = (() => {
+    // All GitHub REST auth methods reduce to a Bearer token; they differ only in
+    // how the token is obtained. github.com (cloud) and GHES (datacenter) both
+    // support all three. Everything is stored in the OS keychain — none of this
+    // ever touches the git credential manager.
+    const isGhes = deployment === "datacenter";
+    const origin = (() => {
       try {
-        return `${new URL(baseUrl ?? "https://github.com").origin}/settings/tokens`;
+        return new URL(baseUrl ?? "https://github.com").origin;
       } catch {
-        return "https://github.com/settings/tokens";
+        return "https://github.com";
       }
     })();
-    const secret = await vscode.window.showInputBox({
+    const providerId = isGhes ? "github-enterprise" : "github";
+    const pick = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(github) Sign in with GitHub (OAuth)",
+          description: isGhes
+            ? "browser sign-in via the GitHub Enterprise auth provider — no token to create"
+            : "browser sign-in — no token to create (recommended)",
+          value: "oauth" as const,
+        },
+        {
+          label: "$(key) Personal access token",
+          description: "classic or fine-grained, read-only — works on Cloud and Enterprise Server",
+          value: "pat" as const,
+        },
+        {
+          label: "$(server) GitHub App installation",
+          description: "App ID + installation ID + private key — centrally managed, auto-rotating",
+          value: "app" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "GitHub sign-in" },
+    );
+    if (!pick) return undefined;
+
+    if (pick.value === "pat") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "GitHub personal access token (read-only)",
+        password: true,
+        placeHolder: "github_pat_…  or  ghp_…",
+        prompt: `Create a READ-ONLY token at ${origin}/settings/tokens (Settings → Developer settings → Personal access tokens). Fine-grained: Contents, Issues, Metadata = Read-only. Classic: the read-only "repo" scope. Stored only in your OS keychain; verified with a single read (lockout-safe).`,
+      });
+      if (!secret?.trim()) return undefined;
+      return { method: "pat", secret: secret.trim() };
+    }
+
+    if (pick.value === "oauth") {
+      const scopes = ["repo", "read:org"]; // GitHub OAuth scopes are coarse; the connector only ever reads.
+      if (isGhes && baseUrl) {
+        // VS Code's built-in GitHub Authentication extension serves the
+        // "github-enterprise" provider only when this setting points at the
+        // instance. Set it (global) if unset so sign-in can succeed.
+        const cfg = vscode.workspace.getConfiguration();
+        if (!cfg.get<string>("github-enterprise.uri")) {
+          await cfg.update("github-enterprise.uri", origin, vscode.ConfigurationTarget.Global);
+        }
+      }
+      try {
+        const session = await vscode.authentication.getSession(providerId, scopes, { createIfNone: true });
+        if (!session) return undefined;
+      } catch (e) {
+        void vscode.window.showErrorMessage(
+          `GitHub sign-in failed: ${e instanceof Error ? e.message : String(e)}.${
+            isGhes
+              ? " For GitHub Enterprise Server, confirm the built-in GitHub Authentication supports your instance (the github-enterprise.uri setting)."
+              : ""
+          } You can use a personal access token instead.`,
+        );
+        return undefined;
+      }
+      return { method: "github-oauth", secret: JSON.stringify({ providerId, scopes }) };
+    }
+
+    // GitHub App installation.
+    const appId = await vscode.window.showInputBox({
       ignoreFocusOut: true,
-      title: "GitHub personal access token (read-only)",
-      password: true,
-      placeHolder: "github_pat_…  or  ghp_…",
-      prompt: `Create a READ-ONLY token at ${tokenPage} (Settings → Developer settings → Personal access tokens). Fine-grained: Contents, Issues, Metadata = Read-only. Classic: the read-only "repo" scope. Stored only in your OS keychain; verified with a single read (lockout-safe).`,
+      title: "GitHub App — App ID",
+      placeHolder: "123456",
+      prompt: `From your App's settings page (${origin}/settings/apps → your app → About).`,
+      validateInput: (v) => (/^\d+$/.test(v.trim()) ? undefined : "The App ID is numeric."),
     });
-    if (!secret?.trim()) return undefined;
-    return { method: "pat", secret: secret.trim() };
+    if (!appId) return undefined;
+    const installationId = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "GitHub App — Installation ID",
+      placeHolder: "12345678",
+      prompt: "Install the App on your org/repos, then read the number from the install URL (…/installations/<id>).",
+      validateInput: (v) => (/^\d+$/.test(v.trim()) ? undefined : "The Installation ID is numeric."),
+    });
+    if (!installationId) return undefined;
+    const keyUri = await vscode.window.showOpenDialog({
+      title: "Select the GitHub App private key (.pem)",
+      canSelectMany: false,
+      filters: { "PEM private key": ["pem"] },
+    });
+    if (!keyUri || !keyUri[0]) return undefined;
+    let privateKey: string;
+    try {
+      privateKey = Buffer.from(await vscode.workspace.fs.readFile(keyUri[0])).toString("utf8");
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read the private key file: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
+    if (!/BEGIN [A-Z ]*PRIVATE KEY/.test(privateKey)) {
+      void vscode.window.showErrorMessage("That file doesn't look like a PEM private key (expected a -----BEGIN … PRIVATE KEY----- block).");
+      return undefined;
+    }
+    return {
+      method: "github-app",
+      secret: JSON.stringify({ appId: appId.trim(), installationId: installationId.trim(), privateKey: privateKey.trim() }),
+    };
   }
   if (type === "splunk") {
     // Splunk Web URL to open for SSO: the ?web= param if present, else the

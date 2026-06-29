@@ -9,6 +9,8 @@
  * produces a fresh `.vsix` via `npm run package`.
  */
 
+import { ReleaseManifest } from "./releaseExpiry";
+
 export interface BrandConfig {
   /** Forms the extension ID `publisher.name` — PERMANENT once deployed. */
   publisher: string;
@@ -56,6 +58,36 @@ function setTopLevelString(raw: string, key: string, value: string): string {
   const re = new RegExp(`^(  "${key}":\\s*)"(?:[^"\\\\]|\\\\.)*"`, "m");
   if (!re.test(raw)) throw new Error(`Could not find top-level "${key}" in package.json.`);
   return raw.replace(re, `$1${JSON.stringify(value)}`);
+}
+
+/**
+ * Set the top-level `release` manifest in package.json text (the time-limited
+ * white-label build control). Replaces an existing single-line `"release": {…}`
+ * value in place (formatting preserved), or inserts one after `"version"` if
+ * absent. Serialized compact so the rebrand diff stays a single line.
+ */
+export function setReleaseManifest(raw: string, manifest: ReleaseManifest): string {
+  const value = JSON.stringify(manifest);
+  const existing = /^(\s*"release":\s*)\{[^\n]*\}/m;
+  if (existing.test(raw)) return raw.replace(existing, `$1${value}`);
+  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, `$1  "release": ${value},\n`);
+}
+
+/**
+ * Set the top-level `provisioning` manifest in package.json text (the first-run
+ * seed payload: connectors, projects, settings, help). Replaces an existing
+ * single-line `"provisioning": {…}` in place, else inserts after `"release"` if
+ * present, else after `"version"`. Serialized compact (one line) to keep the
+ * rebrand diff small. An empty/absent manifest is a no-op.
+ */
+export function setProvisioningManifest(raw: string, manifest: unknown): string {
+  if (!manifest) return raw;
+  const value = JSON.stringify(manifest);
+  const existing = /^(\s*"provisioning":\s*)\{[\s\S]*?\}(?=,?\s*\n)/m;
+  if (existing.test(raw)) return raw.replace(existing, `$1${value}`);
+  const afterRelease = /^(\s*"release":\s*\{[^\n]*\},\n)/m;
+  if (afterRelease.test(raw)) return raw.replace(afterRelease, `$1  "provisioning": ${value},\n`);
+  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, `$1  "provisioning": ${value},\n`);
 }
 
 /** Apply publisher/name/displayName/description to package.json text. */
