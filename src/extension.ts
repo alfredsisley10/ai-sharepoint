@@ -5532,6 +5532,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  register("aiSharePoint.copySupportInfo", async () => {
+    // One-click support header for a ticket: version + environment + the
+    // anonymous install id (the same id that tags diagnostics bundles, so
+    // support can correlate). No site/account/PII — safe to paste anywhere.
+    const info = [
+      `AI SharePoint v${version}`,
+      `Install ID: ${installIds.get().id}`,
+      `VS Code: ${vscode.version}`,
+      `OS: ${os.platform()} ${os.release()} (${os.arch()})`,
+    ].join("\n");
+    await vscode.env.clipboard.writeText(info);
+    void vscode.window.showInformationMessage("Support info copied to the clipboard (version + environment + anonymous install ID — no PII).");
+  });
+
   register("aiSharePoint.toggleVerboseLogging", async () => {
     const next = !verboseWireOn();
     await vscode.workspace

@@ -76,6 +76,9 @@ export class SharePointClient {
     /** When true, never start an interactive flow — fail fast instead.
      *  Used by chat/tool context reads so a question never pops a browser. */
     private readonly silentOnly = false,
+    /** UPN of the connection's signed-in account, so silent acquisition picks
+     *  the right identity when the keychain cache holds more than one. */
+    private readonly accountHint?: string,
   ) {}
 
   /** Resolve a SharePoint site by its browser URL. */
@@ -225,7 +228,10 @@ export class SharePointClient {
     // A 401 retry asks for a forced silent re-mint from the refresh token; this
     // recovers an expired/revoked access token without an interactive prompt.
     if (forceRefresh && this.auth.acquireTokenSilent) {
-      const refreshed = await this.auth.acquireTokenSilent(scopes, { forceRefresh: true });
+      const refreshed = await this.auth.acquireTokenSilent(scopes, {
+        forceRefresh: true,
+        account: this.accountHint,
+      });
       if (refreshed) return refreshed.token;
       if (this.silentOnly) {
         throw new AppError(
@@ -237,7 +243,7 @@ export class SharePointClient {
     }
     if (this.silentOnly) {
       const silent = this.auth.acquireTokenSilent
-        ? await this.auth.acquireTokenSilent(scopes)
+        ? await this.auth.acquireTokenSilent(scopes, { account: this.accountHint })
         : null;
       if (!silent) {
         throw new AppError(

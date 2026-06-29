@@ -76,15 +76,18 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
   /** Cache-only acquisition for background reads (chat/tool context). */
   async acquireTokenSilent(
     scopes: string[],
-    opts?: { forceRefresh?: boolean },
+    opts?: { forceRefresh?: boolean; account?: string },
   ): Promise<AccessToken | null> {
     const accounts = await this.pca.getTokenCache().getAllAccounts();
     if (accounts.length === 0) {
       return null;
     }
+    const wanted = opts?.account?.toLowerCase();
+    const account =
+      (wanted && accounts.find((a) => a.username.toLowerCase() === wanted)) || accounts[0];
     try {
       const silent = await this.pca.acquireTokenSilent({
-        account: accounts[0],
+        account,
         scopes,
         forceRefresh: opts?.forceRefresh ?? false,
       });

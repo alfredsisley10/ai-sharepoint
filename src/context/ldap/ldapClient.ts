@@ -283,20 +283,22 @@ export async function verifyLdap(
   });
 }
 
-/** Search (ANR for free text; raw filter passthrough), size/time capped. */
+/** Search (ANR for free text; raw filter only when explicitly opted in),
+ *  size/time capped. */
 export async function searchLdap(
   source: ContextSource,
   credential: ContextCredential,
   query: string,
   tls: LdapTlsOptions,
   caps: ReadCaps,
+  allowRawFilter = false,
 ): Promise<ContextSearchHit[]> {
   if (!source.baseDn) {
     throw new AppError("This LDAP source has no base DN configured.", "config");
   }
   return withClient(source, credential, tls, caps, async (client) => {
     let entries: RawEntry[];
-    const filter = buildFilter(query);
+    const filter = buildFilter(query, allowRawFilter);
     const started = Date.now();
     if (wireEnabled()) {
       emitWire(

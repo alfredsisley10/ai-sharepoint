@@ -48,6 +48,7 @@
         "aiSharePoint.ldap.dnsServers",
         "aiSharePoint.ldap.tlsRejectUnauthorized",
         "aiSharePoint.ldap.useStartTls",
+        "aiSharePoint.ldap.allowRawFilters",
         "aiSharePoint.servicenow.oauthClientId"
       ]
     }
@@ -422,6 +423,12 @@
         "command": "aiSharePoint.rotateAnonymousId",
         "title": "Rotate Anonymous Install ID",
         "category": "AI SharePoint"
+      },
+      {
+        "command": "aiSharePoint.copySupportInfo",
+        "title": "Copy Support Info (version + install ID)",
+        "category": "AI SharePoint",
+        "icon": "$(copy)"
       },
       {
         "command": "aiSharePoint.openLogs",
@@ -2316,7 +2323,7 @@
             "title": "Organize work into Projects",
             "description": "The **Projects** view groups reference sources into a named scope, carries your **goals & instructions** for @sharepoint, and keeps a separate **AI-managed context** the assistant learns over time (you approve each saved note). Activate a project to scope chat and the Reference Sources view to it — everything travels with Export/Import Reference Config.\n[Open the Projects View](command:aiSharePoint.projectsView.focus)\n[Create a Project](command:aiSharePoint.createProject)",
             "media": {
-              "image": "media/walkthrough/chat.svg",
+              "image": "media/walkthrough/projects.svg",
               "altText": "The Projects view"
             },
             "completionEvents": [
@@ -2533,6 +2540,13 @@
           "scope": "machine",
           "order": 16,
           "markdownDescription": "Path to a PEM CA bundle trusted for LDAPS/StartTLS connections (e.g. your corporate root + intermediates), **appended** to Node's defaults and the OS trust store. Machine-scoped. Use when the OS-store API is unavailable on your VS Code runtime — see Admin Guide §7."
+        },
+        "aiSharePoint.ldap.allowRawFilters": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "order": 17,
+          "markdownDescription": "Allow a search query that is itself a parenthesized LDAP filter (e.g. `(&(objectClass=user)(department=Sales))`) to be passed through verbatim. **Off by default**: every query is otherwise escaped as an Ambiguous Name Resolution match, so free text — including a chat-driven search — can never inject filter syntax. Enable only for trusted, expert-driven directory queries. Machine-scoped."
         },
         "aiSharePoint.logging.verboseWire": {
           "type": "boolean",

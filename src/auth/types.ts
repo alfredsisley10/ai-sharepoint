@@ -23,10 +23,12 @@ export interface SharePointAuthProvider {
    * and agent tools so background context reads never pop a browser window.
    * `forceRefresh` bypasses the cached access token and re-mints from the
    * refresh token — used to recover from a Graph 401 (token expired/revoked
-   * mid-request) without an interactive prompt.
+   * mid-request) without an interactive prompt. `account` selects a specific
+   * cached identity by UPN when the cache holds more than one (otherwise the
+   * first cached account is used).
    */
   acquireTokenSilent?(
     scopes: string[],
-    opts?: { forceRefresh?: boolean },
+    opts?: { forceRefresh?: boolean; account?: string },
   ): Promise<AccessToken | null>;
 }
