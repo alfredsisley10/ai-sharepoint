@@ -291,6 +291,37 @@ function freshChangelog(after: BrandConfig): string {
   ].join("\n");
 }
 
+// Dev tools the VSIX build does NOT need — formatting/linting only (the build is
+// esbuild + typescript + @vscode/vsce). In the exported source these are moved to
+// `optionalDependencies`, so `npm install` SKIPS them with a warning (instead of
+// failing the whole install) when an enterprise registry withholds a just-released
+// version's tarball — the reported `could not find prettier-3.9.3.tgz`. The VSIX
+// still builds; a maintainer who wants them can install a registry-available version.
+const BUILD_OPTIONAL_DEVDEPS = ["prettier", "eslint", "typescript-eslint", "@eslint/js"];
+
+/** Move the build-nonessential dev tools to optionalDependencies (see above). */
+export function relaxExportDevDeps(pkgText: string): string {
+  const pkg = JSON.parse(pkgText) as {
+    devDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    [k: string]: unknown;
+  };
+  const dev = pkg.devDependencies;
+  if (!dev) return pkgText;
+  const optional: Record<string, string> = { ...(pkg.optionalDependencies ?? {}) };
+  let moved = false;
+  for (const name of BUILD_OPTIONAL_DEVDEPS) {
+    if (dev[name] !== undefined) {
+      optional[name] = dev[name];
+      delete dev[name];
+      moved = true;
+    }
+  }
+  if (!moved) return pkgText;
+  pkg.optionalDependencies = optional;
+  return JSON.stringify(pkg, null, 2) + "\n";
+}
+
 /**
  * Rebrand a full-source archive (the VSIX's dist/source.zip) into a complete,
  * buildable, FULLY ANONYMIZED source tree (repo-relative path → bytes): brand
@@ -328,7 +359,9 @@ export function rebrandSourceArchive(sourceZip: Uint8Array, opts: VsixRebrandOpt
     }
     if (name === "package.json") {
       out[name] = strToU8(
-        dropOwner(rebrandPackageJsonFull(strFromU8(data), opts.tokens, opts.after, opts.handle, opts.release, opts.provisioning)),
+        relaxExportDevDeps(
+          dropOwner(rebrandPackageJsonFull(strFromU8(data), opts.tokens, opts.after, opts.handle, opts.release, opts.provisioning)),
+        ),
       );
       continue;
     }

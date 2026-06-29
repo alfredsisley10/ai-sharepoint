@@ -484,24 +484,46 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
       return;
     }
     log.info(`Exported ${what} (${Object.keys(files).length} files) to ${target.fsPath} ("${after.displayName}")`);
-    await vscode.window.showInformationMessage(
+    // Shell-appropriate quick command (PowerShell rejects && as a separator).
+    const sh = (vscode.env.shell ?? "").toLowerCase();
+    const isPwsh = sh.includes("powershell") || sh.includes("pwsh");
+    const quickBuild = isPwsh
+      ? "npm install --verbose; if ($LASTEXITCODE -eq 0) { npm run package }"
+      : "npm install --verbose && npm run package";
+    // BUILD.md is the focused build guide for the minimal handoff; MAINTAINING.md for full source.
+    const guideFile = content.id === "components" ? "BUILD.md" : "MAINTAINING.md";
+    const openLabel = `Open ${guideFile}`;
+    const choice = await vscode.window.showInformationMessage(
       `${what[0].toUpperCase()}${what.slice(1)} ready: "${after.displayName}".`,
       {
         modal: true,
         detail: [
           `Wrote ${Object.keys(files).length} files to ${target.fsPath}.`,
           "",
-          "Build it:",
+          "Quick build (most setups):",
           `  cd "${target.fsPath}"`,
-          content.id === "source" ? "  npm install && npm run package" : "  npm install   (vsce only) && npm run package",
+          `  ${quickBuild}`,
           "",
-          "Included: a GitHub Actions workflow (.github/workflows/whitelabel-build.yml) and",
-          "MAINTAINING.md (GHES / SaaS setup, runners, registry/TLS, branch protection,",
-          "releases). Commit or merge the folder into a repository to manage it.",
+          "Behind a corporate proxy/registry or on Windows, a bare 'npm install' may not be",
+          `enough — ${guideFile} has the full steps: OS trust store (--use-system-ca), a CA`,
+          "bundle or --strict-ssl=false fallback, withheld-version (e.g. prettier) handling, and",
+          "the benign Windows 'npm warn cleanup' notes. Read it before an enterprise build.",
+          "",
+          "Also included: a GitHub Actions workflow (.github/workflows/whitelabel-build.yml).",
+          "Commit or merge the folder into a repository to manage it.",
         ].join("\n"),
       },
+      openLabel,
       "OK",
     );
+    if (choice === openLabel) {
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(target, guideFile));
+        await vscode.window.showTextDocument(doc);
+      } catch (e) {
+        log.error("rebrand: open build guide", e);
+      }
+    }
     return;
   }
 

@@ -11,6 +11,7 @@ import {
   rebrandSourceArchive,
   minimalBuildComponents,
   minimalPackageJson,
+  relaxExportDevDeps,
   VsixRebrandOptions,
 } from "../src/branding/rebrandVsix";
 import { buildBrandTokens } from "../src/branding/brandTokens";
@@ -206,6 +207,31 @@ test("minimalBuildComponents drops the bundled source archive (not needed to vsc
   const files = minimalBuildComponents(vsix, deepOpts());
   assert.ok(!("dist/source.zip" in files), "source archive omitted from the minimal handoff");
   assert.ok("dist/extension.js" in files, "pre-built bundle kept");
+});
+
+test("relaxExportDevDeps moves the formatter/linter to optionalDependencies, keeps the build toolchain", () => {
+  const out = JSON.parse(
+    relaxExportDevDeps(
+      JSON.stringify({
+        devDependencies: {
+          prettier: "^3.0.0",
+          eslint: "^9.0.0",
+          "typescript-eslint": "^8.0.0",
+          "@eslint/js": "^9.0.0",
+          esbuild: "^0.28.0",
+          typescript: "^6.0.0",
+          "@vscode/vsce": "^3.0.0",
+        },
+      }),
+    ),
+  );
+  // Build-critical tools stay REQUIRED — a blocked tarball there must still fail loudly.
+  assert.ok(out.devDependencies.esbuild && out.devDependencies.typescript && out.devDependencies["@vscode/vsce"]);
+  // Formatter/linter become OPTIONAL — npm skips them (warning) if a tarball is withheld,
+  // so the VSIX still builds (the cause of "could not find prettier-3.9.3.tgz").
+  assert.ok(out.optionalDependencies.prettier && out.optionalDependencies.eslint);
+  assert.ok(!("prettier" in out.devDependencies) && !("eslint" in out.devDependencies));
+  assert.ok(!("typescript-eslint" in out.devDependencies) && !("@eslint/js" in out.devDependencies));
 });
 
 test("minimalPackageJson keeps identity/contributes but strips the build surface", () => {
