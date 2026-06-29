@@ -77,6 +77,19 @@ test("white-label export of the REAL source leaves no prior identifiers or commi
   assert.match(strFromU8(out["src/branding/originBrand.ts"]), /displayName: "Northwind Portal"/);
 });
 
+test("exported source keeps package.json %placeholders% resolvable in package.nls.json (any rebrand)", () => {
+  const out = rebrandSourceArchive(zipSync(bundler.collectSourceFiles(repoRoot)), opts);
+  // The NLS bundle must ship, or VS Code shows raw "%view.…%" for every contribution.
+  assert.ok(out["package.nls.json"], "package.nls.json is included in the export");
+  const pkg = strFromU8(out["package.json"]);
+  const nls = JSON.parse(strFromU8(out["package.nls.json"])) as Record<string, string>;
+  // Every %key% in the rebranded package.json must resolve in the rebranded NLS bundle.
+  const placeholders = [...new Set((pkg.match(/%[A-Za-z0-9._-]+%/g) ?? []).map((s) => s.slice(1, -1)))];
+  assert.ok(placeholders.length > 50, "sanity: package.json has many NLS placeholders");
+  const missing = placeholders.filter((k) => !(k in nls));
+  assert.deepEqual(missing, [], `unresolved NLS placeholders after rebrand: ${missing.join(", ")}`);
+});
+
 test("rebrandOriginModule rewrites only ORIGIN_BRAND values, preserving structure", () => {
   // Mirror the real module's shape.
   const src = [

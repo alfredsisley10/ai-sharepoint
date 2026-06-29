@@ -3,6 +3,7 @@ import * as assert from "node:assert/strict";
 import {
   buildReferenceExport,
   parseReferenceImport,
+  isReferenceExportSchema,
   REFERENCE_EXPORT_SCHEMA,
 } from "../src/context/referenceExport";
 import { ContextSource, ContextBookmark } from "../src/context/types";
@@ -149,6 +150,34 @@ test("import rejects wrong schema and bad JSON", () => {
     () => parseReferenceImport(JSON.stringify({ $schema: "other" }), T0, () => "x"),
     /reference-config/,
   );
+});
+
+test("reference-config is portable across white-labeled builds (neutral + legacy brand-prefixed $schema)", () => {
+  // The neutral id contains no brand token, so every build emits the same one.
+  assert.equal(REFERENCE_EXPORT_SCHEMA, "reference-config/v1");
+  // Accept the neutral id and any legacy/other-brand "<kebab>/reference-config/v1".
+  for (const ok of [
+    "reference-config/v1",
+    "ai-sharepoint/reference-config/v1", // original build
+    "contoso-docs/reference-config/v1", // a white-label
+    "northwind-portal/reference-config/v1", // another white-label
+  ]) {
+    assert.ok(isReferenceExportSchema(ok), `should accept ${ok}`);
+  }
+  for (const bad of ["other", "reference-config/v2", "x/reference-config", undefined, 42]) {
+    assert.ok(!isReferenceExportSchema(bad), `should reject ${String(bad)}`);
+  }
+  // A file exported by a *different* white-label imports successfully here.
+  let n = 0;
+  const doc = {
+    $schema: "contoso-docs/reference-config/v1",
+    exportedAt: T0,
+    notice: "",
+    sources: [{ type: "jira", displayName: "J", baseUrl: "https://j.example", deployment: "cloud", authMethod: "basic" }],
+    bookmarks: [],
+  };
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => `id-${n++}`);
+  assert.equal(parsed.sources.length, 1, "cross-brand reference-config imported");
 });
 
 test("import skips malformed entries with warnings, keeps valid ones", () => {

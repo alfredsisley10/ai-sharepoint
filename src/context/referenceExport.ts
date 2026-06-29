@@ -13,7 +13,20 @@ import { Project, INSTRUCTIONS_MAX_CHARS, GOALS_MAX_CHARS, AI_CONTEXT_MAX_CHARS 
  * (defense in depth) before anything is written.
  */
 
-export const REFERENCE_EXPORT_SCHEMA = "ai-sharepoint/reference-config/v1";
+// Brand-NEUTRAL on purpose: reference-config files must move freely between
+// white-labeled builds. The old id was brand-prefixed (`<kebab>/reference-config/v1`),
+// and `<kebab>` is a deep-rename token — so every white-label rebuilt it to its own
+// value and rejected every other build's files. This id contains no brand token, so
+// it is identical across the original and all white-labels. `isReferenceExportSchema`
+// additionally accepts the legacy brand-prefixed ids, so files exported by older or
+// differently-branded builds still import.
+export const REFERENCE_EXPORT_SCHEMA = "reference-config/v1";
+
+/** Whether `s` identifies a reference-config export — the neutral id, or any
+ *  legacy `<brand>/reference-config/v1`. Keeps configs portable across builds. */
+export function isReferenceExportSchema(s: unknown): boolean {
+  return typeof s === "string" && /(^|\/)reference-config\/v1$/.test(s);
+}
 
 export interface ExportedSource {
   type: ContextSource["type"];
@@ -147,9 +160,9 @@ export function parseReferenceImport(
   } catch {
     throw new Error("Not valid JSON.");
   }
-  if (raw?.$schema !== REFERENCE_EXPORT_SCHEMA) {
+  if (!isReferenceExportSchema(raw?.$schema)) {
     throw new Error(
-      `Not an AI SharePoint reference-config file (expected $schema ${REFERENCE_EXPORT_SCHEMA}).`,
+      `Not a reference-config file (expected a "$schema" of "${REFERENCE_EXPORT_SCHEMA}", or a legacy "<name>/reference-config/v1").`,
     );
   }
 

@@ -18,6 +18,10 @@ const { zipSync, strToU8 } = require("fflate");
 const SOURCE_DIRS = ["src", "test", "test-integration", "scripts", "media", "docs", ".github"];
 const SOURCE_ROOT_FILES = [
   "package.json",
+  // REQUIRED: VS Code resolves package.json %key% placeholders (view names,
+  // command titles, walkthroughs) from this NLS bundle. Omitting it makes every
+  // contributed label render as a raw "%key%" in a built white-label VSIX.
+  "package.nls.json",
   "package-lock.json",
   "tsconfig.json",
   "tsconfig.test.json",
@@ -57,6 +61,13 @@ function collectSourceFiles(root) {
   for (const f of SOURCE_ROOT_FILES) {
     const abs = path.join(root, f);
     if (fs.existsSync(abs)) out[f] = new Uint8Array(fs.readFileSync(abs));
+  }
+  // Locale NLS bundles (package.nls.<locale>.json), if any — same role as
+  // package.nls.json: VS Code resolves package.json %key% placeholders from them.
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isFile() && /^package\.nls\.[\w-]+\.json$/.test(entry.name) && !(entry.name in out)) {
+      out[entry.name] = new Uint8Array(fs.readFileSync(path.join(root, entry.name)));
+    }
   }
   return out;
 }
