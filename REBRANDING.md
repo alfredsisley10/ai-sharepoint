@@ -40,6 +40,29 @@ generated `<name>-<version>.vsix` (written to the source folder) and the `code
 --install-extension` command to install it. The manual steps below are the equivalent if you'd
 rather edit by hand.
 
+## Repeatable releases: profiles, bake-in & building both VSIXes
+
+The wizard also steps you through **what to bake into the build** and saves it for next time, so
+refreshing a release is quick and consistent:
+
+- **Bake-in settings.** After the identity prompts you choose what ships with the build:
+  anonymized **telemetry** endpoints (Splunk HEC / OTLP — *endpoints only; the token/auth header
+  is set per deployment, never embedded in the VSIX*), **pre-defined connectors** (a snapshot of
+  your current reference sources as non-secret descriptors — each user supplies their own
+  credentials on first use), **project/memory defaults**, and **custom help** (a User Guide
+  markdown + a first-run welcome note). On first launch the build seeds these **once** and never
+  overwrites anything a user already has.
+- **Release profile.** At the end, choose **Save profile** to write `whitelabel.profile.json`
+  (no secrets) to the source folder. Commit it. Next time you run the wizard it offers to
+  **Reuse profile**, pre-filling every prompt — so a refreshed release is a quick, repeatable
+  pass, and the **build expiry** (validity window) is re-stamped fresh on each release.
+- **Build BOTH the standard and whitelabeled VSIX** (the normal release pass):
+  1. On a **clean** source tree, `npm run package` → the standard `ai-sharepoint-<version>.vsix`.
+  2. Run **Rebrand / White-label…** and **Reuse profile** → it applies the rebrand and (via
+     **Repackage now**) builds the whitelabeled `<name>-<version>.vsix`.
+  3. `git checkout .` (and `git clean -fd` if needed) to **revert** the source back to clean.
+  Repeat each release. The rebrand only edits tracked source files, so the revert is complete.
+
 ## Quick start (manual)
 
 For a **brand-new (greenfield)** deployment you may set your own identity; for an **existing**

@@ -209,6 +209,8 @@ import { runRebrandFlow } from "./branding/rebrandFlow";
 import { evaluateExpiry, setReleaseStatus, ReleaseManifest } from "./branding/releaseExpiry";
 import { ExternalTelemetry, readExternalTelemetryConfig } from "./diagnostics/externalTelemetry";
 import { TelemetryEnv } from "./diagnostics/telemetrySink";
+import { applyProvisioning, ProvisioningEffects } from "./branding/provisioning";
+import { ProvisioningManifest, connectorKey } from "./branding/releaseProfile";
 import { UsageDashboard } from "./ui/dashboard";
 import { registerChatParticipant } from "./chat/participant";
 import { registerLanguageModelTools } from "./chat/tools";
@@ -368,6 +370,68 @@ export function activate(context: vscode.ExtensionContext): void {
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
   const syncConfigs = new SyncConfigStore(context.globalState);
+
+  // First-run provisioning: seed any pre-defined connectors / projects /
+  // setting defaults / custom help baked into this (whitelabeled) build. Runs
+  // once per manifest id, never clobbers what the user already has, and the
+  // store change events refresh the views. Connectors seed WITHOUT credentials —
+  // the user supplies those on first use (ADR-0009 verify-on-connect).
+  const provisioningManifest = (context.extension.packageJSON as { provisioning?: ProvisioningManifest }).provisioning;
+  if (provisioningManifest) {
+    const cfg = () => vscode.workspace.getConfiguration("aiSharePoint");
+    const provisioningFx: ProvisioningEffects = {
+      appliedId: () => context.globalState.get<string>("aiSharePoint.provisionedId"),
+      existingConnectorKeys: () =>
+        new Set(contextSources.list().map((s) => connectorKey({ alias: s.alias, baseUrl: s.baseUrl }))),
+      existingProjectNames: () => new Set(projects.list().map((p) => p.name.trim().toLowerCase())),
+      userHasSetting: (key) => {
+        const i = cfg().inspect(key);
+        return (
+          i?.globalValue !== undefined ||
+          i?.workspaceValue !== undefined ||
+          i?.workspaceFolderValue !== undefined
+        );
+      },
+      seedConnector: (c) => {
+        const source: ContextSource = {
+          id: crypto.randomUUID(),
+          type: c.type as ContextSourceType,
+          displayName: c.displayName,
+          ...(c.alias ? { alias: c.alias } : {}),
+          ...(c.description ? { description: c.description } : {}),
+          baseUrl: c.baseUrl,
+          deployment: (c.deployment ?? "datacenter") as ContextDeployment,
+          authMethod: (c.authMethod ?? "pat") as ContextSource["authMethod"],
+          addedAt: nowIso(),
+          role: "reference",
+        };
+        return Promise.resolve(contextSources.upsert(source));
+      },
+      seedProject: (p) =>
+        Promise.resolve(
+          projects.upsert({
+            id: crypto.randomUUID(),
+            name: p.name,
+            ...(p.description ? { description: p.description } : {}),
+            ...(p.goals ? { goals: p.goals } : {}),
+            ...(p.instructions ? { instructions: p.instructions } : {}),
+            ...(p.aiContext ? { aiContext: p.aiContext } : {}),
+            sourceIds: [],
+          }),
+        ),
+      applySetting: (key, value) => Promise.resolve(cfg().update(key, value, vscode.ConfigurationTarget.Global)),
+      setHelp: (help) => Promise.resolve(context.globalState.update("aiSharePoint.provisionedHelp", help)),
+      markApplied: (id) => Promise.resolve(context.globalState.update("aiSharePoint.provisionedId", id)),
+    };
+    void applyProvisioning(provisioningManifest, provisioningFx).then((r) => {
+      if (!r.applied) return;
+      log.info(
+        `Provisioned ${r.connectors} connector(s), ${r.projects} project(s), ${r.settings} setting default(s)${r.help ? ", custom help" : ""}.`,
+      );
+      const welcome = context.globalState.get<{ welcome?: string }>("aiSharePoint.provisionedHelp")?.welcome;
+      if (welcome) void vscode.window.showInformationMessage(welcome);
+    });
+  }
 
   const sitesProvider = new SitesTreeProvider(sites, contextSources);
   const sourcesProvider = new SourcesTreeProvider(
@@ -5448,10 +5512,41 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   register("aiSharePoint.rebrandExtension", async () => {
-    await runRebrandFlow(log);
+    // Offer the user's current reference sources + projects as bake-in defaults
+    // (non-secret descriptors only — credentials are never captured).
+    await runRebrandFlow(log, {
+      currentConnectors: contextSources
+        .list()
+        .filter((s) => s.role !== "managed")
+        .map((s) => ({
+          type: s.type,
+          displayName: s.displayName,
+          ...(s.alias ? { alias: s.alias } : {}),
+          ...(s.description ? { description: s.description } : {}),
+          baseUrl: s.baseUrl,
+          deployment: s.deployment,
+          authMethod: s.authMethod,
+        })),
+      currentProjects: projects.list().map((p) => ({
+        name: p.name,
+        ...(p.description ? { description: p.description } : {}),
+        ...(p.goals ? { goals: p.goals } : {}),
+        ...(p.instructions ? { instructions: p.instructions } : {}),
+        ...(p.aiContext ? { aiContext: p.aiContext } : {}),
+      })),
+    });
   });
 
-  register("aiSharePoint.openUserGuide", () => openBundledDoc(context, "USER_GUIDE.md"));
+  register("aiSharePoint.openUserGuide", async () => {
+    // A whitelabeled build can bake custom help for its target environment.
+    const help = context.globalState.get<{ userGuide?: string }>("aiSharePoint.provisionedHelp");
+    if (help?.userGuide) {
+      const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: help.userGuide });
+      await vscode.window.showTextDocument(doc, { preview: true });
+      return;
+    }
+    return openBundledDoc(context, "USER_GUIDE.md");
+  });
   register("aiSharePoint.openPrivacyNotice", () => openBundledDoc(context, "PRIVACY.md"));
 
   register("aiSharePoint.openWalkthrough", async () => {

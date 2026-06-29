@@ -73,6 +73,23 @@ export function setReleaseManifest(raw: string, manifest: ReleaseManifest): stri
   return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, `$1  "release": ${value},\n`);
 }
 
+/**
+ * Set the top-level `provisioning` manifest in package.json text (the first-run
+ * seed payload: connectors, projects, settings, help). Replaces an existing
+ * single-line `"provisioning": {…}` in place, else inserts after `"release"` if
+ * present, else after `"version"`. Serialized compact (one line) to keep the
+ * rebrand diff small. An empty/absent manifest is a no-op.
+ */
+export function setProvisioningManifest(raw: string, manifest: unknown): string {
+  if (!manifest) return raw;
+  const value = JSON.stringify(manifest);
+  const existing = /^(\s*"provisioning":\s*)\{[\s\S]*?\}(?=,?\s*\n)/m;
+  if (existing.test(raw)) return raw.replace(existing, `$1${value}`);
+  const afterRelease = /^(\s*"release":\s*\{[^\n]*\},\n)/m;
+  if (afterRelease.test(raw)) return raw.replace(afterRelease, `$1  "provisioning": ${value},\n`);
+  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, `$1  "provisioning": ${value},\n`);
+}
+
 /** Apply publisher/name/displayName/description to package.json text. */
 export function rebrandPackageJson(raw: string, cfg: BrandConfig): string {
   let out = raw;

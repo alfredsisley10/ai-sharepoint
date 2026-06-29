@@ -2,6 +2,26 @@
 
 ## 0.68.0 — 2026-06-24
 
+### Added — whitelabel config wizard, reusable release profile & first-run provisioning
+- The **Rebrand / White-label** flow now steps through **what gets baked into the build**, not
+  just identity: anonymized **telemetry** endpoints (Splunk HEC / OTLP — endpoints only, never a
+  token), **pre-defined connectors** (a snapshot of your current reference sources as non-secret
+  descriptors — users add their own credentials), **project/memory defaults**, and **custom help
+  content** (a User Guide markdown + first-run welcome) for the target environment.
+- **Reusable release profile.** At the end the wizard offers to save `whitelabel.profile.json`
+  (no secrets) to the source folder; next time it offers to **reuse** it, pre-filling every
+  prompt so refreshing a release is a quick, repeatable pass. Commit it so the release team
+  shares it.
+- **First-run provisioning.** A whitelabeled build carries a `provisioning` manifest in its
+  package.json; on first activation the extension seeds the baked connectors, projects, setting
+  defaults, and custom help **once** (tracked by manifest id) and **never clobbers** anything the
+  user already has. "Open User Guide" shows the custom guide when present.
+- **Build both, repeatably.** Documented the release-team flow in `REBRANDING.md`: build the
+  **standard** VSIX from the clean tree, then reuse the profile to rebrand + build the
+  **whitelabeled** VSIX, then revert the tree (`git checkout`) — producing both artifacts each
+  release. Pure, unit-tested core (`src/branding/releaseProfile.ts`, `provisioning.ts`); 7 new
+  tests (632 total).
+
 ### Added — optional anonymized external telemetry (Splunk HEC + OTEL)
 - **Opt-in, off by default.** When `aiSharePoint.telemetry.enabled` is on and an endpoint is
   configured, the extension forwards *anonymized* usage counters to a **Splunk HEC** endpoint

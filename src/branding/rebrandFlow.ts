@@ -12,10 +12,30 @@ import {
   extensionId,
   repackageCommand,
   setReleaseManifest,
+  setProvisioningManifest,
   SUPPORT_PHRASE,
   SECURITY_PHRASE,
 } from "./rebrand";
 import { computeExpiry, ReleaseManifest } from "./releaseExpiry";
+import {
+  ReleaseProfile,
+  ProvisioningContent,
+  ProvisionedConnector,
+  ProvisionedProject,
+  ProvisionedHelp,
+  parseReleaseProfile,
+  serializeReleaseProfile,
+  telemetrySettings,
+  buildProvisioningManifest,
+} from "./releaseProfile";
+
+/** Optional runtime snapshots the wizard can offer to BAKE into the build:
+ *  the user's current reference sources (as non-secret connector descriptors)
+ *  and projects (as memory defaults). Supplied by the extension. */
+export interface RebrandDeps {
+  currentConnectors?: ProvisionedConnector[];
+  currentProjects?: ProvisionedProject[];
+}
 import {
   DeepBrandConfig,
   BrandToken,
@@ -51,7 +71,7 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
  * only — the internal identifier namespaces) across the extension's SOURCE tree,
  * then offers to repackage. The executable counterpart to REBRANDING.md.
  */
-export async function runRebrandFlow(log: Logger): Promise<void> {
+export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promise<void> {
   const start = await vscode.window.showInformationMessage(
     "Rebrand (white-label) this extension",
     {
@@ -91,22 +111,27 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
   };
   const currentHandle = pkg.contributes?.chatParticipants?.[0]?.name ?? "sharepoint";
 
+  // Reuse a saved release profile (repeatable re-releases) when one is present —
+  // its values pre-fill every prompt below so refreshing a release is quick.
+  const loaded = await maybeLoadProfile(root);
+  const seedId = loaded?.identity;
+
   // --- gather the new identity + product naming -----------------------------
-  const publisher = await ask("Publisher ID — forms the permanent extension ID (lowercase, hyphens)", before.publisher, (v) =>
+  const publisher = await ask("Publisher ID — forms the permanent extension ID (lowercase, hyphens)", seedId?.publisher ?? before.publisher, (v) =>
     ID_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contoso).",
   );
   if (publisher === undefined) return;
-  const name = await ask("Internal name — also part of the extension ID (lowercase, hyphens)", before.name, (v) =>
+  const name = await ask("Internal name — also part of the extension ID (lowercase, hyphens)", seedId?.name ?? before.name, (v) =>
     ID_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contoso-docs).",
   );
   if (name === undefined) return;
-  const displayName = await ask('Product display name (replaces "AI SharePoint" everywhere)', before.displayName);
+  const displayName = await ask('Product display name (replaces "AI SharePoint" everywhere)', seedId?.displayName ?? before.displayName);
   if (displayName === undefined) return;
-  const handle = await ask("Chat handle without @ (replaces @sharepoint)", currentHandle, (v) =>
+  const handle = await ask("Chat handle without @ (replaces @sharepoint)", seedId?.handle ?? currentHandle, (v) =>
     HANDLE_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contosodocs).",
   );
   if (handle === undefined) return;
-  const description = await ask("Description", before.description);
+  const description = await ask("Description", seedId?.description ?? before.description);
   if (description === undefined) return;
 
   // --- depth: cosmetic vs full identifier rename ----------------------------
@@ -130,28 +155,32 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
   if (!depth) return;
   const renameIdentifiers = depth.deep;
 
-  const licenseHolder = await ask("License copyright holder — blank to leave unchanged", "", undefined, true);
+  const licenseHolder = await ask("License copyright holder — blank to leave unchanged", seedId?.licenseHolder ?? "", undefined, true);
   if (licenseHolder === undefined) return;
-  const supportContact = await ask("Support contact (email/URL/team) — blank to leave unchanged", "", undefined, true);
+  const supportContact = await ask("Support contact (email/URL/team) — blank to leave unchanged", seedId?.supportContact ?? "", undefined, true);
   if (supportContact === undefined) return;
-  const securityContact = await ask("Security contact (email/URL) — blank to leave unchanged", "", undefined, true);
+  const securityContact = await ask("Security contact (email/URL) — blank to leave unchanged", seedId?.securityContact ?? "", undefined, true);
   if (securityContact === undefined) return;
 
   // Time-limited build (white-label release control): how long this release works
   // before users must upgrade. Blank = no expiry, like the standard build.
   const validityRaw = await ask(
     "Build validity in days — how long this release works before users must upgrade (blank = never expires)",
-    "",
+    loaded?.expiry?.validityDays ? String(loaded.expiry.validityDays) : "",
     (v) => (/^\d{1,4}$/.test(v.trim()) ? undefined : "Whole number of days (e.g. 90), or blank for no expiry."),
     true,
   );
   if (validityRaw === undefined) return;
   let upgradeUrl = "";
   if (validityRaw.trim()) {
-    const u = await ask("Upgrade URL shown when the build expires (where users get the new VSIX) — optional", "", undefined, true);
+    const u = await ask("Upgrade URL shown when the build expires (where users get the new VSIX) — optional", loaded?.expiry?.upgradeUrl ?? "", undefined, true);
     if (u === undefined) return;
     upgradeUrl = u.trim();
   }
+
+  // --- what to BAKE into the build (telemetry, connectors, memory, help) -----
+  const provisioning = await gatherProvisioning(deps, loaded?.provisioning);
+  if (provisioning === undefined) return; // cancelled
 
   const after: BrandConfig = {
     publisher: publisher.trim(),
@@ -186,6 +215,12 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
         }
       : {}),
   };
+
+  // Provisioning manifest baked into the build for first-run seeding.
+  const provisioningManifest = buildProvisioningManifest(provisioning, `${after.publisher}.${after.name}.${builtAtMs}`);
+  const hasProvisioning = Boolean(
+    provisioningManifest.settings || provisioningManifest.connectors || provisioningManifest.projects || provisioningManifest.help,
+  );
 
   const errors = [...validateBrandConfig(after), ...validateDeepBrand(deep)];
   if (errors.length > 0) {
@@ -222,6 +257,16 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
     release.expiresAt
       ? `Build expiry: ${release.expiresAt.slice(0, 10)} (${release.validityDays} days — users must upgrade after this)`
       : "Build expiry: none (this build never expires)",
+    hasProvisioning
+      ? `Bake-in: ${[
+          provisioningManifest.connectors?.length ? `${provisioningManifest.connectors.length} connector(s)` : "",
+          provisioningManifest.projects?.length ? `${provisioningManifest.projects.length} project(s)` : "",
+          provisioningManifest.settings ? `${Object.keys(provisioningManifest.settings).length} setting(s)` : "",
+          provisioningManifest.help ? "custom help" : "",
+        ]
+          .filter(Boolean)
+          .join(", ")}`
+      : "Bake-in: none",
   ].filter(Boolean);
   const apply = await vscode.window.showInformationMessage(
     "Apply this rebrand across the source tree?",
@@ -242,6 +287,7 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
     text = text.split('"name": "sharepoint"').join(`"name": ${JSON.stringify(deep.handle)}`);
     text = text.split('"fullName": "SharePoint"').join(`"fullName": ${JSON.stringify(after.displayName)}`);
     text = setReleaseManifest(text, release);
+    text = setProvisioningManifest(text, hasProvisioning ? provisioningManifest : undefined);
     await writeText(pkgUri, text);
     written.push("package.json");
   } catch (e) {
@@ -307,6 +353,28 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
   }
 
   log.info(`Rebranded to "${after.displayName}" (${extensionId(after.publisher, after.name)})${renameIdentifiers ? `, namespace ${deep.idNamespace}` : ""}`);
+
+  // Offer to save a reusable release profile (no secrets) for the next refresh.
+  await saveProfileMaybe(
+    root,
+    {
+      version: 1,
+      identity: {
+        publisher: after.publisher,
+        name: after.name,
+        displayName: after.displayName,
+        handle: deep.handle,
+        description: after.description,
+        ...(after.licenseHolder ? { licenseHolder: after.licenseHolder } : {}),
+        ...(after.supportContact ? { supportContact: after.supportContact } : {}),
+        ...(after.securityContact ? { securityContact: after.securityContact } : {}),
+        renameIdentifiers,
+      },
+      ...(days > 0 ? { expiry: { validityDays: days, ...(upgradeUrl ? { upgradeUrl } : {}) } } : {}),
+      ...(hasProvisioning ? { provisioning } : {}),
+    },
+    log,
+  );
 
   // --- finish ---------------------------------------------------------------
   const detail = [
@@ -482,6 +550,149 @@ async function readText(uri: vscode.Uri): Promise<string> {
 
 async function writeText(uri: vscode.Uri, text: string): Promise<void> {
   await vscode.workspace.fs.writeFile(uri, Buffer.from(text, "utf8"));
+}
+
+/** A two-option Yes/No quick pick; the default is listed first. Returns
+ *  undefined if dismissed (so the caller can abort the wizard). */
+async function yesNo(title: string, detail: string, def = false): Promise<boolean | undefined> {
+  const order = def ? ["Yes", "No"] : ["No", "Yes"];
+  const pick = await vscode.window.showQuickPick(
+    order.map((label) => ({ label })),
+    { ignoreFocusOut: true, title, placeHolder: detail },
+  );
+  if (!pick) return undefined;
+  return pick.label === "Yes";
+}
+
+/** Load whitelabel.profile.json (if present) and ask whether to reuse it, so a
+ *  refreshed release is a quick, repeatable pass over pre-filled prompts. */
+async function maybeLoadProfile(root: vscode.Uri): Promise<ReleaseProfile | undefined> {
+  let raw: string;
+  try {
+    raw = await readText(vscode.Uri.joinPath(root, "whitelabel.profile.json"));
+  } catch {
+    return undefined; // none saved yet — first run
+  }
+  let profile: ReleaseProfile;
+  try {
+    profile = parseReleaseProfile(raw);
+  } catch (e) {
+    void vscode.window.showWarningMessage(`Ignoring whitelabel.profile.json — ${msg(e)}`);
+    return undefined;
+  }
+  const use = await vscode.window.showInformationMessage(
+    `Reuse the saved release profile for "${profile.identity.displayName}"?`,
+    {
+      modal: true,
+      detail:
+        "Found whitelabel.profile.json. Reusing it pre-fills every prompt — identity, expiry, and what to bake in — so refreshing this release is quick. Choose Start fresh to ignore it.",
+    },
+    "Reuse profile",
+    "Start fresh",
+  );
+  return use === "Reuse profile" ? profile : undefined;
+}
+
+/** Offer to persist the gathered choices as a reusable, secret-free profile. */
+async function saveProfileMaybe(root: vscode.Uri, profile: ReleaseProfile, log: Logger): Promise<void> {
+  const save = await vscode.window.showInformationMessage(
+    "Save these choices as a reusable release profile?",
+    {
+      modal: true,
+      detail:
+        "Writes whitelabel.profile.json to the source folder (no secrets). Next time, the wizard offers to reuse it so refreshing this release is one quick, repeatable step. Commit it alongside the source so your release team shares it.",
+    },
+    "Save profile",
+    "Skip",
+  );
+  if (save !== "Save profile") return;
+  try {
+    await writeText(vscode.Uri.joinPath(root, "whitelabel.profile.json"), serializeReleaseProfile(profile));
+  } catch (e) {
+    log.error("rebrand: save profile", e);
+    void vscode.window.showWarningMessage(`Could not save the release profile: ${msg(e)}`);
+  }
+}
+
+/** Step the user through WHAT to bake into the build: telemetry endpoints,
+ *  pre-defined connectors, project/memory defaults, and custom help. Returns the
+ *  provisioning content, or undefined if the user cancelled. Seeded from a
+ *  loaded profile's provisioning when present. */
+async function gatherProvisioning(
+  deps: RebrandDeps,
+  seed: ProvisioningContent | undefined,
+): Promise<ProvisioningContent | undefined> {
+  const content: ProvisioningContent = {};
+
+  // 1) Telemetry endpoints (endpoints only — never a token/secret in the VSIX).
+  const seedHasTelemetry = Boolean(seed?.settings && Object.keys(seed.settings).some((k) => k.startsWith("telemetry.")));
+  const wantTelemetry = await yesNo(
+    "Bake in anonymized telemetry (Splunk HEC / OTEL) defaults?",
+    "Endpoints only — the Splunk token / OTLP auth header is set per deployment, never embedded in the VSIX.",
+    seedHasTelemetry,
+  );
+  if (wantTelemetry === undefined) return undefined;
+  if (wantTelemetry) {
+    const splunk = await ask("Splunk HEC URL (blank to skip)", String(seed?.settings?.["telemetry.splunkHec.url"] ?? ""), undefined, true);
+    if (splunk === undefined) return undefined;
+    const otlp = await ask("OTEL OTLP/HTTP endpoint (blank to skip)", String(seed?.settings?.["telemetry.otlp.endpoint"] ?? ""), undefined, true);
+    if (otlp === undefined) return undefined;
+    const settings = telemetrySettings({ enabled: Boolean(splunk.trim() || otlp.trim()), splunkHecUrl: splunk, otlpEndpoint: otlp });
+    if (Object.keys(settings).length) content.settings = settings;
+  } else if (seed?.settings) {
+    content.settings = seed.settings;
+  }
+
+  // 2) Pre-defined connectors — a snapshot of the current reference sources.
+  const conns = deps.currentConnectors ?? [];
+  if (conns.length) {
+    const bake = await yesNo(
+      `Bake in your ${conns.length} current reference source(s) as pre-defined connectors?`,
+      "Non-secret settings only (type, URL, alias); each user supplies their own credentials on first use.",
+      Boolean(seed?.connectors?.length),
+    );
+    if (bake === undefined) return undefined;
+    if (bake) content.connectors = conns;
+  } else if (seed?.connectors?.length) {
+    content.connectors = seed.connectors;
+  }
+
+  // 3) Pre-defined projects / memory defaults.
+  const projs = deps.currentProjects ?? [];
+  if (projs.length) {
+    const bake = await yesNo(
+      `Bake in your ${projs.length} project(s) as memory defaults?`,
+      "Goals, instructions, and saved AI context become defaults seeded on first run (users can still edit them).",
+      Boolean(seed?.projects?.length),
+    );
+    if (bake === undefined) return undefined;
+    if (bake) content.projects = projs;
+  } else if (seed?.projects?.length) {
+    content.projects = seed.projects;
+  }
+
+  // 4) Custom help content for the target environment.
+  const help: ProvisionedHelp = {};
+  const guidePick = await vscode.window.showOpenDialog({
+    title: "Custom User Guide markdown to bake in (Cancel to skip)",
+    canSelectMany: false,
+    filters: { Markdown: ["md", "markdown"] },
+  });
+  if (guidePick && guidePick[0]) {
+    try {
+      help.userGuide = await readText(guidePick[0]);
+    } catch (e) {
+      void vscode.window.showWarningMessage(`Could not read the help markdown: ${msg(e)}`);
+    }
+  } else if (seed?.help?.userGuide) {
+    help.userGuide = seed.help.userGuide;
+  }
+  const welcome = await ask("First-run welcome note shown to users (optional)", seed?.help?.welcome ?? "", undefined, true);
+  if (welcome === undefined) return undefined;
+  if (welcome.trim()) help.welcome = welcome.trim();
+  if (help.userGuide || help.welcome) content.help = help;
+
+  return content;
 }
 
 async function editFile(
