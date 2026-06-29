@@ -5,7 +5,31 @@ import {
   stripSqlNoise,
   rowsToHits,
   parseMongoSpec,
+  assertSafeMongoQuery,
 } from "../src/context/db/readSafe";
+
+test("SQL guard blocks PG dblink / lo_export / pg_sleep / pg_read functions", () => {
+  assert.ok(!assertReadOnlySql("SELECT dblink_exec('db','DELETE FROM t')").ok);
+  assert.ok(!assertReadOnlySql("SELECT dblink('db','select 1')").ok);
+  assert.ok(!assertReadOnlySql("SELECT lo_export(1,'/tmp/x')").ok);
+  assert.ok(!assertReadOnlySql("SELECT pg_sleep(10)").ok);
+  assert.ok(!assertReadOnlySql("SELECT pg_read_file('/etc/passwd')").ok);
+});
+
+test("assertSafeMongoQuery rejects server-side-JS and write operators (nested/array)", () => {
+  assert.doesNotThrow(() => assertSafeMongoQuery({ status: "open", n: { $gt: 5 } }));
+  assert.throws(() => assertSafeMongoQuery({ $where: "this.x>1" }), /\$where/);
+  assert.throws(() => assertSafeMongoQuery({ a: { $function: {} } }), /\$function/);
+  assert.throws(() => assertSafeMongoQuery({ $or: [{ ok: 1 }, { $where: "1" }] }), /\$where/);
+  assert.throws(() => assertSafeMongoQuery({ $expr: { $function: { body: "x", args: [], lang: "js" } } }), /\$function/);
+});
+
+test("parseMongoSpec rejects dangerous filters/projections and bad collections", () => {
+  assert.throws(() => parseMongoSpec('{"collection":"c","filter":{"$where":"1"}}'), /\$where/);
+  assert.throws(() => parseMongoSpec('{"collection":"system.users","filter":{}}'), /not a valid read target/);
+  assert.throws(() => parseMongoSpec('{"collection":"a$b"}'), /not a valid read target/);
+  assert.equal(parseMongoSpec('{"collection":"orders","filter":{"active":true},"limit":10}').collection, "orders");
+});
 
 test("plain SELECT and WITH…SELECT pass", () => {
   assert.ok(assertReadOnlySql("SELECT * FROM dbo.Orders WHERE id = 1").ok);

@@ -54,7 +54,9 @@ export async function searchConfluence(
   caps: ReadCaps,
 ): Promise<ContextSearchHit[]> {
   const looksLikeCql = /[=~]|\border by\b/i.test(query);
-  const cql = looksLikeCql ? query : `siteSearch ~ "${query.replace(/"/g, '\\"')}"`;
+  // Escape backslash BEFORE quote — otherwise a term ending in "\" escapes the
+  // closing quote and breaks out into raw CQL.
+  const cql = looksLikeCql ? query : `siteSearch ~ "${query.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   const res = await fetchJson<SearchResponse>(
     `${source.baseUrl.replace(/\/$/, "")}/rest/api/search?cql=${enc(cql)}&limit=${caps.maxResults}`,
     credential,

@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { ProjectsStore } from "../context/projectsStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
@@ -44,6 +45,7 @@ export function registerProjectTools(
         };
       },
       async invoke(options) {
+        if (releaseExpired()) return text(expiredNotice());
         telemetry.record("tool.invoke", { tool: "aisharepoint_remember_project_context" });
         try {
           const active = projects.active();
@@ -89,6 +91,7 @@ export function registerProjectTools(
         };
       },
       async invoke(options) {
+        if (releaseExpired()) return text(expiredNotice());
         telemetry.record("tool.invoke", { tool: "aisharepoint_forget_project_context" });
         try {
           const active = projects.active();

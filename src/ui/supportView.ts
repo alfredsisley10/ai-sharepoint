@@ -143,8 +143,11 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
       {
         id: "version",
         label: `AI SharePoint v${this.version}`,
+        description: "click to copy support info",
         icon: new vscode.ThemeIcon("verified"),
-        tooltip: "Extension version (included in diagnostics bundles).",
+        tooltip:
+          "Copy version + environment + the anonymous install ID for a support ticket (no site/account/PII).",
+        command: { command: "aiSharePoint.copySupportInfo", title: "Copy support info" },
       },
     ];
   }

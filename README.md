@@ -10,12 +10,14 @@ Copilot entitlement** and capped by **your budget**, and while every credential 
 OS keychain**. Nothing this extension collects ever leaves your machine unless you explicitly
 export it.
 
-> **Release 0.4.x.** Shipped: governed Copilot chat/agent surface, enterprise auth
+> **Release 0.71.0.** Shipped: governed Copilot chat/agent surface, enterprise auth
 > (browser + device-code, custom Entra app, sovereign clouds), site-as-code **pull / write-back /
 > revert** with Git + GitHub/GHES governance (ADR-0019/0021/0005), read-only reference sources
-> (Confluence, Jira, **LDAP/Active Directory with DNS auto-discovery**), bookmarks, secret-free
-> team config sharing, budget guardrails, and the anonymized diagnostics pipeline. The AI itself
-> remains read-only — every SharePoint write is a previewed, snapshot-guarded human command.
+> (Confluence, Jira, **LDAP/Active Directory with DNS auto-discovery**, **GitHub/GHES**, databases,
+> and more), bookmarks, secret-free team config sharing, local Copilot activity metering,
+> **opt-in anonymized telemetry** (Splunk HEC / OTEL — off by default), white-label packaging,
+> and the anonymized diagnostics pipeline. The AI itself remains read-only — every SharePoint
+> write is a previewed, snapshot-guarded human command.
 
 ---
 
@@ -25,9 +27,12 @@ export it.
 - Ask about your connected sites in natural language; the assistant reads live site context
   (silently — it never pops a sign-in window from a chat question).
 - Slash commands: `/site` (live overview), `/sites`, `/usage`, `/help`.
-- In **Copilot agent mode**, nine read-only tools are available for auto-invocation or
-  `#`-referencing: `#spConnections`, `#spSiteOverview`, `#spPages`, `#spUsage`, `#spSources`,
-  `#spSearchContext`, `#spContextItem`, `#spBookmarks`, `#spRunBookmark`.
+- In **Copilot agent mode**, 40+ tools are available for auto-invocation or `#`-referencing.
+  The reads run freely — site overviews, pages, usage, reference-source search
+  (`#spSiteOverview`, `#spPages`, `#spUsage`, `#spSources`, `#spSearchContext`, `#spContextItem`,
+  `#spBookmarks`, …). Every **write** tool (SharePoint write-back, Confluence page edits, drafting
+  a Teams/Outlook message, …) is **approval-gated** — it produces a preview and only acts on your
+  explicit confirmation; the agent loop can never write unattended.
 
 ### 🔐 Enterprise-grade sign-in
 - **System-browser sign-in** (authorization-code + PKCE on a loopback port) or **device-code
@@ -115,10 +120,20 @@ Copilot extension installed and signed in; SharePoint features require a Microso
 
 ## Telemetry
 
-This extension **transmits nothing**. Local capture of usage counters defers to VS Code's
-telemetry setting by default (`aiSharePoint.diagnostics.usageCapture`), and error capture can be
-disabled entirely. Data leaves the machine only through the explicit, previewed, leak-scanned
-diagnostics export. See [PRIVACY.md](docs/PRIVACY.md).
+**Out of the box this extension transmits nothing**, and there is no built-in vendor endpoint —
+local capture of usage counters defers to VS Code's telemetry setting (`aiSharePoint.diagnostics.usageCapture`),
+and error capture can be disabled entirely.
+
+Two paths can send data off the machine, both controlled by you:
+
+- the explicit, previewed, leak-scanned **diagnostics export** (a manual, one-time file you choose
+  to share); and
+- **opt-in usage telemetry** to a Splunk HEC and/or OTEL (OTLP) endpoint *you* configure (off by
+  default). When enabled, only anonymized, categorical metrics + environment are sent — never
+  free-form text, content, or PII — and connection details/tokens are stored write-only in the OS
+  keychain (never shown again, never in settings, never in an export).
+
+See [PRIVACY.md](docs/PRIVACY.md) for exactly what each path includes.
 
 ## Redistributing / white-labeling
 

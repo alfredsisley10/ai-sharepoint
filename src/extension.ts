@@ -450,14 +450,23 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       markApplied: (id) => Promise.resolve(context.globalState.update("aiSharePoint.provisionedId", id)),
     };
-    void applyProvisioning(provisioningManifest, provisioningFx).then((r) => {
-      if (!r.applied) return;
-      log.info(
-        `Provisioned ${r.connectors} connector(s), ${r.projects} project(s), ${r.settings} setting default(s)${r.help ? ", custom help" : ""}${r.telemetry ? ", telemetry endpoint" : ""}.`,
-      );
-      const welcome = context.globalState.get<{ welcome?: string }>("aiSharePoint.provisionedHelp")?.welcome;
-      if (welcome) void vscode.window.showInformationMessage(welcome);
-    });
+    void applyProvisioning(provisioningManifest, provisioningFx)
+      .then((r) => {
+        if (!r.applied) return;
+        log.info(
+          `Provisioned ${r.connectors} connector(s), ${r.projects} project(s), ${r.settings} setting default(s)${r.help ? ", custom help" : ""}${r.telemetry ? ", telemetry endpoint" : ""}.`,
+        );
+        const welcome = context.globalState.get<{ welcome?: string }>("aiSharePoint.provisionedHelp")?.welcome;
+        if (welcome) void vscode.window.showInformationMessage(welcome);
+      })
+      .catch((e) => {
+        // First-run seeding is best-effort: a failed seed must never block
+        // activation or surface as an unhandled rejection. The manifest stays
+        // un-marked, so a later reload retries cleanly.
+        log.warn(
+          `First-run provisioning did not complete: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      });
   }
 
   const sitesProvider = new SitesTreeProvider(sites, contextSources);
@@ -5128,7 +5137,17 @@ export function activate(context: vscode.ExtensionContext): void {
           await commsClient.sendTeamsMessage(resolved, draft!.body);
         } else {
           const created = await commsClient.createMailDraft(resolved, draft!.subject ?? "", draft!.body);
-          await commsClient.sendMailDraft(created.id);
+          try {
+            await commsClient.sendMailDraft(created.id);
+          } catch (sendErr) {
+            // The draft now exists server-side but was not sent. Delete it so a
+            // retry doesn't pile up orphaned drafts in the user's mailbox, then
+            // re-throw (the local outbox item is preserved for the retry).
+            // Best-effort: if the send actually went through and only the
+            // response was lost, the id is no longer a draft and this no-ops.
+            await commsClient.deleteMailDraft(created.id).catch(() => undefined);
+            throw sendErr;
+          }
         }
         await outbox.remove(draft!.id);
         telemetry.record("comms.send", { channel: draft!.channel, origin: draft!.origin });
@@ -5505,11 +5524,26 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (confirm === "Rotate") {
       const fresh = await installIds.rotate();
+      telemetryEnv.installId = fresh.id; // keep external telemetry on the new id immediately
       telemetry.record("diagnostics.rotateId");
       void vscode.window.showInformationMessage(
         `New anonymous install ID: ${fresh.id}`,
       );
     }
+  });
+
+  register("aiSharePoint.copySupportInfo", async () => {
+    // One-click support header for a ticket: version + environment + the
+    // anonymous install id (the same id that tags diagnostics bundles, so
+    // support can correlate). No site/account/PII — safe to paste anywhere.
+    const info = [
+      `AI SharePoint v${version}`,
+      `Install ID: ${installIds.get().id}`,
+      `VS Code: ${vscode.version}`,
+      `OS: ${os.platform()} ${os.release()} (${os.arch()})`,
+    ].join("\n");
+    await vscode.env.clipboard.writeText(info);
+    void vscode.window.showInformationMessage("Support info copied to the clipboard (version + environment + anonymous install ID — no PII).");
   });
 
   register("aiSharePoint.toggleVerboseLogging", async () => {

@@ -109,6 +109,18 @@ export function buildPushPlan(
     unchanged: { lists: 0, pages: 0 },
   };
 
+  // A truncated snapshot is an INCOMPLETE view of the live site: an artifact
+  // missing from `current` may simply be past the pagination cap, not actually
+  // absent. Orphan detection (the only source of deletions) is therefore
+  // untrustworthy, so we suppress ALL deletions and surface a loud warning.
+  // Non-destructive ops still run; at worst a create collides and fails safely.
+  const canDelete = !current.truncated;
+  if (current.truncated) {
+    plan.warnings.push(
+      "The live site is too large to read completely (pagination cap hit), so this is a partial snapshot. Deletions are disabled — orphaned lists/pages cannot be detected reliably. Non-destructive changes are still planned.",
+    );
+  }
+
   // ---- lists ---------------------------------------------------------------
   const liveLists = new Map(current.lists.map((l) => [norm(l.displayName), l]));
   const desiredListNames = new Set(desired.lists.map((l) => norm(l.displayName)));
@@ -182,18 +194,20 @@ export function buildPushPlan(
     if (listChanged === 0) plan.unchanged.lists++;
   }
 
-  for (const live of current.lists) {
-    if (!desiredListNames.has(norm(live.displayName))) {
-      if ((live.template ?? "genericList") === "genericList") {
-        plan.deletions.push({
-          kind: "deleteList",
-          listId: live.id,
-          displayName: live.displayName,
-        });
-      } else {
-        plan.warnings.push(
-          `List "${live.displayName}" (${live.template}) exists in SharePoint but not in the repo — system/library lists are never deleted by push.`,
-        );
+  if (canDelete) {
+    for (const live of current.lists) {
+      if (!desiredListNames.has(norm(live.displayName))) {
+        if ((live.template ?? "genericList") === "genericList") {
+          plan.deletions.push({
+            kind: "deleteList",
+            listId: live.id,
+            displayName: live.displayName,
+          });
+        } else {
+          plan.warnings.push(
+            `List "${live.displayName}" (${live.template}) exists in SharePoint but not in the repo — system/library lists are never deleted by push.`,
+          );
+        }
       }
     }
   }
@@ -231,13 +245,15 @@ export function buildPushPlan(
     }
   }
 
-  for (const live of current.pages) {
-    if (!desiredPageNames.has(pageKey(live.name, live.title))) {
-      plan.deletions.push({
-        kind: "deletePage",
-        pageId: live.id,
-        name: live.name ?? live.title,
-      });
+  if (canDelete) {
+    for (const live of current.pages) {
+      if (!desiredPageNames.has(pageKey(live.name, live.title))) {
+        plan.deletions.push({
+          kind: "deletePage",
+          pageId: live.id,
+          name: live.name ?? live.title,
+        });
+      }
     }
   }
 

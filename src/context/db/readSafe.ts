@@ -9,7 +9,7 @@
 import { ContextSearchHit } from "../types";
 
 const FORBIDDEN =
-  /\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|exec|execute|call|backup|restore|bulk|dbcc|shutdown|use|into|waitfor|openrowset|opendatasource|openquery|xp_\w+|sp_\w+)\b/i;
+  /\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|exec|execute|call|backup|restore|bulk|dbcc|shutdown|use|into|waitfor|openrowset|opendatasource|openquery|dblink\w*|lo_export|lo_import|pg_read_\w+|pg_ls_dir|pg_sleep|xp_\w+|sp_\w+)\b/i;
 
 /** Remove string literals and comments so keywords inside them don't count. */
 export function stripSqlNoise(sql: string): string {
@@ -88,6 +88,30 @@ export interface MongoReadSpec {
   limit?: number;
 }
 
+/** MongoDB operators that run server-side JavaScript or write — never allowed
+ *  on a read path (the model/agent controls the filter JSON, so this is the
+ *  write/exec guard, analogous to assertReadOnlySql). Case-sensitive, as Mongo. */
+const DANGEROUS_MONGO_OPS = new Set(["$where", "$function", "$accumulator", "$out", "$merge"]);
+
+/** Recursively reject server-side-JS / write operators anywhere in a Mongo
+ *  filter or projection. Throws (fails closed) on the first hit. */
+export function assertSafeMongoQuery(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const v of value) assertSafeMongoQuery(v);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (DANGEROUS_MONGO_OPS.has(k)) {
+        throw new Error(
+          `MongoDB operator "${k}" is not allowed — reference sources are strictly read-only (server-side JavaScript and write stages are blocked).`,
+        );
+      }
+      assertSafeMongoQuery(v);
+    }
+  }
+}
+
 export function parseMongoSpec(query: string): MongoReadSpec {
   let raw: Record<string, unknown>;
   try {
@@ -100,16 +124,25 @@ export function parseMongoSpec(query: string): MongoReadSpec {
   if (!raw || typeof raw.collection !== "string" || !raw.collection.trim()) {
     throw new Error('MongoDB query JSON needs a "collection" string.');
   }
+  const collection = raw.collection.trim();
+  // Collection names can't contain "$"/NUL; refuse the internal system.* namespaces.
+  if (/[$\0]/.test(collection) || /^system\./i.test(collection)) {
+    throw new Error(`MongoDB collection "${collection}" is not a valid read target.`);
+  }
+  const filter =
+    raw.filter && typeof raw.filter === "object" && !Array.isArray(raw.filter)
+      ? (raw.filter as Record<string, unknown>)
+      : {};
+  const projection =
+    raw.projection && typeof raw.projection === "object"
+      ? (raw.projection as Record<string, unknown>)
+      : undefined;
+  assertSafeMongoQuery(filter);
+  if (projection) assertSafeMongoQuery(projection);
   return {
-    collection: raw.collection.trim(),
-    filter:
-      raw.filter && typeof raw.filter === "object" && !Array.isArray(raw.filter)
-        ? (raw.filter as Record<string, unknown>)
-        : {},
-    projection:
-      raw.projection && typeof raw.projection === "object"
-        ? (raw.projection as Record<string, unknown>)
-        : undefined,
+    collection,
+    filter,
+    projection,
     limit: typeof raw.limit === "number" && raw.limit > 0 ? Math.floor(raw.limit) : undefined,
   };
 }

@@ -108,10 +108,23 @@ test("filter escaping neutralizes RFC 4515 metacharacters", () => {
   assert.equal(escapeFilterValue("a*b(c)\\d"), "a\\2ab\\28c\\29\\5cd");
 });
 
-test("buildFilter: raw filter passthrough, free text → ANR (spaces kept, metachars escaped)", () => {
-  assert.equal(buildFilter("(mail=jane@corp.com)"), "(mail=jane@corp.com)");
+test("buildFilter: free text → ANR (spaces kept, metachars escaped)", () => {
   assert.equal(buildFilter("Jane Doe"), "(anr=Jane Doe)"); // spaces are legal in filter values
   assert.equal(buildFilter("a*b(c)"), "(anr=a\\2ab\\28c\\29)"); // injection-safe
+});
+
+test("buildFilter: raw passthrough is OFF by default (injection-safe), ON only when opted in", () => {
+  // Default: a parenthesized query is escaped, NOT trusted as a filter.
+  assert.equal(buildFilter("(mail=jane@corp.com)"), "(anr=\\28mail=jane@corp.com\\29)");
+  assert.equal(
+    buildFilter("(|(uid=*)(cn=*))"),
+    "(anr=\\28|\\28uid=\\2a\\29\\28cn=\\2a\\29\\29)",
+    "an injected OR filter is neutralized, not executed",
+  );
+  // Opt-in: an expert-supplied filter passes through verbatim.
+  assert.equal(buildFilter("(mail=jane@corp.com)", true), "(mail=jane@corp.com)");
+  // Even opted in, plain text is still ANR (only true parenthesized filters pass).
+  assert.equal(buildFilter("Jane Doe", true), "(anr=Jane Doe)");
 });
 
 test("isProbablyDn recognizes DNs, rejects plain text", () => {

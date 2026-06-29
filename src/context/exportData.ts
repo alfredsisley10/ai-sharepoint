@@ -18,12 +18,16 @@ export const EXPORT_DIR = "ai-sharepoint-exports";
 
 const csvCell = (v: unknown): string => {
   if (v === null || v === undefined) return "";
-  const s =
+  let s =
     v instanceof Date
       ? v.toISOString()
       : typeof v === "object"
         ? JSON.stringify(v)
         : String(v);
+  // CSV formula-injection guard: a cell starting with = + - @ (or a tab/CR that
+  // a spreadsheet trims to one) is executed as a formula in Excel/Sheets. Prefix
+  // a single quote to neutralize while keeping the value human-readable.
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 

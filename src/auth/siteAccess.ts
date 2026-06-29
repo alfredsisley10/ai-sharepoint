@@ -20,7 +20,7 @@ export class SiteAccess {
 
   clientFor(conn: SiteConnection, opts?: { silent?: boolean }): SharePointClient {
     const provider = this.registry.create(conn.authProviderId, conn.cacheHandle);
-    return new SharePointClient(provider, opts?.silent ?? false);
+    return new SharePointClient(provider, opts?.silent ?? false, conn.account);
   }
 
   /**

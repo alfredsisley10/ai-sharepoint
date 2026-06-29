@@ -11,6 +11,11 @@ const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Max @odata pages to follow before declaring a collection truncated.
+ *  200 pages × $top=100 ≈ 20k items — far beyond any real site, so normal
+ *  sites are always complete and only a pathological collection trips the cap. */
+const MAX_PAGES = 200;
+
 export interface SiteInfo {
   id: string;
   displayName: string;
@@ -71,6 +76,9 @@ export class SharePointClient {
     /** When true, never start an interactive flow — fail fast instead.
      *  Used by chat/tool context reads so a question never pops a browser. */
     private readonly silentOnly = false,
+    /** UPN of the connection's signed-in account, so silent acquisition picks
+     *  the right identity when the keychain cache holds more than one. */
+    private readonly accountHint?: string,
   ) {}
 
   /** Resolve a SharePoint site by its browser URL. */
@@ -92,17 +100,47 @@ export class SharePointClient {
     };
   }
 
-  /** Non-hidden lists and libraries of a site (top 50). */
-  async getLists(siteId: string): Promise<ListInfo[]> {
-    const res = await this.get<{
-      value: Array<{
-        id: string;
-        displayName: string;
-        webUrl: string;
-        list?: { template?: string; hidden?: boolean };
-      }>;
-    }>(`/sites/${siteId}/lists?$select=id,displayName,webUrl,list&$top=50`);
-    return res.value
+  /**
+   * Follow `@odata.nextLink` across pages, accumulating `value`, until the
+   * collection is exhausted or the page cap is hit. Returns the items plus
+   * whether the cap truncated the result — callers that build a sync snapshot
+   * MUST treat `truncated` as "this view is incomplete; do not delete".
+   *
+   * Without this, a site with >1 page of lists/pages/columns was silently cut
+   * to the first page, so the push planner saw a partial live state and would
+   * (a) re-create artifacts that already exist and (b) compute an untrustworthy
+   * deletion set (ADR-0021 §4). nextLink is an absolute Graph URL; `request`
+   * accepts absolute URLs so we can pass it straight through.
+   */
+  private async getAllPages<T>(
+    firstPath: string,
+  ): Promise<{ items: T[]; truncated: boolean }> {
+    const items: T[] = [];
+    let path: string | undefined = firstPath;
+    let pages = 0;
+    while (path) {
+      const res: { value?: T[]; "@odata.nextLink"?: string } = await this.get(path);
+      if (Array.isArray(res.value)) items.push(...res.value);
+      pages++;
+      const next: string | undefined = res["@odata.nextLink"];
+      if (!next) return { items, truncated: false };
+      if (pages >= MAX_PAGES) return { items, truncated: true };
+      path = next;
+    }
+    return { items, truncated: false };
+  }
+
+  /** Non-hidden lists and libraries of a site (all pages). `onTruncated` fires
+   *  if the page cap was hit before the collection was exhausted. */
+  async getLists(siteId: string, onTruncated?: () => void): Promise<ListInfo[]> {
+    const { items, truncated } = await this.getAllPages<{
+      id: string;
+      displayName: string;
+      webUrl: string;
+      list?: { template?: string; hidden?: boolean };
+    }>(`/sites/${siteId}/lists?$select=id,displayName,webUrl,list&$top=100`);
+    if (truncated) onTruncated?.();
+    return items
       .filter((l) => !l.list?.hidden)
       .map((l) => ({
         id: l.id,
@@ -112,21 +150,20 @@ export class SharePointClient {
       }));
   }
 
-  /** Modern site pages (top 50). Some tenants restrict this API — callers
-   *  should tolerate `graph.forbidden`. */
-  async getPages(siteId: string): Promise<PageInfo[]> {
-    const res = await this.get<{
-      value: Array<{
-        id: string;
-        title?: string;
-        name?: string;
-        webUrl: string;
-        lastModifiedDateTime?: string;
-      }>;
+  /** Modern site pages (all pages). Some tenants restrict this API — callers
+   *  should tolerate `graph.forbidden`. `onTruncated` fires if the cap was hit. */
+  async getPages(siteId: string, onTruncated?: () => void): Promise<PageInfo[]> {
+    const { items, truncated } = await this.getAllPages<{
+      id: string;
+      title?: string;
+      name?: string;
+      webUrl: string;
+      lastModifiedDateTime?: string;
     }>(
-      `/sites/${siteId}/pages/microsoft.graph.sitePage?$select=id,title,name,webUrl,lastModifiedDateTime&$top=50`,
+      `/sites/${siteId}/pages/microsoft.graph.sitePage?$select=id,title,name,webUrl,lastModifiedDateTime&$top=100`,
     );
-    return res.value.map((p) => ({
+    if (truncated) onTruncated?.();
+    return items.map((p) => ({
       id: p.id,
       title: p.title || p.name || "(untitled page)",
       webUrl: p.webUrl,
@@ -134,12 +171,18 @@ export class SharePointClient {
     }));
   }
 
-  /** Visible columns of a list (for the sync serializer). */
-  async getListColumns(siteId: string, listId: string): Promise<unknown[]> {
-    const res = await this.get<{ value: Array<{ hidden?: boolean }> }>(
+  /** Visible columns of a list (all pages; lists can exceed 100 columns).
+   *  `onTruncated` fires if the page cap was hit before exhaustion. */
+  async getListColumns(
+    siteId: string,
+    listId: string,
+    onTruncated?: () => void,
+  ): Promise<unknown[]> {
+    const { items, truncated } = await this.getAllPages<{ hidden?: boolean }>(
       `/sites/${siteId}/lists/${listId}/columns?$top=100`,
     );
-    return res.value.filter((c) => c.hidden !== true);
+    if (truncated) onTruncated?.();
+    return items.filter((c) => c.hidden !== true);
   }
 
   /** Full page content including the web-part canvas (for the serializer).
@@ -178,10 +221,29 @@ export class SharePointClient {
     return { ok: true, site, account, latencyMs: Date.now() - started };
   }
 
-  protected async acquire(scopes: string[] = [SITES_READ_SCOPE]): Promise<string> {
+  protected async acquire(
+    scopes: string[] = [SITES_READ_SCOPE],
+    forceRefresh = false,
+  ): Promise<string> {
+    // A 401 retry asks for a forced silent re-mint from the refresh token; this
+    // recovers an expired/revoked access token without an interactive prompt.
+    if (forceRefresh && this.auth.acquireTokenSilent) {
+      const refreshed = await this.auth.acquireTokenSilent(scopes, {
+        forceRefresh: true,
+        account: this.accountHint,
+      });
+      if (refreshed) return refreshed.token;
+      if (this.silentOnly) {
+        throw new AppError(
+          "Sign-in expired for this site. Run 'AI SharePoint: Test Site Connection' to sign in again.",
+          "auth.failed",
+        );
+      }
+      // Foreground: fall through to a (possibly interactive) re-acquire.
+    }
     if (this.silentOnly) {
       const silent = this.auth.acquireTokenSilent
-        ? await this.auth.acquireTokenSilent(scopes)
+        ? await this.auth.acquireTokenSilent(scopes, { account: this.accountHint })
         : null;
       if (!silent) {
         throw new AppError(
@@ -198,16 +260,18 @@ export class SharePointClient {
     return this.request<T>("GET", path);
   }
 
-  /** Shared Graph request machinery: timeout, single 429/503 retry, error
-   *  taxonomy. Write methods (SharePointWriteClient) pass write scopes. */
+  /** Shared Graph request machinery: timeout, single 429/503 retry, one 401
+   *  forced-refresh retry, error taxonomy. Write methods (SharePointWriteClient)
+   *  pass write scopes. */
   protected async request<T>(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
     scopes?: string[],
     retried = false,
+    authRetried = false,
   ): Promise<T> {
-    const token = await this.acquire(scopes);
+    const token = await this.acquire(scopes, authRetried);
     const started = Date.now();
     if (wireEnabled() && !retried) {
       // The token itself never reaches the wire log — scheme only.
@@ -225,8 +289,11 @@ export class SharePointClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     let res: Response;
+    // `path` is normally a GRAPH_BASE-relative path, but pagination passes the
+    // absolute @odata.nextLink straight through — use it as-is when absolute.
+    const url = /^https?:\/\//i.test(path) ? path : `${GRAPH_BASE}${path}`;
     try {
-      res = await fetch(`${GRAPH_BASE}${path}`, {
+      res = await fetch(url, {
         method,
         headers: {
           Authorization: `Bearer ${token}`,
@@ -255,7 +322,14 @@ export class SharePointClient {
         Number(res.headers.get("Retry-After")) || 2,
       );
       await new Promise((r) => setTimeout(r, retryAfter * 1000));
-      return this.request<T>(method, path, body, scopes, true);
+      return this.request<T>(method, path, body, scopes, true, authRetried);
+    }
+
+    // 401 (unauthorized) usually means the access token expired or was revoked
+    // mid-flight — distinct from 403 (genuine permission denial). Retry once
+    // with a forced token re-mint before surfacing an auth error.
+    if (res.status === 401 && !authRetried) {
+      return this.request<T>(method, path, body, scopes, retried, true);
     }
 
     if (!res.ok) {
@@ -267,13 +341,15 @@ export class SharePointClient {
         wireEnabled() ? capDetail(errBody) : undefined,
       );
       const code =
-        res.status === 403 || res.status === 401
-          ? "graph.forbidden"
-          : res.status === 404
-            ? "graph.notFound"
-            : res.status === 429 || res.status === 503
-              ? "graph.throttled"
-              : "graph.error";
+        res.status === 401
+          ? "auth.failed"
+          : res.status === 403
+            ? "graph.forbidden"
+            : res.status === 404
+              ? "graph.notFound"
+              : res.status === 429 || res.status === 503
+                ? "graph.throttled"
+                : "graph.error";
       throw new AppError(
         `Graph request failed (${res.status} ${res.statusText}): ${errBody.slice(0, 500)}`,
         code,

@@ -13,9 +13,11 @@ to (delegated — their own permissions, never more) and ask a GitHub-Copilot-ba
 about them, with local counting of the requests it makes (no estimated billing — GitHub is the
 authoritative usage source). Site changes are
 human-approved commands only (previewed, drift-checked, snapshot-guarded); the AI cannot write. It runs entirely client-side: **no
-vendor service, no telemetry transmission, no stored server-side state**. Credentials live in
-the OS keychain via VS Code SecretStorage; diagnostics never leave the machine except by
-explicit, previewed, leak-scanned user export.
+vendor service and no stored server-side state**, and **no telemetry endpoint of our own**.
+Credentials live in the OS keychain via VS Code SecretStorage; diagnostics never leave the machine
+except by explicit, previewed, leak-scanned user export. The only optional egress an admin can turn
+on is **opt-in usage telemetry to a Splunk HEC and/or OTEL endpoint *you* configure** (off by
+default; anonymized categorical metrics only — never content or PII; see §3 and PRIVACY.md).
 
 ## 2. Deployment
 
@@ -51,8 +53,10 @@ Allow these HTTPS (443) endpoints from developer machines:
 | `microsoft.com/devicelogin` (user's browser, any device) | Device-code completion page | Device-code sign-in only |
 | GitHub Copilot service endpoints | AI requests — made by the **GitHub Copilot extension**, not by this extension directly | Chat / Ask Copilot |
 
-The extension itself opens **no other** connections: no update checks, no telemetry posts, no
-CDN fetches. The Copilot Activity dashboard webview loads zero external resources (CSP `default-src
+The extension itself opens **no other** connections by default: no update checks, no CDN fetches,
+and no telemetry to any endpoint of ours. The only optional egress is **opt-in usage telemetry** to
+a Splunk HEC / OTEL endpoint an admin or user explicitly configures (see the feature table below
+and PRIVACY.md). The Copilot Activity dashboard webview loads zero external resources (CSP `default-src
 'none'`).
 
 **Sovereign-cloud note:** sign-in authorities for GCC High / 21Vianet are configurable
@@ -74,6 +78,7 @@ accordingly.
 | Splunk (optional) | Your Splunk management endpoint (typically `:8089`) — read-only SPL search jobs (queued at the concurrency cap like Splunk Web, always cleaned up), write/exfil commands blocked client-side, default 24 h window (ADR-0029) |
 | Splunk Observability Cloud (optional) | `api.<realm>.signalfx.com` (e.g. `api.us1.signalfx.com`) — read-only metadata/state GETs, access token via `X-SF-TOKEN` (ADR-0032) |
 | Grafana (optional) | Your Grafana host (`*.grafana.net` or self-hosted) — read-only `/api/*` with a Viewer service-account token: GETs for dashboards/alerts/annotations (ADR-0033), plus `POST /api/ds/query` to read **live panel data** (executes a panel's own read query; needs `datasources:query`) (ADR-0036) |
+| Usage telemetry (opt-in, off by default) | The **Splunk HEC** and/or **OTEL (OTLP/HTTP) metrics** endpoint *you* configure (ADR-0018). Fire-and-forget POSTs of anonymized, categorical metrics + environment only — never content/PII. Connection details and tokens are stored write-only in the OS keychain. Configure via *Support & Diagnostics → Usage Telemetry*; a whitelabel build can pre-seed the endpoints (tokens obfuscated). |
 
 ### Proxies and TLS inspection (MITM)
 **Every** outbound request the extension makes — Microsoft Graph reads *and* Microsoft Entra

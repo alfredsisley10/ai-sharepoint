@@ -473,7 +473,16 @@ export class ContextService {
     }
     switch (source.type) {
       case "ldap":
-        return searchLdap(source, credential, query, this.ldapTls(), caps);
+        return searchLdap(
+          source,
+          credential,
+          query,
+          this.ldapTls(),
+          caps,
+          vscode.workspace
+            .getConfiguration("aiSharePoint")
+            .get<boolean>("ldap.allowRawFilters", false),
+        );
       case "jira":
         return searchJira(source, credential, query, caps);
       case "github":

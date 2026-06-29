@@ -2,7 +2,9 @@ node_modules/
 dist/
 out/
 out-test/
+coverage/
 *.vsix
 .vscode-test/
+.eslintcache
 *.log
 .DS_Store

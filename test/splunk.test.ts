@@ -11,6 +11,17 @@ import {
 } from "../src/context/adapters/splunk";
 import { ContextSource, DEFAULT_CAPS } from "../src/context/types";
 
+test("splIssue closes the comment bypass and blocks rest/map/into", () => {
+  // comment between a pipe and a blocked command must not slip through
+  assert.ok(splIssue("search index=x | ```c``` delete"));
+  assert.ok(splIssue("search index=x | rest /services/x method=POST"));
+  assert.ok(splIssue('search index=x | map search="savedmutator"'));
+  assert.ok(splIssue("| tstats count where index=x into mycollection"));
+  // legitimate read SPL still passes
+  assert.equal(splIssue("search index=web error | stats count by host"), undefined);
+  assert.equal(splIssue("| tstats count where index=web by host"), undefined);
+});
+
 const T0 = "2026-06-11T12:00:00.000Z";
 
 const SRC: ContextSource = {

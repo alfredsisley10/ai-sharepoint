@@ -22,7 +22,18 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const result = spawnSync(process.execPath, ["--test", ...files], {
+// Opt-in coverage (`npm run coverage` / COVERAGE=1): node's built-in test
+// coverage needs no extra dependency. Kept off the default `test` run so the
+// fast feedback loop stays uncluttered.
+const coverage =
+  process.argv.includes("--coverage") || process.env.COVERAGE === "1";
+const nodeArgs = ["--test"];
+if (coverage) {
+  nodeArgs.push("--experimental-test-coverage");
+}
+nodeArgs.push(...files);
+
+const result = spawnSync(process.execPath, nodeArgs, {
   stdio: "inherit",
 });
 process.exit(result.status ?? 1);

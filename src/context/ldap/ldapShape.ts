@@ -47,13 +47,17 @@ export function escapeFilterValue(value: string): string {
 }
 
 /**
- * Turn a user query into an LDAP filter. A raw filter (starting with "(") is
- * passed through; anything else becomes an AD Ambiguous Name Resolution match,
- * so "Jane Doe" hits cn/displayName/sAMAccountName/mail/givenName/sn at once.
+ * Turn a user query into an LDAP filter. By default EVERYTHING is treated as an
+ * AD Ambiguous Name Resolution match (escaped), so "Jane Doe" hits
+ * cn/displayName/sAMAccountName/mail/givenName/sn at once and an attacker can't
+ * smuggle filter syntax through free text / a chat query. Raw-filter passthrough
+ * (a query that is itself a parenthesized filter) is an LDAP-injection surface,
+ * so it is only honored when `allowRaw` is set — gated behind an explicit,
+ * machine-scoped opt-in (ADR-0020).
  */
-export function buildFilter(query: string): string {
+export function buildFilter(query: string, allowRaw = false): string {
   const trimmed = query.trim();
-  if (trimmed.startsWith("(") && trimmed.endsWith(")")) {
+  if (allowRaw && trimmed.startsWith("(") && trimmed.endsWith(")")) {
     return trimmed;
   }
   return `(anr=${escapeFilterValue(trimmed)})`;

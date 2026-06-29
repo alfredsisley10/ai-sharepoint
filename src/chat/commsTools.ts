@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { OutboxStore } from "../comms/outboxStore";
 import {
   CommDraft,
@@ -62,6 +63,7 @@ export function registerCommsTools(
         };
       },
       async invoke(options) {
+        if (releaseExpired()) return text(expiredNotice());
         telemetry.record("tool.invoke", { tool: "aisharepoint_draft_communication" });
         try {
           const input = options.input;

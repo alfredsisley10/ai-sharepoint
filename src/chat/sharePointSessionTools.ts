@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { SharePointSessionStore } from "../auth/sharePointSessionStore";
 import {
   getFormDigest,
@@ -59,6 +60,7 @@ export function registerSharePointSessionTools(
           return { invocationMessage: `Reading SharePoint list “${o.input.list ?? "?"}” (browser session)` };
         },
         async invoke(o) {
+          if (releaseExpired()) return text(expiredNotice());
           telemetry.record("tool.invoke", { tool: "aisharepoint_sp_list_items" });
           try {
             const i = o.input;
@@ -107,6 +109,7 @@ export function registerSharePointSessionTools(
           };
         },
         async invoke(o) {
+          if (releaseExpired()) return text(expiredNotice());
           telemetry.record("tool.invoke", { tool: "aisharepoint_sp_write_item" });
           try {
             const i = o.input;
@@ -166,6 +169,7 @@ export function registerSharePointSessionTools(
           };
         },
         async invoke(o) {
+          if (releaseExpired()) return text(expiredNotice());
           telemetry.record("tool.invoke", { tool: "aisharepoint_sp_library_files" });
           try {
             const i = o.input;
@@ -232,6 +236,7 @@ export function registerSharePointSessionTools(
           };
         },
         async invoke(o) {
+          if (releaseExpired()) return text(expiredNotice());
           telemetry.record("tool.invoke", { tool: "aisharepoint_sp_manage_page" });
           try {
             const i = o.input;

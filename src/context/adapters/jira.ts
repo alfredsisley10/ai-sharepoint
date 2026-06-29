@@ -67,7 +67,9 @@ export async function searchJira(
   caps: ReadCaps,
 ): Promise<ContextSearchHit[]> {
   const looksLikeJql = /[=~]|\border by\b|\bAND\b|\bOR\b/i.test(query);
-  const jql = looksLikeJql ? query : `text ~ "${query.replace(/"/g, '\\"')}" order by updated desc`;
+  // Escape backslash before quote so a term ending in "\" can't escape the
+  // closing quote and break out into raw JQL.
+  const jql = looksLikeJql ? query : `text ~ "${query.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" order by updated desc`;
   const res = await fetchJson<{ issues?: Issue[] }>(
     `${source.baseUrl.replace(/\/$/, "")}/rest/api/2/search?jql=${enc(jql)}&maxResults=${caps.maxResults}&fields=summary,status,assignee,issuetype,priority,updated`,
     credential,

@@ -38,6 +38,10 @@ export interface SiteSnapshotInput {
   }>;
   /** True when the tenant blocked the Pages API (recorded in the manifest). */
   pagesUnavailable?: boolean;
+  /** True when a live collection exceeded the pagination cap, so this snapshot
+   *  is an INCOMPLETE view of the site. Write-back must refuse deletions when
+   *  set — absence from the snapshot no longer implies absence on the site. */
+  truncated?: boolean;
 }
 
 export type FileMap = Map<string, string>;
@@ -113,6 +117,7 @@ export function serializeSite(input: SiteSnapshotInput): FileMap {
         lists: listIndex,
         pages: pageIndex,
         pagesUnavailable: Boolean(input.pagesUnavailable),
+        truncated: Boolean(input.truncated),
       },
       notSynced: ["navigation", "theme", "list items / documents", "permissions"],
     }),
