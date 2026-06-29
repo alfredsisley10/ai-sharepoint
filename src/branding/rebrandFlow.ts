@@ -160,7 +160,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
         deep: true,
       },
     ],
-    { title: "How deep should the rename go?", placeHolder: "Choose the rebrand depth", ignoreFocusOut: true },
+    { title: WIZARD_TITLE, placeHolder: `How deep should the rename go? ${CANCEL_HINT}`, ignoreFocusOut: true },
   );
   if (!depth) return;
   const renameIdentifiers = depth.deep;
@@ -279,8 +279,11 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
       : "Bake-in: none",
   ].filter(Boolean);
   const apply = await vscode.window.showInformationMessage(
-    "Apply this rebrand across the source tree?",
-    { modal: true, detail: summary.join("\n") },
+    "Apply this rebrand?",
+    {
+      modal: true,
+      detail: `${summary.join("\n")}\n\nNext you'll choose what to produce (a .vsix, build components, or full source) and where to save it. Choose Apply to continue, or Cancel to abort — nothing is written until you pick an output and confirm.`,
+    },
     "Apply",
   );
   if (apply !== "Apply") return;
@@ -357,7 +360,11 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
         id: "source",
       },
     ],
-    { title: `Rebrand "${after.displayName}" — what should it produce?`, ignoreFocusOut: true, placeHolder: "Pick an output" },
+    {
+      title: `Rebrand "${after.displayName}" — what should it produce?`,
+      ignoreFocusOut: true,
+      placeHolder: `Pick an output. ${CANCEL_HINT}`,
+    },
   );
   if (!content) return;
 
@@ -428,7 +435,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
         id: "github",
       },
     ],
-    { title: `Export ${what} — where to?`, ignoreFocusOut: true, placeHolder: "Pick a destination" },
+    { title: `Export ${what} — where to?`, ignoreFocusOut: true, placeHolder: `Pick a destination. ${CANCEL_HINT}` },
   );
   if (!dest) return;
 
@@ -489,7 +496,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
       { label: "Private", description: "recommended", priv: true },
       { label: "Public", description: "anyone can read", priv: false },
     ],
-    { title: "Repository visibility", ignoreFocusOut: true },
+    { title: WIZARD_TITLE, placeHolder: `Repository visibility (you'll enter a token next). ${CANCEL_HINT}`, ignoreFocusOut: true },
   );
   if (!visPick) return;
   const token = await askSecret("GitHub token with 'repo' scope (write) — used once for this export, never stored");
@@ -564,6 +571,11 @@ async function pickVsix(): Promise<vscode.Uri | undefined> {
 
 // --- helpers ---------------------------------------------------------------
 
+/** Shared title so every step reads as part of one wizard, and a clear,
+ *  uniform statement of what Esc and a blank value do. */
+const WIZARD_TITLE = "White-label rebrand";
+const CANCEL_HINT = "Esc cancels the whole rebrand — nothing is written.";
+
 async function ask(
   prompt: string,
   value: string,
@@ -571,12 +583,16 @@ async function ask(
   allowEmpty = false,
 ): Promise<string | undefined> {
   return vscode.window.showInputBox({
+    title: WIZARD_TITLE,
     prompt,
     value,
     ignoreFocusOut: true,
+    placeHolder: allowEmpty
+      ? `Optional — leave blank to skip/keep the current value. ${CANCEL_HINT}`
+      : `Required. ${CANCEL_HINT}`,
     validateInput: (v) => {
       const t = v.trim();
-      if (!t) return allowEmpty ? undefined : "Required.";
+      if (!t) return allowEmpty ? undefined : `Required — type a value, or press Esc to cancel the rebrand.`;
       return validate?.(t);
     },
   });
@@ -591,12 +607,12 @@ async function writeText(uri: vscode.Uri, text: string): Promise<void> {
 }
 
 /** A two-option Yes/No quick pick; the default is listed first. Returns
- *  undefined if dismissed (so the caller can abort the wizard). */
+ *  undefined if dismissed — which ABORTS the wizard, so the prompt says so. */
 async function yesNo(title: string, detail: string, def = false): Promise<boolean | undefined> {
   const order = def ? ["Yes", "No"] : ["No", "Yes"];
   const pick = await vscode.window.showQuickPick(
-    order.map((label) => ({ label })),
-    { ignoreFocusOut: true, title, placeHolder: detail },
+    order.map((label) => ({ label, description: label === order[0] ? "default" : undefined })),
+    { ignoreFocusOut: true, title, placeHolder: `${detail} — ${CANCEL_HINT}` },
   );
   if (!pick) return undefined;
   return pick.label === "Yes";
@@ -604,7 +620,13 @@ async function yesNo(title: string, detail: string, def = false): Promise<boolea
 
 /** Prompt for a secret (masked input). Returns "" if left blank, undefined if cancelled. */
 async function askSecret(prompt: string): Promise<string | undefined> {
-  return vscode.window.showInputBox({ prompt, password: true, ignoreFocusOut: true });
+  return vscode.window.showInputBox({
+    title: WIZARD_TITLE,
+    prompt,
+    password: true,
+    ignoreFocusOut: true,
+    placeHolder: `Required for this step. ${CANCEL_HINT}`,
+  });
 }
 
 /** Load whitelabel.profile.json (if present) and ask whether to reuse it, so a
