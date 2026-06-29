@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.83.0",
+  "version": "0.84.0",
   "release": {
     "channel": "standard"
   },
@@ -1841,6 +1841,47 @@
               "description": "Word(s)/phrase(s) to add or remove (for add/remove)."
             }
           }
+        }
+      },
+      {
+        "name": "aisharepoint_remember_about",
+        "displayName": "Remember About a Site/Source",
+        "toolReferenceName": "spRememberAbout",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(note)",
+        "tags": [
+          "sharepoint",
+          "context"
+        ],
+        "modelDescription": "Save a durable, reusable note about ONE specific reference source or managed site (a convention, a key table, a gotcha, a naming rule) so it improves future answers about that entity. The note is stored as AI-proposed (the user can review/edit/remove it under 'Manage Memory') and is injected as context whenever that site/source is in scope. Provide 'target' = the EXACT site title/URL or source alias/display name (do not invent one), 'title' = a short label, and 'note' = the fact. Use ONLY for genuinely durable, entity-specific facts — not per-turn detail, and not project-wide learnings (use remember_project_context for those). Never store secrets, credentials, or tenant-identifying values you were told to keep private.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "The exact managed-site title/URL or reference-source alias/display name the note is about."
+            },
+            "title": {
+              "type": "string",
+              "description": "A short label for the note (e.g. 'Soft deletes')."
+            },
+            "note": {
+              "type": "string",
+              "description": "The durable fact/heuristic about this entity."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional short tags."
+            }
+          },
+          "required": [
+            "target",
+            "title",
+            "note"
+          ]
         }
       },
       {

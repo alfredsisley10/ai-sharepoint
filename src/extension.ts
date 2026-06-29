@@ -22,6 +22,7 @@ import { ErrorReportStore } from "./diagnostics/errorReports";
 import { DiagnosticsExportService } from "./diagnostics/exportService";
 import { LessonsStore } from "./diagnostics/lessonsStore";
 import { registerLessonsTools } from "./chat/lessonsTools";
+import { registerMemoryTools } from "./chat/memoryTools";
 import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
 import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
@@ -647,6 +648,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ...tryRegister("site-dev tools", () => registerSiteDevTools(sites, access, syncConfigs, telemetry, errors)),
     ...tryRegister("project tools", () => registerProjectTools(projects, telemetry, errors)),
     ...tryRegister("lessons tools", () => registerLessonsTools(lessons, telemetry, errors)),
+    ...tryRegister("memory tools", () =>
+      registerMemoryTools(memory, contextSources, sites, telemetry, errors, () => crypto.randomUUID(), nowIso),
+    ),
     ...tryRegister("proxy tools", () => registerProxyTools(blockedTerms, telemetry, errors)),
     blockedTerms,
     lessons,
