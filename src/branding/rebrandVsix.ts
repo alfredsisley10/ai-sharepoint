@@ -16,6 +16,7 @@ import {
   BrandConfig,
   rebrandPackageJsonFull,
   rebrandLicense,
+  rebrandReadmeTagline,
   replacePhrase,
   SUPPORT_PHRASE,
   SECURITY_PHRASE,
@@ -104,6 +105,11 @@ function transformEntry(name: string, data: Uint8Array, opts: VsixRebrandOptions
   const lower = name.toLowerCase();
   if (/(^|\/)license(\.[a-z0-9]+)?$/.test(lower) && opts.after.licenseHolder) {
     text = rebrandLicense(text, opts.after.licenseHolder);
+  }
+  if (/(^|\/)readme\.md$/.test(lower)) {
+    // The README's tagline restates the description; replace it so the details
+    // page doesn't show the new + original descriptions one after the other.
+    text = rebrandReadmeTagline(text, opts.after.description);
   }
   if (lower.endsWith("/support.md")) {
     text = replacePhrase(text, SUPPORT_PHRASE, opts.after.supportContact).text;
@@ -265,6 +271,9 @@ export function rebrandSourceArchive(sourceZip: Uint8Array, opts: VsixRebrandOpt
     const lower = name.toLowerCase();
     if (/(^|\/)license(\.[a-z0-9]+)?$/.test(lower) && opts.after.licenseHolder) {
       text = rebrandLicense(text, opts.after.licenseHolder);
+    }
+    if (/(^|\/)readme\.md$/.test(lower)) {
+      text = rebrandReadmeTagline(text, opts.after.description);
     }
     if (lower.endsWith("support.md")) {
       text = replacePhrase(text, SUPPORT_PHRASE, opts.after.supportContact).text;
