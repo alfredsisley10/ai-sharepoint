@@ -8,6 +8,10 @@ import {
   applyBrandTokens,
   countTokenHits,
 } from "../src/branding/brandTokens";
+// Origin-side fixtures come from ORIGIN_BRAND (the single source of truth), so
+// the engine tests hardcode NO prior identifiers and stay correct after a
+// white-label export regenerates that module for the new brand.
+import { ORIGIN_BRAND } from "../src/branding/originBrand";
 
 const display: DeepBrandConfig = {
   displayName: "Contoso Docs",
@@ -33,10 +37,10 @@ test("validateDeepBrand enforces handle/namespace shapes", () => {
 test("display-only rebrand renames the product and handle, NOT Microsoft SharePoint", () => {
   const tokens = buildBrandTokens(display);
   const src = [
-    "AI SharePoint connects to SharePoint Online.",
-    "Ask @sharepoint about your SharePoint sites.",
-    "const x = vscode.getConfiguration('aiSharePoint');",
-    "registerTool('aisharepoint_search')",
+    `${ORIGIN_BRAND.displayName} connects to SharePoint Online.`,
+    `Ask @${ORIGIN_BRAND.handle} about your SharePoint sites.`,
+    `const x = vscode.getConfiguration('${ORIGIN_BRAND.namespace}');`,
+    `registerTool('${ORIGIN_BRAND.namespaceLower}_search')`,
   ].join("\n");
   const out = applyBrandTokens(src, tokens);
   // our brand renamed:
@@ -46,17 +50,17 @@ test("display-only rebrand renames the product and handle, NOT Microsoft SharePo
   assert.ok(out.includes("SharePoint Online"));
   assert.ok(out.includes("your SharePoint sites"));
   // identifiers untouched in display-only mode:
-  assert.ok(out.includes("aiSharePoint"));
-  assert.ok(out.includes("aisharepoint_search"));
+  assert.ok(out.includes(ORIGIN_BRAND.namespace));
+  assert.ok(out.includes(`${ORIGIN_BRAND.namespaceLower}_search`));
 });
 
 test("deep rebrand also renames internal identifier namespaces consistently", () => {
   const tokens = buildBrandTokens(deep);
   const src = [
-    "vscode.getConfiguration('aiSharePoint')",
-    "register('aiSharePoint.connectSite')",
-    "registerTool('aisharepoint_search')",
-    "schema id ai-sharepoint/site-snapshot and folder .aisharepoint/site.json",
+    `vscode.getConfiguration('${ORIGIN_BRAND.namespace}')`,
+    `register('${ORIGIN_BRAND.namespace}.connectSite')`,
+    `registerTool('${ORIGIN_BRAND.namespaceLower}_search')`,
+    `schema id ${ORIGIN_BRAND.kebab}/site-snapshot and folder .${ORIGIN_BRAND.namespaceLower}/site.json`,
     "SharePoint Online stays intact",
   ].join("\n");
   const out = applyBrandTokens(src, tokens);
@@ -64,20 +68,23 @@ test("deep rebrand also renames internal identifier namespaces consistently", ()
   assert.match(out, /register\('contosoDocs\.connectSite'\)/);
   assert.match(out, /registerTool\('contosodocs_search'\)/);
   assert.ok(out.includes("contoso-docs/site-snapshot")); // kebab schema id renamed
-  assert.ok(out.includes(".contosodocs/site.json")); // .aisharepoint folder renamed
+  assert.ok(out.includes(".contosodocs/site.json")); // dot-folder prefix renamed
   // Microsoft product name still preserved even in deep mode:
   assert.ok(out.includes("SharePoint Online stays intact"));
 });
 
 test("no token is mangled by another; replacement is single-pass", () => {
   const tokens = buildBrandTokens(deep);
-  // "aiSharePoint" must not be corrupted by the "aisharepoint" rule and vice versa
-  const out = applyBrandTokens("aiSharePoint aisharepoint ai-sharepoint", tokens);
+  // the camelCase namespace must not be corrupted by the lowercase-prefix rule (or vice versa)
+  const out = applyBrandTokens(`${ORIGIN_BRAND.namespace} ${ORIGIN_BRAND.namespaceLower} ${ORIGIN_BRAND.kebab}`, tokens);
   assert.equal(out, "contosoDocs contosodocs contoso-docs");
 });
 
 test("countTokenHits reports occurrences for dry-run reporting", () => {
   const tokens = buildBrandTokens(display);
-  assert.equal(countTokenHits("AI SharePoint and AI SharePoint and @sharepoint", tokens), 3);
+  assert.equal(
+    countTokenHits(`${ORIGIN_BRAND.displayName} and ${ORIGIN_BRAND.displayName} and @${ORIGIN_BRAND.handle}`, tokens),
+    3,
+  );
   assert.equal(countTokenHits("nothing here", tokens), 0);
 });

@@ -14,6 +14,9 @@ import {
   SUPPORT_PHRASE,
   SECURITY_PHRASE,
 } from "../src/branding/rebrand";
+// Origin-side fixtures come from ORIGIN_BRAND so these tests hardcode no prior
+// identifiers (and stay correct after a white-label export regenerates it).
+import { ORIGIN_BRAND } from "../src/branding/originBrand";
 
 test("rebrandReadmeTagline replaces the post-H1 bold description, once, leaving the body", () => {
   const readme = [
@@ -62,28 +65,28 @@ test("extensionId / identityChanged track the data-scoping identity", () => {
 test("rebrandPackageJson sets the four fields, preserves formatting, stays valid JSON", () => {
   const raw = [
     "{",
-    '  "name": "ai-sharepoint",',
-    '  "displayName": "AI SharePoint",',
+    `  "name": "${ORIGIN_BRAND.kebab}",`,
+    `  "displayName": "${ORIGIN_BRAND.displayName}",`,
     '  "description": "Old description with a \\"quote\\".",',
     '  "version": "0.66.2",',
-    '  "publisher": "alfredsisley10",',
+    `  "publisher": "${ORIGIN_BRAND.publisher}",`,
     '  "contributes": {',
     '    "chatParticipants": [',
-    '      { "name": "sharepoint" }',
+    `      { "name": "${ORIGIN_BRAND.handle}" }`,
     "    ]",
     "  }",
     "}",
     "",
   ].join("\n");
-  const out = rebrandPackageJson(raw, { ...base, displayName: 'Has "quotes"', description: "New & shiny." });
+  const out = rebrandPackageJson(raw, { ...base, name: "contoso-docs", displayName: 'Has "quotes"', description: "New & shiny." });
   const parsed = JSON.parse(out);
   assert.equal(parsed.publisher, "contoso");
-  assert.equal(parsed.name, "ai-sharepoint");
+  assert.equal(parsed.name, "contoso-docs");
   assert.equal(parsed.displayName, 'Has "quotes"');
   assert.equal(parsed.description, "New & shiny.");
   assert.equal(parsed.version, "0.66.2"); // untouched
   // the nested chat participant "name" must NOT have been rewritten
-  assert.equal(parsed.contributes.chatParticipants[0].name, "sharepoint");
+  assert.equal(parsed.contributes.chatParticipants[0].name, ORIGIN_BRAND.handle);
 });
 
 test("rebrandPackageJson throws if a field is missing (caller can fall back)", () => {
@@ -91,7 +94,7 @@ test("rebrandPackageJson throws if a field is missing (caller can fall back)", (
 });
 
 test("rebrandLicense swaps the holder and updates the year", () => {
-  const lic = "MIT License\n\nCopyright (c) 2026 AI SharePoint contributors\n\nPermission...";
+  const lic = `MIT License\n\nCopyright (c) 2026 ${ORIGIN_BRAND.displayName} contributors\n\nPermission...`;
   assert.match(rebrandLicense(lic, "Contoso Ltd"), /Copyright \(c\) 2026 Contoso Ltd/);
   assert.match(rebrandLicense(lic, "Contoso Ltd", "2027"), /Copyright \(c\) 2027 Contoso Ltd/);
 });
@@ -137,10 +140,10 @@ test("repackageCommand avoids && on PowerShell — Windows 5.1 rejects && as a s
 
 test("summarizeBrand lists only the changed fields", () => {
   const lines = summarizeBrand(
-    { ...base, publisher: "alfredsisley10", displayName: "AI SharePoint" },
+    { ...base, publisher: ORIGIN_BRAND.publisher, displayName: ORIGIN_BRAND.displayName },
     base,
   );
-  assert.ok(lines.some((l) => /Publisher: alfredsisley10 → contoso/.test(l)));
-  assert.ok(lines.some((l) => /Display name: AI SharePoint → Contoso Docs/.test(l)));
+  assert.ok(lines.some((l) => l.includes(`Publisher: ${ORIGIN_BRAND.publisher} → contoso`)));
+  assert.ok(lines.some((l) => l.includes(`Display name: ${ORIGIN_BRAND.displayName} → Contoso Docs`)));
   assert.ok(!lines.some((l) => /Name:/.test(l))); // unchanged
 });
