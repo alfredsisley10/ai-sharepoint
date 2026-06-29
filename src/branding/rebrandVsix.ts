@@ -113,18 +113,94 @@ function transformEntry(name: string, data: Uint8Array, opts: VsixRebrandOptions
   return strToU8(text);
 }
 
+/** Rebrand every entry of a VSIX, returning the full entry map (the same set of
+ *  paths as the input — `extension/…`, `extension.vsixmanifest`, etc.). */
+export function transformedEntries(
+  vsix: Uint8Array,
+  opts: VsixRebrandOptions,
+): Record<string, Uint8Array> {
+  const files = unzipSync(vsix);
+  const out: Record<string, Uint8Array> = {};
+  for (const [name, data] of Object.entries(files)) {
+    out[name] = transformEntry(name, data, opts);
+  }
+  return out;
+}
+
 /**
  * Read a VSIX, rebrand every text entry + the manifest, and return the bytes of
  * a new VSIX. The output is a standard deflate ZIP that VS Code installs like
  * any packaged extension.
  */
 export function rebrandVsix(vsix: Uint8Array, opts: VsixRebrandOptions): Uint8Array {
-  const files = unzipSync(vsix);
+  return zipSync(transformedEntries(vsix, opts), { level: 6 });
+}
+
+/** Reduce a rebranded package.json to the minimum needed to RE-PACKAGE the
+ *  pre-built bundle: vsce only (no esbuild/typescript/etc. — the bundle is
+ *  already built), no runtime dependencies (bundled + --no-dependencies), and
+ *  no source build step. This is what shrinks the build-team dependency surface
+ *  so a withheld/scanning-pending dependency can't break their build. */
+export function minimalPackageJson(pkgText: string): string {
+  const pkg = JSON.parse(pkgText) as Record<string, unknown>;
+  delete pkg.dependencies; // bundle is pre-built; vsce packages with --no-dependencies
+  pkg.devDependencies = { "@vscode/vsce": "^3.0.0" };
+  pkg.scripts = {
+    package: "vsce package --no-dependencies --no-rewrite-relative-links --allow-missing-repository",
+  };
+  return JSON.stringify(pkg, null, 2) + "\n";
+}
+
+const BUILD_VSCODEIGNORE = ["node_modules/**", "BUILD.md", ".vscodeignore", "**/*.map", ""].join("\n");
+
+function buildReadme(displayName: string, name: string): string {
+  return [
+    `# Building "${displayName}"`,
+    "",
+    "These are the minimal, **pre-built** components for this white-labeled",
+    "extension. The bundle (`dist/extension.js`) is already compiled and",
+    "rebranded — you only re-package it into a `.vsix` through your own pipeline.",
+    "",
+    "## Build",
+    "",
+    "```",
+    "npm install      # installs @vscode/vsce only",
+    `npm run package  # produces ${name}-<version>.vsix`,
+    "```",
+    "",
+    "Requires Node 18+ and registry access for `@vscode/vsce`. If your registry",
+    "serves internally-issued TLS certs, make sure the OS trust store is used:",
+    "Node 22.9+ honors `NODE_OPTIONS=--use-system-ca`; on older Node set",
+    "`NODE_EXTRA_CA_CERTS` to your corporate CA bundle.",
+    "",
+    "No source build is required (no esbuild/TypeScript) — only `@vscode/vsce` is",
+    "installed, which keeps the dependency surface (and security-scan exposure)",
+    "minimal.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * The minimal, hand-offable build components for a separate build team: the
+ * rebranded extension payload (bundle + manifest assets) at the repo root, a
+ * minimal package.json (vsce-only), a `.vscodeignore`, and a `BUILD.md`. Returns
+ * a repo-relative path → bytes map (no `extension/` prefix), ready to write to a
+ * folder or push to a repository. Re-packaging these yields the same VSIX.
+ */
+export function minimalBuildComponents(
+  vsix: Uint8Array,
+  opts: VsixRebrandOptions,
+): Record<string, Uint8Array> {
+  const entries = transformedEntries(vsix, opts);
   const out: Record<string, Uint8Array> = {};
-  for (const [name, data] of Object.entries(files)) {
-    out[name] = transformEntry(name, data, opts);
+  for (const [name, data] of Object.entries(entries)) {
+    if (!name.startsWith("extension/")) continue; // drop vsixmanifest / [Content_Types].xml (vsce regenerates them)
+    const rel = name.slice("extension/".length);
+    out[rel] = rel === "package.json" ? strToU8(minimalPackageJson(strFromU8(data))) : data;
   }
-  return zipSync(out, { level: 6 });
+  out[".vscodeignore"] = strToU8(BUILD_VSCODEIGNORE);
+  out["BUILD.md"] = strToU8(buildReadme(opts.after.displayName, opts.after.name));
+  return out;
 }
 
 /** Read just `extension/package.json` from a VSIX (for the pre-fill / "before"

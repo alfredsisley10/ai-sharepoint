@@ -8,7 +8,7 @@ import {
   identityChanged,
   extensionId,
 } from "./rebrand";
-import { rebrandVsix, readVsixPackageJson } from "./rebrandVsix";
+import { rebrandVsix, minimalBuildComponents, readVsixPackageJson, VsixRebrandOptions } from "./rebrandVsix";
 import { computeExpiry, ReleaseManifest } from "./releaseExpiry";
 import {
   ReleaseProfile,
@@ -277,10 +277,10 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
   );
   if (apply !== "Apply") return;
 
-  // --- apply: transform the chosen VSIX in place ----------------------------
+  // --- apply ----------------------------------------------------------------
   const tokens = buildBrandTokens(deep);
 
-  // Optional icon swap (replaces extension/media/icon.png inside the VSIX).
+  // Optional icon swap (applies to whichever output is produced).
   let newIcon: Uint8Array | undefined;
   const icon = await vscode.window.showOpenDialog({
     title: "Select a new icon PNG (Cancel to keep the current icon)",
@@ -296,42 +296,17 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     }
   }
 
-  // Where to write the rebranded VSIX — default next to the input.
+  const opts: VsixRebrandOptions = {
+    tokens,
+    after,
+    handle: deep.handle,
+    release,
+    ...(hasProvisioning ? { provisioning: provisioningManifest } : {}),
+    ...(newIcon ? { newIcon } : {}),
+  };
   const version = typeof pkg.version === "string" ? pkg.version : "0.0.0";
-  const outUri = await vscode.window.showSaveDialog({
-    title: "Save the rebranded VSIX",
-    defaultUri: vscode.Uri.joinPath(profileDir, `${after.name}-${version}.vsix`),
-    filters: { "VS Code Extension": ["vsix"] },
-  });
-  if (!outUri) return;
 
-  try {
-    const outBytes = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Rebranding to "${after.displayName}"…` },
-      () =>
-        Promise.resolve(
-          rebrandVsix(vsixBytes, {
-            tokens,
-            after,
-            handle: deep.handle,
-            release,
-            ...(hasProvisioning ? { provisioning: provisioningManifest } : {}),
-            ...(newIcon ? { newIcon } : {}),
-          }),
-        ),
-    );
-    await vscode.workspace.fs.writeFile(outUri, outBytes);
-  } catch (e) {
-    log.error("rebrand: vsix", e);
-    void vscode.window.showErrorMessage(`Could not produce the rebranded VSIX: ${msg(e)}. The original .vsix was not modified.`);
-    return;
-  }
-
-  log.info(
-    `Rebranded VSIX written: ${outUri.fsPath} ("${after.displayName}", ${extensionId(after.publisher, after.name)})${renameIdentifiers ? `, namespace ${deep.idNamespace}` : ""}`,
-  );
-
-  // Offer to save a reusable release profile (no secrets) next to the VSIX.
+  // Save the reusable, secret-free profile now — independent of the output mode.
   await saveProfileMaybe(
     profileDir,
     {
@@ -353,21 +328,107 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     log,
   );
 
-  // --- finish ---------------------------------------------------------------
-  const detail = [
-    `Wrote ${outUri.fsPath}.`,
-    release.expiresAt
-      ? `This build expires ${release.expiresAt.slice(0, 10)} (${release.validityDays} days — users must upgrade after that).`
-      : "This build never expires.",
-    renameIdentifiers
-      ? "Internal identifiers were renamed — this is a distinct extension ID, so existing installs of the original keep their own data."
-      : "",
-    "",
-    `Install it with:  code --install-extension "${outUri.fsPath}"`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  await vscode.window.showInformationMessage(`Rebrand complete: "${after.displayName}".`, { modal: true, detail }, "OK");
+  // --- choose the output ----------------------------------------------------
+  const mode = await vscode.window.showQuickPick(
+    [
+      {
+        label: "$(package) Rebranded .vsix",
+        detail: "One file you can install or distribute directly — no build step.",
+        id: "vsix",
+      },
+      {
+        label: "$(folder) Minimal build components",
+        detail:
+          "The pre-built, rebranded payload + a minimal package.json (vsce only) for a separate build team to package through their own pipeline. Sidesteps withheld build dependencies.",
+        id: "components",
+      },
+    ],
+    { title: `Rebrand "${after.displayName}" — what should it produce?`, ignoreFocusOut: true, placeHolder: "Pick an output" },
+  );
+  if (!mode) return;
+
+  if (mode.id === "vsix") {
+    const outUri = await vscode.window.showSaveDialog({
+      title: "Save the rebranded VSIX",
+      defaultUri: vscode.Uri.joinPath(profileDir, `${after.name}-${version}.vsix`),
+      filters: { "VS Code Extension": ["vsix"] },
+    });
+    if (!outUri) return;
+    try {
+      const outBytes = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Rebranding to "${after.displayName}"…` },
+        () => Promise.resolve(rebrandVsix(vsixBytes, opts)),
+      );
+      await vscode.workspace.fs.writeFile(outUri, outBytes);
+    } catch (e) {
+      log.error("rebrand: vsix", e);
+      void vscode.window.showErrorMessage(`Could not produce the rebranded VSIX: ${msg(e)}. The original .vsix was not modified.`);
+      return;
+    }
+    log.info(
+      `Rebranded VSIX written: ${outUri.fsPath} ("${after.displayName}", ${extensionId(after.publisher, after.name)})${renameIdentifiers ? `, namespace ${deep.idNamespace}` : ""}`,
+    );
+    const detail = [
+      `Wrote ${outUri.fsPath}.`,
+      release.expiresAt
+        ? `This build expires ${release.expiresAt.slice(0, 10)} (${release.validityDays} days — users must upgrade after that).`
+        : "This build never expires.",
+      renameIdentifiers ? "Internal identifiers were renamed — a distinct extension ID; existing installs keep their own data." : "",
+      "",
+      `Install it with:  code --install-extension "${outUri.fsPath}"`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    await vscode.window.showInformationMessage(`Rebrand complete: "${after.displayName}".`, { modal: true, detail }, "OK");
+    return;
+  }
+
+  // Minimal build components → a folder a build team can package themselves.
+  const folder = await vscode.window.showOpenDialog({
+    title: "Select an empty folder for the build components",
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+  });
+  if (!folder || !folder[0]) return;
+  const target = vscode.Uri.joinPath(folder[0], `${after.name}-build`);
+  try {
+    const files = minimalBuildComponents(vsixBytes, opts);
+    await writeFileMap(target, files);
+  } catch (e) {
+    log.error("rebrand: components", e);
+    void vscode.window.showErrorMessage(`Could not write the build components: ${msg(e)}.`);
+    return;
+  }
+  log.info(`Build components written: ${target.fsPath} ("${after.displayName}")`);
+  await vscode.window.showInformationMessage(
+    `Build components ready: "${after.displayName}".`,
+    {
+      modal: true,
+      detail: [
+        `Wrote the minimal, pre-built components to ${target.fsPath}.`,
+        "",
+        "Hand this folder to your build team. To produce the .vsix:",
+        `  cd "${target.fsPath}"`,
+        "  npm install        (installs @vscode/vsce only)",
+        "  npm run package",
+        "",
+        "See BUILD.md in the folder for corporate-registry / TLS notes.",
+      ].join("\n"),
+    },
+    "OK",
+  );
+}
+
+/** Write a relative-path → bytes map under `root`, creating parent dirs. */
+async function writeFileMap(root: vscode.Uri, files: Record<string, Uint8Array>): Promise<void> {
+  await vscode.workspace.fs.createDirectory(root);
+  for (const [rel, bytes] of Object.entries(files)) {
+    const uri = vscode.Uri.joinPath(root, ...rel.split("/"));
+    const dir = vscode.Uri.joinPath(uri, "..");
+    await vscode.workspace.fs.createDirectory(dir);
+    await vscode.workspace.fs.writeFile(uri, bytes);
+  }
 }
 
 /** Pick the .vsix to rebrand (the built standard package). */

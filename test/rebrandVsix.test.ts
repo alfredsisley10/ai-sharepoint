@@ -7,6 +7,8 @@ import {
   setManifestAttr,
   setManifestElement,
   readVsixPackageJson,
+  minimalBuildComponents,
+  minimalPackageJson,
   VsixRebrandOptions,
 } from "../src/branding/rebrandVsix";
 import { buildBrandTokens } from "../src/branding/brandTokens";
@@ -138,6 +140,38 @@ test("rebrandVsixManifest is display-only safe (no identifier rename needed)", (
   const xml = rebrandVsixManifest(MANIFEST, { tokens, after, handle: "contosodocs", release });
   assert.match(xml, /Id="contoso-docs"/);
   assert.match(xml, /<DisplayName>Contoso Docs<\/DisplayName>/);
+});
+
+test("minimalBuildComponents: pre-built payload at root, vsce-only package.json, BUILD.md", () => {
+  const files = minimalBuildComponents(fixtureVsix(), deepOpts());
+  // Repo-relative paths (no extension/ prefix); manifest + content-types dropped.
+  assert.ok("package.json" in files);
+  assert.ok("dist/extension.js" in files);
+  assert.ok("media/icon.png" in files);
+  assert.ok(".vscodeignore" in files);
+  assert.ok("BUILD.md" in files);
+  assert.ok(!("extension.vsixmanifest" in files), "vsce regenerates the manifest");
+  assert.ok(!("[Content_Types].xml" in files));
+
+  const pkg = JSON.parse(strFromU8(files["package.json"]));
+  assert.equal(pkg.displayName, "Contoso Docs", "still rebranded");
+  assert.deepEqual(Object.keys(pkg.devDependencies), ["@vscode/vsce"], "only vsce is needed to package");
+  assert.ok(!("dependencies" in pkg), "runtime deps dropped — bundle is pre-built");
+  assert.match(pkg.scripts.package, /vsce package/);
+  // The pre-built bundle is the rebranded one.
+  assert.match(strFromU8(files["dist/extension.js"]), /Contoso Docs/);
+  assert.match(strFromU8(files["BUILD.md"]), /Contoso Docs/);
+});
+
+test("minimalPackageJson keeps identity/contributes but strips the build surface", () => {
+  const out = JSON.parse(
+    minimalPackageJson(JSON.stringify({ name: "x", displayName: "X", main: "./dist/extension.js", contributes: { a: 1 }, dependencies: { pg: "^8" }, devDependencies: { esbuild: "^0.28", prettier: "^3" }, scripts: { "vscode:prepublish": "node esbuild.js" } })),
+  );
+  assert.equal(out.main, "./dist/extension.js");
+  assert.deepEqual(out.contributes, { a: 1 });
+  assert.ok(!("dependencies" in out));
+  assert.deepEqual(Object.keys(out.devDependencies), ["@vscode/vsce"]);
+  assert.ok(!("vscode:prepublish" in out.scripts), "no source build step (bundle is pre-built)");
 });
 
 test("readVsixPackageJson reads the manifest; rejects a non-extension zip", () => {
