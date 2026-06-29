@@ -21,6 +21,7 @@ import {
   SECURITY_PHRASE,
 } from "./rebrand";
 import { ReleaseManifest } from "./releaseExpiry";
+import { exportScaffoldFiles } from "./exportScaffold";
 
 export interface VsixRebrandOptions {
   /** Brand tokens from buildBrandTokens(deep). */
@@ -203,7 +204,77 @@ export function minimalBuildComponents(
   out[".vscodeignore"] = strToU8(BUILD_VSCODEIGNORE);
   out[".gitignore"] = strToU8(BUILD_GITIGNORE);
   out["BUILD.md"] = strToU8(buildReadme(opts.after.displayName, opts.after.name));
-  return out;
+  return { ...out, ...exportScaffoldFiles(opts.after, "minimal") };
+}
+
+/** Extract the bundled full-source archive (dist/source.zip) from a VSIX, or
+ *  undefined if this VSIX predates source bundling. */
+export function readVsixSourceArchive(vsix: Uint8Array): Uint8Array | undefined {
+  return unzipSync(vsix)["extension/dist/source.zip"];
+}
+
+// Paths whose brand tokens must NOT be rewritten when exporting source: the
+// rebrand engine itself (its find-tokens are literal data — rewriting them
+// would corrupt it), and the test/tooling/CI trees (they reference the old
+// identifiers and string fixtures on purpose). They are still EMITTED so the
+// tree builds; only token substitution is skipped.
+const SOURCE_SKIP_REWRITE = [
+  "src/branding/",
+  "test/",
+  "test-integration/",
+  "scripts/",
+  ".github/",
+  "node_modules/",
+  "dist/",
+  "out/",
+  "out-test/",
+];
+const SOURCE_TEXT_RE = /\.(ts|js|cjs|mjs|json|md|txt|svg|css|html|ya?ml)$/i;
+
+/**
+ * Rebrand a full-source archive (the VSIX's dist/source.zip) into a complete,
+ * buildable, rebranded source tree (repo-relative path → bytes). Mirrors the
+ * old in-place source rewrite: brand tokens across product source/docs,
+ * identity + release + provisioning into package.json, LICENSE-holder and
+ * support/security contacts — while leaving the rebrand engine, tests, and CI
+ * tooling untouched (token-wise). Build-ready GitHub Actions + a MAINTAINING.md
+ * are added.
+ */
+export function rebrandSourceArchive(sourceZip: Uint8Array, opts: VsixRebrandOptions): Record<string, Uint8Array> {
+  const files = unzipSync(sourceZip);
+  const out: Record<string, Uint8Array> = {};
+  for (const [name, data] of Object.entries(files)) {
+    if (SOURCE_SKIP_REWRITE.some((p) => name.startsWith(p))) {
+      out[name] = data; // present, but not token-rewritten (engine/test/CI safety)
+      continue;
+    }
+    if (name === "package.json") {
+      out[name] = strToU8(
+        rebrandPackageJsonFull(strFromU8(data), opts.tokens, opts.after, opts.handle, opts.release, opts.provisioning),
+      );
+      continue;
+    }
+    // Extensionless docs (LICENSE, README, …) are text too — without this they
+    // fall through as "binary" and the LICENSE holder is never rewritten.
+    const isText = SOURCE_TEXT_RE.test(name) || /(^|\/)(license|readme|changelog|notice|authors|contributors)$/i.test(name);
+    if (!isText) {
+      out[name] = data; // binary (icons, etc.)
+      continue;
+    }
+    let text = applyBrandTokens(strFromU8(data), opts.tokens);
+    const lower = name.toLowerCase();
+    if (/(^|\/)license(\.[a-z0-9]+)?$/.test(lower) && opts.after.licenseHolder) {
+      text = rebrandLicense(text, opts.after.licenseHolder);
+    }
+    if (lower.endsWith("support.md")) {
+      text = replacePhrase(text, SUPPORT_PHRASE, opts.after.supportContact).text;
+      text = replacePhrase(text, SECURITY_PHRASE, opts.after.securityContact).text;
+    } else if (lower.endsWith("security.md")) {
+      text = replacePhrase(text, SECURITY_PHRASE, opts.after.securityContact).text;
+    }
+    out[name] = strToU8(text);
+  }
+  return { ...out, ...exportScaffoldFiles(opts.after, "source") };
 }
 
 /** Read just `extension/package.json` from a VSIX (for the pre-fill / "before"

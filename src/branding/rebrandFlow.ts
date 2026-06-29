@@ -8,7 +8,14 @@ import {
   identityChanged,
   extensionId,
 } from "./rebrand";
-import { rebrandVsix, minimalBuildComponents, readVsixPackageJson, VsixRebrandOptions } from "./rebrandVsix";
+import {
+  rebrandVsix,
+  minimalBuildComponents,
+  rebrandSourceArchive,
+  readVsixSourceArchive,
+  readVsixPackageJson,
+  VsixRebrandOptions,
+} from "./rebrandVsix";
 import { exportToGitHub } from "./githubExport";
 import { computeExpiry, ReleaseManifest } from "./releaseExpiry";
 import {
@@ -329,32 +336,32 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     log,
   );
 
-  // --- choose the output ----------------------------------------------------
-  const mode = await vscode.window.showQuickPick(
+  // --- choose what to produce ----------------------------------------------
+  const content = await vscode.window.showQuickPick(
     [
       {
         label: "$(package) Rebranded .vsix",
-        detail: "One file you can install or distribute directly — no build step.",
+        detail: "One file to install or distribute directly — no build step.",
         id: "vsix",
       },
       {
-        label: "$(folder) Minimal build components",
+        label: "$(tools) Minimal build components",
         detail:
-          "The pre-built, rebranded payload + a minimal package.json (vsce only) for a separate build team to package through their own pipeline. Sidesteps withheld build dependencies.",
+          "Pre-built, rebranded payload + a vsce-only package.json. A build team re-packages it (smallest dependency surface), or you merge it into a repo.",
         id: "components",
       },
       {
-        label: "$(github) Push to enterprise GitHub",
+        label: "$(code) Full source",
         detail:
-          "Create/update a repository (github.com or GitHub Enterprise Server) with the build components, for ongoing maintenance and management.",
-        id: "github",
+          "The complete, rebranded source tree (from the source bundled inside the VSIX) for full ongoing maintenance — no access to the original repo needed; standard npm deps only.",
+        id: "source",
       },
     ],
     { title: `Rebrand "${after.displayName}" — what should it produce?`, ignoreFocusOut: true, placeHolder: "Pick an output" },
   );
-  if (!mode) return;
+  if (!content) return;
 
-  if (mode.id === "vsix") {
+  if (content.id === "vsix") {
     const outUri = await vscode.window.showSaveDialog({
       title: "Save the rebranded VSIX",
       defaultUri: vscode.Uri.joinPath(profileDir, `${after.name}-${version}.vsix`),
@@ -390,39 +397,72 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     return;
   }
 
-  if (mode.id === "components") {
-    // Minimal build components → a folder a build team can package, or that the
-    // user can commit / merge into a git repository manually.
+  // Build the file map for the chosen content (components or full source).
+  let files: Record<string, Uint8Array>;
+  if (content.id === "components") {
+    files = minimalBuildComponents(vsixBytes, opts);
+  } else {
+    const sourceZip = readVsixSourceArchive(vsixBytes);
+    if (!sourceZip) {
+      void vscode.window.showErrorMessage(
+        "This .vsix doesn't carry its source (it was built before source bundling). Rebuild the standard VSIX with a current build and rebrand that, or choose a different output.",
+      );
+      return;
+    }
+    files = rebrandSourceArchive(sourceZip, opts);
+  }
+  const what = content.id === "components" ? "build components" : "full source";
+  const folderSuffix = content.id === "source" ? "source" : "build";
+
+  // Destination: a local folder (commit/merge yourself), or push to GitHub.
+  const dest = await vscode.window.showQuickPick(
+    [
+      {
+        label: "$(folder) Write to a local folder",
+        detail: "Commit or merge it into a git repository yourself.",
+        id: "folder",
+      },
+      {
+        label: "$(github) Push to enterprise GitHub",
+        detail: "Create/update a repo on github.com or GitHub Enterprise Server, in one commit.",
+        id: "github",
+      },
+    ],
+    { title: `Export ${what} — where to?`, ignoreFocusOut: true, placeHolder: "Pick a destination" },
+  );
+  if (!dest) return;
+
+  if (dest.id === "folder") {
     const folder = await vscode.window.showOpenDialog({
-      title: "Select a folder to write the build components into",
+      title: `Select a folder for the ${what}`,
       canSelectFiles: false,
       canSelectFolders: true,
       canSelectMany: false,
     });
     if (!folder || !folder[0]) return;
-    const target = vscode.Uri.joinPath(folder[0], `${after.name}-build`);
+    const target = vscode.Uri.joinPath(folder[0], `${after.name}-${folderSuffix}`);
     try {
-      await writeFileMap(target, minimalBuildComponents(vsixBytes, opts));
+      await writeFileMap(target, files);
     } catch (e) {
-      log.error("rebrand: components", e);
-      void vscode.window.showErrorMessage(`Could not write the build components: ${msg(e)}.`);
+      log.error("rebrand: export folder", e);
+      void vscode.window.showErrorMessage(`Could not write the ${what}: ${msg(e)}.`);
       return;
     }
-    log.info(`Build components written: ${target.fsPath} ("${after.displayName}")`);
+    log.info(`Exported ${what} (${Object.keys(files).length} files) to ${target.fsPath} ("${after.displayName}")`);
     await vscode.window.showInformationMessage(
-      `Build components ready: "${after.displayName}".`,
+      `${what[0].toUpperCase()}${what.slice(1)} ready: "${after.displayName}".`,
       {
         modal: true,
         detail: [
-          `Wrote the minimal, pre-built components to ${target.fsPath}.`,
+          `Wrote ${Object.keys(files).length} files to ${target.fsPath}.`,
           "",
-          "Package them (e.g. by your build team):",
+          "Build it:",
           `  cd "${target.fsPath}"`,
-          "  npm install        (installs @vscode/vsce only)",
-          "  npm run package",
+          content.id === "source" ? "  npm install && npm run package" : "  npm install   (vsce only) && npm run package",
           "",
-          "Or commit/merge the folder into a git repository to manage it yourself",
-          "(a .gitignore is included). See BUILD.md for corporate-registry / TLS notes.",
+          "Included: a GitHub Actions workflow (.github/workflows/whitelabel-build.yml) and",
+          "MAINTAINING.md (GHES / SaaS setup, runners, registry/TLS, branch protection,",
+          "releases). Commit or merge the folder into a repository to manage it.",
         ].join("\n"),
       },
       "OK",
@@ -430,7 +470,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     return;
   }
 
-  // Push the build components to an enterprise GitHub for ongoing maintenance.
+  // dest.id === "github" — push the chosen components to an enterprise GitHub.
   const host = await ask(
     "GitHub host — blank for github.com, or your GitHub Enterprise Server host (e.g. github.corp.example)",
     "",
@@ -452,9 +492,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     { title: "Repository visibility", ignoreFocusOut: true },
   );
   if (!visPick) return;
-  const token = await askSecret(
-    "GitHub token with 'repo' scope (write) — used once for this export, never stored",
-  );
+  const token = await askSecret("GitHub token with 'repo' scope (write) — used once for this export, never stored");
   if (token === undefined) return;
   if (!token.trim()) {
     void vscode.window.showErrorMessage("A GitHub token is required to push. Nothing was exported.");
@@ -462,7 +500,6 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
   }
 
   try {
-    const files = minimalBuildComponents(vsixBytes, opts);
     const result = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Pushing "${after.displayName}" to GitHub…` },
       () =>
@@ -473,14 +510,14 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
             owner: ownerIn.trim(),
             repo: repoIn.trim(),
             privateRepo: visPick.priv,
-            message: `White-label build: ${after.displayName} (${after.name})`,
+            message: `White-label ${what}: ${after.displayName} (${after.name})`,
           },
           files,
           // The extension host's global fetch satisfies the injected shape.
           fetch as unknown as Parameters<typeof exportToGitHub>[2],
         ),
     );
-    log.info(`Pushed build components to ${result.repoUrl}@${result.branch} (${result.files} files)`);
+    log.info(`Pushed ${what} to ${result.repoUrl}@${result.branch} (${result.files} files)`);
     const open = await vscode.window.showInformationMessage(
       `Pushed "${after.displayName}" to GitHub.`,
       {
@@ -489,7 +526,8 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
           `${result.createdRepo ? "Created and pushed to" : "Pushed to"} ${result.repoUrl}`,
           `Branch ${result.branch}, ${result.files} file(s), commit ${result.commitSha.slice(0, 7)}.`,
           "",
-          "The repo holds the minimal, buildable components (see BUILD.md) for ongoing maintenance.",
+          "The repo includes a build workflow and MAINTAINING.md (GHES / SaaS setup) for",
+          "ongoing maintenance — see those before configuring branch protection and releases.",
         ].join("\n"),
       },
       "Open repository",

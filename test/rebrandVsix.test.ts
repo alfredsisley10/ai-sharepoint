@@ -7,6 +7,8 @@ import {
   setManifestAttr,
   setManifestElement,
   readVsixPackageJson,
+  readVsixSourceArchive,
+  rebrandSourceArchive,
   minimalBuildComponents,
   minimalPackageJson,
   VsixRebrandOptions,
@@ -172,6 +174,51 @@ test("minimalPackageJson keeps identity/contributes but strips the build surface
   assert.ok(!("dependencies" in out));
   assert.deepEqual(Object.keys(out.devDependencies), ["@vscode/vsce"]);
   assert.ok(!("vscode:prepublish" in out.scripts), "no source build step (bundle is pre-built)");
+});
+
+function fixtureSourceZip(): Uint8Array {
+  return zipSync({
+    "src/extension.ts": strToU8('// AI SharePoint @sharepoint aiSharePoint reads a SharePoint site'),
+    "src/branding/brandTokens.ts": strToU8('const FIND = "AI SharePoint"; // @sharepoint aiSharePoint'),
+    "test/foo.test.ts": strToU8('assert("AI SharePoint")'),
+    "package.json": strToU8(PKG),
+    "LICENSE": strToU8("Copyright (c) 2026 AI SharePoint contributors"),
+    "media/icon.png": ICON,
+  });
+}
+
+test("rebrandSourceArchive: rewrites product source, SPARES the engine + tests, rebrands package.json", () => {
+  const out = rebrandSourceArchive(fixtureSourceZip(), deepOpts());
+  // Product source is token-rewritten (deep rename).
+  assert.match(strFromU8(out["src/extension.ts"]), /Contoso Docs @contosodocs contosoDocs/);
+  assert.match(strFromU8(out["src/extension.ts"]), /reads a SharePoint site/, "Microsoft 'SharePoint' preserved");
+  // The rebrand engine's literal find-tokens MUST survive verbatim.
+  assert.match(strFromU8(out["src/branding/brandTokens.ts"]), /"AI SharePoint"/);
+  // Tests are emitted but not rewritten (they assert on the old strings).
+  assert.equal(strFromU8(out["test/foo.test.ts"]), 'assert("AI SharePoint")');
+  // package.json fully rebranded; LICENSE holder updated.
+  assert.equal(JSON.parse(strFromU8(out["package.json"])).displayName, "Contoso Docs");
+  // Build-ready scaffolding is included.
+  assert.ok(".github/workflows/whitelabel-build.yml" in out);
+  assert.ok("MAINTAINING.md" in out);
+  assert.match(strFromU8(out["MAINTAINING.md"]), /GitHub Enterprise Server/);
+  // Binary passes through.
+  assert.deepEqual([...out["media/icon.png"]], [...ICON]);
+});
+
+test("rebrandSourceArchive licenseHolder rewrites the LICENSE copyright", () => {
+  const out = rebrandSourceArchive(fixtureSourceZip(), deepOpts({ after: { ...after, licenseHolder: "Contoso Inc." } }));
+  assert.match(strFromU8(out["LICENSE"]), /Copyright \(c\) 2026 Contoso Inc\./);
+});
+
+test("readVsixSourceArchive returns the bundled source, or undefined when absent", () => {
+  const withSource = zipSync({
+    "extension/package.json": strToU8(PKG),
+    "extension/dist/source.zip": fixtureSourceZip(),
+  });
+  assert.ok(readVsixSourceArchive(withSource));
+  const without = zipSync({ "extension/package.json": strToU8(PKG) });
+  assert.equal(readVsixSourceArchive(without), undefined);
 });
 
 test("readVsixPackageJson reads the manifest; rejects a non-extension zip", () => {
