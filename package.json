@@ -44,6 +44,8 @@
         "aiSharePoint.ldap.caCertificatesFile",
         "aiSharePoint.context.allowSchemaIndexing",
         "aiSharePoint.ldap.dnsServers",
+        "aiSharePoint.ldap.tlsRejectUnauthorized",
+        "aiSharePoint.ldap.useStartTls",
         "aiSharePoint.servicenow.oauthClientId"
       ]
     }
@@ -2505,18 +2507,21 @@
         "aiSharePoint.context.allowSchemaIndexing": {
           "type": "boolean",
           "default": true,
+          "scope": "machine",
           "order": 13,
           "markdownDescription": "Allow building **semantic schema indexes** of database sources with Copilot (ADR-0024). Only table/column **names and types** are ever sent — never row data — and always behind an explicit per-source consent. Set `false` to disable organization-wide."
         },
         "aiSharePoint.ldap.tlsRejectUnauthorized": {
           "type": "boolean",
           "default": true,
+          "scope": "machine",
           "order": 14,
           "markdownDescription": "Validate LDAPS/StartTLS server certificates for LDAP/Active Directory sources (ADR-0020). Keep **true** in production. If LDAPS uses an internal CA not in Node's bundle, prefer installing the CA; only disable for isolated lab testing."
         },
         "aiSharePoint.ldap.useStartTls": {
           "type": "boolean",
           "default": false,
+          "scope": "machine",
           "order": 15,
           "markdownDescription": "For `ldap://` (port 389) sources, upgrade the connection with StartTLS before binding. Ignored for `ldaps://` (implicit TLS)."
         },
@@ -2539,12 +2544,14 @@
             "type": "string"
           },
           "default": [],
+          "scope": "machine",
           "order": 16,
           "markdownDescription": "**Machine-scoped.** Internal DNS server IPs used for Active Directory **SRV lookups** (e.g. `[\"10.0.0.53\", \"10.0.1.53\"]`). Set this when LDAP works in the office but fails on VPN: Node's resolver bypasses Windows NRPT / VPN split-DNS rules, so pointing SRV queries directly at corporate DNS by IP makes discovery deterministic everywhere. Empty = system resolver."
         },
         "aiSharePoint.servicenow.oauthClientId": {
           "type": "string",
           "default": "",
+          "scope": "machine",
           "order": 17,
           "markdownDescription": "**Machine-scoped.** OAuth client ID for **ServiceNow browser sign-in** — from a one-time Application Registry entry (System OAuth → *Create an OAuth API endpoint for external clients*) with redirect URL `http://localhost:51725/callback`. Users then sign in via their browser SSO session; no passwords or hand-issued tokens. Leave empty to hide the browser option."
         }

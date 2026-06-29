@@ -5505,6 +5505,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (confirm === "Rotate") {
       const fresh = await installIds.rotate();
+      telemetryEnv.installId = fresh.id; // keep external telemetry on the new id immediately
       telemetry.record("diagnostics.rotateId");
       void vscode.window.showInformationMessage(
         `New anonymous install ID: ${fresh.id}`,

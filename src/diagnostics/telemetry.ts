@@ -86,9 +86,11 @@ export class TelemetryService {
     }
     void this.memento.update(KEY, this.state);
 
-    // Forward to the external sink (opt-in; self-anonymizing, fire-and-forget).
+    // Forward the REDACTED + length-capped props (not the raw ones) to the
+    // external sink; the sink then drops anything non-categorical. Defense in
+    // depth for the "no free-form/PII leaves the machine" guarantee.
     try {
-      this.sink?.emit(name, props);
+      this.sink?.emit(name, safeProps);
     } catch {
       /* a sink must never break local capture */
     }
