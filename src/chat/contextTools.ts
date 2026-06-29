@@ -14,6 +14,7 @@ import {
   upsertRelationship,
 } from "../context/db/erDiagram";
 import { ContextSource, MAX_RESULT_WINDOW } from "../context/types";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -195,6 +196,7 @@ export function registerContextTools(
       return { invocationMessage };
     },
     async invoke(options) {
+      if (releaseExpired()) return text(expiredNotice());
       telemetry.record("tool.invoke", { tool: name });
       try {
         return text(await run(options.input));

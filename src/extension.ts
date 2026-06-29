@@ -206,6 +206,7 @@ import { SitesTreeProvider } from "./ui/sitesView";
 import { UsageTreeProvider } from "./ui/usageView";
 import { SupportTreeProvider } from "./ui/supportView";
 import { runRebrandFlow } from "./branding/rebrandFlow";
+import { evaluateExpiry, setReleaseStatus, ReleaseManifest } from "./branding/releaseExpiry";
 import { UsageDashboard } from "./ui/dashboard";
 import { registerChatParticipant } from "./chat/participant";
 import { registerLanguageModelTools } from "./chat/tools";
@@ -215,6 +216,21 @@ const nowIso = () => new Date().toISOString();
 
 export function activate(context: vscode.ExtensionContext): void {
   const log = new Logger("AI SharePoint");
+
+  // Release expiry (white-label time-limited builds): read the manifest baked
+  // into package.json and, if past its date, gate the AI surfaces with an
+  // upgrade prompt. Fails open on a missing/standard build or malformed data.
+  const releaseManifest = (context.extension.packageJSON as { release?: ReleaseManifest }).release;
+  const expiry = evaluateExpiry(releaseManifest, Date.now());
+  setReleaseStatus(expiry);
+  if (expiry.message) {
+    const items = expiry.upgradeUrl ? ["Get the latest version"] : [];
+    const open = (choice?: string) => {
+      if (choice && expiry.upgradeUrl) void vscode.env.openExternal(vscode.Uri.parse(expiry.upgradeUrl));
+    };
+    if (expiry.state === "expired") void vscode.window.showErrorMessage(expiry.message, ...items).then(open);
+    else if (expiry.state === "warn") void vscode.window.showWarningMessage(expiry.message, ...items).then(open);
+  }
   const responses = vscode.window.createOutputChannel("AI SharePoint — Copilot");
   const secrets = new SecretStore(context.secrets);
   const installIds = new InstallIdStore(context.globalState);

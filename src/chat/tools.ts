@@ -5,6 +5,7 @@ import { UsageMeter } from "../copilot/meter";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { describeColumn, summarizeCanvas, summarizePageContent, PageContentSummary } from "./siteInspect";
 
 /**
@@ -57,6 +58,7 @@ export function registerLanguageModelTools(
       return { invocationMessage };
     },
     async invoke(options, token) {
+      if (releaseExpired()) return text(expiredNotice());
       telemetry.record("tool.invoke", { tool: name });
       try {
         return text(await run(options.input, token));

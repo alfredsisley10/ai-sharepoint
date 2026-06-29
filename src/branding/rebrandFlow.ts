@@ -11,9 +11,11 @@ import {
   identityChanged,
   extensionId,
   repackageCommand,
+  setReleaseManifest,
   SUPPORT_PHRASE,
   SECURITY_PHRASE,
 } from "./rebrand";
+import { computeExpiry, ReleaseManifest } from "./releaseExpiry";
 import {
   DeepBrandConfig,
   BrandToken,
@@ -135,6 +137,22 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
   const securityContact = await ask("Security contact (email/URL) — blank to leave unchanged", "", undefined, true);
   if (securityContact === undefined) return;
 
+  // Time-limited build (white-label release control): how long this release works
+  // before users must upgrade. Blank = no expiry, like the standard build.
+  const validityRaw = await ask(
+    "Build validity in days — how long this release works before users must upgrade (blank = never expires)",
+    "",
+    (v) => (/^\d{1,4}$/.test(v.trim()) ? undefined : "Whole number of days (e.g. 90), or blank for no expiry."),
+    true,
+  );
+  if (validityRaw === undefined) return;
+  let upgradeUrl = "";
+  if (validityRaw.trim()) {
+    const u = await ask("Upgrade URL shown when the build expires (where users get the new VSIX) — optional", "", undefined, true);
+    if (u === undefined) return;
+    upgradeUrl = u.trim();
+  }
+
   const after: BrandConfig = {
     publisher: publisher.trim(),
     name: name.trim(),
@@ -150,6 +168,23 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
     renameIdentifiers,
     kebabName: after.name,
     idNamespace: camelize(after.name),
+  };
+
+  // Release manifest baked into the rebranded package.json (drives the runtime
+  // expiry gate). validityDays is optional — blank means the build never expires.
+  const builtAtMs = Date.now();
+  const days = validityRaw.trim() ? Number(validityRaw.trim()) : 0;
+  const release: ReleaseManifest = {
+    channel: "whitelabel",
+    builtAt: new Date(builtAtMs).toISOString(),
+    productName: after.displayName,
+    ...(days > 0
+      ? {
+          validityDays: days,
+          expiresAt: computeExpiry(builtAtMs, days),
+          ...(upgradeUrl ? { upgradeUrl } : {}),
+        }
+      : {}),
   };
 
   const errors = [...validateBrandConfig(after), ...validateDeepBrand(deep)];
@@ -184,6 +219,9 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
     ...summarizeBrand(before, after),
     currentHandle !== deep.handle ? `Chat handle: @${currentHandle} → @${deep.handle}` : "",
     renameIdentifiers ? `Internal namespace: aiSharePoint.* → ${deep.idNamespace}.*` : "Internal identifiers: unchanged",
+    release.expiresAt
+      ? `Build expiry: ${release.expiresAt.slice(0, 10)} (${release.validityDays} days — users must upgrade after this)`
+      : "Build expiry: none (this build never expires)",
   ].filter(Boolean);
   const apply = await vscode.window.showInformationMessage(
     "Apply this rebrand across the source tree?",
@@ -203,6 +241,7 @@ export async function runRebrandFlow(log: Logger): Promise<void> {
     text = rebrandPackageJson(text, after);
     text = text.split('"name": "sharepoint"').join(`"name": ${JSON.stringify(deep.handle)}`);
     text = text.split('"fullName": "SharePoint"').join(`"fullName": ${JSON.stringify(after.displayName)}`);
+    text = setReleaseManifest(text, release);
     await writeText(pkgUri, text);
     written.push("package.json");
   } catch (e) {

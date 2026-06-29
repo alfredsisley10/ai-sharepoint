@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { SitesStore } from "../auth/sitesStore";
 import { SiteAccess } from "../auth/siteAccess";
 import { SiteOverview } from "../auth/sharePointClient";
@@ -204,6 +205,10 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
     stream,
     token,
   ) => {
+    if (releaseExpired()) {
+      stream.markdown(expiredNotice());
+      return {};
+    }
     deps.telemetry.record("chat.request", {
       command: request.command ?? "none",
     });

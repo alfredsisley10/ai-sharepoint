@@ -2,6 +2,19 @@
 
 ## 0.68.0 — 2026-06-24
 
+### Added — time-limited white-label builds (release expiry)
+- The **Rebrand / White-label** flow now asks for a **build validity window** (in days, blank =
+  never expires) and an optional **upgrade URL**, and bakes a `release` manifest
+  (`channel`/`builtAt`/`validityDays`/`expiresAt`/`upgradeUrl`) into the rebranded package.json.
+  Distributors can guarantee users move to newer releases on a cadence.
+- At activation the extension reads the manifest and, within the last 14 days, shows a
+  **warning** (with a "Get the latest version" action); once **expired**, the AI surfaces — the
+  `@`chat participant and every language-model tool — refuse with an upgrade message while
+  diagnostics, settings, and the rebrand command stay available. The **standard build never
+  expires**, and evaluation **fails open** on missing/malformed data so a bad date can't brick
+  the extension. Pure, unit-tested core (`src/branding/releaseExpiry.ts`); 6 new tests
+  (616 total).
+
 ### Added — GitHub reference connector (github.com + Enterprise Server)
 - New read-only **GitHub** context source, for both **github.com (SaaS)** and on-prem
   **GitHub Enterprise Server** (the REST base is derived from the deployment:

@@ -9,6 +9,8 @@
  * produces a fresh `.vsix` via `npm run package`.
  */
 
+import { ReleaseManifest } from "./releaseExpiry";
+
 export interface BrandConfig {
   /** Forms the extension ID `publisher.name` — PERMANENT once deployed. */
   publisher: string;
@@ -56,6 +58,19 @@ function setTopLevelString(raw: string, key: string, value: string): string {
   const re = new RegExp(`^(  "${key}":\\s*)"(?:[^"\\\\]|\\\\.)*"`, "m");
   if (!re.test(raw)) throw new Error(`Could not find top-level "${key}" in package.json.`);
   return raw.replace(re, `$1${JSON.stringify(value)}`);
+}
+
+/**
+ * Set the top-level `release` manifest in package.json text (the time-limited
+ * white-label build control). Replaces an existing single-line `"release": {…}`
+ * value in place (formatting preserved), or inserts one after `"version"` if
+ * absent. Serialized compact so the rebrand diff stays a single line.
+ */
+export function setReleaseManifest(raw: string, manifest: ReleaseManifest): string {
+  const value = JSON.stringify(manifest);
+  const existing = /^(\s*"release":\s*)\{[^\n]*\}/m;
+  if (existing.test(raw)) return raw.replace(existing, `$1${value}`);
+  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, `$1  "release": ${value},\n`);
 }
 
 /** Apply publisher/name/displayName/description to package.json text. */
