@@ -12,7 +12,12 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
 
@@ -27,6 +32,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint (type-aware correctness)
+        run: npm run lint
+
       - name: Unit tests
         run: npm test
 
@@ -39,9 +47,59 @@ jobs:
       - name: Package VSIX
         run: npm run package
 
+      - name: VSIX content gate
+        run: node scripts/check-vsix.js
+
       - name: Upload VSIX artifact
+        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v7
         with:
           name: ai-sharepoint-vsix
           path: "*.vsix"
           if-no-files-found: error
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Production deps only — dev tooling (eslint, vsce…) never ships.
+      - name: npm audit (prod, high+)
+        run: npm audit --omit=dev --audit-level=high
+
+  coverage:
+    name: coverage report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Test coverage
+        run: npm run coverage
+
+  integration:
+    name: integration smoke
+    runs-on: ubuntu-latest
+    # Soft gate: downloads a real VS Code (external CDN) and needs a display,
+    # both of which can be unavailable/flaky. Surfaces regressions without
+    # blocking merges; promote to a required check once it proves stable.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build bundle
+        run: npm run compile
+      - name: Run integration smoke under xvfb
+        run: xvfb-run -a npm run test:integration

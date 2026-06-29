@@ -112,6 +112,10 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
     const { verifier, challenge } = await this.crypto.generatePkceCodes();
 
     return new Promise<AccessToken>((resolve, reject) => {
+      // The async handler wraps its whole body in try/catch and settles this
+      // promise via resolve()/reject() + cleanup(), so it never rejects to the
+      // (void-returning) http listener — the structural warning is a non-issue.
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises
       const server = http.createServer(async (req, res) => {
         try {
           const url = new URL(req.url ?? "/", "http://localhost");
@@ -181,7 +185,9 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
       });
 
       // Bind to an ephemeral loopback port (AAD permits any localhost port for
-      // public-client native redirects).
+      // public-client native redirects). The async listener self-handles via
+      // try/catch + reject()/cleanup(), so it never rejects to the void caller.
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises
       server.listen(0, "127.0.0.1", async () => {
         port = (server.address() as AddressInfo).port;
         const redirectUri = `http://localhost:${port}`;

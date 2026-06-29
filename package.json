@@ -3,7 +3,9 @@
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
   "version": "0.70.0",
-  "release": { "channel": "standard" },
+  "release": {
+    "channel": "standard"
+  },
   "publisher": "alfredsisley10",
   "license": "MIT",
   "qna": false,
@@ -2562,8 +2564,14 @@
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "tsc -p tsconfig.test.json && node scripts/run-tests.js",
+    "coverage": "tsc -p tsconfig.test.json && node scripts/run-tests.js --coverage",
+    "test:integration": "node test-integration/runTest.js",
     "check:native": "node scripts/check-native-deps.js",
+    "check:vsix": "node esbuild.js && node scripts/check-vsix.js",
     "scan:secrets": "node scripts/scan-secrets.js",
     "build:samples": "tsc -p tsconfig.test.json && node scripts/render-dashboard-sample.js",
     "package": "vsce package --no-dependencies --no-rewrite-relative-links --allow-missing-repository",
@@ -2578,11 +2586,16 @@
     "tedious": "^19.2.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^25.9.3",
     "@types/pg": "^8.20.0",
     "@types/vscode": "^1.95.0",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.28.1",
-    "typescript": "^6.0.3"
+    "eslint": "^9.39.4",
+    "prettier": "^3.9.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.0"
   }
 }

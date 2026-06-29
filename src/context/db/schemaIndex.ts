@@ -580,7 +580,8 @@ export function distinctValues(
       if (v === null || v === undefined) continue;
       const s = String(v).replace(/\s+/g, " ").trim().slice(0, CONTENT_VALUE_MAX_CHARS);
       if (!s) continue;
-      (out[k] ??= []).includes(s) || out[k].length >= CONTENT_DISTINCT_PER_COLUMN || out[k].push(s);
+      const seen = (out[k] ??= []);
+      if (!seen.includes(s) && seen.length < CONTENT_DISTINCT_PER_COLUMN) seen.push(s);
     }
   }
   return out;
