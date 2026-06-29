@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.78.0 — 2026-06-29
+
+### Fixed — white-label wizard could concatenate the old + new description
+- The rebrand wizard pre-filled each identity prompt (display name, description, etc.) with the
+  **current** value as an editable default. If the pre-filled text wasn't replaced cleanly, a user
+  typing their new value could end up submitting `<original><typed>` — most visibly a description
+  that read the original sentence followed by the white-label one. The identity prompts now start
+  **empty**, showing the current value only as a placeholder *hint*, so the new value is always
+  typed fresh and can't be appended to the original; any pre-filled value (e.g. when reusing a saved
+  release profile) is now fully selected so the first keystroke replaces it. The display-name and
+  handle prompts are also dynamic now (they reference the picked VSIX's current name/handle rather
+  than hard-coded text).
+
 ## 0.77.0 — 2026-06-29
 
 White-label export: enterprise/Windows build resilience and clearer build guidance.

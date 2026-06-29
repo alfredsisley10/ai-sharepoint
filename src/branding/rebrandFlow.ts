@@ -127,21 +127,49 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
   const seedId = loaded?.identity;
 
   // --- gather the new identity + product naming -----------------------------
-  const publisher = await ask("Publisher ID — forms the permanent extension ID (lowercase, hyphens)", seedId?.publisher ?? before.publisher, (v) =>
-    ID_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contoso).",
+  // The brand-identity prompts start EMPTY (the current value is shown only as a
+  // placeholder hint), so the user types their new value fresh — the original is
+  // never a pre-filled, editable value that could be appended to. A saved profile
+  // (re-release) is the exception: its values pre-fill so they can be reused/tweaked.
+  const publisher = await ask(
+    "Publisher ID — forms the permanent extension ID (lowercase, hyphens)",
+    seedId?.publisher ?? "",
+    (v) => (ID_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contoso)."),
+    false,
+    `Current: ${before.publisher || "—"} — type your publisher ID. ${CANCEL_HINT}`,
   );
   if (publisher === undefined) return;
-  const name = await ask("Internal name — also part of the extension ID (lowercase, hyphens)", seedId?.name ?? before.name, (v) =>
-    ID_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contoso-docs).",
+  const name = await ask(
+    "Internal name — also part of the extension ID (lowercase, hyphens)",
+    seedId?.name ?? "",
+    (v) => (ID_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contoso-docs)."),
+    false,
+    `Current: ${before.name || "—"} — type your extension name. ${CANCEL_HINT}`,
   );
   if (name === undefined) return;
-  const displayName = await ask('Product display name (replaces "AI SharePoint" everywhere)', seedId?.displayName ?? before.displayName);
+  const displayName = await ask(
+    "Product display name — what users see (replaces the current name everywhere)",
+    seedId?.displayName ?? "",
+    undefined,
+    false,
+    `Current: ${before.displayName || "—"} — type your product's display name. ${CANCEL_HINT}`,
+  );
   if (displayName === undefined) return;
-  const handle = await ask("Chat handle without @ (replaces @sharepoint)", seedId?.handle ?? currentHandle, (v) =>
-    HANDLE_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contosodocs).",
+  const handle = await ask(
+    "Chat participant handle, without the @ (e.g. contosodocs)",
+    seedId?.handle ?? "",
+    (v) => (HANDLE_RE.test(v) ? undefined : "Lowercase letters, digits, and hyphens only (e.g. contosodocs)."),
+    false,
+    `Current: @${currentHandle} — type your handle (no @). ${CANCEL_HINT}`,
   );
   if (handle === undefined) return;
-  const description = await ask("Description", seedId?.description ?? before.description);
+  const description = await ask(
+    "Description — the one line shown under the name in the Extensions view",
+    seedId?.description ?? "",
+    undefined,
+    false,
+    `Current: ${clip(before.description) || "—"} — type your product's description. ${CANCEL_HINT}`,
+  );
   if (description === undefined) return;
 
   // --- depth: cosmetic vs full identifier rename ----------------------------
@@ -576,20 +604,32 @@ async function pickVsix(): Promise<vscode.Uri | undefined> {
 const WIZARD_TITLE = "White-label rebrand";
 const CANCEL_HINT = "Esc cancels the whole rebrand — nothing is written.";
 
+/** Shorten a value for a one-line placeholder hint. */
+function clip(s: string, n = 60): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
 async function ask(
   prompt: string,
   value: string,
   validate?: (v: string) => string | undefined,
   allowEmpty = false,
+  placeholder?: string,
 ): Promise<string | undefined> {
   return vscode.window.showInputBox({
     title: WIZARD_TITLE,
     prompt,
     value,
+    // Select the whole pre-filled value so the first keystroke REPLACES it
+    // rather than appending — without this a user typing their brand could end
+    // up with "<original><typed>" concatenated (e.g. a doubled description).
+    valueSelection: value ? [0, value.length] : undefined,
     ignoreFocusOut: true,
-    placeHolder: allowEmpty
-      ? `Optional — leave blank to skip/keep the current value. ${CANCEL_HINT}`
-      : `Required. ${CANCEL_HINT}`,
+    placeHolder:
+      placeholder ??
+      (allowEmpty
+        ? `Optional — leave blank to skip/keep the current value. ${CANCEL_HINT}`
+        : `Required. ${CANCEL_HINT}`),
     validateInput: (v) => {
       const t = v.trim();
       if (!t) return allowEmpty ? undefined : `Required — type a value, or press Esc to cancel the rebrand.`;
