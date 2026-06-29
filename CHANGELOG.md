@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.84.0 — 2026-06-29
+
+### Added — assistant-proposed memory (the `ai` origin)
+- New `aisharepoint_remember_about` language-model tool: when @sharepoint learns a durable,
+  entity-specific fact (a convention, a key table, a gotcha) it can save a memory note attached to
+  the exact reference source or managed site. Stored as **AI-proposed** (badged in *Manage Memory*),
+  reviewable/editable/removable by the user, and injected as context whenever that site/source is in
+  scope. Non-modal (like lesson capture) and release-expiry gated. The target must match an existing
+  site title/URL or source alias/display name (`resolveMemoryTarget`, unit-tested) — it can't invent
+  one. This completes the "user **+** AI-authored" memory model.
+
+_Next: an inline expandable "Memory" group under each site/source in the tree, then the Prompt
+Library tab, then memory/prompt export/import with intelligent merge._
+
 ## 0.83.0 — 2026-06-29
 
 ### Added — per-site/source memory (notes that feed the assistant)
