@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.72.0",
+  "version": "0.73.0",
   "release": {
     "channel": "standard"
   },
@@ -2692,24 +2692,25 @@
     "vscode:prepublish": "node esbuild.js --production"
   },
   "dependencies": {
-    "@azure/msal-node": "^5.2.4",
-    "ldapts": "^8.1.8",
-    "mongodb": "^7.3.0",
-    "mysql2": "^3.22.5",
-    "pg": "^8.21.0",
-    "tedious": "^19.2.1"
+    "@azure/msal-node": "^5.0.0",
+    "fflate": "^0.8.0",
+    "ldapts": "^8.0.0",
+    "mongodb": "^7.0.0",
+    "mysql2": "^3.0.0",
+    "pg": "^8.0.0",
+    "tedious": "^19.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
-    "@types/node": "^25.9.3",
-    "@types/pg": "^8.20.0",
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^25.0.0",
+    "@types/pg": "^8.0.0",
     "@types/vscode": "^1.95.0",
-    "@vscode/test-electron": "^2.5.2",
-    "@vscode/vsce": "^3.2.1",
-    "esbuild": "^0.28.1",
-    "eslint": "^9.39.4",
-    "prettier": "^3.9.3",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.0"
+    "@vscode/test-electron": "^2.0.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.28.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^6.0.0",
+    "typescript-eslint": "^8.0.0"
   }
 }

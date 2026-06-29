@@ -27,18 +27,54 @@ exactly which fields to set to ship under your own identity, then repackage.
 
 ---
 
-## Easiest: the in-app command
+## Easiest: the in-app command (rebrand a built `.vsix`)
 
 Open the **Support & Diagnostics** view (AI SharePoint activity bar) and click
 **"Rebrand / White-label…"** — or run **AI SharePoint: Rebrand / White-label This Extension…**
-from the Command Palette. It points at the extension's source folder (auto-detected if it's open
-in your workspace, otherwise you pick it), prompts for the new identity, applies every edit in
-this guide, optionally swaps the icon, warns before changing the extension ID, and offers to
-build the package for you. **Repackage now** opens a terminal that prints each step (dependency
-install, then packaging) with live progress, and finishes by printing the exact path of the
-generated `<name>-<version>.vsix` (written to the source folder) and the `code
---install-extension` command to install it. The manual steps below are the equivalent if you'd
-rather edit by hand.
+from the Command Palette.
+
+You point it at the **built standard `.vsix`** (not a source folder), it prompts for the new
+identity, expiry, and what to bake in, optionally swaps the icon, warns before changing the
+extension ID, and then transforms the package directly — **no source tree and no `npm install` /
+build step.** This is deterministic (one file in, one file out) and side-steps the corporate-build
+pitfalls below. The input `.vsix` is **never modified**, so re-running with different identifiers
+always starts cleanly from the original (if you accidentally pick an already-white-labeled `.vsix`,
+the flow warns you).
+
+At the end you choose **what to produce**:
+
+- **Rebranded `.vsix`** — one file to install (`code --install-extension <file>`) or distribute.
+- **Minimal build components** — the pre-built, rebranded payload written to a folder with a
+  minimal `package.json` (only `@vscode/vsce` is needed to re-package — no esbuild/TypeScript/etc.)
+  and a `BUILD.md`. Hand it to a build team, or commit/merge the folder (a `.gitignore` is
+  included) into your own git repository.
+- **Push to enterprise GitHub** — create/update a repository on github.com or GitHub Enterprise
+  Server with those components, in one commit, for ongoing maintenance and management. You supply
+  the host, owner, repo name, visibility, and a one-time `repo`-scope token (never stored).
+
+To build the **standard** `.vsix` in the first place (the input to the rebrand), or to repackage
+the minimal components, see **Building behind a corporate registry** below. The manual steps
+further down are the equivalent edits if you'd rather rebrand by hand.
+
+## Building behind a corporate registry (SSL, proxies, withheld versions)
+
+`npm run package` and `scripts/rebrand-package.js` (the logged build driver) are hardened for
+locked-down enterprise environments:
+
+- **OS trust store.** The install trusts the operating-system certificate store, so a corporate
+  registry/proxy presenting an internally-issued TLS cert connects. On Node 22.9+ this is automatic
+  (`--use-system-ca`); on older Node, set `NODE_EXTRA_CA_CERTS` (or `REBRAND_CA_FILE`) to your CA
+  bundle.
+- **Verbose + bounded.** `npm install` runs at `--loglevel verbose` for full diagnostics and under
+  a max timeout (`REBRAND_INSTALL_TIMEOUT_MS`, default 10 min) so a stalled registry fails loudly
+  instead of hanging.
+- **Pre-scan + version adaptation.** Before installing, the driver scans the configured registry
+  for every dependency and reports the version it will use — **adapting to a prior version when the
+  latest is withheld** (e.g. still pending a security scan). Dependency floors are kept at the major
+  base (`^X.0.0`), so a prior minor/patch satisfies the range; a dependency with *no* installable
+  version fails the pre-scan with a clear message instead of a cryptic mid-install error. If the
+  build team can't get the full toolchain approved, hand them the **minimal build components**
+  above — they need only `@vscode/vsce`.
 
 ## Repeatable releases: profiles, bake-in & building both VSIXes
 

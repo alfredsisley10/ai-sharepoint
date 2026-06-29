@@ -4,18 +4,12 @@ import { redactError } from "../core/redaction";
 import {
   BrandConfig,
   validateBrandConfig,
-  rebrandPackageJson,
-  rebrandLicense,
-  replacePhrase,
   summarizeBrand,
   identityChanged,
   extensionId,
-  repackageCommand,
-  setReleaseManifest,
-  setProvisioningManifest,
-  SUPPORT_PHRASE,
-  SECURITY_PHRASE,
 } from "./rebrand";
+import { rebrandVsix, minimalBuildComponents, readVsixPackageJson, VsixRebrandOptions } from "./rebrandVsix";
+import { exportToGitHub } from "./githubExport";
 import { computeExpiry, ReleaseManifest } from "./releaseExpiry";
 import {
   ReleaseProfile,
@@ -40,9 +34,7 @@ export interface RebrandDeps {
 }
 import {
   DeepBrandConfig,
-  BrandToken,
   buildBrandTokens,
-  applyBrandTokens,
   validateDeepBrand,
   camelize,
 } from "./brandTokens";
@@ -51,27 +43,13 @@ const ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 const HANDLE_RE = /^[a-z0-9][a-z0-9-]*$/;
 const msg = (e: unknown) => redactError(e).message;
 
-// Dirs never rewritten. src/branding holds the rebrand engine itself — rewriting
-// it would corrupt the find-tokens; test/ isn't shipped and references tokens.
-const SKIP_DIRS = new Set([
-  "node_modules",
-  "dist",
-  "out-test",
-  "test",
-  "scripts",
-  ".git",
-  ".github",
-  ".vscode",
-  ".vscode-test",
-]);
-const REWRITE_EXTS = new Set([".ts", ".md", ".json", ".svg", ".html", ".css"]);
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-
 /**
  * "Rebrand This Extension" (Support & Diagnostics). Applies a new identity AND,
  * optionally, a full product rename (display name, chat handle, and — greenfield
- * only — the internal identifier namespaces) across the extension's SOURCE tree,
- * then offers to repackage. The executable counterpart to REBRANDING.md.
+ * only — the internal identifier namespaces) directly to a packaged .vsix: pick
+ * the built .vsix, get a rebranded .vsix back. No source tree and no build step —
+ * the bundle, manifest, package.json, and assets are transformed in place. The
+ * executable counterpart to REBRANDING.md.
  */
 export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promise<void> {
   const start = await vscode.window.showInformationMessage(
@@ -79,30 +57,52 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     {
       modal: true,
       detail:
-        "Applies a new identity and (optionally) a full product rename — display name, chat handle, even the internal identifiers — across the extension's SOURCE files, then can build a fresh .vsix. You need the extension's source folder; the installed copy can't rebrand itself.",
+        "Applies a new identity and (optionally) a full product rename — display name, chat handle, even the internal identifiers — directly to a packaged .vsix. Pick the built .vsix and you get a rebranded .vsix back: no source folder and no build step.",
     },
     "Continue",
   );
   if (start !== "Continue") return;
 
-  const root = await resolveSourceRoot();
-  if (!root) return;
+  const vsixUri = await pickVsix();
+  if (!vsixUri) return;
 
-  const pkgUri = vscode.Uri.joinPath(root, "package.json");
-  let pkgRaw: string;
+  let vsixBytes: Uint8Array;
   let pkg: {
     publisher?: string;
     name?: string;
     displayName?: string;
     description?: string;
+    version?: string;
+    release?: { channel?: string; productName?: string };
     contributes?: { chatParticipants?: Array<{ name?: string }> };
   };
   try {
-    pkgRaw = await readText(pkgUri);
-    pkg = JSON.parse(pkgRaw);
+    vsixBytes = await vscode.workspace.fs.readFile(vsixUri);
+    pkg = readVsixPackageJson(vsixBytes) as typeof pkg;
   } catch (e) {
-    void vscode.window.showErrorMessage(`Could not read a valid package.json there: ${msg(e)}`);
+    void vscode.window.showErrorMessage(`Could not read that .vsix: ${msg(e)}`);
     return;
+  }
+
+  // Always rebrand FROM the original standard build. The transform finds the
+  // original brand tokens ("AI SharePoint" / "@sharepoint" / "aiSharePoint") —
+  // once a VSIX is already white-labeled those tokens are gone, so re-branding
+  // it would only half-apply (the classic "restart with new names didn't update
+  // everything" trap). Because this flow never mutates the input and writes a
+  // NEW file, starting again from the standard VSIX always yields a complete,
+  // consistent rebrand — so steer the user back to it.
+  if (pkg.release?.channel === "whitelabel") {
+    const proceed = await vscode.window.showWarningMessage(
+      `This .vsix is already a white-label build${pkg.release.productName ? ` ("${pkg.release.productName}")` : ""}.`,
+      {
+        modal: true,
+        detail:
+          "Re-branding an already-branded VSIX can't fully rename strings that were already changed, so the result may mix identities. For a clean rebrand to NEW identifiers, start again from the ORIGINAL standard .vsix (this flow never modifies the file you pick).",
+      },
+      "Pick a different .vsix",
+      "Rebrand it anyway",
+    );
+    if (proceed !== "Rebrand it anyway") return;
   }
 
   const before: BrandConfig = {
@@ -113,9 +113,10 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
   };
   const currentHandle = pkg.contributes?.chatParticipants?.[0]?.name ?? "sharepoint";
 
-  // Reuse a saved release profile (repeatable re-releases) when one is present —
-  // its values pre-fill every prompt below so refreshing a release is quick.
-  const loaded = await maybeLoadProfile(root);
+  // A saved release profile (repeatable re-releases) lives next to the VSIX —
+  // reusing it pre-fills every prompt so refreshing a release is quick.
+  const profileDir = vscode.Uri.joinPath(vsixUri, "..");
+  const loaded = await maybeLoadProfile(profileDir);
   const seedId = loaded?.identity;
 
   // --- gather the new identity + product naming -----------------------------
@@ -279,65 +280,9 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
 
   // --- apply ----------------------------------------------------------------
   const tokens = buildBrandTokens(deep);
-  const written: string[] = [];
-  const skipped: string[] = [];
 
-  // package.json: brand tokens, then identity fields, then participant name/fullName.
-  try {
-    let text = applyBrandTokens(pkgRaw, tokens);
-    text = rebrandPackageJson(text, after);
-    text = text.split('"name": "sharepoint"').join(`"name": ${JSON.stringify(deep.handle)}`);
-    text = text.split('"fullName": "SharePoint"').join(`"fullName": ${JSON.stringify(after.displayName)}`);
-    text = setReleaseManifest(text, release);
-    text = setProvisioningManifest(text, hasProvisioning ? provisioningManifest : undefined);
-    await writeText(pkgUri, text);
-    written.push("package.json");
-  } catch (e) {
-    log.error("rebrand: package.json", e);
-    void vscode.window.showErrorMessage(`Could not update package.json: ${msg(e)}. No files were changed.`);
-    return;
-  }
-
-  // Whole-tree brand-token rewrite (src, docs, README, etc.).
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Rebranding source files…" },
-    async () => {
-      const result = await rewriteTree(root, tokens, log);
-      written.push(`${result.changed} source file(s)`);
-      if (result.errors > 0) skipped.push(`${result.errors} file(s) unreadable`);
-    },
-  );
-
-  // LICENSE: brand tokens (renames "AI SharePoint contributors"), then explicit holder.
-  await editFile(
-    root,
-    "LICENSE",
-    (t) => {
-      let r = applyBrandTokens(t, tokens);
-      if (after.licenseHolder) r = rebrandLicense(r, after.licenseHolder);
-      return r;
-    },
-    written,
-    skipped,
-    log,
-  );
-
-  // Distributor contact placeholders.
-  if (after.supportContact || after.securityContact) {
-    await editFile(
-      root,
-      "SUPPORT.md",
-      (t) => replacePhrase(replacePhrase(t, SUPPORT_PHRASE, after.supportContact).text, SECURITY_PHRASE, after.securityContact).text,
-      written,
-      skipped,
-      log,
-    );
-  }
-  if (after.securityContact) {
-    await editFile(root, "docs/SECURITY.md", (t) => replacePhrase(t, SECURITY_PHRASE, after.securityContact).text, written, skipped, log);
-  }
-
-  // Optional icon swap.
+  // Optional icon swap (applies to whichever output is produced).
+  let newIcon: Uint8Array | undefined;
   const icon = await vscode.window.showOpenDialog({
     title: "Select a new icon PNG (Cancel to keep the current icon)",
     canSelectMany: false,
@@ -345,20 +290,26 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
   });
   if (icon && icon[0]) {
     try {
-      const bytes = await vscode.workspace.fs.readFile(icon[0]);
-      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(root, "media", "icon.png"), bytes);
-      written.push("media/icon.png");
+      newIcon = await vscode.workspace.fs.readFile(icon[0]);
     } catch (e) {
       log.error("rebrand: icon", e);
-      skipped.push("media/icon.png (copy failed)");
+      void vscode.window.showWarningMessage(`Could not read that icon: ${msg(e)}. Keeping the current icon.`);
     }
   }
 
-  log.info(`Rebranded to "${after.displayName}" (${extensionId(after.publisher, after.name)})${renameIdentifiers ? `, namespace ${deep.idNamespace}` : ""}`);
+  const opts: VsixRebrandOptions = {
+    tokens,
+    after,
+    handle: deep.handle,
+    release,
+    ...(hasProvisioning ? { provisioning: provisioningManifest } : {}),
+    ...(newIcon ? { newIcon } : {}),
+  };
+  const version = typeof pkg.version === "string" ? pkg.version : "0.0.0";
 
-  // Offer to save a reusable release profile (no secrets) for the next refresh.
+  // Save the reusable, secret-free profile now — independent of the output mode.
   await saveProfileMaybe(
-    root,
+    profileDir,
     {
       version: 1,
       identity: {
@@ -378,158 +329,202 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     log,
   );
 
-  // --- finish ---------------------------------------------------------------
-  const detail = [
-    `Updated: ${written.join(", ")}.`,
-    skipped.length ? `Skipped: ${skipped.join(", ")}.` : "",
-    "",
-    renameIdentifiers
-      ? "Internal identifiers were renamed — run the unit tests (they reference the old names) and recompile before shipping."
-      : "Recompile to bake the new product name into the bundle.",
-    "",
-    `"Repackage now" installs dependencies and builds the package in a terminal, printing each step. The result is ${after.name}-<version>.vsix in the source folder (${root.fsPath}) — the exact path is shown when it finishes.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const next = await vscode.window.showInformationMessage(
-    `Rebrand applied: "${after.displayName}".`,
-    { modal: true, detail },
-    "Repackage now",
-    "Open REBRANDING.md",
+  // --- choose the output ----------------------------------------------------
+  const mode = await vscode.window.showQuickPick(
+    [
+      {
+        label: "$(package) Rebranded .vsix",
+        detail: "One file you can install or distribute directly — no build step.",
+        id: "vsix",
+      },
+      {
+        label: "$(folder) Minimal build components",
+        detail:
+          "The pre-built, rebranded payload + a minimal package.json (vsce only) for a separate build team to package through their own pipeline. Sidesteps withheld build dependencies.",
+        id: "components",
+      },
+      {
+        label: "$(github) Push to enterprise GitHub",
+        detail:
+          "Create/update a repository (github.com or GitHub Enterprise Server) with the build components, for ongoing maintenance and management.",
+        id: "github",
+      },
+    ],
+    { title: `Rebrand "${after.displayName}" — what should it produce?`, ignoreFocusOut: true, placeHolder: "Pick an output" },
   );
-  if (next === "Repackage now") {
-    const term = vscode.window.createTerminal({ name: "Rebrand & package", cwd: root });
-    term.show();
-    term.sendText(await resolveRepackageCommand(root));
-  } else if (next === "Open REBRANDING.md") {
+  if (!mode) return;
+
+  if (mode.id === "vsix") {
+    const outUri = await vscode.window.showSaveDialog({
+      title: "Save the rebranded VSIX",
+      defaultUri: vscode.Uri.joinPath(profileDir, `${after.name}-${version}.vsix`),
+      filters: { "VS Code Extension": ["vsix"] },
+    });
+    if (!outUri) return;
     try {
-      await vscode.window.showTextDocument(vscode.Uri.joinPath(root, "REBRANDING.md"));
-    } catch {
-      /* doc may be absent in older copies */
-    }
-  }
-}
-
-/**
- * The terminal command for the "Repackage now" step. Prefers the logged,
- * cross-platform build driver (scripts/rebrand-package.js) — it prints each step,
- * streams output so a slow install or a failure is never a silent hang, and
- * reports the exact output `.vsix` path. Invoked as a single token, so no shell
- * chaining operator is involved (Windows PowerShell 5.1 rejects `&&`). Falls back
- * to the shell-aware inline command if the driver isn't present in the source
- * tree (e.g. an older or partial copy).
- */
-async function resolveRepackageCommand(root: vscode.Uri): Promise<string> {
-  const driver = vscode.Uri.joinPath(root, "scripts", "rebrand-package.js");
-  try {
-    await vscode.workspace.fs.stat(driver);
-    return "node scripts/rebrand-package.js";
-  } catch {
-    return repackageCommand(vscode.env.shell);
-  }
-}
-
-// --- tree rewrite ----------------------------------------------------------
-
-async function rewriteTree(
-  root: vscode.Uri,
-  tokens: BrandToken[],
-  log: Logger,
-): Promise<{ changed: number; scanned: number; errors: number }> {
-  let changed = 0;
-  let scanned = 0;
-  let errors = 0;
-
-  async function walk(dir: vscode.Uri): Promise<void> {
-    let entries: [string, vscode.FileType][];
-    try {
-      entries = await vscode.workspace.fs.readDirectory(dir);
+      const outBytes = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Rebranding to "${after.displayName}"…` },
+        () => Promise.resolve(rebrandVsix(vsixBytes, opts)),
+      );
+      await vscode.workspace.fs.writeFile(outUri, outBytes);
     } catch (e) {
-      errors++;
-      log.error("rebrand: readdir", e);
+      log.error("rebrand: vsix", e);
+      void vscode.window.showErrorMessage(`Could not produce the rebranded VSIX: ${msg(e)}. The original .vsix was not modified.`);
       return;
     }
-    for (const [n, type] of entries) {
-      // Never follow symlinks (files OR dirs): writing token-substituted content
-      // back through a link could clobber a file outside the source root.
-      if (type & vscode.FileType.SymbolicLink) continue;
-      if (type === vscode.FileType.Directory) {
-        if (SKIP_DIRS.has(n)) continue;
-        if (dir.path.endsWith("/src") && n === "branding") continue; // engine self-protection
-        await walk(vscode.Uri.joinPath(dir, n));
-        continue;
-      }
-      if (n === "package.json" || n === "package-lock.json") continue; // package.json handled explicitly
-      const ext = n.slice(n.lastIndexOf("."));
-      if (!REWRITE_EXTS.has(ext)) continue;
-      const uri = vscode.Uri.joinPath(dir, n);
-      try {
-        const stat = await vscode.workspace.fs.stat(uri);
-        if (stat.size > MAX_FILE_BYTES) continue;
-        scanned++;
-        const text = await readText(uri);
-        const out = applyBrandTokens(text, tokens);
-        if (out !== text) {
-          await writeText(uri, out);
-          changed++;
-        }
-      } catch (e) {
-        errors++;
-        log.error(`rebrand: ${n}`, e);
-      }
-    }
+    log.info(
+      `Rebranded VSIX written: ${outUri.fsPath} ("${after.displayName}", ${extensionId(after.publisher, after.name)})${renameIdentifiers ? `, namespace ${deep.idNamespace}` : ""}`,
+    );
+    const detail = [
+      `Wrote ${outUri.fsPath}.`,
+      release.expiresAt
+        ? `This build expires ${release.expiresAt.slice(0, 10)} (${release.validityDays} days — users must upgrade after that).`
+        : "This build never expires.",
+      renameIdentifiers ? "Internal identifiers were renamed — a distinct extension ID; existing installs keep their own data." : "",
+      "",
+      `Install it with:  code --install-extension "${outUri.fsPath}"`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    await vscode.window.showInformationMessage(`Rebrand complete: "${after.displayName}".`, { modal: true, detail }, "OK");
+    return;
   }
 
-  await walk(root);
-  return { changed, scanned, errors };
+  if (mode.id === "components") {
+    // Minimal build components → a folder a build team can package, or that the
+    // user can commit / merge into a git repository manually.
+    const folder = await vscode.window.showOpenDialog({
+      title: "Select a folder to write the build components into",
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+    });
+    if (!folder || !folder[0]) return;
+    const target = vscode.Uri.joinPath(folder[0], `${after.name}-build`);
+    try {
+      await writeFileMap(target, minimalBuildComponents(vsixBytes, opts));
+    } catch (e) {
+      log.error("rebrand: components", e);
+      void vscode.window.showErrorMessage(`Could not write the build components: ${msg(e)}.`);
+      return;
+    }
+    log.info(`Build components written: ${target.fsPath} ("${after.displayName}")`);
+    await vscode.window.showInformationMessage(
+      `Build components ready: "${after.displayName}".`,
+      {
+        modal: true,
+        detail: [
+          `Wrote the minimal, pre-built components to ${target.fsPath}.`,
+          "",
+          "Package them (e.g. by your build team):",
+          `  cd "${target.fsPath}"`,
+          "  npm install        (installs @vscode/vsce only)",
+          "  npm run package",
+          "",
+          "Or commit/merge the folder into a git repository to manage it yourself",
+          "(a .gitignore is included). See BUILD.md for corporate-registry / TLS notes.",
+        ].join("\n"),
+      },
+      "OK",
+    );
+    return;
+  }
+
+  // Push the build components to an enterprise GitHub for ongoing maintenance.
+  const host = await ask(
+    "GitHub host — blank for github.com, or your GitHub Enterprise Server host (e.g. github.corp.example)",
+    "",
+    undefined,
+    true,
+  );
+  if (host === undefined) return;
+  const ownerIn = await ask("Owner — your GitHub user or organization", after.publisher);
+  if (ownerIn === undefined) return;
+  const repoIn = await ask("Repository name", `${after.name}`, (v) =>
+    /^[A-Za-z0-9._-]+$/.test(v) ? undefined : "Letters, digits, '.', '_' or '-' only.",
+  );
+  if (repoIn === undefined) return;
+  const visPick = await vscode.window.showQuickPick(
+    [
+      { label: "Private", description: "recommended", priv: true },
+      { label: "Public", description: "anyone can read", priv: false },
+    ],
+    { title: "Repository visibility", ignoreFocusOut: true },
+  );
+  if (!visPick) return;
+  const token = await askSecret(
+    "GitHub token with 'repo' scope (write) — used once for this export, never stored",
+  );
+  if (token === undefined) return;
+  if (!token.trim()) {
+    void vscode.window.showErrorMessage("A GitHub token is required to push. Nothing was exported.");
+    return;
+  }
+
+  try {
+    const files = minimalBuildComponents(vsixBytes, opts);
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Pushing "${after.displayName}" to GitHub…` },
+      () =>
+        exportToGitHub(
+          {
+            host: host.trim(),
+            token: token.trim(),
+            owner: ownerIn.trim(),
+            repo: repoIn.trim(),
+            privateRepo: visPick.priv,
+            message: `White-label build: ${after.displayName} (${after.name})`,
+          },
+          files,
+          // The extension host's global fetch satisfies the injected shape.
+          fetch as unknown as Parameters<typeof exportToGitHub>[2],
+        ),
+    );
+    log.info(`Pushed build components to ${result.repoUrl}@${result.branch} (${result.files} files)`);
+    const open = await vscode.window.showInformationMessage(
+      `Pushed "${after.displayName}" to GitHub.`,
+      {
+        modal: true,
+        detail: [
+          `${result.createdRepo ? "Created and pushed to" : "Pushed to"} ${result.repoUrl}`,
+          `Branch ${result.branch}, ${result.files} file(s), commit ${result.commitSha.slice(0, 7)}.`,
+          "",
+          "The repo holds the minimal, buildable components (see BUILD.md) for ongoing maintenance.",
+        ].join("\n"),
+      },
+      "Open repository",
+    );
+    if (open === "Open repository") {
+      await vscode.env.openExternal(vscode.Uri.parse(result.repoUrl));
+    }
+  } catch (e) {
+    log.error("rebrand: github", e);
+    void vscode.window.showErrorMessage(`Could not push to GitHub: ${msg(e)}`);
+  }
+}
+
+/** Write a relative-path → bytes map under `root`, creating parent dirs. */
+async function writeFileMap(root: vscode.Uri, files: Record<string, Uint8Array>): Promise<void> {
+  await vscode.workspace.fs.createDirectory(root);
+  for (const [rel, bytes] of Object.entries(files)) {
+    const uri = vscode.Uri.joinPath(root, ...rel.split("/"));
+    const dir = vscode.Uri.joinPath(uri, "..");
+    await vscode.workspace.fs.createDirectory(dir);
+    await vscode.workspace.fs.writeFile(uri, bytes);
+  }
+}
+
+/** Pick the .vsix to rebrand (the built standard package). */
+async function pickVsix(): Promise<vscode.Uri | undefined> {
+  const picked = await vscode.window.showOpenDialog({
+    title: "Select the .vsix to rebrand",
+    canSelectMany: false,
+    filters: { "VS Code Extension": ["vsix"] },
+  });
+  return picked?.[0];
 }
 
 // --- helpers ---------------------------------------------------------------
-
-async function resolveSourceRoot(): Promise<vscode.Uri | undefined> {
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    if (await looksLikeSource(folder.uri)) {
-      const use = await vscode.window.showInformationMessage(
-        "Use the extension source in this workspace folder?",
-        { modal: true, detail: folder.uri.fsPath },
-        "Use this folder",
-        "Pick another…",
-      );
-      if (use === "Use this folder") return folder.uri;
-      if (use === undefined) return undefined;
-      break;
-    }
-  }
-  const picked = await vscode.window.showOpenDialog({
-    title: "Select the extension source folder (containing package.json)",
-    canSelectFiles: false,
-    canSelectFolders: true,
-    canSelectMany: false,
-  });
-  if (!picked || !picked[0]) return undefined;
-  if (await looksLikeSource(picked[0], true)) return picked[0];
-  void vscode.window.showErrorMessage("That folder isn't the extension source (no package.json with contributes). Pick the source root.");
-  return undefined;
-}
-
-/** Identify the extension source structurally (no hardcoded brand name, so it
- *  survives a prior rename): a package.json with `contributes`, alongside the
- *  rebranding guide or a chat-participant contribution. */
-async function looksLikeSource(dir: vscode.Uri, lenient = false): Promise<boolean> {
-  try {
-    const json = JSON.parse(await readText(vscode.Uri.joinPath(dir, "package.json")));
-    if (!json?.contributes) return false;
-    if (lenient) return true;
-    try {
-      await vscode.workspace.fs.stat(vscode.Uri.joinPath(dir, "REBRANDING.md"));
-      return true;
-    } catch {
-      return !!json.contributes.chatParticipants;
-    }
-  } catch {
-    return false;
-  }
-}
 
 async function ask(
   prompt: string,
@@ -722,28 +717,4 @@ async function gatherProvisioning(
   if (help.userGuide || help.welcome) content.help = help;
 
   return content;
-}
-
-async function editFile(
-  root: vscode.Uri,
-  rel: string,
-  transform: (text: string) => string,
-  written: string[],
-  skipped: string[],
-  log: Logger,
-): Promise<void> {
-  const uri = vscode.Uri.joinPath(root, ...rel.split("/"));
-  try {
-    const before = await readText(uri);
-    const after = transform(before);
-    if (after === before) {
-      skipped.push(`${rel} (no change)`);
-      return;
-    }
-    await writeText(uri, after);
-    written.push(rel);
-  } catch (e) {
-    log.error(`rebrand: ${rel}`, e);
-    skipped.push(`${rel} (${msg(e)})`);
-  }
 }

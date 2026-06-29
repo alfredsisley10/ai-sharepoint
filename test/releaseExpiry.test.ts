@@ -56,6 +56,29 @@ test("setReleaseManifest replaces the single-line release value, preserving the 
   assert.equal(parsed.publisher, "y");
 });
 
+test("setReleaseManifest replaces a MULTI-LINE release block (canonical JSON), no duplicate key", () => {
+  // The shipped package.json formats `release` across lines; the replace must
+  // hit it (not fall through to insert a second "release", which JSON last-wins
+  // would resolve back to the original channel — silently dropping whitelabel).
+  const pkg = [
+    "{",
+    '  "name": "x",',
+    '  "version": "0.72.0",',
+    '  "release": {',
+    '    "channel": "standard"',
+    "  },",
+    '  "publisher": "y"',
+    "}",
+    "",
+  ].join("\n");
+  const manifest: ReleaseManifest = { channel: "whitelabel", productName: "Contoso", validityDays: 90 };
+  const out = setReleaseManifest(pkg, manifest);
+  const parsed = JSON.parse(out);
+  assert.deepEqual(parsed.release, manifest);
+  assert.equal((out.match(/"release":/g) ?? []).length, 1, "exactly one release key");
+  assert.equal(parsed.publisher, "y");
+});
+
 test("setReleaseManifest inserts a release key after version when none exists", () => {
   const pkg = ['{', '  "name": "x",', '  "version": "0.68.0",', '  "publisher": "y"', "}", ""].join("\n");
   const out = setReleaseManifest(pkg, { channel: "whitelabel" });

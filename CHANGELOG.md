@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.73.0 — 2026-06-29
+
+White-label flow reworked around a packaged `.vsix`, plus enterprise build resilience.
+
+### Changed — rebrand a built `.vsix` (not a source folder)
+- The rebrand wizard now takes the **built `.vsix`** and transforms it directly — no source tree
+  and no `npm install` / build step. Deterministic (one file in, one out), and the input is never
+  modified, so re-running with new identifiers always starts cleanly from the original (a guard
+  warns if you pick an already-white-labeled `.vsix`). The bundle, `package.json`,
+  `package.nls.json`, manifest identity, and assets are all rebranded in place.
+
+### Added — output options for enterprise workflows
+- **Minimal build components**: write the pre-built, rebranded payload to a folder with a minimal,
+  `@vscode/vsce`-only `package.json`, a `.gitignore`, and a `BUILD.md` — hand to a build team, or
+  commit/merge into your own git repo. Only `@vscode/vsce` is needed to re-package (no
+  esbuild/TypeScript/etc.), which collapses the dependency surface.
+- **Push to enterprise GitHub** (github.com or GitHub Enterprise Server): create/update a repo with
+  those components in one commit (Git Data API), for ongoing maintenance.
+
+### Added — building behind a corporate registry
+- `scripts/rebrand-package.js` now trusts the **OS certificate store** (Node `--use-system-ca`;
+  `NODE_EXTRA_CA_CERTS` / `REBRAND_CA_FILE` on older Node), runs `npm install` at **`--loglevel
+  verbose`** under a **max timeout** (`REBRAND_INSTALL_TIMEOUT_MS`), and **pre-scans** the registry
+  first — adapting to a **prior version when the latest is withheld** (the cause of
+  "no matching version found for prettier@^3.9.3").
+- Dependency floors relaxed to the major base (`^X.0.0`) so a prior minor/patch satisfies the range
+  when a registry withholds the newest pending a security scan.
+
 ## 0.72.0 — 2026-06-29
 
 Completes the two items deferred from the 0.71.0 SDLC-review release.
