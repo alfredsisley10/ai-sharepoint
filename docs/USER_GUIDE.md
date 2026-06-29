@@ -484,11 +484,17 @@ Search and analyze your organization's GitHub content **read-only** — works fo
 
 - **Add** (Reference Sources → `+` → *GitHub*): paste the URL you browse to
   (`https://github.com` or your Enterprise Server, e.g. `https://github.corp.example`) — the
-  deployment and REST endpoint are detected automatically. Then supply a **read-only Personal
-  Access Token**: fine-grained with *Contents/Issues/Metadata = Read*, or a classic token with
-  the read-only `repo` scope. It's stored only in your OS keychain and verified once
-  (lockout-safe) — so, unlike pushing a site repo, this **never** prompts the git credential
-  manager.
+  deployment and REST endpoint are detected automatically. Then choose **how to sign in** — all
+  stored only in your OS keychain, verified once (lockout-safe), and (unlike pushing a site repo)
+  **never** prompting the git credential manager:
+  - **Sign in with GitHub (OAuth)** — a browser sign-in via VS Code's built-in GitHub provider
+    (for Enterprise Server, the *github-enterprise* provider; the wizard sets
+    `github-enterprise.uri` for you). No token to create — recommended.
+  - **Personal access token** — fine-grained with *Contents/Issues/Metadata = Read*, or a
+    classic token with the read-only `repo` scope.
+  - **GitHub App installation** — enter the **App ID** and **installation ID** and pick the
+    app's **private key (.pem)**; the connector mints short-lived installation tokens on demand
+    and caches them. Best for centrally-managed, auto-rotating access.
 - **Ask naturally**: plain text searches **issues & pull requests**
   (*"@sharepoint find open PRs about the payments timeout in GH"*). Prefix **`code:`**,
   **`repos:`**, or **`commits:`** to search those instead, or pass JSON

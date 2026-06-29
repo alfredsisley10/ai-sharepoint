@@ -6,8 +6,12 @@
 - New read-only **GitHub** context source, for both **github.com (SaaS)** and on-prem
   **GitHub Enterprise Server** (the REST base is derived from the deployment:
   `api.github.com` vs `<host>/api/v3`). Add it via **Add Context Source → GitHub**: paste the
-  URL you browse to, then a **read-only Personal Access Token** (stored in the OS keychain like
-  every other source — so searching GitHub never goes through the git credential manager).
+  URL you browse to, then pick **any of GitHub's authentication methods** — all stored in the OS
+  keychain, none touching the git credential manager: **Sign in with GitHub (OAuth)** via VS
+  Code's built-in GitHub / GitHub Enterprise provider (no token to create), a **read-only
+  Personal Access Token** (classic or fine-grained), or a **GitHub App installation** (App ID +
+  installation ID + private key → short-lived installation tokens minted and cached
+  automatically). All three work on Cloud and Enterprise Server.
 - `@sharepoint` can **search** four GitHub corpora and **fetch** individual items through the
   existing tools. Search: plain text → issues & PRs; a `code:` / `repos:` / `commits:` prefix →
   that corpus; or JSON `{"type":"code|issues|repositories|commits","q":"…","limit":n}` (q takes
@@ -16,7 +20,7 @@
   (repository).
 - Reuses the shared read-safety caps (ADR-0012), verify-on-connect + auth-lockout protection
   (ADR-0009), and Bearer-token HTTP path unchanged. Pure, unit-tested adapter
-  (`src/context/adapters/github.ts`); 10 new tests (607 total).
+  (`src/context/adapters/github.ts`, `githubAuth.ts`); 13 new tests (610 total).
 
 ### Added — full product rename in the rebrand command
 - The **Rebrand / White-label** command (Support & Diagnostics) now renames the product

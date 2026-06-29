@@ -5763,26 +5763,120 @@ async function promptContextCredential(
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
   if (type === "github") {
-    // PAT only: GitHub's REST API takes the token as a Bearer credential. A
-    // read-only fine-grained or classic token works for both github.com and
-    // GHES; stored in the keychain — so this never involves the git credential
-    // manager. Point the user at THIS instance's token page (GHES or SaaS).
-    const tokenPage = (() => {
+    // All GitHub REST auth methods reduce to a Bearer token; they differ only in
+    // how the token is obtained. github.com (cloud) and GHES (datacenter) both
+    // support all three. Everything is stored in the OS keychain — none of this
+    // ever touches the git credential manager.
+    const isGhes = deployment === "datacenter";
+    const origin = (() => {
       try {
-        return `${new URL(baseUrl ?? "https://github.com").origin}/settings/tokens`;
+        return new URL(baseUrl ?? "https://github.com").origin;
       } catch {
-        return "https://github.com/settings/tokens";
+        return "https://github.com";
       }
     })();
-    const secret = await vscode.window.showInputBox({
+    const providerId = isGhes ? "github-enterprise" : "github";
+    const pick = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(github) Sign in with GitHub (OAuth)",
+          description: isGhes
+            ? "browser sign-in via the GitHub Enterprise auth provider — no token to create"
+            : "browser sign-in — no token to create (recommended)",
+          value: "oauth" as const,
+        },
+        {
+          label: "$(key) Personal access token",
+          description: "classic or fine-grained, read-only — works on Cloud and Enterprise Server",
+          value: "pat" as const,
+        },
+        {
+          label: "$(server) GitHub App installation",
+          description: "App ID + installation ID + private key — centrally managed, auto-rotating",
+          value: "app" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "GitHub sign-in" },
+    );
+    if (!pick) return undefined;
+
+    if (pick.value === "pat") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "GitHub personal access token (read-only)",
+        password: true,
+        placeHolder: "github_pat_…  or  ghp_…",
+        prompt: `Create a READ-ONLY token at ${origin}/settings/tokens (Settings → Developer settings → Personal access tokens). Fine-grained: Contents, Issues, Metadata = Read-only. Classic: the read-only "repo" scope. Stored only in your OS keychain; verified with a single read (lockout-safe).`,
+      });
+      if (!secret?.trim()) return undefined;
+      return { method: "pat", secret: secret.trim() };
+    }
+
+    if (pick.value === "oauth") {
+      const scopes = ["repo", "read:org"]; // GitHub OAuth scopes are coarse; the connector only ever reads.
+      if (isGhes && baseUrl) {
+        // VS Code's built-in GitHub Authentication extension serves the
+        // "github-enterprise" provider only when this setting points at the
+        // instance. Set it (global) if unset so sign-in can succeed.
+        const cfg = vscode.workspace.getConfiguration();
+        if (!cfg.get<string>("github-enterprise.uri")) {
+          await cfg.update("github-enterprise.uri", origin, vscode.ConfigurationTarget.Global);
+        }
+      }
+      try {
+        const session = await vscode.authentication.getSession(providerId, scopes, { createIfNone: true });
+        if (!session) return undefined;
+      } catch (e) {
+        void vscode.window.showErrorMessage(
+          `GitHub sign-in failed: ${e instanceof Error ? e.message : String(e)}.${
+            isGhes
+              ? " For GitHub Enterprise Server, confirm the built-in GitHub Authentication supports your instance (the github-enterprise.uri setting)."
+              : ""
+          } You can use a personal access token instead.`,
+        );
+        return undefined;
+      }
+      return { method: "github-oauth", secret: JSON.stringify({ providerId, scopes }) };
+    }
+
+    // GitHub App installation.
+    const appId = await vscode.window.showInputBox({
       ignoreFocusOut: true,
-      title: "GitHub personal access token (read-only)",
-      password: true,
-      placeHolder: "github_pat_…  or  ghp_…",
-      prompt: `Create a READ-ONLY token at ${tokenPage} (Settings → Developer settings → Personal access tokens). Fine-grained: Contents, Issues, Metadata = Read-only. Classic: the read-only "repo" scope. Stored only in your OS keychain; verified with a single read (lockout-safe).`,
+      title: "GitHub App — App ID",
+      placeHolder: "123456",
+      prompt: `From your App's settings page (${origin}/settings/apps → your app → About).`,
+      validateInput: (v) => (/^\d+$/.test(v.trim()) ? undefined : "The App ID is numeric."),
     });
-    if (!secret?.trim()) return undefined;
-    return { method: "pat", secret: secret.trim() };
+    if (!appId) return undefined;
+    const installationId = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "GitHub App — Installation ID",
+      placeHolder: "12345678",
+      prompt: "Install the App on your org/repos, then read the number from the install URL (…/installations/<id>).",
+      validateInput: (v) => (/^\d+$/.test(v.trim()) ? undefined : "The Installation ID is numeric."),
+    });
+    if (!installationId) return undefined;
+    const keyUri = await vscode.window.showOpenDialog({
+      title: "Select the GitHub App private key (.pem)",
+      canSelectMany: false,
+      filters: { "PEM private key": ["pem"] },
+    });
+    if (!keyUri || !keyUri[0]) return undefined;
+    let privateKey: string;
+    try {
+      privateKey = Buffer.from(await vscode.workspace.fs.readFile(keyUri[0])).toString("utf8");
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read the private key file: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
+    if (!/BEGIN [A-Z ]*PRIVATE KEY/.test(privateKey)) {
+      void vscode.window.showErrorMessage("That file doesn't look like a PEM private key (expected a -----BEGIN … PRIVATE KEY----- block).");
+      return undefined;
+    }
+    return {
+      method: "github-app",
+      secret: JSON.stringify({ appId: appId.trim(), installationId: installationId.trim(), privateKey: privateKey.trim() }),
+    };
   }
   if (type === "splunk") {
     // Splunk Web URL to open for SSO: the ?web= param if present, else the
