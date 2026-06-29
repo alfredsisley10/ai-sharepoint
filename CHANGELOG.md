@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.68.0 — 2026-06-24
+## 0.69.0 — 2026-06-29
 
 ### Added — whitelabel config wizard, reusable release profile & first-run provisioning
 - The **Rebrand / White-label** flow now steps through **what gets baked into the build**, not
@@ -73,25 +73,6 @@
   (ADR-0009), and Bearer-token HTTP path unchanged. Pure, unit-tested adapter
   (`src/context/adapters/github.ts`, `githubAuth.ts`); 13 new tests (610 total).
 
-### Added — full product rename in the rebrand command
-- The **Rebrand / White-label** command (Support & Diagnostics) now renames the product
-  *entirely*, not just the publisher identity. It asks for a **product display name** and a
-  **chat handle**, then rewrites every brand token across the whole source tree (package.json,
-  the ~150 compiled TS sources, docs) and offers to recompile — so "AI SharePoint" and
-  `@sharepoint` become whatever you choose, end to end.
-- **Microsoft's "SharePoint" is never touched.** Only the distinctive brand tokens
-  (`AI SharePoint`, `@sharepoint`, and the `aiSharePoint`/`aisharepoint`/`ai-sharepoint`
-  identifier prefixes) are replaced; "SharePoint Online", "your SharePoint sites", etc. are
-  preserved. (Of 1,166 "SharePoint" occurrences, ~984 are Microsoft's and stay.)
-- Optional **"Also rename internal identifiers"** (greenfield-only, gated by a modal warning)
-  rewrites the `aiSharePoint.*` command/setting/view IDs, `aisharepoint_*` tool names, and
-  `ai-sharepoint` schema ids into a namespace derived from the new name. Validated end-to-end: a
-  deep rename of the tree still typechecks and bundles cleanly.
-- The rebrand engine excludes itself (`src/branding/**`) and the tests from the rewrite so the
-  find-tokens stay intact, and detects the source folder structurally (no hardcoded brand name).
-- Pure, unit-tested token engine (`src/branding/brandTokens.ts`) with the
-  "don't rename Microsoft SharePoint" guarantee; 6 new tests (595 total).
-
 ### Fixed — rebrand "Repackage now" is cross-platform, logged, and never a silent hang
 - **The `&&` crash on Windows.** The button typed `npm install && npm run package` into a
   terminal, which fails on the default **Windows PowerShell** (5.1): it rejects `&&` with
@@ -110,6 +91,27 @@
   --install-extension` line). The rebrand-complete dialog now also states where the `.vsix`
   will be written. A shell-aware inline command (`repackageCommand`, unit-tested) remains as
   a fallback when the driver isn't present in the source tree. (597 tests.)
+
+## 0.68.0 — 2026-06-24
+
+### Added — full product rename in the rebrand command
+- The **Rebrand / White-label** command (Support & Diagnostics) now renames the product
+  *entirely*, not just the publisher identity. It asks for a **product display name** and a
+  **chat handle**, then rewrites every brand token across the whole source tree (package.json,
+  the ~150 compiled TS sources, docs) and offers to recompile — so "AI SharePoint" and
+  `@sharepoint` become whatever you choose, end to end.
+- **Microsoft's "SharePoint" is never touched.** Only the distinctive brand tokens
+  (`AI SharePoint`, `@sharepoint`, and the `aiSharePoint`/`aisharepoint`/`ai-sharepoint`
+  identifier prefixes) are replaced; "SharePoint Online", "your SharePoint sites", etc. are
+  preserved. (Of 1,166 "SharePoint" occurrences, ~984 are Microsoft's and stay.)
+- Optional **"Also rename internal identifiers"** (greenfield-only, gated by a modal warning)
+  rewrites the `aiSharePoint.*` command/setting/view IDs, `aisharepoint_*` tool names, and
+  `ai-sharepoint` schema ids into a namespace derived from the new name. Validated end-to-end: a
+  deep rename of the tree still typechecks and bundles cleanly.
+- The rebrand engine excludes itself (`src/branding/**`) and the tests from the rewrite so the
+  find-tokens stay intact, and detects the source folder structurally (no hardcoded brand name).
+- Pure, unit-tested token engine (`src/branding/brandTokens.ts`) with the
+  "don't rename Microsoft SharePoint" guarantee; 6 new tests (595 total).
 
 ## 0.67.0 — 2026-06-24
 
