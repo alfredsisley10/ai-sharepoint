@@ -57,7 +57,9 @@ function setTopLevelString(raw: string, key: string, value: string): string {
   // escaped quotes); nested same-named keys are deeper-indented and won't match.
   const re = new RegExp(`^(  "${key}":\\s*)"(?:[^"\\\\]|\\\\.)*"`, "m");
   if (!re.test(raw)) throw new Error(`Could not find top-level "${key}" in package.json.`);
-  return raw.replace(re, `$1${JSON.stringify(value)}`);
+  // Function replacement (not a "$1…" string) so a "$" in the value can't be
+  // misread as a replacement special ($&, $1, $$ …) and corrupt the JSON.
+  return raw.replace(re, (_m, p1: string) => p1 + JSON.stringify(value));
 }
 
 /**
@@ -69,8 +71,9 @@ function setTopLevelString(raw: string, key: string, value: string): string {
 export function setReleaseManifest(raw: string, manifest: ReleaseManifest): string {
   const value = JSON.stringify(manifest);
   const existing = /^(\s*"release":\s*)\{[^\n]*\}/m;
-  if (existing.test(raw)) return raw.replace(existing, `$1${value}`);
-  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, `$1  "release": ${value},\n`);
+  // Function replacements so a "$" in the manifest can't corrupt the output.
+  if (existing.test(raw)) return raw.replace(existing, (_m, p1: string) => p1 + value);
+  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, (_m, p1: string) => `${p1}  "release": ${value},\n`);
 }
 
 /**
@@ -84,10 +87,11 @@ export function setProvisioningManifest(raw: string, manifest: unknown): string 
   if (!manifest) return raw;
   const value = JSON.stringify(manifest);
   const existing = /^(\s*"provisioning":\s*)\{[\s\S]*?\}(?=,?\s*\n)/m;
-  if (existing.test(raw)) return raw.replace(existing, `$1${value}`);
+  // Function replacements so a "$" anywhere in the manifest can't corrupt the output.
+  if (existing.test(raw)) return raw.replace(existing, (_m, p1: string) => p1 + value);
   const afterRelease = /^(\s*"release":\s*\{[^\n]*\},\n)/m;
-  if (afterRelease.test(raw)) return raw.replace(afterRelease, `$1  "provisioning": ${value},\n`);
-  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, `$1  "provisioning": ${value},\n`);
+  if (afterRelease.test(raw)) return raw.replace(afterRelease, (_m, p1: string) => `${p1}  "provisioning": ${value},\n`);
+  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, (_m, p1: string) => `${p1}  "provisioning": ${value},\n`);
 }
 
 /** Apply publisher/name/displayName/description to package.json text. */

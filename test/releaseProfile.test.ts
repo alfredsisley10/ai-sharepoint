@@ -115,6 +115,12 @@ test("setProvisioningManifest replaces/inserts the provisioning block", () => {
   assert.equal(setProvisioningManifest(noRelease, undefined), noRelease);
 });
 
+test("setProvisioningManifest preserves '$' sequences in values (no replacement-special corruption)", () => {
+  const pkg = ['{', '  "version": "1.0.0",', '  "publisher": "p"', "}", ""].join("\n");
+  const out = setProvisioningManifest(pkg, { id: "b1", settings: { tip: "use $1 and $& and $$ literally" } });
+  assert.equal(JSON.parse(out).provisioning.settings.tip, "use $1 and $& and $$ literally");
+});
+
 test("applyProvisioning seeds once, skipping what already exists, then marks applied", async () => {
   const seededConnectors: unknown[] = [];
   const seededProjects: unknown[] = [];

@@ -450,6 +450,9 @@ async function rewriteTree(
       return;
     }
     for (const [n, type] of entries) {
+      // Never follow symlinks (files OR dirs): writing token-substituted content
+      // back through a link could clobber a file outside the source root.
+      if (type & vscode.FileType.SymbolicLink) continue;
       if (type === vscode.FileType.Directory) {
         if (SKIP_DIRS.has(n)) continue;
         if (dir.path.endsWith("/src") && n === "branding") continue; // engine self-protection
