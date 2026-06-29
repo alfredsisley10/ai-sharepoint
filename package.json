@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.69.0",
+  "version": "0.70.0",
   "release": { "channel": "standard" },
   "publisher": "alfredsisley10",
   "license": "MIT",
@@ -44,12 +44,7 @@
         "aiSharePoint.ldap.caCertificatesFile",
         "aiSharePoint.context.allowSchemaIndexing",
         "aiSharePoint.ldap.dnsServers",
-        "aiSharePoint.servicenow.oauthClientId",
-        "aiSharePoint.telemetry.enabled",
-        "aiSharePoint.telemetry.splunkHec.url",
-        "aiSharePoint.telemetry.splunkHec.token",
-        "aiSharePoint.telemetry.otlp.endpoint",
-        "aiSharePoint.telemetry.otlp.headers"
+        "aiSharePoint.servicenow.oauthClientId"
       ]
     }
   },
@@ -456,6 +451,12 @@
         "title": "Toggle Verbose Wire Logging",
         "category": "AI SharePoint",
         "icon": "$(eye)"
+      },
+      {
+        "command": "aiSharePoint.manageTelemetry",
+        "title": "Manage Usage Telemetry (Splunk / OTEL)…",
+        "category": "AI SharePoint",
+        "icon": "$(broadcast)"
       },
       {
         "command": "aiSharePoint.indexSourceContent",
@@ -2392,40 +2393,7 @@
           ],
           "default": "followVSCode",
           "order": 9,
-          "markdownDescription": "Local feature-usage counters for the diagnostics bundle. **Nothing is ever transmitted by the extension** — data leaves the machine only via your explicit export (or the opt-in external telemetry below)."
-        },
-        "aiSharePoint.telemetry.enabled": {
-          "type": "boolean",
-          "default": false,
-          "order": 9.1,
-          "markdownDescription": "**Opt-in, default off.** When on AND an endpoint below is configured, forward *anonymized* usage counters to your Splunk HEC and/or OTEL metrics platform. Only short categorical values are ever sent — event names, enum dimensions (e.g. source type, error **code**), and environment (extension/VS Code version, OS type/version, an anonymous install id). **Never** freeform text, URLs, paths, queries, content, credentials, PII, or error messages. Sending is opportunistic: a down or slow endpoint never blocks or breaks the extension. Also respects your `aiSharePoint.diagnostics.usageCapture` / VS Code telemetry stance."
-        },
-        "aiSharePoint.telemetry.splunkHec.url": {
-          "type": "string",
-          "default": "",
-          "order": 9.2,
-          "markdownDescription": "Splunk HEC event collector URL (e.g. `https://splunk.corp.example:8088/services/collector/event`). Used only when `telemetry.enabled` is on and a token is set."
-        },
-        "aiSharePoint.telemetry.splunkHec.token": {
-          "type": "string",
-          "default": "",
-          "order": 9.3,
-          "markdownDescription": "Splunk HEC token (sent as `Authorization: Splunk <token>`). Machine-scoped."
-        },
-        "aiSharePoint.telemetry.otlp.endpoint": {
-          "type": "string",
-          "default": "",
-          "order": 9.4,
-          "markdownDescription": "OTEL OTLP/HTTP base endpoint for metrics (e.g. `https://otel-collector.corp.example:4318`). Anonymized event counts are exported as OTLP Sum metrics to `<endpoint>/v1/metrics`. Used only when `telemetry.enabled` is on."
-        },
-        "aiSharePoint.telemetry.otlp.headers": {
-          "type": "object",
-          "default": {},
-          "additionalProperties": {
-            "type": "string"
-          },
-          "order": 9.5,
-          "markdownDescription": "Extra HTTP headers for the OTLP exporter (e.g. an API key or tenant header). Machine-scoped."
+          "markdownDescription": "Local feature-usage counters for the diagnostics bundle. **Nothing is ever transmitted by the extension** — data leaves the machine only via your explicit export, or the opt-in external telemetry you configure under **Support & Diagnostics → Usage Telemetry** (command: *AI SharePoint: Manage Usage Telemetry*). External telemetry also honors this setting / your VS Code telemetry stance."
         },
         "aiSharePoint.diagnostics.errorCapture": {
           "type": "boolean",

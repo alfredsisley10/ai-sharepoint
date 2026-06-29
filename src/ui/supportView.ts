@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { ErrorReportStore } from "../diagnostics/errorReports";
+import { TelemetryStatus } from "../diagnostics/telemetryConfig";
 
 interface SupportNode {
   id: string;
@@ -24,6 +25,12 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
     private readonly errors: ErrorReportStore,
     private readonly version: string,
     private readonly verboseWireOn: () => boolean = () => false,
+    private readonly telemetry: () => TelemetryStatus = () => ({
+      enabled: false,
+      splunkTokenSet: false,
+      otlpHeaderSet: false,
+      active: false,
+    }),
   ) {
     errors.onDidChange(() => this.emitter.fire());
   }
@@ -46,6 +53,7 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
   getChildren(node?: SupportNode): SupportNode[] {
     if (node) return [];
     const errorCount = this.errors.count();
+    const tel = this.telemetry();
     return [
       {
         id: "export",
@@ -85,6 +93,17 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
         tooltip:
           "Log the full request/response detail of every integration — Graph (SharePoint/Teams/Outlook), Confluence/Jira, LDAP, databases, Vertex AI Search, Power BI, MSAL sign-in, and Copilot prompts. Secrets are redacted in layers (auth headers masked, token bodies withheld, credential-shaped values scrubbed). Local only; never included in diagnostics exports. Click to toggle.",
         command: { command: "aiSharePoint.toggleVerboseLogging", title: "Toggle" },
+      },
+      {
+        id: "telemetry",
+        label: "Usage Telemetry (Splunk / OTEL)",
+        description: tel.active ? "sending" : tel.enabled ? "enabled — set an endpoint" : "off",
+        icon: tel.active
+          ? new vscode.ThemeIcon("broadcast", new vscode.ThemeColor("charts.green"))
+          : new vscode.ThemeIcon("broadcast"),
+        tooltip:
+          "Configure anonymized usage telemetry to a Splunk HEC and/or OTEL (OTLP) metrics endpoint. Opt-in and off by default; only categorical metrics + environment leave the machine (no content/PII). Connection details — including tokens — are stored in your OS keychain, never shown again, never in settings, and never in a diagnostics export. Click to manage.",
+        command: { command: "aiSharePoint.manageTelemetry", title: "Manage" },
       },
       {
         id: "walkthrough",
