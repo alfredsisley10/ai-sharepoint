@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.77.0 — 2026-06-29
+
+White-label export: enterprise/Windows build resilience and clearer build guidance.
+
+### Fixed — exported build failed on a quarantining registry
+- The full-source export shipped `package-lock.json`, which pins the **exact** newest dependency
+  versions. Enterprise registries commonly quarantine a just-released version pending a security
+  scan, so its tarball 404s (the reported `could not find prettier-3.9.3.tgz`) and `npm install`
+  fails even though `package.json` allows older versions. The export now **omits the lockfile** and
+  keeps dependency ranges at the major base (`^X.0.0`), so `npm install` resolves the newest version
+  the registry actually has — falling back to the prior (N-1) release when the latest is withheld.
+  `MAINTAINING.md` documents committing your own lock after a clean install.
+
+### Changed — build guides are cross-platform with full diagnostics and a TLS escalation
+- The README **Develop / build** section and the generated `MAINTAINING.md` / `BUILD.md` now give
+  **macOS/Linux (bash/zsh), Windows PowerShell, and cmd.exe** commands (previously bash-only), use
+  `npm install --verbose` for full diagnostics, and present TLS handling as an ordered escalation:
+  **(1)** trust the OS certificate store (`--use-system-ca`), **(2)** add a specific
+  `NODE_EXTRA_CA_CERTS` bundle for a self-signed CA the OS store lacks, **(3)** as a flagged
+  last-resort **security risk**, `npm install --strict-ssl=false` (then re-enable). The shared
+  guidance lives in one builder so all three guides stay consistent.
+- The guides now explain that Windows `npm warn cleanup` / "operation not permitted, rmdir" messages
+  are **benign warnings** (npm pruning other-platform optional binaries while antivirus/Explorer/
+  OneDrive hold them open) — the install still succeeds; confirm with `npm run package`.
+
+### Changed — clearer "minimal build components" wording
+- Replaced the unexplained "vsce-only package.json" phrasing across the wizard, `BUILD.md`,
+  `MAINTAINING.md`, and `REBRANDING.md` with a definition: **`@vscode/vsce`** is the official VS Code
+  Extension packaging tool (the `vsce` CLI) that zips the folder into a `.vsix`; because the bundle
+  is pre-built there's no TypeScript/esbuild step, which is what keeps the dependency surface small.
+
 ## 0.76.0 — 2026-06-29
 
 Full anonymization of white-labeled source — no prior identifiers or commit history.

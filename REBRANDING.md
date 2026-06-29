@@ -47,8 +47,10 @@ At the end you choose **what to produce**, then **where to put it**.
 
 - **Rebranded `.vsix`** — one file to install (`code --install-extension <file>`) or distribute.
 - **Minimal build components** — the pre-built, rebranded payload with a minimal `package.json`
-  (only `@vscode/vsce` is needed to re-package — no esbuild/TypeScript/etc.) and a `BUILD.md`.
-  Smallest dependency surface; ideal for a build team or a locked-down registry.
+  whose only build dependency is **`@vscode/vsce`** (the official VS Code Extension packaging tool,
+  the `vsce` CLI, which zips an extension folder into an installable `.vsix`), plus a `BUILD.md`.
+  Because the bundle is already compiled there's no esbuild/TypeScript step — the smallest possible
+  dependency surface; ideal for a build team or a locked-down registry.
 - **Full source** — the complete, rebranded source tree, extracted from the source that ships
   **inside the VSIX** (`dist/source.zip`). This means a white-labeled copy can be maintained from
   scratch **without access to the original repository** — only standard npm dependencies are

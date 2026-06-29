@@ -22,7 +22,7 @@ import {
   SECURITY_PHRASE,
 } from "./rebrand";
 import { ReleaseManifest } from "./releaseExpiry";
-import { exportScaffoldFiles } from "./exportScaffold";
+import { exportScaffoldFiles, buildEnvironmentNotes } from "./exportScaffold";
 import { ORIGIN_BRAND, OriginBrand, rebrandOriginModule } from "./originBrand";
 
 export interface VsixRebrandOptions {
@@ -153,10 +153,11 @@ export function rebrandVsix(vsix: Uint8Array, opts: VsixRebrandOptions): Uint8Ar
 }
 
 /** Reduce a rebranded package.json to the minimum needed to RE-PACKAGE the
- *  pre-built bundle: vsce only (no esbuild/typescript/etc. — the bundle is
- *  already built), no runtime dependencies (bundled + --no-dependencies), and
- *  no source build step. This is what shrinks the build-team dependency surface
- *  so a withheld/scanning-pending dependency can't break their build. */
+ *  pre-built bundle: only `@vscode/vsce` (the VS Code extension packager — no
+ *  esbuild/typescript/etc., since the bundle is already built), no runtime
+ *  dependencies (bundled + --no-dependencies), and no source build step. This is
+ *  what shrinks the build-team dependency surface so a withheld/scanning-pending
+ *  dependency can't break their build. */
 export function minimalPackageJson(pkgText: string): string {
   const pkg = JSON.parse(pkgText) as Record<string, unknown>;
   delete pkg.dependencies; // bundle is pre-built; vsce packages with --no-dependencies
@@ -179,22 +180,28 @@ function buildReadme(displayName: string, name: string): string {
     "extension. The bundle (`dist/extension.js`) is already compiled and",
     "rebranded — you only re-package it into a `.vsix` through your own pipeline.",
     "",
+    "## What you need",
+    "",
+    "The only build tool required is **`vsce`** — the package `@vscode/vsce`, the",
+    "official *Visual Studio Code Extension* command-line tool that zips an",
+    "extension folder into an installable `.vsix`. Because the code is already",
+    "compiled, there is **no TypeScript or esbuild step** — `vsce` simply packages",
+    "the existing files. That keeps the dependency surface (and your security-scan",
+    "exposure) as small as possible.",
+    "",
     "## Build",
     "",
+    "The **same commands on macOS, Linux, and Windows** (npm is cross-platform).",
+    "`--verbose` gives full install diagnostics behind a proxy or private registry.",
+    "",
     "```",
-    "npm install      # installs @vscode/vsce only",
-    `npm run package  # produces ${name}-<version>.vsix`,
+    "npm install --verbose   # installs only the vsce packaging tool (@vscode/vsce)",
+    `npm run package         # vsce packages the files into ${name}-<version>.vsix`,
     "```",
     "",
-    "Requires Node 18+ and registry access for `@vscode/vsce`. If your registry",
-    "serves internally-issued TLS certs, make sure the OS trust store is used:",
-    "Node 22.9+ honors `NODE_OPTIONS=--use-system-ca`; on older Node set",
-    "`NODE_EXTRA_CA_CERTS` to your corporate CA bundle.",
+    "Requires Node 18+ and registry access for `@vscode/vsce`.",
     "",
-    "No source build is required (no esbuild/TypeScript) — only `@vscode/vsce` is",
-    "installed, which keeps the dependency surface (and security-scan exposure)",
-    "minimal.",
-    "",
+    buildEnvironmentNotes("minimal"),
   ].join("\n");
 }
 
@@ -238,12 +245,18 @@ export function readVsixSourceArchive(vsix: Uint8Array): Uint8Array | undefined 
 const SOURCE_SKIP_REWRITE = ["scripts/", "node_modules/", "dist/", "out/", "out-test/"];
 const SOURCE_TEXT_RE = /\.(ts|js|cjs|mjs|json|md|txt|svg|css|html|ya?ml)$/i;
 
-// Origin-coupled files that must NOT ship in an anonymized copy. CHANGELOG.md
-// (the original release narrative) is replaced with a fresh one; REBRANDING.md
-// (names the origin and documents the origin's white-label mechanism) and the
-// origin's own .github (CI / issue templates) are dropped — the export supplies
-// its own build workflow + MAINTAINING.md via exportScaffoldFiles().
-const SOURCE_DROP = [/^REBRANDING\.md$/i, /^\.github\//];
+// Files that must NOT ship in an anonymized, enterprise-buildable copy.
+// CHANGELOG.md (the original release narrative) is replaced with a fresh one;
+// REBRANDING.md (names the origin and documents the origin's white-label
+// mechanism) and the origin's own .github (CI / issue templates) are dropped —
+// the export supplies its own build workflow + MAINTAINING.md via
+// exportScaffoldFiles(). package-lock.json is dropped because it pins the EXACT
+// newest versions, which an enterprise registry often quarantines pending a
+// security scan (e.g. "could not find prettier-3.9.3.tgz"); without it, the
+// relaxed `^X.0.0` ranges let `npm install` resolve the newest version the
+// registry actually has (the prior release when the latest is withheld). The
+// maintainer commits their own lock after a clean install — see MAINTAINING.md.
+const SOURCE_DROP = [/^REBRANDING\.md$/i, /^\.github\//, /^package-lock\.json$/i];
 const ORIGIN_MODULE = "src/branding/originBrand.ts";
 const SOURCE_CHANGELOG = "CHANGELOG.md";
 

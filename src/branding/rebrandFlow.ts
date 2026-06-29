@@ -350,7 +350,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
       {
         label: "$(tools) Minimal build components",
         detail:
-          "Pre-built, rebranded payload + a vsce-only package.json. A build team re-packages it (smallest dependency surface), or you merge it into a repo.",
+          "Pre-built, rebranded payload + a package.json that needs only @vscode/vsce — the official VS Code extension packager (the 'vsce' CLI) — to produce the .vsix. No TypeScript/esbuild toolchain, so the smallest dependency surface. Hand to a build team, or merge into a repo.",
         id: "components",
       },
       {

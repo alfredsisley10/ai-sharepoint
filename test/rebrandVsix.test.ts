@@ -259,6 +259,8 @@ function fixtureSourceZip(): Uint8Array {
     // Build tooling — emitted verbatim (carries no brand identifiers).
     "scripts/build.js": strToU8("// build helper — no brand here"),
     "package.json": strToU8(PKG),
+    // Pins exact newest versions — dropped so a quarantining registry can resolve N-1.
+    "package-lock.json": strToU8(JSON.stringify({ name: ORIGIN_BRAND.kebab, lockfileVersion: 3 })),
     // Origin-coupled docs/CI — dropped or replaced.
     "CHANGELOG.md": strToU8(`# Changelog\n\n## 0.1.0\n- ${ORIGIN_BRAND.displayName} by ${ORIGIN_BRAND.publisher}\n`),
     "REBRANDING.md": strToU8(`# Rebranding\n\nPublisher fixed at ${ORIGIN_BRAND.publisher}.\n`),
@@ -298,6 +300,7 @@ test("rebrandSourceArchive: anonymizes product/engine/tests, regenerates originB
   assert.doesNotMatch(text("CHANGELOG.md"), /0\.1\.0/, "original release history gone");
   assert.ok(!("REBRANDING.md" in out), "origin-coupled rebranding doc dropped");
   assert.ok(!(".github/workflows/ci.yml" in out), "origin CI dropped");
+  assert.ok(!("package-lock.json" in out), "lockfile dropped so a quarantining registry can resolve N-1");
 
   // Build-ready scaffolding added.
   assert.ok(".github/workflows/whitelabel-build.yml" in out);
@@ -319,6 +322,32 @@ test("rebrandSourceArchive replaces the publisher/owner even though it isn't a b
 test("rebrandSourceArchive licenseHolder rewrites the LICENSE copyright", () => {
   const out = rebrandSourceArchive(fixtureSourceZip(), deepOpts({ after: { ...after, licenseHolder: "Contoso Inc." } }));
   assert.match(strFromU8(out["LICENSE"]), /Copyright \(c\) 2026 Contoso Inc\./);
+});
+
+test("exported build guides: cross-platform, --verbose, OS trust store, strict-ssl fallback, withheld-version + Windows cleanup notes", () => {
+  const maintaining = strFromU8(rebrandSourceArchive(fixtureSourceZip(), deepOpts())["MAINTAINING.md"]);
+  // Diagnostics + cross-platform.
+  assert.match(maintaining, /npm install --verbose/, "verbose install diagnostics");
+  assert.match(maintaining, /\$env:NODE_OPTIONS/, "Windows PowerShell env syntax");
+  assert.match(maintaining, /cmd\.exe/, "cmd.exe variant");
+  // TLS escalation: OS store → CA bundle → strict-ssl last resort (with risk warning).
+  assert.match(maintaining, /--use-system-ca/, "OS trust store (Node 22.9+)");
+  assert.match(maintaining, /NODE_EXTRA_CA_CERTS/, "CA bundle for older Node / self-signed");
+  assert.match(maintaining, /--strict-ssl=false/, "documented SSL-ignore last resort");
+  assert.match(maintaining, /security risk/i, "strict-ssl carries a security warning");
+  // Withheld/quarantined newer versions (the prettier-3.9.3 failure).
+  assert.match(maintaining, /prettier-3\.9\.3\.tgz/, "names the concrete withheld-version failure");
+  assert.match(maintaining, /no `package-lock\.json`/, "explains the dropped lockfile");
+  // Windows npm warn cleanup is explained as benign.
+  assert.match(maintaining, /npm warn cleanup/, "explains the benign Windows cleanup warning");
+  assert.match(maintaining, /warnings, not errors/i, "reassures the warnings are non-fatal");
+
+  const build = strFromU8(minimalBuildComponents(fixtureVsix(), deepOpts())["BUILD.md"]);
+  assert.match(build, /npm install --verbose/);
+  assert.match(build, /--use-system-ca/);
+  assert.match(build, /--strict-ssl=false/, "SSL-ignore last resort in BUILD.md too");
+  assert.match(build, /\$env:NODE_OPTIONS/, "Windows PowerShell trust-store syntax");
+  assert.match(build, /npm warn cleanup/, "Windows cleanup note in BUILD.md");
 });
 
 test("rebrandVsix rebrands the source tree embedded in the .vsix (no prior identifiers inside)", () => {

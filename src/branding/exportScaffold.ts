@@ -68,12 +68,95 @@ export function buildWorkflowYaml(kind: ExportKind): string {
   ].join("\n");
 }
 
+/**
+ * Shared build-environment troubleshooting for the exported guides: corporate
+ * TLS (OS trust store + verbose first, a specific CA bundle next, `--strict-ssl`
+ * bypass only as a flagged last resort) and the benign Windows `npm warn cleanup`
+ * / "operation not permitted, rmdir" warnings. Cross-platform throughout
+ * (bash/zsh · PowerShell · cmd.exe).
+ */
+export function buildEnvironmentNotes(kind: ExportKind): string {
+  const lines = [
+    "## Behind a corporate proxy or private registry (internal TLS certs)",
+    "",
+    "Don't blanket-disable TLS — work through these **in order**, keeping `--verbose`",
+    "so you can see exactly which host and which dependency is involved:",
+    "",
+    "1. **Trust the OS certificate store** (recommended; Node 22.9+). Set `--use-system-ca`",
+    "   before installing:",
+    "   - bash/zsh: `export NODE_OPTIONS=--use-system-ca`",
+    "   - PowerShell: `$env:NODE_OPTIONS = '--use-system-ca'`",
+    "   - cmd.exe: `set NODE_OPTIONS=--use-system-ca`",
+    "",
+    "   then `npm install --verbose --no-audit --no-fund`.",
+    "",
+    "2. **Add the specific CA bundle.** If a dependency still fails on a self-signed CA the",
+    "   OS store doesn't have (or you're on older Node), point `NODE_EXTRA_CA_CERTS` at your",
+    "   corporate CA `.pem` and re-run:",
+    "   - bash/zsh: `export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem`",
+    "   - PowerShell: `$env:NODE_EXTRA_CA_CERTS = 'C:\\path\\to\\corp-ca.pem'`",
+    "   - cmd.exe: `set NODE_EXTRA_CA_CERTS=C:\\path\\to\\corp-ca.pem`",
+    "",
+    "3. **Last resort — ignore TLS errors** (⚠️ **security risk**). `--strict-ssl=false`",
+    "   disables certificate verification, exposing the install to man-in-the-middle",
+    "   tampering. Only on a **trusted** network, for a single install, then re-enable:",
+    "",
+    "   ```",
+    "   npm install --strict-ssl=false --verbose",
+    "   npm config set strict-ssl true   # re-enable immediately afterward",
+    "   ```",
+    "",
+  ];
+  if (kind === "source") {
+    lines.push(
+      "## Withheld / quarantined newer versions",
+      "",
+      "Enterprise registries often quarantine a just-released version until it clears a",
+      "security scan, so its tarball 404s (e.g. `could not find prettier-3.9.3.tgz`). This",
+      "export therefore ships **no `package-lock.json`** and keeps dependency ranges at the",
+      "major base (`^X.0.0`), so `npm install` resolves the newest version your registry",
+      "*actually has* — automatically falling back to the prior (N-1) release when the latest",
+      "is withheld. After a clean install, **commit the generated `package-lock.json`** to your",
+      "repo for reproducible builds. If a build later fails on a missing tarball, delete",
+      "`package-lock.json` and re-run `npm install` to re-resolve against your registry.",
+      "",
+    );
+  }
+  lines.push('## Windows: `npm warn cleanup` / "operation not permitted, rmdir"', "");
+  if (kind === "source") {
+    lines.push(
+      "These are **warnings, not errors — the install still succeeds.** npm fetches the",
+      "platform-specific binaries for several OSes (esbuild ships one per platform) and",
+      "prunes the ones this machine doesn't need; on Windows, antivirus, Explorer, or",
+      "OneDrive frequently hold those folders open, so the cleanup `rmdir` is denied and",
+      "npm logs `npm warn cleanup`. Confirm the build is fine by running `npm run package` —",
+      "it still produces the `.vsix`.",
+      "",
+      "To minimize the noise: build in a **local, non-synced** folder (not OneDrive or a",
+      "synced Desktop), add it to your antivirus exclusions, and close editors/Explorer",
+      "windows on `node_modules`. For a clean retry: PowerShell",
+      "`Remove-Item -Recurse -Force node_modules` (cmd `rmdir /s /q node_modules`), then",
+      "`npm install --verbose`. Use `npm install` (not `npm ci`) so npm resolves this",
+      "platform's binaries.",
+    );
+  } else {
+    lines.push(
+      "If npm logs `npm warn cleanup` with \"operation not permitted, rmdir\", these are",
+      "**warnings, not errors** — npm couldn't delete a temporary folder (antivirus/Explorer/",
+      "OneDrive held it open) but the install still succeeds. Confirm with `npm run package`.",
+      "Building in a local, non-synced folder and excluding it from antivirus avoids the noise.",
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 /** GHES / SaaS best-practice guidance for the exported repository. */
 export function maintainingGuide(after: BrandConfig, kind: ExportKind): string {
   const buildSteps =
     kind === "source"
-      ? "    npm install\n    npm run typecheck\n    npm test\n    npm run package"
-      : "    npm install      # installs @vscode/vsce only\n    npm run package";
+      ? "npm install --verbose\nnpm run typecheck\nnpm test\nnpm run package"
+      : "npm install --verbose   # installs only @vscode/vsce (the VS Code extension packager)\nnpm run package";
   return [
     `# Maintaining "${after.displayName}"`,
     "",
@@ -87,10 +170,14 @@ export function maintainingGuide(after: BrandConfig, kind: ExportKind): string {
     "",
     "## Build locally",
     "",
+    "The **same commands on macOS, Linux, and Windows** (npm is cross-platform).",
+    "`--verbose` gives full install diagnostics behind a proxy or private registry.",
+    "",
     "```",
     buildSteps,
     "```",
     "",
+    buildEnvironmentNotes(kind),
     "## GitHub Actions (build, package, release)",
     "",
     "A workflow is included at `.github/workflows/whitelabel-build.yml`. It builds and",
@@ -117,11 +204,10 @@ export function maintainingGuide(after: BrandConfig, kind: ExportKind): string {
     "//registry.corp.example/:_authToken=${NPM_TOKEN}",
     "```",
     "",
-    "If the registry/proxy serves internally-issued certificates, trust the OS store on",
-    "the runner (Node 22.9+ honors `NODE_OPTIONS=--use-system-ca`) or set",
-    "`NODE_EXTRA_CA_CERTS` to your corporate CA bundle. Dependency floors are kept at the",
-    "major base (`^X.0.0`) so a prior version still resolves when the newest is withheld",
-    "pending a security scan.",
+    "The same OS-trust-store / CA settings from **Behind a corporate proxy** above apply on",
+    "the runner — set them in the workflow `env:` or your runner image. Installs adapt to the",
+    "versions your registry has (no committed lockfile; `^X.0.0` ranges) — see **Withheld /",
+    "quarantined newer versions** above.",
     "",
     "**Branch protection.** Protect `main`: require the *Build VSIX* check to pass,",
     "require pull-request review, and restrict who can push tags (releases trigger on",

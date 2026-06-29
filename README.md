@@ -103,10 +103,15 @@ this interactively.
 | [Privacy & Data Notice](docs/PRIVACY.md) | Everyone — what is stored, what an export contains |
 | [Plan](docs/PLAN.md) & [ADRs](docs/adr) | Engineering — architecture and decisions |
 
-## Develop
+## Develop / build
+
+Plain npm — the **same commands on macOS, Linux, and Windows**. `--verbose` gives full
+install diagnostics (useful behind a proxy or a private registry).
+
+**macOS / Linux (bash/zsh):**
 
 ```bash
-npm install
+npm install --verbose
 npm run compile      # bundle to dist/ (or: npm run watch)
 npm run typecheck    # tsc --noEmit
 npm test             # unit tests (node:test)
@@ -114,6 +119,71 @@ npm run check:native # ADR-0016 gate: pure-JS dependency tree
 npm run scan:secrets # PLAN §6 gate: no secret-shaped content in the repo
 npm run package      # produce the VSIX
 ```
+
+**Windows (PowerShell):**
+
+```powershell
+npm install --verbose
+npm run compile
+npm run typecheck
+npm test
+npm run package
+```
+
+`cmd.exe` is identical — the npm commands are the same on every platform.
+
+### Behind a corporate proxy or private registry (internal TLS certs)
+
+If your registry/proxy presents internally-issued certificates, **don't blanket-disable TLS** —
+work through these in order. Keep `--verbose` throughout so you can see exactly which host and
+which dependency is involved.
+
+**1. Trust the OS certificate store** (recommended; Node 22.9+). Set `--use-system-ca` before installing:
+
+```bash
+# macOS / Linux (bash/zsh)
+export NODE_OPTIONS=--use-system-ca
+npm install --verbose --no-audit --no-fund
+```
+
+```powershell
+# Windows PowerShell
+$env:NODE_OPTIONS = '--use-system-ca'
+npm install --verbose --no-audit --no-fund
+```
+
+```bat
+:: Windows cmd.exe
+set NODE_OPTIONS=--use-system-ca
+npm install --verbose --no-audit --no-fund
+```
+
+**2. Add the specific CA bundle.** If a dependency still fails on a self-signed CA the OS store
+doesn't have (or you're on older Node), point `NODE_EXTRA_CA_CERTS` at your corporate CA bundle —
+bash `export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem`, PowerShell
+`$env:NODE_EXTRA_CA_CERTS = 'C:\path\to\corp-ca.pem'`, cmd `set NODE_EXTRA_CA_CERTS=C:\path\to\corp-ca.pem` —
+then re-run the install.
+
+**3. Last resort — ignore TLS errors (⚠️ security risk).** Only if (1)–(2) can't be arranged and
+you are on a **trusted** network. `--strict-ssl=false` disables certificate verification, so the
+install is exposed to man-in-the-middle tampering; use it for a single install, then re-enable:
+
+```bash
+npm install --strict-ssl=false --verbose
+npm config set strict-ssl true   # re-enable afterward
+```
+
+On a quarantining registry that withholds just-released versions (e.g. `could not find
+prettier-3.9.3.tgz`), the relaxed `^X.0.0` ranges let `npm install` fall back to the prior (N-1)
+release — delete any stale `package-lock.json` first so it isn't pinned to the withheld version.
+
+### Windows: `npm warn cleanup` / "operation not permitted, rmdir"
+
+These are **warnings, not errors** — the install still succeeds. npm fetches per-platform binaries
+(esbuild ships one per OS) and prunes the ones this machine doesn't need; antivirus / Explorer /
+OneDrive often hold those folders open, so the cleanup `rmdir` is denied. Confirm with
+`npm run package`. To avoid the noise, build in a local (non-synced) folder and exclude it from
+antivirus.
 
 Press <kbd>F5</kbd> to launch the Extension Development Host. Copilot features require the GitHub
 Copilot extension installed and signed in; SharePoint features require a Microsoft 365 account.
