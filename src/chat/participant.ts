@@ -12,6 +12,8 @@ import { ProjectsStore } from "../context/projectsStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { LessonsStore } from "../diagnostics/lessonsStore";
+import { MemoryStore } from "../context/memoryStore";
+import { memoryContextBlock } from "../context/memory";
 import { BlockedTermsStore } from "../diagnostics/blockedTermsStore";
 import { buildProxyNudge, defang, scanForTerms, proxyBlockAdvice } from "../core/proxyShield";
 import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
@@ -177,6 +179,7 @@ interface ChatDeps {
   telemetry: TelemetryService;
   errors: ErrorReportStore;
   lessons: LessonsStore;
+  memory: MemoryStore;
   proxyTerms: BlockedTermsStore;
   modelLimits: ModelLimitsStore;
   log: Logger;
@@ -701,6 +704,14 @@ async function buildSiteContext(
           .map((b) => `- ${b.name} [${b.kind}] on ${deps.sources.get(b.sourceId)?.displayName ?? "?"}`)
           .join("\n")}`
       : "",
+    // Per-entity memory: user-curated + AI-proposed notes for the in-scope
+    // reference sources and the configured sites (additional context the user saved).
+    [
+      ...referenceSources.map((s) => memoryContextBlock(`source "${s.displayName}"`, deps.memory.listForScope({ kind: "source", key: s.id }))),
+      ...deps.sites.list().map((c) => memoryContextBlock(`site "${c.displayName}"`, deps.memory.listForScope({ kind: "site", key: c.siteUrl }))),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
   ]
     .filter(Boolean)
     .join("\n");

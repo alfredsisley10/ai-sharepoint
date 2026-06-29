@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.83.0 — 2026-06-29
+
+### Added — per-site/source memory (notes that feed the assistant)
+- New **Manage Memory** command: attach short, non-secret notes (conventions, gotchas, key tables,
+  naming) to a managed site or reference source. Pick an entity, then add/edit/copy/delete its notes.
+- **Memory feeds @sharepoint's context**: when a site/source is in scope, its notes are injected into
+  the assistant's context as authoritative, user-curated guidance for that entity.
+- Notes carry an **origin** (`user` now; `ai` reserved for assistant-proposed notes, shown with an
+  "AI-proposed" badge) and a normalized dedup key, so the upcoming import/merge can combine notes
+  users share. Stored in global state (survives folder switches), secret-free.
+
+_First increment of the memory/prompt-library/merge work (Phases 2–4). Next: assistant-proposed
+memory capture, an inline expandable "Memory" group in the Sites/Sources tree, and including memory
+in the combined export/import with review + intelligent merge._
+
 ## 0.82.0 — 2026-06-29
 
 ### Added — combined, selective export/import (sites + sources + projects)

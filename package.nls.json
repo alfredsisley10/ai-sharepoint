@@ -42,6 +42,7 @@
   "aiSharePoint.discoverActiveDirectory.title": "Discover Active Directory (DNS)",
   "aiSharePoint.exportReferenceConfig.title": "Export Sites, Sources & Projects (secret-free)…",
   "aiSharePoint.importReferenceConfig.title": "Import Sites, Sources & Projects…",
+  "aiSharePoint.manageMemory.title": "Manage Memory (notes for a site or source)…",
   "aiSharePoint.browseSource.title": "Browse Source & Add Bookmark…",
   "aiSharePoint.addBookmark.title": "Add Bookmark",
   "aiSharePoint.runBookmark.title": "Run Bookmark",
