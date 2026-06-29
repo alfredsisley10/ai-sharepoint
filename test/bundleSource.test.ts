@@ -16,6 +16,9 @@ test("collectSourceFiles includes the buildable source, excludes node_modules/di
   // Source + the files needed to build it.
   assert.ok(names.includes("src/extension.ts"), "TS source");
   assert.ok(names.includes("package.json"));
+  // Without this, VS Code can't resolve the package.json %key% placeholders and
+  // every view tab / command title / walkthrough entry renders as a raw "%key%".
+  assert.ok(names.includes("package.nls.json"), "NLS bundle (resolves %placeholders%)");
   assert.ok(names.includes("package-lock.json"), "lockfile for reproducible installs");
   assert.ok(names.includes("esbuild.js"));
   assert.ok(names.includes("tsconfig.json"));

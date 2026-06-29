@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.81.0 — 2026-06-29
+
+Two white-label correctness fixes: built-from-source VSIXs render their labels, and reference-config
+files move freely between white-labeled builds.
+
+### Fixed — built-from-source VSIX showed raw `%placeholders%` for every label
+- The source bundle (`dist/source.zip`) omitted **`package.nls.json`**, so a VSIX built from a
+  **Full source** (or **Minimal components**) export had no NLS bundle. VS Code then couldn't
+  resolve any `package.json` `%key%`, and every view tab, command title, and **walkthrough** entry
+  rendered as a raw placeholder (e.g. `%view.aiLink.sitesView.name%`). The bundler now includes
+  `package.nls.json` (and any `package.nls.<locale>.json`), the rebrand rewrites its keys in lockstep
+  with the `package.json` placeholders, and a test asserts every placeholder resolves in the export
+  after a deep rebrand. (The directly-rebranded `.vsix` path was unaffected — it already carried the
+  NLS bundle.)
+
+### Fixed — reference-config files weren't portable across white-labeled builds
+- Exported reference-config files were stamped with a brand-prefixed `$schema`
+  (`<kebab>/reference-config/v1`), and `<kebab>` is a deep-rename token — so each white-label
+  produced its own id and **rejected every other build's files** ("Not a … reference-config file").
+  The schema id is now **brand-neutral** (`reference-config/v1`, never rewritten), and import also
+  accepts any legacy `<name>/reference-config/v1` — so a reference-config exported by the original or
+  any white-labeled build imports into any other.
+
 ## 0.80.0 — 2026-06-29
 
 ### Changed — the exported build guide now explains the benign `npm install` warnings
