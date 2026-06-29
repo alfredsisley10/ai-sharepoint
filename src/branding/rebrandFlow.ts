@@ -9,6 +9,7 @@ import {
   extensionId,
 } from "./rebrand";
 import { rebrandVsix, minimalBuildComponents, readVsixPackageJson, VsixRebrandOptions } from "./rebrandVsix";
+import { exportToGitHub } from "./githubExport";
 import { computeExpiry, ReleaseManifest } from "./releaseExpiry";
 import {
   ReleaseProfile,
@@ -342,6 +343,12 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
           "The pre-built, rebranded payload + a minimal package.json (vsce only) for a separate build team to package through their own pipeline. Sidesteps withheld build dependencies.",
         id: "components",
       },
+      {
+        label: "$(github) Push to enterprise GitHub",
+        detail:
+          "Create/update a repository (github.com or GitHub Enterprise Server) with the build components, for ongoing maintenance and management.",
+        id: "github",
+      },
     ],
     { title: `Rebrand "${after.displayName}" — what should it produce?`, ignoreFocusOut: true, placeHolder: "Pick an output" },
   );
@@ -383,41 +390,117 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     return;
   }
 
-  // Minimal build components → a folder a build team can package themselves.
-  const folder = await vscode.window.showOpenDialog({
-    title: "Select an empty folder for the build components",
-    canSelectFiles: false,
-    canSelectFolders: true,
-    canSelectMany: false,
-  });
-  if (!folder || !folder[0]) return;
-  const target = vscode.Uri.joinPath(folder[0], `${after.name}-build`);
-  try {
-    const files = minimalBuildComponents(vsixBytes, opts);
-    await writeFileMap(target, files);
-  } catch (e) {
-    log.error("rebrand: components", e);
-    void vscode.window.showErrorMessage(`Could not write the build components: ${msg(e)}.`);
+  if (mode.id === "components") {
+    // Minimal build components → a folder a build team can package, or that the
+    // user can commit / merge into a git repository manually.
+    const folder = await vscode.window.showOpenDialog({
+      title: "Select a folder to write the build components into",
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+    });
+    if (!folder || !folder[0]) return;
+    const target = vscode.Uri.joinPath(folder[0], `${after.name}-build`);
+    try {
+      await writeFileMap(target, minimalBuildComponents(vsixBytes, opts));
+    } catch (e) {
+      log.error("rebrand: components", e);
+      void vscode.window.showErrorMessage(`Could not write the build components: ${msg(e)}.`);
+      return;
+    }
+    log.info(`Build components written: ${target.fsPath} ("${after.displayName}")`);
+    await vscode.window.showInformationMessage(
+      `Build components ready: "${after.displayName}".`,
+      {
+        modal: true,
+        detail: [
+          `Wrote the minimal, pre-built components to ${target.fsPath}.`,
+          "",
+          "Package them (e.g. by your build team):",
+          `  cd "${target.fsPath}"`,
+          "  npm install        (installs @vscode/vsce only)",
+          "  npm run package",
+          "",
+          "Or commit/merge the folder into a git repository to manage it yourself",
+          "(a .gitignore is included). See BUILD.md for corporate-registry / TLS notes.",
+        ].join("\n"),
+      },
+      "OK",
+    );
     return;
   }
-  log.info(`Build components written: ${target.fsPath} ("${after.displayName}")`);
-  await vscode.window.showInformationMessage(
-    `Build components ready: "${after.displayName}".`,
-    {
-      modal: true,
-      detail: [
-        `Wrote the minimal, pre-built components to ${target.fsPath}.`,
-        "",
-        "Hand this folder to your build team. To produce the .vsix:",
-        `  cd "${target.fsPath}"`,
-        "  npm install        (installs @vscode/vsce only)",
-        "  npm run package",
-        "",
-        "See BUILD.md in the folder for corporate-registry / TLS notes.",
-      ].join("\n"),
-    },
-    "OK",
+
+  // Push the build components to an enterprise GitHub for ongoing maintenance.
+  const host = await ask(
+    "GitHub host — blank for github.com, or your GitHub Enterprise Server host (e.g. github.corp.example)",
+    "",
+    undefined,
+    true,
   );
+  if (host === undefined) return;
+  const ownerIn = await ask("Owner — your GitHub user or organization", after.publisher);
+  if (ownerIn === undefined) return;
+  const repoIn = await ask("Repository name", `${after.name}`, (v) =>
+    /^[A-Za-z0-9._-]+$/.test(v) ? undefined : "Letters, digits, '.', '_' or '-' only.",
+  );
+  if (repoIn === undefined) return;
+  const visPick = await vscode.window.showQuickPick(
+    [
+      { label: "Private", description: "recommended", priv: true },
+      { label: "Public", description: "anyone can read", priv: false },
+    ],
+    { title: "Repository visibility", ignoreFocusOut: true },
+  );
+  if (!visPick) return;
+  const token = await askSecret(
+    "GitHub token with 'repo' scope (write) — used once for this export, never stored",
+  );
+  if (token === undefined) return;
+  if (!token.trim()) {
+    void vscode.window.showErrorMessage("A GitHub token is required to push. Nothing was exported.");
+    return;
+  }
+
+  try {
+    const files = minimalBuildComponents(vsixBytes, opts);
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Pushing "${after.displayName}" to GitHub…` },
+      () =>
+        exportToGitHub(
+          {
+            host: host.trim(),
+            token: token.trim(),
+            owner: ownerIn.trim(),
+            repo: repoIn.trim(),
+            privateRepo: visPick.priv,
+            message: `White-label build: ${after.displayName} (${after.name})`,
+          },
+          files,
+          // The extension host's global fetch satisfies the injected shape.
+          fetch as unknown as Parameters<typeof exportToGitHub>[2],
+        ),
+    );
+    log.info(`Pushed build components to ${result.repoUrl}@${result.branch} (${result.files} files)`);
+    const open = await vscode.window.showInformationMessage(
+      `Pushed "${after.displayName}" to GitHub.`,
+      {
+        modal: true,
+        detail: [
+          `${result.createdRepo ? "Created and pushed to" : "Pushed to"} ${result.repoUrl}`,
+          `Branch ${result.branch}, ${result.files} file(s), commit ${result.commitSha.slice(0, 7)}.`,
+          "",
+          "The repo holds the minimal, buildable components (see BUILD.md) for ongoing maintenance.",
+        ].join("\n"),
+      },
+      "Open repository",
+    );
+    if (open === "Open repository") {
+      await vscode.env.openExternal(vscode.Uri.parse(result.repoUrl));
+    }
+  } catch (e) {
+    log.error("rebrand: github", e);
+    void vscode.window.showErrorMessage(`Could not push to GitHub: ${msg(e)}`);
+  }
 }
 
 /** Write a relative-path → bytes map under `root`, creating parent dirs. */

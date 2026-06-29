@@ -152,6 +152,8 @@ export function minimalPackageJson(pkgText: string): string {
 }
 
 const BUILD_VSCODEIGNORE = ["node_modules/**", "BUILD.md", ".vscodeignore", "**/*.map", ""].join("\n");
+// So the folder is git-ready for the "merge into a repo manually" path.
+const BUILD_GITIGNORE = ["node_modules/", "*.vsix", ""].join("\n");
 
 function buildReadme(displayName: string, name: string): string {
   return [
@@ -199,6 +201,7 @@ export function minimalBuildComponents(
     out[rel] = rel === "package.json" ? strToU8(minimalPackageJson(strFromU8(data))) : data;
   }
   out[".vscodeignore"] = strToU8(BUILD_VSCODEIGNORE);
+  out[".gitignore"] = strToU8(BUILD_GITIGNORE);
   out["BUILD.md"] = strToU8(buildReadme(opts.after.displayName, opts.after.name));
   return out;
 }
