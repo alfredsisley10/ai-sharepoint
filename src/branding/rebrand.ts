@@ -133,6 +133,22 @@ export function rebrandPackageJsonFull(
   return t;
 }
 
+/**
+ * Replace the README's bold tagline — the restated product description right
+ * after the top `# Heading` — with the new description. Without this the
+ * rebranded README still opens with the ORIGINAL description sentence, which VS
+ * Code renders on the details page right below the (already rebranded)
+ * package.json description, so users see the description twice. Brand-token
+ * rewriting can't fix it (the sentence isn't a brand token). No-op if the
+ * tagline isn't found. Function replacement so a `$` in the description is safe.
+ */
+export function rebrandReadmeTagline(text: string, description: string): string {
+  return text.replace(
+    /^(#[^\n]*\r?\n\s*)\*\*[\s\S]*?\*\*/,
+    (_m, head: string) => `${head}**${description}**`,
+  );
+}
+
 /** Replace the copyright holder (keeping or updating the year) in an MIT-style
  *  LICENSE. No-op (returns input) if no copyright line is found. */
 export function rebrandLicense(text: string, holder: string, year?: string): string {

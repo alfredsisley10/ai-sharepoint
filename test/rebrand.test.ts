@@ -7,12 +7,35 @@ import {
   identityChanged,
   rebrandPackageJson,
   rebrandLicense,
+  rebrandReadmeTagline,
   replacePhrase,
   repackageCommand,
   summarizeBrand,
   SUPPORT_PHRASE,
   SECURITY_PHRASE,
 } from "../src/branding/rebrand";
+
+test("rebrandReadmeTagline replaces the post-H1 bold description, once, leaving the body", () => {
+  const readme = [
+    "# Contoso Docs",
+    "",
+    "**Govern and explore SharePoint Online — with metered usage,",
+    "budget guardrails, and privacy-first diagnostics.**",
+    "",
+    "Body paragraph with **bold** that must NOT be touched.",
+    "",
+  ].join("\n");
+  const out = rebrandReadmeTagline(readme, "Contoso's internal docs assistant.");
+  assert.match(out, /^# Contoso Docs\n\n\*\*Contoso's internal docs assistant\.\*\*/);
+  assert.doesNotMatch(out, /Govern and explore/, "original tagline gone");
+  assert.match(out, /Body paragraph with \*\*bold\*\* that must NOT be touched\./, "body untouched");
+});
+
+test("rebrandReadmeTagline is a no-op when there's no tagline (and safe with $ in the description)", () => {
+  assert.equal(rebrandReadmeTagline("# Title\n\nJust prose, no bold tagline.\n", "x"), "# Title\n\nJust prose, no bold tagline.\n");
+  const out = rebrandReadmeTagline("# T\n\n**old**\n", "Cost is $5 (50% off) $& $1");
+  assert.match(out, /\*\*Cost is \$5 \(50% off\) \$& \$1\*\*/);
+});
 
 const base: BrandConfig = {
   publisher: "contoso",

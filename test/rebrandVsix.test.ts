@@ -50,7 +50,7 @@ function fixtureVsix(): Uint8Array {
     "extension/package.json": strToU8(PKG),
     "extension/dist/extension.js": strToU8(BUNDLE),
     "extension/media/icon.png": ICON,
-    "extension/readme.md": strToU8("# AI SharePoint\nUse @sharepoint."),
+    "extension/readme.md": strToU8("# AI SharePoint\n\n**Govern SharePoint with AI SharePoint.**\n\nUse @sharepoint."),
   });
 }
 
@@ -98,6 +98,11 @@ test("rebrandVsix rewrites package.json identity, participant, release, and the 
   const bundle = strFromU8(out["extension/dist/extension.js"]);
   assert.match(bundle, /Contoso Docs @contosodocs contosoDocs contoso-docs/);
   assert.match(bundle, /reads a SharePoint site/, "bare 'SharePoint' must NOT be renamed");
+
+  // README tagline is replaced with the new description (no duplicate description).
+  const readme = strFromU8(out["extension/readme.md"]);
+  assert.match(readme, /\*\*Internal docs assistant\.\*\*/);
+  assert.doesNotMatch(readme, /Govern SharePoint/, "original tagline replaced, not duplicated");
 });
 
 test("rebrandVsix updates the vsixmanifest identity + display metadata", () => {

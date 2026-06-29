@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.75.0 — 2026-06-29
+
+White-label usability and correctness polish.
+
+### Fixed — duplicated description
+- The white-labeled description no longer appears twice. The product description lives in two
+  places VS Code shows side by side (`package.json` `description` and the README's bold tagline);
+  the rebrand now rewrites the README tagline to the new description instead of leaving the
+  original sentence in place beneath it.
+
+### Changed — every prompt says what Esc and a blank value do
+- The whole rebrand wizard now reads as one titled flow ("White-label rebrand") and every step
+  states its outcome up front: **Esc cancels the entire rebrand — nothing is written**, an
+  **optional** field can be left blank to skip/keep the current value, and a **required** field
+  must be typed (with the cancel path spelled out). Quick picks (rename depth, output, destination,
+  repository visibility) and the masked token prompt carry the same hint, and the pre-output
+  confirmation now explains that you'll next choose *what* to produce and *where*, and that nothing
+  is written until you pick an output and confirm.
+
 ## 0.74.0 — 2026-06-29
 
 Full-source white-label export, with a self-contained VSIX and CI scaffolding.
