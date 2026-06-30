@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.91.0",
+  "version": "0.92.0",
   "release": {
     "channel": "standard"
   },
@@ -352,6 +352,24 @@
         "icon": "$(inbox)"
       },
       {
+        "command": "aiSharePoint.addLocalFile",
+        "title": "%aiSharePoint.addLocalFile.title%",
+        "category": "%category%",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "aiSharePoint.readFileSource",
+        "title": "%aiSharePoint.readFileSource.title%",
+        "category": "%category%",
+        "icon": "$(table)"
+      },
+      {
+        "command": "aiSharePoint.removeFileSource",
+        "title": "%aiSharePoint.removeFileSource.title%",
+        "category": "%category%",
+        "icon": "$(trash)"
+      },
+      {
         "command": "aiSharePoint.browseSource",
         "title": "%aiSharePoint.browseSource.title%",
         "category": "%category%",
@@ -633,7 +651,7 @@
       },
       {
         "view": "aiSharePoint.sourcesView",
-        "contents": "No reference sources yet. This view holds all read-only context the assistant can search — read-only SharePoint sites plus Confluence, Jira, databases, and more.\n[Add Context Source](command:aiSharePoint.addContextSource)\nRead-only SharePoint sites you connect appear here too. Credentials stay in your OS keychain; every source is strictly read-only with account-lockout protection."
+        "contents": "No reference sources yet. This view holds all read-only context the assistant can search — read-only SharePoint sites plus Confluence, Jira, databases, and more.\n[Add Context Source](command:aiSharePoint.addContextSource)\nYou can also add a local **Excel or CSV** file for the assistant to read as context.\n[Add File for Context](command:aiSharePoint.addLocalFile)\nRead-only SharePoint sites you connect appear here too. Credentials stay in your OS keychain; every source is strictly read-only with account-lockout protection."
       },
       {
         "view": "aiSharePoint.commsView",
@@ -1967,6 +1985,28 @@
         }
       },
       {
+        "name": "aisharepoint_read_file",
+        "displayName": "Read a Context File (Excel/CSV)",
+        "toolReferenceName": "spReadFile",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(table)",
+        "tags": [
+          "sharepoint",
+          "context",
+          "files"
+        ],
+        "modelDescription": "Read a file the user registered for context (a local Excel .xlsx or CSV/TSV; OneDrive/SharePoint files later) and return it as a bounded Markdown table for analysis. Pass 'name' = the file's label (or a distinctive part of it). If 'name' is omitted and exactly one file is registered, that one is used; otherwise the tool lists the available labels — pick one and call again. Reads ONLY files the user explicitly registered (never an arbitrary path). Large sheets are truncated; tell the user if you needed more rows/columns than shown.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The label of the registered file to read (or a distinctive substring)."
+            }
+          }
+        }
+      },
+      {
         "name": "aisharepoint_capture_lesson",
         "displayName": "Capture Lesson Learned",
         "toolReferenceName": "spCaptureLesson",
@@ -2096,6 +2136,16 @@
           "command": "aiSharePoint.discoverActiveDirectory",
           "when": "view == aiSharePoint.sourcesView",
           "group": "navigation@3"
+        },
+        {
+          "command": "aiSharePoint.addLocalFile",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "2_files@1"
+        },
+        {
+          "command": "aiSharePoint.readFileSource",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "2_files@2"
         },
         {
           "command": "aiSharePoint.exportReferenceConfig",

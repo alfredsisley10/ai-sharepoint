@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.92.0 — 2026-06-30
+
+### Added — local file context (Excel & CSV)
+- Register a local **.xlsx**, **.csv**, or **.tsv** file as read-only context: *Add File for Context*
+  (Reference Sources title bar or palette). @sharepoint can then read it into a chat as a bounded
+  table via the new **`aisharepoint_read_file`** tool (reference it as `#spReadFile`).
+- **No native dependencies**: CSV parsing is a small RFC-4180 parser (quotes, embedded
+  commas/newlines, delimiter sniffing for `,`/`;`/tab); `.xlsx` is read with a dependency-free
+  reader — a minimal ZIP central-directory reader over Node's built-in `zlib`, plus pure scanners
+  for `sharedStrings.xml` and the first worksheet (shared/inline strings, numbers, booleans;
+  column gaps preserved). Tables are bounded (rows/cols/cell length) with a truncation note.
+- **Safe by construction**: only files you explicitly register are read (never an arbitrary path);
+  the store keeps the path + label + kind, never the content; the read tool is release-expiry gated.
+  *Read a Context File* renders one to a Markdown preview; *Remove a Context File* unregisters it
+  (the file itself is untouched).
+- Pure cores (`csv`, `xlsx` XML scanners, `tabular` render, file-source list ops) are unit-tested,
+  including an end-to-end `.xlsx` read against a ZIP built in the test.
+
+_Next: the same context from OneDrive and shared SharePoint files (Graph), reusing your sign-in._
+
 ## 0.91.0 — 2026-06-30
 
 ### Added — @sharepoint can read Outlook itself (read-only tool)

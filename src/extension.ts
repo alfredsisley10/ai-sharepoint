@@ -166,6 +166,10 @@ import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
 import { OutlookWorkspaceStore } from "./comms/outlookWorkspaceStore";
 import { registerOutlookTools } from "./chat/outlookTools";
+import { FileSourcesStore } from "./context/files/fileSourcesStore";
+import { FileSource, findByLocation } from "./context/files/fileSources";
+import { detectTabularKind, readTabularBuffer, renderTable } from "./context/files/tabular";
+import { registerFileTools } from "./chat/fileTools";
 import {
   OutlookReadScope,
   OutlookWorkspace,
@@ -399,6 +403,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const prompts = new PromptStore(context.globalState);
   const outlookWorkspaces = new OutlookWorkspaceStore(context.globalState);
   context.subscriptions.push(outlookWorkspaces);
+  const fileSources = new FileSourcesStore(context.globalState);
+  context.subscriptions.push(fileSources);
+  // Read a registered file source into rows. Local files read from disk; remote
+  // (OneDrive/SharePoint) Graph items are added in a later release.
+  const readFileSource = async (source: FileSource): Promise<string[][]> => {
+    if (source.location.kind !== "local") {
+      throw new AppError("Remote (OneDrive/SharePoint) file reading isn't available yet in this build.", "config");
+    }
+    const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(source.location.path));
+    return readTabularBuffer(source.tabular, Buffer.from(bytes));
+  };
   const syncConfigs = new SyncConfigStore(context.globalState);
 
   // First-run provisioning: seed any pre-defined connectors / projects /
@@ -680,6 +695,7 @@ export function activate(context: vscode.ExtensionContext): void {
         nowIso,
       ),
     ),
+    ...tryRegister("file tools", () => registerFileTools(fileSources, readFileSource, telemetry, errors)),
     ...tryRegister("proxy tools", () => registerProxyTools(blockedTerms, telemetry, errors)),
     blockedTerms,
     lessons,
@@ -5136,6 +5152,87 @@ export function activate(context: vscode.ExtensionContext): void {
         await prompts.remove(p.id);
       }
     }
+  });
+
+  // --- File context sources (Phase 6): local spreadsheets/CSVs ------------
+  register("aiSharePoint.addLocalFile", async () => {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      openLabel: "Add for Context",
+      filters: { "Spreadsheets & CSV": ["csv", "tsv", "tab", "xlsx"] },
+      title: "Add a local file for read-only context",
+    });
+    if (!picked?.[0]) return;
+    const fsPath = picked[0].fsPath;
+    const name = fsPath.split(/[\\/]/).pop() || fsPath;
+    const tabular = detectTabularKind(name);
+    if (tabular === "unknown") {
+      void vscode.window.showWarningMessage("Only .csv, .tsv, and .xlsx files are supported for tabular context.");
+      return;
+    }
+    const dup = findByLocation(fileSources.list(), { kind: "local", path: fsPath });
+    if (dup) {
+      void vscode.window.showInformationMessage(`Already registered as “${dup.label}”.`);
+      return;
+    }
+    const label = await vscode.window.showInputBox({
+      title: "Label for this file",
+      value: name,
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? undefined : "Required."),
+    });
+    if (!label) return;
+    // Validate it parses before registering, so a bad file fails loudly now.
+    try {
+      const bytes = await vscode.workspace.fs.readFile(picked[0]);
+      const rows = readTabularBuffer(tabular, Buffer.from(bytes));
+      await fileSources.add({ id: crypto.randomUUID(), label: label.trim(), location: { kind: "local", path: fsPath }, tabular, addedAt: nowIso() });
+      telemetry.record("file.add", { kind: tabular });
+      void vscode.window.showInformationMessage(`Added “${label.trim()}” (${rows.length} row(s)). @sharepoint can read it with #spReadFile.`);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read that file: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  register("aiSharePoint.readFileSource", async (arg?: unknown) => {
+    const all = fileSources.list();
+    if (all.length === 0) {
+      const add = await vscode.window.showInformationMessage("No files registered yet.", "Add File…");
+      if (add) await vscode.commands.executeCommand("aiSharePoint.addLocalFile");
+      return;
+    }
+    let source = arg && typeof arg === "object" && typeof (arg as FileSource).id === "string" ? (arg as FileSource) : undefined;
+    if (!source) {
+      const pick = await vscode.window.showQuickPick(
+        all.map((f) => ({ label: f.label, description: f.tabular, detail: f.location.kind === "local" ? f.location.path : f.location.webUrl, f })),
+        { title: "Read which file?", ignoreFocusOut: true, matchOnDetail: true },
+      );
+      if (!pick) return;
+      source = pick.f;
+    }
+    try {
+      const rows = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Reading “${source.label}”…` },
+        () => readFileSource(source!),
+      );
+      const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderTable(source.label, rows) });
+      await vscode.window.showTextDocument(doc, { preview: true });
+      telemetry.record("file.read", { kind: source.tabular, rows: rows.length });
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read “${source.label}”: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  register("aiSharePoint.removeFileSource", async () => {
+    const all = fileSources.list();
+    if (all.length === 0) return;
+    const pick = await vscode.window.showQuickPick(
+      all.map((f) => ({ label: f.label, description: f.location.kind === "local" ? f.location.path : f.location.webUrl, id: f.id })),
+      { title: "Remove which file from context? (the file itself is not deleted)", ignoreFocusOut: true },
+    );
+    if (!pick) return;
+    await fileSources.remove(pick.id);
+    void vscode.window.showInformationMessage(`Removed “${pick.label}” from context.`);
   });
 
   register("aiSharePoint.discoverActiveDirectory", async () => {
