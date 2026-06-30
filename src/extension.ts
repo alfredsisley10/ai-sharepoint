@@ -164,6 +164,16 @@ import * as http from "node:http";
 import * as nodeCrypto from "node:crypto";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
+import { OutlookWorkspaceStore } from "./comms/outlookWorkspaceStore";
+import {
+  OutlookReadScope,
+  OutlookWorkspace,
+  buildSubjectMoveRule,
+  calendarWindow,
+  renderMailDigest,
+  renderCalendarDigest,
+  withTrackedSubject,
+} from "./comms/outlookWorkspace";
 import {
   TeamsWebhook,
   teamsWebhookUrlIssue,
@@ -386,6 +396,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const projects = new ProjectsStore(context.globalState);
   const memory = new MemoryStore(context.globalState);
   const prompts = new PromptStore(context.globalState);
+  const outlookWorkspaces = new OutlookWorkspaceStore(context.globalState);
+  context.subscriptions.push(outlookWorkspaces);
   const syncConfigs = new SyncConfigStore(context.globalState);
 
   // First-run provisioning: seed any pre-defined connectors / projects /
@@ -5153,7 +5165,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // reviewCommDraft after a modal approval that names every recipient.
 
   const COMMS_CONN_KEY = "aiSharePoint.commsConnection";
-  const commsClientFor = async (): Promise<CommsClient | undefined> => {
+  /** Resolve which Microsoft 365 sign-in to use for comms (single → that one;
+   *  else remembered; else ask), and return both the connection and a client. */
+  const commsConnAndClient = async (
+    titleWhenAsking = "Send using which Microsoft 365 sign-in?",
+  ): Promise<{ conn: SiteConnection; client: CommsClient } | undefined> => {
     const all = sites.list();
     if (all.length === 0) {
       const add = await vscode.window.showInformationMessage(
@@ -5175,15 +5191,149 @@ export function activate(context: vscode.ExtensionContext): void {
           description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
           conn: c,
         })),
-        { ignoreFocusOut: true, title: "Send using which Microsoft 365 sign-in?" },
+        { ignoreFocusOut: true, title: titleWhenAsking },
       );
       if (!pick) return undefined;
       conn = pick.conn;
       await context.globalState.update(COMMS_CONN_KEY, conn.cacheHandle);
     }
     const provider = registry.create(conn.authProviderId, conn.cacheHandle);
-    return new CommsClient(provider, false);
+    return { conn, client: new CommsClient(provider, false) };
   };
+  const commsClientFor = async (): Promise<CommsClient | undefined> => {
+    return (await commsConnAndClient())?.client;
+  };
+
+  // --- Read-only Outlook workspace (ADR-0025 extension) --------------------
+  // Reads reuse the Microsoft 365 send sign-in; the only writes are creating the
+  // workspace folder and (on request) a move-replies rule — both explicit.
+
+  /** Ensure a workspace is configured for the active comms connection, walking
+   *  the user through folder + scope setup when it isn't. Returns the client +
+   *  workspace, or undefined if the user cancels. */
+  const ensureOutlookWorkspace = async (): Promise<{ client: CommsClient; ws: OutlookWorkspace } | undefined> => {
+    const picked = await commsConnAndClient("Read Outlook using which Microsoft 365 sign-in?");
+    if (!picked) return undefined;
+    const existing = outlookWorkspaces.get(picked.conn.cacheHandle);
+    if (existing) return { client: picked.client, ws: existing };
+    const setUp = await vscode.window.showInformationMessage(
+      "No Outlook workspace yet for this sign-in. A workspace is an Outlook folder @sharepoint can read (read-only). Set one up now?",
+      { modal: true },
+      "Set Up Workspace",
+    );
+    if (setUp !== "Set Up Workspace") return undefined;
+    const ws = await configureWorkspace(picked.conn.cacheHandle, picked.client);
+    return ws ? { client: picked.client, ws } : undefined;
+  };
+
+  /** Folder + scope setup, stored against the connection. Shared by the explicit
+   *  command and the just-in-time path above. */
+  const configureWorkspace = async (handle: string, client: CommsClient): Promise<OutlookWorkspace | undefined> => {
+    const folders = await client.listMailFolders().catch((e) => {
+      throw new AppError(
+        e instanceof Error && /403|consent|permission/i.test(e.message)
+          ? "Reading Outlook needs the Mail.Read permission consented for this sign-in (Admin Guide §4)."
+          : `Could not list Outlook folders: ${e instanceof Error ? e.message : String(e)}`,
+        e instanceof Error && /403|consent|permission/i.test(e.message) ? "graph.forbidden" : "graph.error",
+      );
+    });
+    const CREATE = "$(add) Create a new workspace folder…";
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: CREATE, alwaysShow: true } as vscode.QuickPickItem & { id?: string },
+        ...folders.map((f) => ({ label: f.displayName, description: f.totalItemCount != null ? `${f.totalItemCount} item(s)` : "", id: f.id })),
+      ],
+      { title: "Pick or create the Outlook workspace folder", placeHolder: "@sharepoint will read this folder (read-only).", ignoreFocusOut: true },
+    );
+    if (!pick) return undefined;
+    let folderId = pick.id;
+    let folderName = pick.label;
+    if (pick.label === CREATE || !folderId) {
+      const name = await vscode.window.showInputBox({ title: "New workspace folder name", value: "AI SharePoint Workspace", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+      if (!name) return undefined;
+      const created = await client.createMailFolder(name.trim());
+      folderId = created.id;
+      folderName = created.displayName;
+    }
+    const scopePick = await vscode.window.showQuickPick(
+      [
+        { label: "$(folder) Just this workspace folder", description: "@sharepoint reads only the workspace folder (recommended)", scope: "workspace" as OutlookReadScope },
+        { label: "$(mail) The whole mailbox", description: "@sharepoint may read any mail in this account", scope: "mailbox" as OutlookReadScope },
+      ],
+      { title: "How much Outlook mail may @sharepoint read?", placeHolder: "You can change this later by reconfiguring the workspace.", ignoreFocusOut: true },
+    );
+    if (!scopePick) return undefined;
+    const at = nowIso();
+    const ws: OutlookWorkspace = {
+      connectionHandle: handle,
+      folderId: folderId!,
+      folderName,
+      readScope: scopePick.scope,
+      trackedSubjects: outlookWorkspaces.get(handle)?.trackedSubjects ?? [],
+      createdAt: outlookWorkspaces.get(handle)?.createdAt ?? at,
+      updatedAt: at,
+    };
+    await outlookWorkspaces.upsert(ws);
+    telemetry.record("comms.workspaceConfigured", { scope: ws.readScope });
+    void vscode.window.showInformationMessage(`Outlook workspace set to “${folderName}” (${ws.readScope === "workspace" ? "folder-only" : "whole mailbox"} read access).`);
+    return ws;
+  };
+
+  register("aiSharePoint.configureOutlookWorkspace", async () => {
+    const picked = await commsConnAndClient("Configure Outlook workspace for which Microsoft 365 sign-in?");
+    if (!picked) return;
+    await configureWorkspace(picked.conn.cacheHandle, picked.client);
+  });
+
+  register("aiSharePoint.readOutlookMail", async () => {
+    const got = await ensureOutlookWorkspace();
+    if (!got) return;
+    const messages = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Reading Outlook (read-only)…" },
+      () => got.client.readMessages(got.ws.readScope, got.ws.folderId, 25),
+    );
+    const label = got.ws.readScope === "workspace" ? `${got.ws.folderName} (workspace)` : "whole mailbox";
+    const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderMailDigest(label, messages) });
+    await vscode.window.showTextDocument(doc, { preview: true });
+    telemetry.record("comms.readMail", { scope: got.ws.readScope, count: messages.length });
+  });
+
+  register("aiSharePoint.readOutlookCalendar", async () => {
+    const got = await ensureOutlookWorkspace();
+    if (!got) return;
+    const days = 7;
+    const { startIso, endIso } = calendarWindow(nowIso(), days);
+    const events = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Reading your Outlook calendar (read-only)…" },
+      () => got.client.readCalendar(startIso, endIso, 50),
+    );
+    const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderCalendarDigest(`next ${days} days`, events) });
+    await vscode.window.showTextDocument(doc, { preview: true });
+    telemetry.record("comms.readCalendar", { count: events.length });
+  });
+
+  register("aiSharePoint.trackRepliesToWorkspace", async () => {
+    const got = await ensureOutlookWorkspace();
+    if (!got) return;
+    const subject = await vscode.window.showInputBox({
+      title: "Move replies to the workspace folder — match which subject?",
+      prompt: `An Outlook rule will move messages whose subject contains this into “${got.ws.folderName}”.`,
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? undefined : "Enter the subject (or a distinctive part of it)."),
+    });
+    if (!subject) return;
+    const rule = buildSubjectMoveRule(subject, got.ws.folderId, got.ws.folderName, got.ws.trackedSubjects.length + 1);
+    const confirm = await vscode.window.showInformationMessage(
+      `Create an Outlook rule “${rule.displayName}”? Future messages whose subject contains “${rule.conditions.subjectContains[0]}” will be moved to “${got.ws.folderName}”. This changes your Outlook rules (reversible in Outlook).`,
+      { modal: true },
+      "Create Rule",
+    );
+    if (confirm !== "Create Rule") return;
+    await got.client.createMessageRule(rule);
+    await outlookWorkspaces.upsert({ ...got.ws, trackedSubjects: withTrackedSubject(got.ws.trackedSubjects, subject), updatedAt: nowIso() });
+    telemetry.record("comms.trackReplies");
+    void vscode.window.showInformationMessage(`Rule created — replies matching “${rule.conditions.subjectContains[0]}” will collect in “${got.ws.folderName}”.`);
+  });
 
   /** Create an email draft directly in the user's Outlook Drafts folder.
    *  Outlook's own Drafts is the review surface (the user finishes/sends it

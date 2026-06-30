@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.89.0",
+  "version": "0.90.0",
   "release": {
     "channel": "standard"
   },
@@ -328,6 +328,30 @@
         "icon": "$(clippy)"
       },
       {
+        "command": "aiSharePoint.configureOutlookWorkspace",
+        "title": "%aiSharePoint.configureOutlookWorkspace.title%",
+        "category": "%category%",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "aiSharePoint.readOutlookMail",
+        "title": "%aiSharePoint.readOutlookMail.title%",
+        "category": "%category%",
+        "icon": "$(mail)"
+      },
+      {
+        "command": "aiSharePoint.readOutlookCalendar",
+        "title": "%aiSharePoint.readOutlookCalendar.title%",
+        "category": "%category%",
+        "icon": "$(calendar)"
+      },
+      {
+        "command": "aiSharePoint.trackRepliesToWorkspace",
+        "title": "%aiSharePoint.trackRepliesToWorkspace.title%",
+        "category": "%category%",
+        "icon": "$(inbox)"
+      },
+      {
         "command": "aiSharePoint.browseSource",
         "title": "%aiSharePoint.browseSource.title%",
         "category": "%category%",
@@ -613,7 +637,7 @@
       },
       {
         "view": "aiSharePoint.commsView",
-        "contents": "No Teams drafts pending. Prepare a message yourself or ask @sharepoint to draft one.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\n**Teams** drafts wait **here** in this outbox until YOU approve sending them. **Outlook** emails are saved straight to your **Outlook Drafts folder** — review and send them from Outlook (this view won't list them). Nothing is ever sent without your approval (ADR-0025)."
+        "contents": "No Teams drafts pending. Prepare a message yourself or ask @sharepoint to draft one.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\n**Teams** drafts wait **here** in this outbox until YOU approve sending them. **Outlook** emails are saved straight to your **Outlook Drafts folder** — review and send them from Outlook (this view won't list them). Nothing is ever sent without your approval (ADR-0025).\nWant @sharepoint to **read** mail/calendar too? Set up a read-only **Outlook workspace** (one folder, scoped access).\n[Configure Outlook Workspace](command:aiSharePoint.configureOutlookWorkspace)"
       },
       {
         "view": "aiSharePoint.projectsView",
@@ -1999,6 +2023,16 @@
           "group": "navigation@2"
         },
         {
+          "command": "aiSharePoint.readOutlookMail",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "aiSharePoint.readOutlookCalendar",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@4"
+        },
+        {
           "command": "aiSharePoint.configureTeamsWebhook",
           "when": "view == aiSharePoint.commsView",
           "group": "1_config@1"
@@ -2007,6 +2041,16 @@
           "command": "aiSharePoint.testCommsMethod",
           "when": "view == aiSharePoint.commsView",
           "group": "1_config@2"
+        },
+        {
+          "command": "aiSharePoint.configureOutlookWorkspace",
+          "when": "view == aiSharePoint.commsView",
+          "group": "1_config@3"
+        },
+        {
+          "command": "aiSharePoint.trackRepliesToWorkspace",
+          "when": "view == aiSharePoint.commsView",
+          "group": "1_config@4"
         },
         {
           "command": "aiSharePoint.addContextSource",

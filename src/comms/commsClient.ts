@@ -1,4 +1,11 @@
 import { SharePointClient } from "../auth/sharePointClient";
+import {
+  OutlookReadScope,
+  MailMessageView,
+  CalendarEventView,
+  messagesPath,
+  calendarViewPath,
+} from "./outlookWorkspace";
 
 /**
  * Graph client for Communication Channels (ADR-0025). Send-capable scopes
@@ -15,6 +22,19 @@ const DIRECTORY_SCOPES = ["https://graph.microsoft.com/User.ReadBasic.All"];
 const TEAMS_SCOPES = [...DIRECTORY_SCOPES, "https://graph.microsoft.com/Chat.ReadWrite"];
 const MAIL_DRAFT_SCOPES = ["https://graph.microsoft.com/Mail.ReadWrite"];
 const MAIL_SEND_SCOPES = [...MAIL_DRAFT_SCOPES, "https://graph.microsoft.com/Mail.Send"];
+// Read-only Outlook workspace (ADR-0025 extension). Reads are strictly
+// least-privilege: Mail.Read / Calendars.Read. Designating the workspace folder
+// reuses the draft scope (Mail.ReadWrite — already consented for sending), and
+// the optional move-replies rule needs MailboxSettings.ReadWrite.
+const MAIL_READ_SCOPES = ["https://graph.microsoft.com/Mail.Read"];
+const CALENDAR_READ_SCOPES = ["https://graph.microsoft.com/Calendars.Read"];
+const MAILBOX_RULE_SCOPES = ["https://graph.microsoft.com/MailboxSettings.ReadWrite"];
+
+export interface MailFolderRef {
+  id: string;
+  displayName: string;
+  totalItemCount?: number;
+}
 
 export interface ResolvedRecipient {
   id: string;
@@ -130,6 +150,64 @@ export class CommsClient extends SharePointClient {
       `/me/messages/${encodeURIComponent(messageId)}`,
       undefined,
       MAIL_DRAFT_SCOPES,
+    );
+  }
+
+  // --- Read-only Outlook workspace (ADR-0025 extension) --------------------
+
+  /** List the user's mail folders (top level) — used to pick/find a workspace. */
+  async listMailFolders(): Promise<MailFolderRef[]> {
+    const res = await this.request<{ value: MailFolderRef[] }>(
+      "GET",
+      "/me/mailFolders?$select=id,displayName,totalItemCount&$top=100",
+      undefined,
+      MAIL_READ_SCOPES,
+    );
+    return res.value ?? [];
+  }
+
+  /** Create a mail folder (the workspace). Reuses the draft scope, already
+   *  consented for sending — no new read/write consent prompt. */
+  createMailFolder(displayName: string): Promise<MailFolderRef> {
+    return this.request<MailFolderRef>(
+      "POST",
+      "/me/mailFolders",
+      { displayName },
+      MAIL_DRAFT_SCOPES,
+    );
+  }
+
+  /** Read recent messages within the active scope (folder or whole mailbox).
+   *  Strictly read-only (Mail.Read). Newest first. */
+  async readMessages(scope: OutlookReadScope, folderId: string, top: number): Promise<MailMessageView[]> {
+    const res = await this.request<{ value: MailMessageView[] }>(
+      "GET",
+      messagesPath(scope, folderId, top),
+      undefined,
+      MAIL_READ_SCOPES,
+    );
+    return res.value ?? [];
+  }
+
+  /** Read calendar events in [startIso, endIso] (read-only, Calendars.Read). */
+  async readCalendar(startIso: string, endIso: string, top: number): Promise<CalendarEventView[]> {
+    const res = await this.request<{ value: CalendarEventView[] }>(
+      "GET",
+      calendarViewPath(startIso, endIso, top),
+      undefined,
+      CALENDAR_READ_SCOPES,
+    );
+    return res.value ?? [];
+  }
+
+  /** Create an inbox rule that moves messages whose subject matches into the
+   *  workspace folder (the "replies follow the thread" workflow). */
+  createMessageRule(rule: object): Promise<{ id: string }> {
+    return this.request<{ id: string }>(
+      "POST",
+      "/me/mailFolders/inbox/messageRules",
+      rule,
+      MAILBOX_RULE_SCOPES,
     );
   }
 }

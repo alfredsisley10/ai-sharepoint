@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.90.0 — 2026-06-30
+
+### Added — read-only Outlook workspace (mail + calendar)
+- @sharepoint can now **read** your Outlook mail and calendar using the **same Microsoft 365
+  sign-in** that sends drafts — no separate connector or credentials. Reads are strictly
+  least-privilege (`Mail.Read` / `Calendars.Read`); the only writes are creating the workspace
+  folder and (on request) a move-replies rule, both explicit.
+- **Workspace folder workflow** — *Outlook: Configure Read-Only Workspace*: pick or create an
+  Outlook folder as your "workspace," then choose the **access scope**:
+  - **Just this folder** (recommended) — @sharepoint reads only the workspace folder.
+  - **Whole mailbox** — @sharepoint may read any mail in the account.
+- **Move replies to the workspace** — *Outlook: Move Replies to Workspace (by subject)*: creates an
+  Outlook rule (after a modal confirm) that moves messages whose subject matches into the workspace
+  folder, so a conversation collects in one place. Reversible from Outlook.
+- **Read commands** (with a read-only digest rendered to a Markdown preview): *Outlook: Read Mail*
+  (within the active scope, newest first) and *Outlook: Read Calendar* (next 7 days). Available from
+  the Communications view title bar.
+- Pure, unit-tested core (scope→Graph path, calendar window, subject normalization, rule payload,
+  digests). Workspace config stores only ids/names/scope — never mail content or tokens.
+
+_Next: an assistant-facing read-only tool so @sharepoint can pull this context into a chat itself._
+
 ## 0.89.0 — 2026-06-30
 
 ### Added — intelligent merge on import (memory + prompts)
