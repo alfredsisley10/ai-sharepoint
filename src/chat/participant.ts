@@ -19,6 +19,7 @@ import { buildProxyNudge, defangDetails, renderDefangReport, scanForTerms, proxy
 import { recordDefangReport } from "./proxyDefangLog";
 import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
 import { InteractionCache } from "./interactionCache";
+import { maybeAutoCalibrate } from "./modelCalibration";
 import {
   PromptSection,
   budgetSections,
@@ -735,6 +736,9 @@ async function answerWithModel(
   }
   // The turn completed — clear the interrupted-restart checkpoint.
   await deps.interactions.finish("completed").catch(() => undefined);
+  // First-use calibration (opt-in): learn this model's REAL ceiling in the
+  // background now, so a later large turn doesn't discover it the hard way.
+  maybeAutoCalibrate(model, modelKey, deps.modelLimits);
   return { metadata: { modelId: model.id } };
 }
 

@@ -898,6 +898,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | `aiSharePoint.context.catalogTtlHours` | `24` | Pre-cached catalog freshness window |
 | `aiSharePoint.context.catalogCheckpointSeconds` | `15` | "Keep loading?" interval during catalog pre-cache |
 | `aiSharePoint.context.allowSchemaIndexing` | `true` | **Machine-scoped** — allow Copilot schema indexing (names only) |
+| `aiSharePoint.context.autoProbeOnFirstUse` | `false` | **Machine-scoped** — on first use of a model, send one short calibration request to learn its real context limit (uses a little Copilot quota) |
 | `aiSharePoint.ldap.dnsServers` | `[]` | **Machine-scoped** — internal DNS IPs for AD SRV lookups (fixes VPN split-DNS) |
 | `aiSharePoint.logging.verboseWire` | `false` | Full redacted request/response detail from every integration in the log |
 

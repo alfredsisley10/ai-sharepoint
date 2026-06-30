@@ -11,6 +11,7 @@ import {
   probeConverged,
   probeFiller,
   initialProbeWindow,
+  calibrationSize,
 } from "../src/core/contextProbe";
 
 // --- failure classification ----------------------------------------------
@@ -89,4 +90,11 @@ test("probeFiller produces roughly the requested token count in distinct words",
   const f = probeFiller(50);
   assert.equal(f.split(" ").length, 50);
   assert.match(f, /\bw0\b/);
+});
+
+test("calibrationSize targets just under the advertised ceiling (or undefined)", () => {
+  assert.equal(calibrationSize(64000), 60800); // floor(64000 * 0.95)
+  assert.equal(calibrationSize(500), 1000); // small models floored to 1000
+  assert.equal(calibrationSize(undefined), undefined);
+  assert.equal(calibrationSize(0), undefined);
 });

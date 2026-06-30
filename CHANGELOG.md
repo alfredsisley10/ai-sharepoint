@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.105.0 — 2026-06-30
+
+### Added — optional first-use context-limit calibration
+- New opt-in setting **`aiSharePoint.context.autoProbeOnFirstUse`** (default off). When enabled, the
+  first time each model is used in chat, @sharepoint sends **one** short calibration request near the
+  model's advertised limit — in the background, after your turn — to learn the **real** context
+  ceiling your organization grants (Copilot can cap it lower than advertised) before a genuinely large
+  turn relies on it. Off by default because it uses a little Copilot allowance; the full
+  *Probe Model Context Limit* command remains the on-demand option. Either way, prompts are budgeted
+  to the learned ceiling. Single-shot, fire-and-forget (never delays your turn), deduped per model.
+
 ## 0.104.0 — 2026-06-30
 
 ### Added — durable, restartable AI interactions (context limits + proxy resilience)

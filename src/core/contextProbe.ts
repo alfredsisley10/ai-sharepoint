@@ -54,3 +54,14 @@ export function initialProbeWindow(
 
 export const PROBE_TOLERANCE = 2_000;
 export const PROBE_MAX_STEPS = 8;
+
+/**
+ * The size for a single first-use CALIBRATION send (vs. the full binary search):
+ * just under the advertised ceiling, so one request reveals whether the org
+ * actually delivers the advertised limit. A success records a high known-good; an
+ * overflow records that the real cap is lower. Undefined when nothing's advertised
+ * (we won't burn quota guessing a target with no anchor). */
+export function calibrationSize(advertised: number | undefined): number | undefined {
+  if (!advertised || advertised <= 0) return undefined;
+  return Math.max(1_000, Math.floor(advertised * 0.95));
+}
