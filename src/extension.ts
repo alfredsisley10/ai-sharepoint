@@ -57,6 +57,7 @@ import {
   ContextDeployment,
   ContextSourceType,
   ConfluenceWriteScope,
+  contextCredentialUi,
 } from "./context/types";
 import {
   parseConfluenceUrl,
@@ -1908,6 +1909,91 @@ export function activate(context: vscode.ExtensionContext): void {
     };
   };
 
+  /** Microsoft 365 Copilot (Graph) sign-in. The Copilot Retrieval / Search
+   *  surfaces are Graph calls that reuse the SAME Microsoft 365 sign-in as
+   *  SharePoint — an `aad-sso` token for graph.microsoft.com via a connected
+   *  site — or a pasted Graph access token. This mirrors `pickAadCredential`
+   *  (Power BI) so the connect/reconnect "plug" path routes m365copilot to
+   *  Microsoft Entra rather than falling through to `promptContextCredential`'s
+   *  Atlassian Cloud credential prompt ("Atlassian account email"). */
+  const pickM365GraphCredential = async (): Promise<ContextCredential | undefined> => {
+    const signIn = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
+          description: "reuses a connected site's sign-in — recommended",
+          value: "aad" as const,
+        },
+        {
+          label: "$(key) Paste a Graph access token",
+          description: "from shell.azure.com or another machine — ~1 h lifetime",
+          value: "pat" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Microsoft 365 Copilot sign-in" },
+    );
+    if (!signIn) return undefined;
+    if (signIn.value === "pat") {
+      const token = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        password: true,
+        title: "Microsoft Graph access token",
+        prompt:
+          "No CLI installed? Open shell.azure.com and run `az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv`, then paste it. Stored only in your OS keychain; expires after ~1 h (re-paste via Test Context Source).",
+      });
+      if (!token?.trim()) return undefined;
+      return { method: "pat", secret: token.trim() };
+    }
+    const all = sites.list();
+    if (all.length === 0) {
+      const add = await vscode.window.showInformationMessage(
+        "This reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
+        "Connect Site",
+      );
+      if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
+      return undefined;
+    }
+    let conn = all.length === 1 ? all[0] : undefined;
+    if (!conn) {
+      const pick = await vscode.window.showQuickPick(
+        all.map((c) => ({
+          label: c.displayName,
+          description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
+          conn: c,
+        })),
+        { ignoreFocusOut: true, title: "Use which Microsoft 365 sign-in for Copilot retrieval?" },
+      );
+      if (!pick) return undefined;
+      conn = pick.conn;
+    }
+    return {
+      method: "aad-sso",
+      secret: JSON.stringify({ providerId: conn.authProviderId, cacheHandle: conn.cacheHandle }),
+    };
+  };
+
+  /** The single credential-picker router shared by the add wizard and the
+   *  reconnect "plug" path (`testContextSource`). Routing lived inline at both
+   *  sites and they diverged — the add path special-cased m365copilot but the
+   *  reconnect path didn't, so reconnecting an imported m365copilot source fell
+   *  through to the Atlassian "account email" prompt. Funnelling both through
+   *  `contextCredentialUi` makes that impossible to repeat. */
+  const promptCredentialFor = (
+    type: ContextSourceType,
+    deployment: ContextDeployment,
+    baseUrl?: string,
+    defaultUpn?: string,
+  ): Promise<ContextCredential | undefined> => {
+    switch (contextCredentialUi(type)) {
+      case "powerbi-aad":
+        return pickAadCredential();
+      case "m365-graph":
+        return pickM365GraphCredential();
+      default:
+        return promptContextCredential(type, deployment, defaultUpn, baseUrl);
+    }
+  };
+
   /** Power BI token getter for a credential of any of the three methods —
    *  the wizard-side mirror of ContextService's routing. */
   const pbiTokenGetter =
@@ -2413,60 +2499,9 @@ export function activate(context: vscode.ExtensionContext): void {
       const surfaces = surfacePicks.map((p) => p.value);
       baseUrl = `https://graph.microsoft.com/v1.0/copilot/retrieval?surfaces=${surfaces.join(",")}`;
 
-      const signIn = await vscode.window.showQuickPick(
-        [
-          {
-            label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
-            description: "reuses a connected site's sign-in — recommended",
-            value: "aad" as const,
-          },
-          {
-            label: "$(key) Paste a Graph access token",
-            description: "from shell.azure.com or another machine — ~1 h lifetime",
-            value: "pat" as const,
-          },
-        ],
-        { ignoreFocusOut: true, title: "Microsoft 365 Copilot sign-in" },
-      );
-      if (!signIn) return;
-      if (signIn.value === "pat") {
-        const token = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          password: true,
-          title: "Microsoft Graph access token",
-          prompt:
-            "No CLI installed? Open shell.azure.com and run `az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv`, then paste it. Stored only in your OS keychain; expires after ~1 h (re-paste via Test Context Source).",
-        });
-        if (!token?.trim()) return;
-        presetCredential = { method: "pat", secret: token.trim() };
-      } else {
-        const all = sites.list();
-        if (all.length === 0) {
-          const add = await vscode.window.showInformationMessage(
-            "This reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
-            "Connect Site",
-          );
-          if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
-          return;
-        }
-        let conn = all.length === 1 ? all[0] : undefined;
-        if (!conn) {
-          const pick = await vscode.window.showQuickPick(
-            all.map((c) => ({
-              label: c.displayName,
-              description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
-              conn: c,
-            })),
-            { ignoreFocusOut: true, title: "Use which Microsoft 365 sign-in for Copilot retrieval?" },
-          );
-          if (!pick) return;
-          conn = pick.conn;
-        }
-        presetCredential = {
-          method: "aad-sso",
-          secret: JSON.stringify({ providerId: conn.authProviderId, cacheHandle: conn.cacheHandle }),
-        };
-      }
+      // Same Microsoft Entra / Graph sign-in the reconnect "plug" path uses, so
+      // adding and later reconnecting an m365copilot source prompt identically.
+      presetCredential = await pickM365GraphCredential();
       if (!presetCredential) return;
     } else if (typePick.value === "vertexai") {
       deployment = "cloud";
@@ -2754,10 +2789,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     const credential =
-      presetCredential ??
-      (typePick.value === "powerbi"
-        ? await pickAadCredential()
-        : await promptContextCredential(typePick.value, deployment, defaultUpn));
+      presetCredential ?? (await promptCredentialFor(typePick.value, deployment, undefined, defaultUpn));
     if (!credential) return;
     const hostLabel = (() => {
       try {
@@ -2968,10 +3000,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       return;
     }
-    const promptCredential = () =>
-      source.type === "powerbi"
-        ? pickAadCredential()
-        : promptContextCredential(source.type, source.deployment, undefined, source.baseUrl);
+    const promptCredential = () => promptCredentialFor(source.type, source.deployment, source.baseUrl);
     let credential = await contextSources.getCredential(source.id);
     let fresh = false;
     if (!credential || (!gateNow.allowed && gateNow.reason === "credential-bad")) {

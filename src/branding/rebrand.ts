@@ -11,6 +11,7 @@
 
 import { ReleaseManifest } from "./releaseExpiry";
 import { BrandToken, applyBrandTokens } from "./brandTokens";
+import { ORIGIN_BRAND } from "./originBrand";
 
 export interface BrandConfig {
   /** Forms the extension ID `publisher.name` — PERMANENT once deployed. */
@@ -78,7 +79,10 @@ export function setReleaseManifest(raw: string, manifest: ReleaseManifest): stri
   const existing = /^(\s*"release":\s*)\{[\s\S]*?\}(?=,?\s*\n)/m;
   // Function replacements so a "$" in the manifest can't corrupt the output.
   if (existing.test(raw)) return raw.replace(existing, (_m, p1: string) => p1 + value);
-  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, (_m, p1: string) => `${p1}  "release": ${value},\n`);
+  // `\r?\n` so the insert anchor matches a CRLF package.json too (a Windows
+  // autocrlf checkout / Windows-built VSIX) — otherwise `release` is silently
+  // never inserted and the time-limited build control is lost.
+  return raw.replace(/^(\s*"version":\s*"[^"]*",\r?\n)/m, (_m, p1: string) => `${p1}  "release": ${value},\n`);
 }
 
 /**
@@ -94,9 +98,10 @@ export function setProvisioningManifest(raw: string, manifest: unknown): string 
   const existing = /^(\s*"provisioning":\s*)\{[\s\S]*?\}(?=,?\s*\n)/m;
   // Function replacements so a "$" anywhere in the manifest can't corrupt the output.
   if (existing.test(raw)) return raw.replace(existing, (_m, p1: string) => p1 + value);
-  const afterRelease = /^(\s*"release":\s*\{[^\n]*\},\n)/m;
+  // `\r?\n` end-anchors so insertion also works on a CRLF package.json (Windows).
+  const afterRelease = /^(\s*"release":\s*\{[^\n]*\},\r?\n)/m;
   if (afterRelease.test(raw)) return raw.replace(afterRelease, (_m, p1: string) => `${p1}  "provisioning": ${value},\n`);
-  return raw.replace(/^(\s*"version":\s*"[^"]*",\n)/m, (_m, p1: string) => `${p1}  "provisioning": ${value},\n`);
+  return raw.replace(/^(\s*"version":\s*"[^"]*",\r?\n)/m, (_m, p1: string) => `${p1}  "provisioning": ${value},\n`);
 }
 
 /** Apply publisher/name/displayName/description to package.json text. */
@@ -107,6 +112,26 @@ export function rebrandPackageJson(raw: string, cfg: BrandConfig): string {
   out = setTopLevelString(out, "displayName", cfg.displayName);
   out = setTopLevelString(out, "description", cfg.description);
   return out;
+}
+
+/**
+ * Rename the chat participant in package.json text: the bare `name` (the handle,
+ * which is NOT an `@`-prefixed brand token so `applyBrandTokens` doesn't touch
+ * it) and the `fullName`.
+ *
+ * White-label correctness: the `name` find-token is `ORIGIN_BRAND.handle` — the
+ * single source of truth the export REGENERATES per brand — NOT a hardcoded
+ * "sharepoint" literal. A literal would silently stop matching in a white-labeled
+ * engine (whose participant is named with the maintainer's handle), leaving the
+ * rename a no-op. `fullName` keys off the origin's literal participant full name
+ * for the origin's first rebrand; on a re-rebrand of an already-white-labeled
+ * build the full name equals the (regenerated) display name and `applyBrandTokens`
+ * handles it.
+ */
+export function rebrandChatParticipant(text: string, newHandle: string, newDisplayName: string): string {
+  let t = text.split(`"name": ${JSON.stringify(ORIGIN_BRAND.handle)}`).join(`"name": ${JSON.stringify(newHandle)}`);
+  t = t.split('"fullName": "SharePoint"').join(`"fullName": ${JSON.stringify(newDisplayName)}`);
+  return t;
 }
 
 /**
@@ -126,8 +151,7 @@ export function rebrandPackageJsonFull(
 ): string {
   let t = applyBrandTokens(pkgText, tokens);
   t = rebrandPackageJson(t, after);
-  t = t.split('"name": "sharepoint"').join(`"name": ${JSON.stringify(handle)}`);
-  t = t.split('"fullName": "SharePoint"').join(`"fullName": ${JSON.stringify(after.displayName)}`);
+  t = rebrandChatParticipant(t, handle, after.displayName);
   t = setReleaseManifest(t, release);
   t = setProvisioningManifest(t, provisioning);
   return t;

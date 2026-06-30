@@ -22,6 +22,25 @@ export type ContextSourceType =
   | "m365copilot";
 export type ContextDeployment = "cloud" | "datacenter";
 
+/** Which credential-entry UI a source type uses on connect AND reconnect.
+ *  Microsoft Entra source types must NOT fall through to the generic prompt,
+ *  whose cloud default is the Atlassian "account email" form — that crossed
+ *  wiring once made the m365copilot reconnect ("plug") path ask for an
+ *  Atlassian account when it should reuse the Microsoft 365 / Graph sign-in.
+ *  Centralizing the decision here (consumed by one router) keeps the add wizard
+ *  and the reconnect path from ever diverging on it again. */
+export type ContextCredentialUi = "powerbi-aad" | "m365-graph" | "generic";
+export function contextCredentialUi(type: ContextSourceType): ContextCredentialUi {
+  switch (type) {
+    case "powerbi":
+      return "powerbi-aad";
+    case "m365copilot":
+      return "m365-graph";
+    default:
+      return "generic";
+  }
+}
+
 /** Auth method descriptor persisted per source (ADR-0014/0015).
  *  ldap-simple = LDAP simple bind; ntlm = Windows Authentication (MSSQL);
  *  gcloud-sso = live token from the gcloud CLI's Google SSO session

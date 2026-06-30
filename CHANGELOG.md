@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.98.0 — 2026-06-30
+
+### Fixed — Microsoft 365 Copilot reconnect asked for an "Atlassian account email"
+- Reconnecting an **imported Microsoft 365 Copilot** source (the **plug** icon → *Test Context
+  Source*) prompted for an **"Atlassian account email"** instead of reusing your **Microsoft Entra /
+  Microsoft 365** sign-in. The add wizard special-cased the connector but the reconnect path didn't,
+  so it fell through to the generic prompt's Atlassian Cloud default. Both paths now route through a
+  single credential router, and Copilot connects/reconnects with the same Microsoft 365 (shared with
+  SharePoint) or pasted-Graph-token sign-in everywhere — the divergence that caused the cross-wiring
+  can't recur. (Power BI, the other Entra source, is routed the same way.)
+
+### Fixed — white-label build: chat-participant rename and CRLF package.json
+- The white-label export no longer leaves the rebranded build's **chat participant** named after the
+  origin handle: the rename now keys off the regenerated single-source-of-truth identity rather than a
+  literal, so a re-branded engine renames its participant correctly (this is the `rebrandVsix` test a
+  maintainer saw fail on a Windows white-label build).
+- The `release` (time-limited build control) and `provisioning` (first-run seed) manifests are now
+  inserted correctly into a **CRLF `package.json`** — e.g. a Windows `autocrlf` checkout or a
+  Windows-built VSIX. The insert anchors previously matched only `\n` and silently dropped both blocks
+  on CRLF; they now accept `\r?\n`. Added regression tests for both.
+
 ## 0.97.0 — 2026-06-30
 
 ### Added — read-only, scoped Teams messages
