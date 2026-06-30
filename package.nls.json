@@ -51,6 +51,7 @@
   "aiSharePoint.readOutlookCalendar.title": "Outlook: Read Calendar (read-only)",
   "aiSharePoint.trackRepliesToWorkspace.title": "Outlook: Move Replies to Workspace (by subject)…",
   "aiSharePoint.addLocalFile.title": "Add File for Context (Excel/CSV)…",
+  "aiSharePoint.addSharedFile.title": "Add OneDrive/SharePoint File for Context…",
   "aiSharePoint.readFileSource.title": "Read a Context File…",
   "aiSharePoint.removeFileSource.title": "Remove a Context File…",
   "aiSharePoint.browseSource.title": "Browse Source & Add Bookmark…",

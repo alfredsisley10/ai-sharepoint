@@ -12,6 +12,7 @@ import {
 import { detectTabularKind, renderTable, readTabularBuffer } from "../src/context/files/tabular";
 import { withFile, withoutFile, findByLocation, fileLocationKey } from "../src/context/files/fileSources";
 import type { FileSource } from "../src/context/files/fileSources";
+import { encodeSharingUrl, driveItemToRef } from "../src/context/files/graphFiles";
 
 // --- CSV -----------------------------------------------------------------
 
@@ -132,13 +133,28 @@ test("renderTable makes a header table, escapes pipes, and notes truncation", ()
 
 // --- file source list ops ------------------------------------------------
 
+test("encodeSharingUrl produces a Graph base64url 'u!' id", () => {
+  // base64url: + → -, / → _, no padding, prefixed with "u!".
+  assert.equal(encodeSharingUrl("https://x?a=1&b=2/c+d"), "u!" + Buffer.from("https://x?a=1&b=2/c+d").toString("base64").replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-"));
+  assert.match(encodeSharingUrl("https://contoso.sharepoint.com/:x:/g/abc"), /^u!/);
+});
+
+test("driveItemToRef reads a /shares result and a sharedWithMe (remoteItem) shape", () => {
+  const shares = driveItemToRef({ id: "IT", name: "Book.xlsx", webUrl: "https://w", parentReference: { driveId: "DR" } });
+  assert.deepEqual(shares, { driveId: "DR", itemId: "IT", name: "Book.xlsx", webUrl: "https://w" });
+  const shared = driveItemToRef({ id: "local", name: "Data.csv", remoteItem: { id: "RID", parentReference: { driveId: "RDR" } } });
+  assert.equal(shared?.driveId, "RDR");
+  assert.equal(shared?.itemId, "RID");
+  assert.equal(driveItemToRef({ name: "x" }), undefined, "incomplete → undefined");
+});
+
 test("file source ops: add/replace/remove, dedup by location", () => {
   const a: FileSource = { id: "1", label: "A", location: { kind: "local", path: "/x/A.csv" }, tabular: "csv", addedAt: "t" };
   let items = withFile([], a);
   assert.equal(items.length, 1);
   // same location (case-folded) is found for dedup
   assert.ok(findByLocation(items, { kind: "local", path: "/X/a.csv" }));
-  assert.equal(fileLocationKey({ kind: "graph", driveId: "d", itemId: "IT" }), "graph:IT");
+  assert.equal(fileLocationKey({ kind: "graph", connectionHandle: "h", driveId: "d", itemId: "IT" }), "graph:IT");
   items = withoutFile(items, "1");
   assert.equal(items.length, 0);
 });

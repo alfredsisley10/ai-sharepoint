@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.92.0",
+  "version": "0.93.0",
   "release": {
     "channel": "standard"
   },
@@ -356,6 +356,12 @@
         "title": "%aiSharePoint.addLocalFile.title%",
         "category": "%category%",
         "icon": "$(new-file)"
+      },
+      {
+        "command": "aiSharePoint.addSharedFile",
+        "title": "%aiSharePoint.addSharedFile.title%",
+        "category": "%category%",
+        "icon": "$(cloud)"
       },
       {
         "command": "aiSharePoint.readFileSource",
@@ -2143,9 +2149,14 @@
           "group": "2_files@1"
         },
         {
-          "command": "aiSharePoint.readFileSource",
+          "command": "aiSharePoint.addSharedFile",
           "when": "view == aiSharePoint.sourcesView",
           "group": "2_files@2"
+        },
+        {
+          "command": "aiSharePoint.readFileSource",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "2_files@3"
         },
         {
           "command": "aiSharePoint.exportReferenceConfig",

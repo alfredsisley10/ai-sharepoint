@@ -6,6 +6,8 @@ import {
   messagesPath,
   calendarViewPath,
 } from "./outlookWorkspace";
+import { DriveItemRef, encodeSharingUrl, driveItemToRef } from "../context/files/graphFiles";
+import { AppError } from "../core/errors";
 
 /**
  * Graph client for Communication Channels (ADR-0025). Send-capable scopes
@@ -29,6 +31,9 @@ const MAIL_SEND_SCOPES = [...MAIL_DRAFT_SCOPES, "https://graph.microsoft.com/Mai
 const MAIL_READ_SCOPES = ["https://graph.microsoft.com/Mail.Read"];
 const CALENDAR_READ_SCOPES = ["https://graph.microsoft.com/Calendars.Read"];
 const MAILBOX_RULE_SCOPES = ["https://graph.microsoft.com/MailboxSettings.ReadWrite"];
+// Read OneDrive + shared SharePoint files the user can already access.
+const FILES_READ_SCOPES = ["https://graph.microsoft.com/Files.Read.All"];
+const GRAPH_V1 = "https://graph.microsoft.com/v1.0";
 
 export interface MailFolderRef {
   id: string;
@@ -209,5 +214,44 @@ export class CommsClient extends SharePointClient {
       rule,
       MAILBOX_RULE_SCOPES,
     );
+  }
+
+  // --- OneDrive / shared SharePoint files (read-only context) --------------
+
+  /** Resolve a sharing link (OneDrive/SharePoint "shared with you" URL) to a
+   *  stable drive-item reference. Read-only (Files.Read.All). */
+  async resolveSharedItem(sharingUrl: string): Promise<DriveItemRef> {
+    const item = await this.request<Record<string, unknown>>(
+      "GET",
+      `/shares/${encodeSharingUrl(sharingUrl)}/driveItem?$select=id,name,webUrl,parentReference`,
+      undefined,
+      FILES_READ_SCOPES,
+    );
+    const ref = driveItemToRef(item);
+    if (!ref) throw new AppError("That link didn't resolve to a file we can read.", "graph.error");
+    return ref;
+  }
+
+  /** List the files shared with the signed-in user (read-only). */
+  async listSharedWithMe(): Promise<DriveItemRef[]> {
+    const res = await this.request<{ value: Record<string, unknown>[] }>(
+      "GET",
+      "/me/drive/sharedWithMe",
+      undefined,
+      FILES_READ_SCOPES,
+    );
+    return (res.value ?? []).map((v) => driveItemToRef(v)).filter((r): r is DriveItemRef => Boolean(r));
+  }
+
+  /** Download a drive item's raw bytes (read-only). Uses an authenticated fetch
+   *  because the content endpoint returns binary, not JSON. */
+  async downloadDriveItem(driveId: string, itemId: string): Promise<Buffer> {
+    const token = await this.acquire(FILES_READ_SCOPES);
+    const url = `${GRAPH_V1}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/content`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, redirect: "follow" });
+    if (!res.ok) {
+      throw new AppError(`Microsoft Graph returned ${res.status} downloading the file.`, res.status === 403 ? "graph.forbidden" : "graph.error");
+    }
+    return Buffer.from(await res.arrayBuffer());
   }
 }

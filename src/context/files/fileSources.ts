@@ -10,7 +10,7 @@ import { TabularKind } from "./tabular";
 
 export type FileLocation =
   | { kind: "local"; path: string }
-  | { kind: "graph"; driveId: string; itemId: string; webUrl?: string };
+  | { kind: "graph"; connectionHandle: string; driveId: string; itemId: string; webUrl?: string };
 
 export interface FileSource {
   id: string;

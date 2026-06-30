@@ -406,13 +406,21 @@ export function activate(context: vscode.ExtensionContext): void {
   const fileSources = new FileSourcesStore(context.globalState);
   context.subscriptions.push(fileSources);
   // Read a registered file source into rows. Local files read from disk; remote
-  // (OneDrive/SharePoint) Graph items are added in a later release.
+  // (OneDrive / shared SharePoint) items download via Graph using the M365
+  // sign-in the file was registered under.
   const readFileSource = async (source: FileSource): Promise<string[][]> => {
-    if (source.location.kind !== "local") {
-      throw new AppError("Remote (OneDrive/SharePoint) file reading isn't available yet in this build.", "config");
+    if (source.location.kind === "local") {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(source.location.path));
+      return readTabularBuffer(source.tabular, Buffer.from(bytes));
     }
-    const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(source.location.path));
-    return readTabularBuffer(source.tabular, Buffer.from(bytes));
+    const loc = source.location;
+    const conn = sites.list().find((c) => c.cacheHandle === loc.connectionHandle) ?? sites.list()[0];
+    if (!conn) {
+      throw new AppError("Connect the Microsoft 365 sign-in for this file first (connect a SharePoint site).", "config");
+    }
+    const client = new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false);
+    const buf = await client.downloadDriveItem(loc.driveId, loc.itemId);
+    return readTabularBuffer(source.tabular, buf);
   };
   const syncConfigs = new SyncConfigStore(context.globalState);
 
@@ -5442,6 +5450,72 @@ export function activate(context: vscode.ExtensionContext): void {
     await outlookWorkspaces.upsert({ ...got.ws, trackedSubjects: withTrackedSubject(got.ws.trackedSubjects, subject), updatedAt: nowIso() });
     telemetry.record("comms.trackReplies");
     void vscode.window.showInformationMessage(`Rule created — replies matching “${rule.conditions.subjectContains[0]}” will collect in “${got.ws.folderName}”.`);
+  });
+
+  register("aiSharePoint.addSharedFile", async () => {
+    const picked = await commsConnAndClient("Read shared files using which Microsoft 365 sign-in?");
+    if (!picked) return;
+    const { conn, client } = picked;
+    const PASTE = "$(link) Paste a sharing link…";
+    const mode = await vscode.window.showQuickPick(
+      [
+        { label: "$(cloud) Pick from files shared with me", how: "shared" as const },
+        { label: PASTE, how: "link" as const },
+      ],
+      { title: "Add a OneDrive / SharePoint file for context", ignoreFocusOut: true },
+    );
+    if (!mode) return;
+    let ref;
+    try {
+      if (mode.how === "link") {
+        const url = await vscode.window.showInputBox({
+          title: "Paste the OneDrive / SharePoint sharing link",
+          prompt: "The 'Copy link' URL for a file shared with you.",
+          ignoreFocusOut: true,
+          validateInput: (v) => (/^https?:\/\//i.test(v.trim()) ? undefined : "Enter a valid https link."),
+        });
+        if (!url) return;
+        ref = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Resolving the shared file…" }, () => client.resolveSharedItem(url));
+      } else {
+        const shared = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Listing files shared with you…" }, () => client.listSharedWithMe());
+        const tabularOnly = shared.filter((r) => detectTabularKind(r.name) !== "unknown");
+        if (tabularOnly.length === 0) {
+          void vscode.window.showInformationMessage("No shared Excel/CSV files found. Use “Paste a sharing link…” for a specific file.");
+          return;
+        }
+        const pick = await vscode.window.showQuickPick(
+          tabularOnly.map((r) => ({ label: r.name, description: r.webUrl, ref: r })),
+          { title: "Pick a shared file", ignoreFocusOut: true, matchOnDescription: true },
+        );
+        if (!pick) return;
+        ref = pick.ref;
+      }
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not access the shared file: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    const tabular = detectTabularKind(ref.name);
+    if (tabular === "unknown") {
+      void vscode.window.showWarningMessage(`“${ref.name}” isn't a supported tabular file (.xlsx/.csv/.tsv).`);
+      return;
+    }
+    const location = { kind: "graph" as const, connectionHandle: conn.cacheHandle, driveId: ref.driveId, itemId: ref.itemId, ...(ref.webUrl ? { webUrl: ref.webUrl } : {}) };
+    const dup = findByLocation(fileSources.list(), location);
+    if (dup) {
+      void vscode.window.showInformationMessage(`Already registered as “${dup.label}”.`);
+      return;
+    }
+    const label = await vscode.window.showInputBox({ title: "Label for this file", value: ref.name, ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (!label) return;
+    try {
+      const buf = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Reading the file…" }, () => client.downloadDriveItem(ref.driveId, ref.itemId));
+      const rows = readTabularBuffer(tabular, buf);
+      await fileSources.add({ id: crypto.randomUUID(), label: label.trim(), location, tabular, addedAt: nowIso() });
+      telemetry.record("file.add", { kind: tabular, remote: true });
+      void vscode.window.showInformationMessage(`Added “${label.trim()}” (${rows.length} row(s)). @sharepoint can read it with #spReadFile.`);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read “${ref.name}”: ${e instanceof Error ? e.message : String(e)}`);
+    }
   });
 
   /** Create an email draft directly in the user's Outlook Drafts folder.

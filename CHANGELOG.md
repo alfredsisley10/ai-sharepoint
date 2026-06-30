@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.93.0 — 2026-06-30
+
+### Added — OneDrive & shared SharePoint files as context
+- *Add OneDrive/SharePoint File for Context* registers a file shared with you — either **pick from
+  "files shared with me"** or **paste a sharing link**. It resolves to a stable drive-item reference
+  via Microsoft Graph, reusing the **same Microsoft 365 sign-in** as mail/sites (read-only,
+  `Files.Read.All`).
+- Registered remote files read exactly like local ones: @sharepoint pulls them in with
+  `#spReadFile`, and *Read a Context File* renders them to a table. Content downloads on demand via
+  Graph using the sign-in the file was registered under; we store only the drive/item reference +
+  label, never the file content.
+- Pure Graph helpers (`encodeSharingUrl`, `driveItemToRef` — handling both the `/shares` and
+  `sharedWithMe` shapes) are unit-tested. Completes Phase 6 (local **and** cloud file context).
+
 ## 0.92.0 — 2026-06-30
 
 ### Added — local file context (Excel & CSV)
