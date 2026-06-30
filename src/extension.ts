@@ -197,6 +197,9 @@ import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { MemoryStore } from "./context/memoryStore";
+import { PromptStore } from "./context/promptStore";
+import { PromptsTreeProvider } from "./ui/promptsView";
+import { PromptItem, PromptScope, normalizePromptInput } from "./context/promptLibrary";
 import { MemoryItem, MemoryScope, MemoryScopeKind, normalizeMemoryInput } from "./context/memory";
 import { ContextBookmark } from "./context/types";
 import { discoverActiveDirectory } from "./context/ldap/discoveryHost";
@@ -382,6 +385,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
   const memory = new MemoryStore(context.globalState);
+  const prompts = new PromptStore(context.globalState);
   const syncConfigs = new SyncConfigStore(context.globalState);
 
   // First-run provisioning: seed any pre-defined connectors / projects /
@@ -659,6 +663,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const projectsProvider = new ProjectsTreeProvider(projects, contextSources);
   const projectsView = tryCreateTreeView("aiSharePoint.projectsView", projectsProvider);
   if (projectsView) context.subscriptions.push(projectsView, projectsProvider);
+  const promptsProvider = new PromptsTreeProvider(prompts, sites, contextSources, projects);
+  const promptsView = tryCreateTreeView("aiSharePoint.promptsView", promptsProvider);
+  if (promptsView) context.subscriptions.push(promptsView, promptsProvider, prompts);
   for (const v of [sitesView, usageView, supportView, commsView]) {
     if (v) context.subscriptions.push(v);
   }
@@ -1201,6 +1208,10 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (confirm === "Remove Connection") {
       await sites.remove(conn.siteUrl, secrets);
+      // Drop the memory notes + prompts attached to this site so they don't
+      // orphan (a re-added site at the same URL would otherwise inherit them).
+      await memory.removeForScope({ kind: "site", key: conn.siteUrl });
+      await prompts.removeForScope({ kind: "site", key: conn.siteUrl });
       telemetry.record("site.remove");
     }
   });
@@ -2993,6 +3004,8 @@ export function activate(context: vscode.ExtensionContext): void {
       await schemas.remove(source.id);
       await catalogs.remove(source.id);
       await projects.forgetSource(source.id);
+      await memory.removeForScope({ kind: "source", key: source.id });
+      await prompts.removeForScope({ kind: "source", key: source.id });
       contextCache.invalidateSource(source.id);
       telemetry.record("context.remove");
     }
@@ -3149,6 +3162,8 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (confirm !== "Remove Project") return;
     await projects.remove(pick.pr.id);
+    // Prompts scoped to this project would otherwise orphan in the library.
+    await prompts.removeForScope({ kind: "project", key: pick.pr.id });
   });
 
   // Click-to-activate from the Projects view (arg = project id).
@@ -4825,6 +4840,135 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showInformationMessage("Memory note copied to the clipboard.");
       } else if (act === "Delete") {
         await memory.remove(m.id);
+      }
+    }
+  });
+
+  // --- Prompt Library (Phase 3) --------------------------------------------
+  // Reusable prompt snippets, global or attached to a site/source/project.
+  // Reuse = copy to the clipboard; management is add/edit/copy/delete.
+
+  /** Resolve a tree node (or palette invocation) to a prompt scope + label.
+   *  Handles prompt group/item nodes, site/source connections, and project rows. */
+  const resolvePromptScope = (preselect?: unknown): { scope: PromptScope; label: string } | undefined => {
+    const n = preselect && typeof preselect === "object" ? (preselect as Record<string, unknown>) : undefined;
+    if (!n) return undefined;
+    // Prompt Library nodes carry the scope directly.
+    if (n.promptScope && typeof n.promptScope === "object") {
+      const s = n.promptScope as PromptScope;
+      return { scope: s, label: promptsProvider.labelForScope(s) };
+    }
+    if (n.scope && typeof n.scope === "object" && typeof (n.scope as PromptScope).kind === "string" && typeof n.body === "string") {
+      const s = n.scope as PromptScope;
+      return { scope: s, label: promptsProvider.labelForScope(s) };
+    }
+    // A projects-view row: { kind: "project", project: {...} }.
+    if (n.kind === "project" && n.project && typeof n.project === "object") {
+      const p = n.project as { id: string; name: string };
+      return { scope: { kind: "project", key: p.id }, label: p.name };
+    }
+    // A site connection.
+    if (typeof n.siteUrl === "string" && typeof n.role === "string") {
+      return { scope: { kind: "site", key: n.siteUrl }, label: (n.displayName as string) || (n.siteUrl as string) };
+    }
+    // A context source.
+    if (typeof n.id === "string" && typeof n.type === "string") {
+      return { scope: { kind: "source", key: n.id }, label: (n.displayName as string) ?? (n.id as string) };
+    }
+    return undefined;
+  };
+
+  /** Ask the user to pick a scope (Global, or a specific site/source/project). */
+  const pickPromptScope = async (): Promise<{ scope: PromptScope; label: string } | undefined> => {
+    type ScopePick = vscode.QuickPickItem & { scope: PromptScope; lbl: string };
+    const choices: ScopePick[] = [
+      { label: "$(globe) Global", description: "available everywhere", scope: { kind: "global" }, lbl: "Global" },
+    ];
+    for (const c of sites.list()) choices.push({ label: `$(cloud) ${c.displayName || c.siteUrl}`, description: `site · ${c.role}`, scope: { kind: "site", key: c.siteUrl }, lbl: c.displayName || c.siteUrl });
+    for (const s of contextSources.list()) choices.push({ label: `$(book) ${s.displayName}`, description: `source · ${s.type}`, scope: { kind: "source", key: s.id }, lbl: s.displayName });
+    for (const p of projects.list()) choices.push({ label: `$(folder) ${p.name}`, description: "project", scope: { kind: "project", key: p.id }, lbl: p.name });
+    const pick = await vscode.window.showQuickPick(choices, {
+      title: "Prompt Library — where should this prompt live?",
+      placeHolder: "Global prompts show everywhere; scoped prompts group under their site/source/project.",
+      ignoreFocusOut: true,
+    });
+    return pick ? { scope: pick.scope, label: pick.lbl } : undefined;
+  };
+
+  /** Shared add flow: title + body inputs, then store under `scope`. */
+  const addPromptTo = async (scope: PromptScope, label: string): Promise<boolean> => {
+    const title = await vscode.window.showInputBox({ title: `New prompt for ${label} — short title`, prompt: "e.g. Summarize a page for execs", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (!title) return false;
+    const body = await vscode.window.showInputBox({ title: "New prompt — the prompt text", prompt: "The reusable prompt you'll paste into chat", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (!body) return false;
+    const norm = normalizePromptInput(title, body);
+    const at = nowIso();
+    await prompts.add({ id: crypto.randomUUID(), scope, title: norm.title, body: norm.body, ...(norm.tags ? { tags: norm.tags } : {}), createdAt: at, updatedAt: at });
+    telemetry.record("prompt.add", { scope: scope.kind });
+    return true;
+  };
+
+  register("aiSharePoint.usePrompt", async (preselect?: unknown) => {
+    let item = preselect && typeof preselect === "object" && typeof (preselect as PromptItem).body === "string" ? (preselect as PromptItem) : undefined;
+    if (!item) {
+      const all = prompts.list();
+      if (all.length === 0) {
+        void vscode.window.showInformationMessage("No prompts yet — add one with the “+” in the Prompt Library, or right-click a site/source/project.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        all.map((p) => ({ label: p.title, description: promptsProvider.labelForScope(p.scope), detail: p.body.length > 120 ? `${p.body.slice(0, 120)}…` : p.body, item: p })),
+        { title: "Use a prompt — copy to clipboard", placeHolder: "Pick a prompt to copy.", ignoreFocusOut: true, matchOnDetail: true },
+      );
+      if (!pick) return;
+      item = pick.item;
+    }
+    await vscode.env.clipboard.writeText(item.body);
+    telemetry.record("prompt.use", { scope: item.scope.kind });
+    void vscode.window.showInformationMessage(`Prompt “${item.title}” copied to the clipboard.`);
+  });
+
+  register("aiSharePoint.addPrompt", async (preselect?: unknown) => {
+    const target = resolvePromptScope(preselect) ?? (await pickPromptScope());
+    if (!target) return;
+    await addPromptTo(target.scope, target.label);
+  });
+
+  register("aiSharePoint.managePrompt", async (preselect?: unknown) => {
+    const target = resolvePromptScope(preselect) ?? (await pickPromptScope());
+    if (!target) return;
+    const { scope, label } = target;
+    for (;;) {
+      const items = prompts.listForScope(scope);
+      const ADD = "$(add) Add a prompt…";
+      const chosen = await vscode.window.showQuickPick(
+        [
+          { label: ADD, alwaysShow: true } as vscode.QuickPickItem & { item?: PromptItem },
+          ...items.map((p) => ({ label: `$(comment-discussion) ${p.title}`, description: p.tags?.join(", ") ?? "", detail: p.body.length > 120 ? `${p.body.slice(0, 120)}…` : p.body, item: p })),
+        ],
+        { title: `Prompts for ${label} — ${items.length}`, placeHolder: "Pick a prompt to use/edit/delete, or add one. Esc closes.", ignoreFocusOut: true, matchOnDetail: true },
+      );
+      if (!chosen) return;
+      if (chosen.label === ADD) {
+        await addPromptTo(scope, label);
+        continue;
+      }
+      const p = chosen.item;
+      if (!p) continue;
+      const act = await vscode.window.showQuickPick(["Use (copy)", "Edit", "Delete"], { title: `“${p.title}”`, placeHolder: p.body.slice(0, 120), ignoreFocusOut: true });
+      if (act === "Use (copy)") {
+        await vscode.env.clipboard.writeText(p.body);
+        telemetry.record("prompt.use", { scope: p.scope.kind });
+        void vscode.window.showInformationMessage(`Prompt “${p.title}” copied to the clipboard.`);
+      } else if (act === "Edit") {
+        const title = await vscode.window.showInputBox({ title: "Edit title", value: p.title, ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+        if (title === undefined) continue;
+        const body = await vscode.window.showInputBox({ title: "Edit prompt text", value: p.body, ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+        if (body === undefined) continue;
+        const norm = normalizePromptInput(title, body);
+        await prompts.update({ ...p, title: norm.title, body: norm.body, ...(norm.tags ? { tags: norm.tags } : {}), updatedAt: nowIso() });
+      } else if (act === "Delete") {
+        await prompts.remove(p.id);
       }
     }
   });

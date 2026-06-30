@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.87.0 — 2026-06-30
+
+### Added — Prompt Library (a new tab for reusable prompts)
+- A new **Prompt Library** view holds reusable prompt snippets, grouped by where they live —
+  **Global** (available everywhere) first, then per managed site, reference source, and project.
+  Click a prompt to **copy it to the clipboard**, then paste it into chat. (Prompts are reuse-on-
+  demand; they are *not* injected into the assistant's context — that's what memory is for.)
+- **Create from anywhere it's relevant**: the view's **"+"**, the palette (*Add Prompt to
+  Library…*), or right-click a site, source, or project to save a prompt **scoped to it**. Manage
+  (add/edit/copy/delete) from the group/item context menu or *Manage Prompts…*.
+- Each prompt has a short title, the prompt body, and optional tags; titles fold for dedup so the
+  upcoming export/import can merge prompts teammates share.
+- **No orphans**: removing a site, source, or project now also drops its scoped prompts **and** its
+  memory notes (previously memory lingered after entity removal), so nothing dangles.
+
+_Next: nesting a "Prompts" group under each site/source/project (like Memory), then prompt
+export/import in the combined flow with review + intelligent merge._
+
 ## 0.86.0 — 2026-06-30
 
 ### Added — memory in the combined export/import (with review + dedup)
