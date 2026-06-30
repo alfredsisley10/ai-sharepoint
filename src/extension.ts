@@ -243,9 +243,47 @@ import { deobfuscateSecret } from "./diagnostics/secretObfuscation";
 import { UsageDashboard } from "./ui/dashboard";
 import { registerChatParticipant } from "./chat/participant";
 import { registerLanguageModelTools } from "./chat/tools";
+import {
+  DEFAULT_PROBE_TARGETS,
+  ProbeTarget,
+  ProbeOutcome,
+  ProbeReport,
+  interpretProbe,
+  renderConnectivityReport,
+  summarizeConnectivity,
+} from "./core/connectivityProbe";
 
 /** Host clock, isolated so it's the single source of "now" (ISO, UTC). */
 const nowIso = () => new Date().toISOString();
+
+/** One connectivity probe: an unauthenticated HTTPS round-trip whose ONLY
+ *  purpose is to reveal whether a corporate proxy / TLS inspector / content
+ *  filter sits in the path. Any HTTP status counts as "a response" (the filter
+ *  detector decides what it means); a throw is captured for diagnosis. Bounded
+ *  by an 8s timeout and the command's cancellation token. */
+async function probeConnectivity(
+  target: ProbeTarget,
+  token: vscode.CancellationToken,
+): Promise<ProbeOutcome> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8_000);
+  const sub = token.onCancellationRequested(() => ctrl.abort());
+  try {
+    const res = await fetch(target.url, { signal: ctrl.signal, redirect: "manual" });
+    let bodyText = "";
+    try {
+      bodyText = (await res.text()).slice(0, 4_000);
+    } catch {
+      /* body unreadable — status + headers still inform the verdict */
+    }
+    return { status: res.status, bodyText, headers: res.headers };
+  } catch (error) {
+    return { error };
+  } finally {
+    clearTimeout(timer);
+    sub.dispose();
+  }
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   const log = new Logger("AI SharePoint");
@@ -6657,6 +6695,34 @@ export function activate(context: vscode.ExtensionContext): void {
     } else {
       void vscode.window.showInformationMessage("Verbose wire logging is off.");
     }
+  });
+
+  register("aiSharePoint.testNetworkConnectivity", async () => {
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Testing network / proxy connectivity…", cancellable: true },
+      async (progress, token) => {
+        const reports: ProbeReport[] = [];
+        for (const target of DEFAULT_PROBE_TARGETS) {
+          if (token.isCancellationRequested) break;
+          progress.report({ message: `${target.label}…` });
+          reports.push(interpretProbe(target, await probeConnectivity(target, token)));
+        }
+        if (reports.length === 0) return; // cancelled before the first probe
+        // The full report (per-endpoint verdict + remediation) goes to the log;
+        // the toast carries the headline and a way to open it.
+        log.info(`\n${renderConnectivityReport(reports, nowIso())}`);
+        const summary = summarizeConnectivity(reports);
+        if (summary.ok) {
+          void vscode.window.showInformationMessage(`Network check: ${summary.message}`);
+        } else {
+          const choice = await vscode.window.showWarningMessage(
+            `Network check: ${summary.message}`,
+            "Show Details",
+          );
+          if (choice === "Show Details") log.show();
+        }
+      },
+    );
   });
 
   register("aiSharePoint.openLogs", async () => {

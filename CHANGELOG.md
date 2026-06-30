@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.107.0 — 2026-06-30
+
+### Added — proxy / TLS-inspection detection now covers sign-in, databases, and LDAP, plus a connectivity test
+- **A new “Test Network / Proxy Connectivity” command** (Support & Diagnostics view, or the Command
+  Palette) proactively checks whether a corporate proxy, SSL-inspection appliance, or web content
+  filter is in the path. It sends two **unauthenticated** requests — to the Microsoft sign-in authority
+  and to Microsoft Graph — and reports, per endpoint, whether it's reachable or blocked, naming the
+  appliance and giving the exact fix (trust the root CA, set `http.proxy`, allowlist the host). Any HTTP
+  reply (even a 401 from Graph) counts as reachable; a re-signed TLS cert, a 407, a block page, or a DNS
+  failure is flagged with targeted guidance. No credentials are used.
+- **Microsoft sign-in failures are now diagnosed the same way.** Both the system-browser and device-code
+  flows previously surfaced MSAL's opaque “fetch failed”. They now detect a proxy / TLS-inspection /
+  content-filter cause behind the sign-in call (the real TLS errno hides in the error's `cause`) and
+  show the same actionable remediation instead.
+- **Database and LDAP TLS handshakes recognize an SSL-inspecting appliance.** When a re-signed,
+  untrusted certificate breaks a database (SQL Server / PostgreSQL / MySQL / MongoDB) or LDAPS
+  connection, the error now names the appliance when recognized (Zscaler, Netskope, Palo Alto, etc.)
+  while keeping the database/LDAP-specific certificate-trust remedy (OS trust store, the shared
+  `aiSharePoint.ldap.caCertificatesFile` bundle, or `?trustServerCertificate=true` for SQL Server).
+
 ## 0.106.0 — 2026-06-30
 
 ### Hardened — file parsing, request restart, and the test gate

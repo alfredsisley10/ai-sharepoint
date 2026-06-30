@@ -76,6 +76,7 @@
   "aiSharePoint.restartLastInteraction.title": "Restart Last Chat Request",
   "aiSharePoint.probeModelContextLimit.title": "Probe Model Context Limit",
   "aiSharePoint.showModelLimits.title": "Show Learned Model Context Limits",
+  "aiSharePoint.testNetworkConnectivity.title": "Test Network / Proxy Connectivity",
   "aiSharePoint.manageProjectMemory.title": "Manage Project Memory",
   "aiSharePoint.exportLessons.title": "Export Lessons Learned (anonymized)",
   "aiSharePoint.clearLessons.title": "Delete Captured Lessons",

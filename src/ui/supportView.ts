@@ -78,6 +78,14 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
         contextValue: "errorReports",
       },
       {
+        id: "networkCheck",
+        label: "Test Network / Proxy Connectivity",
+        icon: new vscode.ThemeIcon("plug"),
+        tooltip:
+          "Check whether a corporate proxy, SSL-inspection appliance, or web content filter is blocking the Microsoft sign-in and Graph endpoints. Sends two unauthenticated requests and reports any proxy/TLS interference with targeted fixes. No credentials are used.",
+        command: { command: "aiSharePoint.testNetworkConnectivity", title: "Test" },
+      },
+      {
         id: "logs",
         label: "Open Extension Logs",
         icon: new vscode.ThemeIcon("output"),

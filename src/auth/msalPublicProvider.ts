@@ -11,6 +11,7 @@ import { AccessToken, SharePointAuthProvider } from "./types";
 import { KeychainCachePlugin } from "./msalCache";
 import { FetchNetworkClient } from "./msalNetwork";
 import { AppError } from "../core/errors";
+import { describeSignInFailure } from "./signInDiagnostics";
 
 /** Static, parameter-free response pages (REVIEW S5 — never reflect query
  *  values into HTML). Styling is inline; no external resources are loaded. */
@@ -47,7 +48,7 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
   constructor(
     secrets: SecretStore,
     cacheHandle: string,
-    authority: string,
+    private readonly authority: string,
     clientId: string,
   ) {
     const config: Configuration = {
@@ -186,7 +187,9 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
             // Response may already be closed; the rejection below carries the error.
           }
           cleanup();
-          reject(err instanceof Error ? err : new Error(String(err)));
+          // Redeeming the code is an HTTPS call to the token endpoint — name a
+          // proxy/TLS-inspection/content-filter cause when one is detectable.
+          reject(describeSignInFailure(err, this.authority));
         }
       });
 
@@ -226,7 +229,9 @@ export class MsalPublicClientProvider implements SharePointAuthProvider {
           await vscode.env.openExternal(vscode.Uri.parse(authUrl));
         } catch (err) {
           cleanup();
-          reject(err instanceof Error ? err : new Error(String(err)));
+          // getAuthCodeUrl fetches the authority's OIDC metadata over HTTPS —
+          // a proxy/filter blocking that is a common first-failure on sign-in.
+          reject(describeSignInFailure(err, this.authority));
         }
       });
     });

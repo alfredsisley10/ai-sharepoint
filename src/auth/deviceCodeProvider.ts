@@ -8,6 +8,7 @@ import { AccessToken, SharePointAuthProvider } from "./types";
 import { KeychainCachePlugin } from "./msalCache";
 import { FetchNetworkClient } from "./msalNetwork";
 import { AppError } from "../core/errors";
+import { describeSignInFailure } from "./signInDiagnostics";
 
 /** What the UI needs to show the user during device-code sign-in. */
 export interface DeviceCodePrompt {
@@ -36,7 +37,7 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
   constructor(
     secrets: SecretStore,
     cacheHandle: string,
-    authority: string,
+    private readonly authority: string,
     clientId: string,
     /** UI callback — injected so this module stays headless/testable. */
     private readonly onPrompt: (info: DeviceCodePrompt) => void,
@@ -66,7 +67,14 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
           expiresInSeconds: info.expiresIn,
         }),
     };
-    const result = await this.pca.acquireTokenByDeviceCode(request);
+    let result;
+    try {
+      result = await this.pca.acquireTokenByDeviceCode(request);
+    } catch (err) {
+      // The code-poll loop is HTTPS to the token endpoint — name a proxy/
+      // TLS-inspection/content-filter cause when the failure carries one.
+      throw describeSignInFailure(err, this.authority);
+    }
     if (!result) {
       throw new AppError("Device-code sign-in returned no token.", "auth.failed");
     }
