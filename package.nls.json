@@ -73,6 +73,8 @@
   "aiSharePoint.reviewLessons.title": "Review Lessons Learned (anonymized)",
   "aiSharePoint.manageProxyTerms.title": "Manage Proxy Avoid-List",
   "aiSharePoint.showProxyDefangDetails.title": "Show Proxy Avoidance Details (what was changed)",
+  "aiSharePoint.restartLastInteraction.title": "Restart Last Chat Request",
+  "aiSharePoint.probeModelContextLimit.title": "Probe Model Context Limit",
   "aiSharePoint.showModelLimits.title": "Show Learned Model Context Limits",
   "aiSharePoint.manageProjectMemory.title": "Manage Project Memory",
   "aiSharePoint.exportLessons.title": "Export Lessons Learned (anonymized)",

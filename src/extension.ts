@@ -26,6 +26,16 @@ import { registerMemoryTools } from "./chat/memoryTools";
 import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
 import { getDefangReport } from "./chat/proxyDefangLog";
+import { InteractionCache } from "./chat/interactionCache";
+import { looksLikeOverflow } from "./core/contextBudget";
+import {
+  initialProbeWindow,
+  nextProbeSize,
+  probeConverged,
+  probeFiller,
+  PROBE_TOLERANCE,
+  PROBE_MAX_STEPS,
+} from "./core/contextProbe";
 import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
 import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
@@ -289,6 +299,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const lessons = new LessonsStore(context.globalState, EXTENSION_VERSION, nowIso);
   const blockedTerms = new BlockedTermsStore(context.globalState);
   const modelLimits = new ModelLimitsStore(context.globalState, nowIso);
+  // Workspace-scoped local cache of the last @sharepoint turn, for intelligent
+  // restart after an interruption (proxy block / dropped connection / overflow).
+  const interactions = new InteractionCache(context.workspaceState, nowIso);
   const meter = new UsageMeter(context.globalState);
   const copilot = new CopilotService(meter);
   const sites = new SitesStore(context.globalState, context.workspaceState);
@@ -830,6 +843,7 @@ export function activate(context: vscode.ExtensionContext): void {
         memory,
         proxyTerms: blockedTerms,
         modelLimits,
+        interactions,
         log,
         now: nowIso,
       }),
@@ -6335,6 +6349,87 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.window.showTextDocument(doc, { preview: true });
   });
 
+  // Intelligent restart: re-open the chat prefilled with the last (interrupted)
+  // request from the local interaction cache, so a turn lost to a proxy block /
+  // dropped connection / context overflow can be resubmitted in one click.
+  register("aiSharePoint.restartLastInteraction", async () => {
+    const last = interactions.last();
+    if (!last?.prompt) {
+      void vscode.window.showInformationMessage("No recent @sharepoint request to restart.");
+      return;
+    }
+    const query = `@sharepoint ${last.prompt}`;
+    try {
+      await vscode.commands.executeCommand("workbench.action.chat.open", { query });
+    } catch {
+      // Older VS Code or a different chat surface — fall back to the clipboard.
+      await vscode.env.clipboard.writeText(query);
+      void vscode.window.showInformationMessage("Copied your last request to the clipboard — paste it into the @sharepoint chat to retry.");
+    }
+  });
+
+  // Actively measure a model's REAL input-context limit. Copilot can deliver less
+  // than the advertised maxInputTokens (varies by org), so this binary-searches
+  // the accept/reject boundary with filler prompts and records it for budgeting.
+  register("aiSharePoint.probeModelContextLimit", async () => {
+    const model = await copilot.pickDefaultModel().catch(() => undefined);
+    if (!model) {
+      void vscode.window.showErrorMessage("No GitHub Copilot model is available — sign in to Copilot and retry.");
+      return;
+    }
+    const proceed = await vscode.window.showWarningMessage(
+      `Probe the real context limit for “${model.name}”? This sends up to ${PROBE_MAX_STEPS} test prompts using your Copilot allowance to find the largest input it actually accepts (advertised: ${model.maxInputTokens?.toLocaleString() ?? "unknown"} tokens).`,
+      { modal: true },
+      "Probe",
+    );
+    if (proceed !== "Probe") return;
+    const key = model.family || model.id;
+    const advertised = model.maxInputTokens;
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Measuring the real context limit for ${model.name}…`, cancellable: true },
+      async (progress, ptoken) => {
+        let { low, high } = initialProbeWindow(advertised, modelLimits.get(key)?.knownGood);
+        let lastGood = low;
+        for (let step = 0; step < PROBE_MAX_STEPS && !probeConverged(low, high, PROBE_TOLERANCE) && !ptoken.isCancellationRequested; step++) {
+          const target = nextProbeSize(low, high, PROBE_TOLERANCE);
+          if (target === undefined) break;
+          progress.report({ message: `testing ~${target.toLocaleString()} tokens (step ${step + 1}/${PROBE_MAX_STEPS})…` });
+          const filler = probeFiller(target);
+          let measured = target;
+          try {
+            measured = await model.countTokens(filler);
+          } catch {
+            /* keep the requested target as the estimate */
+          }
+          try {
+            const resp = await model.sendRequest(
+              [vscode.LanguageModelChatMessage.User(`${filler}\n\nReply with exactly: OK`)],
+              { justification: "AI SharePoint context-limit probe" },
+              ptoken,
+            );
+            for await (const _part of resp.stream) {
+              /* drain — success is reaching the end without an overflow throw */
+            }
+            lastGood = Math.max(lastGood, measured);
+            low = Math.max(low, measured);
+            await modelLimits.recordSuccess(key, advertised, measured).catch(() => undefined);
+          } catch (err) {
+            if (looksLikeOverflow(redactError(err).message)) {
+              high = Math.min(high, measured);
+              await modelLimits.recordOverflow(key, advertised, measured).catch(() => undefined);
+            } else {
+              throw err; // network/entitlement — stop and surface it
+            }
+          }
+        }
+        const effective = modelLimits.effectiveLimit(key, advertised) ?? lastGood;
+        void vscode.window.showInformationMessage(
+          `Context probe for ${model.name}: advertised ${advertised?.toLocaleString() ?? "unknown"}, measured usable ≈ ${lastGood.toLocaleString()} tokens (budgeting cap ${effective.toLocaleString()}). Saved — chats now budget to this.`,
+        );
+      },
+    );
+  });
+
   // #2 — review/curate the active project's AI-managed memory item by item
   // (today the edit flow only lets you wipe the whole blob).
   register("aiSharePoint.manageProjectMemory", async () => {
@@ -6388,7 +6483,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const rows = modelLimits.list();
     if (rows.length === 0) {
       void vscode.window.showInformationMessage(
-        "No model context limits learned yet — they're recorded automatically as you chat.",
+        "No model context limits learned yet — they're recorded automatically as you chat. Run “Probe Model Context Limit” to actively measure a model's real limit now.",
       );
       return;
     }
@@ -6406,7 +6501,7 @@ export function activate(context: vscode.ExtensionContext): void {
       language: "markdown",
       content: `# Learned model context limits (#3)\n\n${lines.join(
         "\n",
-      )}\n\n_“Learned cap” is recorded when a prompt overflows a model; “known-good” is the largest prompt that has succeeded. Prompts are budgeted to stay under the effective ceiling, trimming the lowest-value sections first._\n`,
+      )}\n\n_“Learned cap” is recorded when a prompt overflows a model; “known-good” is the largest prompt that has succeeded. Prompts are budgeted to stay under the effective ceiling, trimming the lowest-value sections first. The advertised limit can be capped lower by your organization — run **“Probe Model Context Limit”** to actively measure the real ceiling._\n`,
     });
     await vscode.window.showTextDocument(doc, { preview: true });
   });

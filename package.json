@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.103.0",
+  "version": "0.104.0",
   "release": {
     "channel": "standard"
   },
@@ -484,6 +484,18 @@
         "title": "%aiSharePoint.showProxyDefangDetails.title%",
         "category": "%category%",
         "icon": "$(shield)"
+      },
+      {
+        "command": "aiSharePoint.restartLastInteraction",
+        "title": "%aiSharePoint.restartLastInteraction.title%",
+        "category": "%category%",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aiSharePoint.probeModelContextLimit",
+        "title": "%aiSharePoint.probeModelContextLimit.title%",
+        "category": "%category%",
+        "icon": "$(dashboard)"
       },
       {
         "command": "aiSharePoint.showModelLimits",

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.104.0 — 2026-06-30
+
+### Added — durable, restartable AI interactions (context limits + proxy resilience)
+- **The model's real context limit is now actively measurable.** GitHub Copilot can deliver less
+  than a model's advertised `maxInputTokens`, and the cap varies by organization. A new command,
+  **“Probe Model Context Limit”**, binary-searches the accept/reject boundary with filler prompts and
+  records the true ceiling; **“Show Learned Model Context Limits”** displays advertised vs. learned
+  vs. known-good. (Prompts were already budgeted to the learned ceiling and trimmed lowest-value
+  sections first — that continues, now informed by the probe.)
+- **Turns survive failures instead of being lost.** When a send hits the context limit, @sharepoint
+  now **auto-retries under a tighter budget** (instead of just failing); when the connection drops
+  before any reply, it **retries once**. The learned ceiling is recorded either way, so future turns
+  budget down automatically.
+- **Intelligent restart.** Each turn is checkpointed to a small **local cache** (the request + which
+  context sections it carried; workspace-scoped, never exported). If a turn is interrupted, a
+  **“↻ Restart this request”** button reopens the chat prefilled with it.
+- **Reword suggestions when a content proxy is suspected.** On a network failure, if your message
+  contains avoid-list words, @sharepoint now names them and suggests rephrasing — or enabling defang.
+
 ## 0.103.0 — 2026-06-30
 
 ### Added — proxy defang is now transparent: click to see what was changed
