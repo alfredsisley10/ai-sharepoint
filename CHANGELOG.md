@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.85.0 — 2026-06-30
+
+### Added — inline "Memory" group under each site/source in the tree
+- Memory now appears **where the entity lives**: a managed site, reference site, reference source, or
+  managed source that has notes shows a collapsible **`Memory (N)`** folder as a child. Expanding it
+  lists the notes — user notes with a 📝 icon, assistant-proposed ones with a ✨ "AI-proposed" badge
+  and tooltip. This is the expandable, nested structure requested for browsing context at a glance,
+  consistent across the **Managed Sites** and **Reference Sources** views.
+- **Manage Memory** is now one right-click away from the thing it describes: the command is on site
+  nodes, context-source nodes, managed-source nodes, the `Memory` folder itself, and individual notes
+  — and pre-selects that exact entity's scope, so you skip the picker. (It's still available from the
+  palette, where it shows the picker.) The folder also carries an inline action for quick access.
+- No new data or schema — this is purely the tree surface over the existing 0.83/0.84 memory store,
+  so it composes with the upcoming memory export/import + intelligent merge unchanged.
+
+_Next: the Prompt Library tab, then memory/prompt export/import with intelligent merge._
+
 ## 0.84.0 — 2026-06-29
 
 ### Added — assistant-proposed memory (the `ai` origin)

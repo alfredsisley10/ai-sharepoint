@@ -473,13 +473,14 @@ export function activate(context: vscode.ExtensionContext): void {
       });
   }
 
-  const sitesProvider = new SitesTreeProvider(sites, contextSources);
+  const sitesProvider = new SitesTreeProvider(sites, contextSources, memory);
   const sourcesProvider = new SourcesTreeProvider(
     contextSources,
     sites,
     bookmarks,
     schemas,
     catalogs,
+    memory,
     nowIso,
     (all) => projects.scope(all),
   );
@@ -4659,11 +4660,22 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Memory: per-entity notes (user + AI) that give @sharepoint extra context about
   // a site/source. Managed here via a picker; injected into chat when in scope.
+  // Resolve a human label for a memory scope (for the manage loop title) by
+  // looking up the owning site/source; falls back to the raw key.
+  const labelForScope = (s: MemoryScope): string =>
+    s.kind === "site"
+      ? sites.list().find((c) => c.siteUrl === s.key)?.displayName || s.key
+      : contextSources.list().find((src) => src.id === s.key)?.displayName || s.key;
   register("aiSharePoint.manageMemory", async (preselect?: unknown) => {
     let scope: MemoryScope | undefined;
     let label = "";
-    const node = preselect && typeof preselect === "object" ? (preselect as Partial<SiteConnection & ContextSource>) : undefined;
-    if (node && typeof node.siteUrl === "string" && typeof node.role === "string") {
+    const node = preselect && typeof preselect === "object" ? (preselect as Partial<SiteConnection & ContextSource> & { memoryScope?: MemoryScope; scope?: MemoryScope }) : undefined;
+    // Right-clicked the "Memory (N)" folder or a note → that exact scope.
+    const fromTree = node?.memoryScope ?? (node?.scope && typeof node.scope === "object" && "kind" in node.scope ? node.scope : undefined);
+    if (fromTree && (fromTree.kind === "site" || fromTree.kind === "source") && typeof fromTree.key === "string") {
+      scope = fromTree;
+      label = labelForScope(fromTree);
+    } else if (node && typeof node.siteUrl === "string" && typeof node.role === "string") {
       scope = { kind: "site", key: node.siteUrl };
       label = node.displayName || node.siteUrl;
     } else if (node && typeof node.id === "string" && typeof node.type === "string") {

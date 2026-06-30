@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.84.0",
+  "version": "0.85.0",
   "release": {
     "channel": "standard"
   },
@@ -2073,6 +2073,11 @@
           "group": "3_manage@3"
         },
         {
+          "command": "aiSharePoint.manageMemory",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem =~ /^site-/",
+          "group": "4_memory@1"
+        },
+        {
           "command": "aiSharePoint.testContextSource",
           "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
           "group": "inline@1"
@@ -2091,6 +2096,11 @@
           "command": "aiSharePoint.removeContextSource",
           "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
           "group": "2_manage@1"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "2_manage@2"
         },
         {
           "command": "aiSharePoint.addBookmark",
@@ -2151,6 +2161,26 @@
           "command": "aiSharePoint.removeContextSource",
           "when": "view == aiSharePoint.sitesView && viewItem =~ /^managed-source/",
           "group": "2_manage@2"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^managed-source/",
+          "group": "2_manage@3"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem == memory-group",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem == memory-group",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem == memory-item",
+          "group": "1_actions@1"
         },
         {
           "command": "aiSharePoint.applyRepoToSharePoint",

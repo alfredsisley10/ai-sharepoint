@@ -8,13 +8,24 @@ import { ContextSource, ContextBookmark } from "../context/types";
 import { isSrvLocator } from "../context/ldap/srvLocator";
 import { SitesStore, SiteConnection } from "../auth/sitesStore";
 import { siteTreeItem } from "./sitesView";
+import { MemoryStore } from "../context/memoryStore";
+import { MemoryItem } from "../context/memory";
+import {
+  MemoryGroupNode,
+  isMemoryGroup,
+  isMemoryItem,
+  memoryGroupChildren,
+  memoryGroupTreeItem,
+  memoryItemTreeItem,
+  hasMemory,
+} from "./memoryTree";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
-type Node = ContextSource | ContextBookmark | SiteConnection;
+type Node = ContextSource | ContextBookmark | SiteConnection | MemoryGroupNode | MemoryItem;
 
 function isBookmark(node: Node): node is ContextBookmark {
-  return (node as ContextBookmark).locator !== undefined;
+  return (node as ContextBookmark).locator !== undefined && (node as MemoryItem).origin === undefined;
 }
 
 function isSiteConnection(node: Node): node is SiteConnection {
@@ -36,6 +47,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     private readonly bookmarks: BookmarksStore,
     private readonly schemas: SchemaStore,
     private readonly catalogs: CatalogStore,
+    private readonly memory: MemoryStore,
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly scope: (all: ContextSource[]) => ContextSource[] = (all) => all,
   ) {
@@ -44,6 +56,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     bookmarks.onDidChange(() => this.emitter.fire());
     schemas.onDidChange(() => this.emitter.fire());
     catalogs.onDidChange(() => this.emitter.fire());
+    memory.onDidChange(() => this.emitter.fire());
   }
 
   refresh(): void {
@@ -51,7 +64,16 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
-    if (isSiteConnection(node)) return siteTreeItem(node);
+    if (isMemoryGroup(node)) return memoryGroupTreeItem(node, this.memory);
+    if (isMemoryItem(node)) return memoryItemTreeItem(node);
+    if (isSiteConnection(node)) {
+      const item = siteTreeItem(node);
+      // A reference site can carry memory → make it expandable for the group.
+      if (hasMemory(this.memory, { kind: "site", key: node.siteUrl })) {
+        item.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+      }
+      return item;
+    }
     return isBookmark(node) ? this.bookmarkItem(node) : this.sourceItem(node);
   }
 
@@ -63,15 +85,21 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
       const referenceSources = this.scope(this.sources.list().filter((s) => s.role !== "managed"));
       return [...referenceSites, ...referenceSources];
     }
-    if (isBookmark(node) || isSiteConnection(node)) return [];
-    return this.bookmarks.listForSource(node.id);
+    if (isMemoryGroup(node)) return this.memory.listForScope(node.memoryScope);
+    if (isMemoryItem(node) || isBookmark(node)) return [];
+    if (isSiteConnection(node)) return memoryGroupChildren(this.memory, { kind: "site", key: node.siteUrl });
+    return [
+      ...this.bookmarks.listForSource(node.id),
+      ...memoryGroupChildren(this.memory, { kind: "source", key: node.id }),
+    ];
   }
 
   private sourceItem(source: ContextSource): vscode.TreeItem {
     const bookmarkCount = this.bookmarks.listForSource(source.id).length;
+    const expandable = bookmarkCount > 0 || hasMemory(this.memory, { kind: "source", key: source.id });
     const item = new vscode.TreeItem(
       source.displayName,
-      bookmarkCount > 0
+      expandable
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None,
     );
