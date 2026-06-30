@@ -266,6 +266,9 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
           mode: deps.proxyTerms.mode(),
         });
         if (rw) advice = advice ? `${advice}\n\n${rw}` : rw;
+        // Counter (categorical only): we surfaced a proxy-block hint this turn —
+        // either the repeated-failure heuristic or a named avoid-list word.
+        if (pb || rw) deps.telemetry.record("chat.proxySuspected", { hint: rw ? "reword" : "heuristic" });
       }
       stream.markdown(
         `⚠️ **Something went wrong:** ${safe.message}${advice ? `\n\n${advice}` : ""}`,
@@ -620,6 +623,10 @@ async function answerWithModel(
       // overflow handling and rethrow.
       deps.copilot.raiseIfEntitlementFailure(sendErr);
       const kind = classifySendFailure(redactError(sendErr).message);
+      // Anonymized resilience counter — event TYPE only (overflow / blocked /
+      // transient / other), never the message — so the field rate of each
+      // failure mode is measurable without any content leaving the machine.
+      deps.telemetry.record("chat.sendFailure", { kind });
       // Effective-context probing (#3): if the send overflowed this model's real
       // context, record a tighter ceiling so future turns budget down automatically.
       if (kind === "overflow") {
@@ -646,6 +653,7 @@ async function answerWithModel(
         } else {
           transientRetries++;
         }
+        deps.telemetry.record("chat.autoRetry", { mode: plan.tightenBudget ? "overflow" : "transient" });
         stream.progress(plan.note);
         round--; // neutralize the loop's round++ so we re-attempt round 0
         continue;

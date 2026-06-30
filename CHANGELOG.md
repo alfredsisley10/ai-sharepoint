@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.108.0 — 2026-06-30
+
+### Added — anonymized resilience counters (opt-in telemetry)
+- The durability features added in recent releases now emit **categorical-only** usage counters so the
+  field rate of each failure mode is measurable without any content leaving the machine:
+  `chat.sendFailure` (`kind` = overflow / blocked / transient / other), `chat.autoRetry`
+  (`mode` = overflow / transient), `chat.proxySuspected` (`hint` = reword / heuristic),
+  `context.probe` (`outcome` = completed / cancelled), and `network.check`
+  (`result` = clean / blocked, plus the worst diagnosis `kind` when blocked).
+- These follow the existing privacy model exactly: stored locally, gated by `diagnostics.usageCapture`,
+  and forwarded off-machine **only** if you opt into external telemetry — where the anonymizer drops any
+  non-categorical value (no prompts, hosts, or error messages can be sent). A guard test asserts every
+  emitted token survives anonymization, so a future rename can't silently create a reporting blind spot.
+
 ## 0.107.0 — 2026-06-30
 
 ### Added — proxy / TLS-inspection detection now covers sign-in, databases, and LDAP, plus a connectivity test

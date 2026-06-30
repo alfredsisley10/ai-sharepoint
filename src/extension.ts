@@ -6481,6 +6481,9 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         }
         const effective = modelLimits.effectiveLimit(key, advertised) ?? lastGood;
+        // Anonymized counter (categorical only): a probe ran and whether it
+        // finished or the user cancelled — never the prompt or the measured size.
+        telemetry.record("context.probe", { outcome: ptoken.isCancellationRequested ? "cancelled" : "completed" });
         void vscode.window.showInformationMessage(
           `Context probe for ${model.name}: advertised ${advertised?.toLocaleString() ?? "unknown"}, measured usable ≈ ${lastGood.toLocaleString()} tokens (budgeting cap ${effective.toLocaleString()}). Saved — chats now budget to this.`,
         );
@@ -6712,6 +6715,10 @@ export function activate(context: vscode.ExtensionContext): void {
         // the toast carries the headline and a way to open it.
         log.info(`\n${renderConnectivityReport(reports, nowIso())}`);
         const summary = summarizeConnectivity(reports);
+        // Counter (categorical only): clean vs. a detected proxy/filter — and,
+        // when blocked, the worst diagnosis kind — never a host or error body.
+        const worst = reports.find((r) => !r.reachable)?.diagnosis?.kind;
+        telemetry.record("network.check", { result: summary.ok ? "clean" : "blocked", ...(worst ? { kind: worst } : {}) });
         if (summary.ok) {
           void vscode.window.showInformationMessage(`Network check: ${summary.message}`);
         } else {
