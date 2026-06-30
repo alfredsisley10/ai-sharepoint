@@ -13,6 +13,7 @@ import {
   normalizeTitle,
   decodeEntities,
   sanitizeStorageBody,
+  confluenceWriteConfirmationText,
 } from "../src/context/adapters/confluenceWrite";
 import { ContextSource, ContextCredential } from "../src/context/types";
 
@@ -238,4 +239,25 @@ test("writes mirror the Python client: no-check token + a NON-browser User-Agent
     () => updateConfluencePage(SRC, CRED, { id: "5", title: "New", body: "<p/>" }, 30000),
   );
   assert.equal(header(upd.calls[1].init, "X-Atlassian-Token"), "no-check", "the PUT carries the header");
+});
+
+test("confluenceWriteConfirmationText always surfaces the instance URL + write scope before a change", () => {
+  // Space-scoped connector → the gate names the space key AND the URL.
+  const spaceScoped = { baseUrl: "https://wiki.example.com/wiki", writeScope: { kind: "space" as const, spaceKey: "ENG" } };
+  const m1 = confluenceWriteConfirmationText(spaceScoped, "Wiki", ["**Action:** archive page `123`"]);
+  assert.match(m1, /https:\/\/wiki\.example\.com\/wiki/);
+  assert.match(m1, /Space \(connector write scope\):\*\* `ENG`/);
+  assert.match(m1, /archive page `123`/);
+  assert.match(m1, /Verify the \*\*space\*\* and \*\*URL\*\*/);
+
+  // Instance-scoped connector (no space bound) → explicit "ENTIRE instance" warning + URL.
+  const instance = { baseUrl: "https://wiki.example.com/wiki", writeScope: { kind: "instance" as const } };
+  const m2 = confluenceWriteConfirmationText(instance, undefined, ["**Action:** update page `9`"]);
+  assert.match(m2, /ENTIRE instance/);
+  assert.match(m2, /https:\/\/wiki\.example\.com\/wiki/);
+
+  // Unresolved source → still a gate, naming the source ref.
+  const m3 = confluenceWriteConfirmationText(undefined, "Wiki", ["**Action:** remove page `9` from search"]);
+  assert.match(m3, /\*\*Source:\*\* Wiki/);
+  assert.match(m3, /remove page `9` from search/);
 });

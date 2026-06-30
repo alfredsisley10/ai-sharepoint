@@ -317,6 +317,11 @@ Jira, Cloud or Data Center (more source types are roadmap).
   account from org lockout policies. *Test Context Source* re-prompts for a fresh credential;
   *Reset Source Auth Lockout* (context menu) reopens a locked source — check with your admin
   first.
+- **Confluence governance writes are confirmation-gated**: a *managed* Confluence connector can
+  also make changes (create/update a page, archive, move, remove-from-search, labels). Every such
+  change shows an approval prompt naming the target **space** and the **instance URL** (plus the
+  action) so you verify *where* it lands before it happens. Reference (read-only) connectors have
+  no write path at all.
 
 ### Aliases & descriptions: name sources the way you talk about them
 

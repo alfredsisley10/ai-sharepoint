@@ -20,6 +20,38 @@ import { codeBlock, taskList, horizontalRule, tableOfContents } from "./confluen
 const enc = encodeURIComponent;
 
 /**
+ * Build the body of the confirmation a user must approve before ANY Confluence
+ * mutation (create/update, archive, move, remove-from-search, label change). It
+ * ALWAYS surfaces the instance **URL** and the connector's write **scope** (the
+ * space key when the connector is space-bound, the page when page-bound, or a
+ * clear "entire instance" warning otherwise) on top of the op-specific lines, so
+ * the user verifies WHERE the change lands before it happens. Pure (no vscode) so
+ * it's unit-tested; the tool layer wraps the returned text in a MarkdownString.
+ */
+export function confluenceWriteConfirmationText(
+  target: Pick<ContextSource, "baseUrl" | "writeScope"> | undefined,
+  ref: string | undefined,
+  opLines: string[],
+): string {
+  const head: string[] = [];
+  if (target) {
+    head.push(`**Confluence instance:** ${target.baseUrl}`);
+    const ws = target.writeScope;
+    if (ws?.kind === "space" && ws.spaceKey) head.push(`**Space (connector write scope):** \`${ws.spaceKey}\``);
+    else if (ws?.kind === "page") head.push(`**Write scope:** a single page${ws.url ? ` — ${ws.url}` : ""}`);
+    else head.push(`**Write scope:** the ENTIRE instance — not bounded to one space`);
+  } else {
+    head.push(`**Source:** ${ref ?? "the configured Confluence source"}`);
+  }
+  return [
+    ...head,
+    ...opLines,
+    "",
+    "Verify the **space** and **URL** above before approving — this writes to Confluence with your own API token.",
+  ].join("\n");
+}
+
+/**
  * Headers that make a Confluence WRITE behave like the Atlassian Python client
  * (atlassian-python-api on `requests`), which succeeds where VS Code's Electron
  * `fetch` fails its CSRF check:

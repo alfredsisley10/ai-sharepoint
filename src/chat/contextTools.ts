@@ -20,7 +20,7 @@ import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { sourceChatLabel, resolveSourceRef } from "../context/sourceRef";
 import { EXPORT_MAX_ROWS, EXPORT_TIMEOUT_MS, EXPORT_DIR } from "../context/exportData";
-import { markdownToStorage } from "../context/adapters/confluenceWrite";
+import { markdownToStorage, confluenceWriteConfirmationText } from "../context/adapters/confluenceWrite";
 import { catalogByCategory, CapabilityReport, RenderedValidation } from "../context/adapters/confluenceMacros";
 import { OwnerResolution } from "../context/adapters/confluenceOwnership";
 import { ManageabilityReport } from "../context/adapters/confluenceEntitlements";
@@ -232,6 +232,12 @@ export function registerContextTools(
     return source;
   };
 
+  /** The write-gate confirmation body for a Confluence mutation. Soft-resolves
+   *  the source (in-memory, no network) so the approval card always shows the
+   *  instance URL + the connector's space/scope before the change. */
+  const confluenceWriteConfirmation = (ref: string | undefined, opLines: string[]): vscode.MarkdownString =>
+    new vscode.MarkdownString(confluenceWriteConfirmationText(resolveSourceRef(scopedSources(), ref), ref, opLines));
+
   /** Catalog on demand: cached on disk; first touch loads it live (stored
    *  credential only — a tool call never prompts). */
   const schemaFor = async (source: ContextSource): Promise<SourceSchema> => {
@@ -281,16 +287,12 @@ export function registerContextTools(
           invocationMessage: `${verb} a Confluence page`,
           confirmationMessages: {
             title: `${verb} Confluence page “${i.title ?? "(untitled)"}”?`,
-            message: new vscode.MarkdownString(
-              [
-                `**Source:** ${i.source ?? "_the configured Confluence source_"}`,
-                i.action === "update"
-                  ? `**Page id:** ${i.pageId ?? "_?_"}`
-                  : `**Space:** ${i.spaceKey ?? "_?_"}${i.parentId ? ` · under parent ${i.parentId}` : ""}`,
-                "",
-                "Writes to **Confluence** with your own API token — a real change. Confluence keeps version history (updates bump the version), so it's reversible there.",
-              ].join("\n"),
-            ),
+            message: confluenceWriteConfirmation(i.source, [
+              i.action === "update"
+                ? `**Action:** update page \`${i.pageId ?? "?"}\` — “${i.title ?? "(untitled)"}”`
+                : `**Action:** create page in space \`${i.spaceKey ?? "?"}\`${i.parentId ? ` under parent ${i.parentId}` : ""} — “${i.title ?? "(untitled)"}”`,
+              "Confluence keeps version history (updates bump the version), so it's reversible there.",
+            ]),
           },
         };
       },
@@ -391,13 +393,11 @@ export function registerContextTools(
             invocationMessage: `${verb} Confluence page label(s)`,
             confirmationMessages: {
               title: `${verb} label(s) on page ${i.pageId ?? "?"}?`,
-              message: new vscode.MarkdownString(
-                [
-                  `**Labels:** ${(i.labels ?? []).map((l) => `\`${l}\``).join(", ") || "_?_"}`,
-                  "",
-                  "Changes the page's labels in Confluence (metadata — reversible). Labels are lowercased and spaces become hyphens.",
-                ].join("\n"),
-              ),
+              message: confluenceWriteConfirmation(i.source, [
+                `**Action:** ${verb.toLowerCase()} label(s) on page \`${i.pageId ?? "?"}\``,
+                `**Labels:** ${(i.labels ?? []).map((l) => `\`${l}\``).join(", ") || "?"}`,
+                "Labels are page metadata — reversible. Labels are lowercased and spaces become hyphens.",
+              ]),
             },
           };
         },
@@ -437,9 +437,10 @@ export function registerContextTools(
           invocationMessage: "Archiving a Confluence page",
           confirmationMessages: {
             title: `Archive Confluence page ${options.input.pageId ?? "?"}?`,
-            message: new vscode.MarkdownString(
-              "Moves the page under the space's **Archive** root (created if absent). Reversible — the page isn't deleted, just relocated.",
-            ),
+            message: confluenceWriteConfirmation(options.input.source, [
+              `**Action:** archive page \`${options.input.pageId ?? "?"}\``,
+              "Moves it under the space's **Archive** root (created if absent). Reversible — relocated, not deleted.",
+            ]),
           },
         };
       },
@@ -475,11 +476,12 @@ export function registerContextTools(
             invocationMessage: "Moving a Confluence page",
             confirmationMessages: {
               title: `Move page ${i.pageId ?? "?"} ${what}?`,
-              message: new vscode.MarkdownString(
+              message: confluenceWriteConfirmation(i.source, [
+                `**Action:** move page \`${i.pageId ?? "?"}\` ${what}`,
                 position === "append"
                   ? "Re-parents the page (makes it a child of the new parent). Stays within the managed space; reversible by moving it back."
                   : "Reorders the page relative to a sibling under the same parent. Reversible.",
-              ),
+              ]),
             },
           };
         },
@@ -512,9 +514,10 @@ export function registerContextTools(
           invocationMessage: "Removing a Confluence page from search",
           confirmationMessages: {
             title: `Remove page ${options.input.pageId ?? "?"} from search?`,
-            message: new vscode.MarkdownString(
-              "**Blanks the page's current content** so it drops out of search and navigation. The page is NOT deleted — Confluence keeps every prior version, so the original content is retained for compliance and is restorable. Usually done AFTER archiving.",
-            ),
+            message: confluenceWriteConfirmation(options.input.source, [
+              `**Action:** remove page \`${options.input.pageId ?? "?"}\` from search`,
+              "**Blanks the page's current content** so it drops out of search and navigation. NOT deleted — Confluence keeps every prior version (restorable). Usually done AFTER archiving.",
+            ]),
           },
         };
       },

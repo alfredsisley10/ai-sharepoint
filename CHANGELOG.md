@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.101.0 — 2026-06-30
+
+### Changed — Confluence writes now confirm the space and instance URL before changing anything
+- Every Confluence **mutating** action — create/update a page, archive, move/re-parent, remove
+  from search, and add/remove labels — now shows the target **Confluence instance URL** and the
+  connector's **write scope** (the **space key** when the connector is space-bound, the page when
+  page-bound, or an explicit "ENTIRE instance" warning otherwise) in its approval prompt, on top
+  of the specific action. You verify *where* the change lands — which space and which site — before
+  approving. Reads are unaffected; only writes are gated.
+
 ## 0.100.0 — 2026-06-30
 
 ### Added — file reference sources: more formats, all sheets, and they're now visible
