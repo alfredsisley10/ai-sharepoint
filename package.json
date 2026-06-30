@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.90.0",
+  "version": "0.91.0",
   "release": {
     "channel": "standard"
   },
@@ -1933,6 +1933,36 @@
             "target",
             "title",
             "note"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_read_outlook",
+        "displayName": "Read Outlook (mail & calendar)",
+        "toolReferenceName": "spReadOutlook",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(mail)",
+        "tags": [
+          "sharepoint",
+          "outlook",
+          "context"
+        ],
+        "modelDescription": "Read the user's Outlook mail or calendar (READ-ONLY) for context, using the read-only Outlook workspace they configured. 'kind'='mail' returns recent messages within the workspace's access scope (just the workspace folder, or the whole mailbox — the user chose); 'kind'='calendar' returns events for the next 'days' days (default 7). This never sends, moves, or deletes anything. If no workspace is configured the tool will say so — then ask the user to run 'Outlook: Configure Read-Only Workspace'; do NOT guess or fabricate mailbox/calendar contents. Summarize results for the user; do not expose anyone's private mail beyond what's needed to answer.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["mail", "calendar"],
+              "description": "'mail' for recent messages in scope, 'calendar' for upcoming events."
+            },
+            "days": {
+              "type": "number",
+              "description": "For 'calendar': how many days ahead to read (1–31, default 7). Ignored for 'mail'."
+            }
+          },
+          "required": [
+            "kind"
           ]
         }
       },

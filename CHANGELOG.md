@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.91.0 — 2026-06-30
+
+### Added — @sharepoint can read Outlook itself (read-only tool)
+- New language-model tool **`aisharepoint_read_outlook`**: the assistant can pull mail/calendar
+  context into a chat on its own — `kind: "mail"` reads recent messages within the workspace's
+  access scope, `kind: "calendar"` reads the next N days (1–31, default 7). Reference it as
+  `#spReadOutlook`.
+- **Read-only and bounded**: never sends, moves, or deletes; reads only a workspace the user has
+  configured, honoring the folder-only vs whole-mailbox scope. With no workspace set up it tells the
+  assistant to ask the user to configure one rather than guessing mailbox contents. Release-expiry
+  gated like every other tool. Completes Phase 5.
+
 ## 0.90.0 — 2026-06-30
 
 ### Added — read-only Outlook workspace (mail + calendar)

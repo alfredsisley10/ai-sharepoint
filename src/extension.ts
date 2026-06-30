@@ -165,6 +165,7 @@ import * as nodeCrypto from "node:crypto";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
 import { OutlookWorkspaceStore } from "./comms/outlookWorkspaceStore";
+import { registerOutlookTools } from "./chat/outlookTools";
 import {
   OutlookReadScope,
   OutlookWorkspace,
@@ -667,6 +668,17 @@ export function activate(context: vscode.ExtensionContext): void {
     ...tryRegister("lessons tools", () => registerLessonsTools(lessons, telemetry, errors)),
     ...tryRegister("memory tools", () =>
       registerMemoryTools(memory, contextSources, sites, telemetry, errors, () => crypto.randomUUID(), nowIso),
+    ),
+    ...tryRegister("outlook tools", () =>
+      registerOutlookTools(
+        outlookWorkspaces,
+        sites,
+        (conn) => new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false),
+        () => context.globalState.get<string>("aiSharePoint.commsConnection"),
+        telemetry,
+        errors,
+        nowIso,
+      ),
     ),
     ...tryRegister("proxy tools", () => registerProxyTools(blockedTerms, telemetry, errors)),
     blockedTerms,
