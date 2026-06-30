@@ -171,7 +171,7 @@ import { registerOutlookTools } from "./chat/outlookTools";
 import { MailFormat, ComposedAttachment, contentTypeForName, attachmentIssue } from "./comms/mailCompose";
 import { FileSourcesStore } from "./context/files/fileSourcesStore";
 import { FileSource, findByLocation } from "./context/files/fileSources";
-import { detectFileKind, readFileContent, renderFileContent, describeKind, summarizeFileContent, FileContent } from "./context/files/fileContent";
+import { detectFileKind, readFileContent, renderFileContent, describeKind, summarizeFileContent, legacyFileHint, FileContent } from "./context/files/fileContent";
 import { registerFileTools } from "./chat/fileTools";
 import {
   OutlookReadScope,
@@ -5044,6 +5044,12 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!picked?.[0]) return;
     const fsPath = picked[0].fsPath;
     const name = fsPath.split(/[\\/]/).pop() || fsPath;
+    // Known dead-end types (legacy .doc, PowerPoint, …) get tailored guidance.
+    const legacyHint = legacyFileHint(name);
+    if (legacyHint) {
+      void vscode.window.showWarningMessage(legacyHint);
+      return;
+    }
     // Unknown extension → try as text; the binary sniff inside readFileContent
     // rejects true binaries with a clear message.
     const kind = detectFileKind(name) === "unknown" ? "text" : detectFileKind(name);
@@ -5494,6 +5500,11 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     } catch (e) {
       void vscode.window.showErrorMessage(`Could not access the shared file: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    const legacyHint = legacyFileHint(ref.name);
+    if (legacyHint) {
+      void vscode.window.showWarningMessage(legacyHint);
       return;
     }
     // Unknown extension (e.g. from a pasted link) → try as text; the binary
@@ -6359,13 +6370,22 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const query = `@sharepoint ${last.prompt}`;
-    try {
-      await vscode.commands.executeCommand("workbench.action.chat.open", { query });
-    } catch {
-      // Older VS Code or a different chat surface — fall back to the clipboard.
-      await vscode.env.clipboard.writeText(query);
-      void vscode.window.showInformationMessage("Copied your last request to the clipboard — paste it into the @sharepoint chat to retry.");
+    // `workbench.action.chat.open` accepts different argument shapes across VS
+    // Code versions — try the object form, then the bare-string form, before
+    // falling back to the clipboard. Each is guarded so an unsupported shape
+    // (which rejects) just moves to the next.
+    for (const arg of [{ query } as unknown, query]) {
+      try {
+        await vscode.commands.executeCommand("workbench.action.chat.open", arg);
+        return;
+      } catch {
+        /* try the next shape */
+      }
     }
+    await vscode.env.clipboard.writeText(query);
+    void vscode.window.showInformationMessage(
+      "Copied your last request to the clipboard — paste it into Copilot Chat (@sharepoint) to retry.",
+    );
   });
 
   // Actively measure a model's REAL input-context limit. Copilot can deliver less

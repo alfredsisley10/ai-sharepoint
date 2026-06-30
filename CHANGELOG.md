@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.106.0 — 2026-06-30
+
+### Hardened — file parsing, request restart, and the test gate
+- **Legacy/unsupported files now get tailored guidance instead of a generic rejection.** Trying to add
+  a `.doc`, `.ppt`/`.pptx`, `.rtf`, `.key`, `.pages`, or `.numbers` file now names the format and says
+  exactly what to do (e.g. “open it in Word and *Save As* .docx, then re-add”), rather than failing as a
+  binary file with no next step.
+- **The `.xls` reader fails cleanly.** Corrupt or unsupported legacy workbooks now surface a clear
+  “open it in Excel and *Save As* .xlsx” message instead of leaking a low-level parser error; already
+  actionable messages (no Workbook stream, not a valid .xls) are preserved as-is.
+- **“Restart last request” is more robust across VS Code versions.** The command now tries multiple
+  `workbench.action.chat.open` argument shapes and falls back to copying the request to the clipboard
+  with instructions, so reopening Copilot Chat prefilled works on more builds.
+- **The test gate no longer reports false greens from stale artifacts.** `npm test`/`npm run coverage`
+  now wipe `out-test/` before recompiling, so a deleted test can never keep running from an orphaned
+  compiled `.test.js`.
+
 ## 0.105.0 — 2026-06-30
 
 ### Added — optional first-use context-limit calibration

@@ -37,6 +37,22 @@ export function detectFileKind(fileName: string): FileKind {
   return "unknown";
 }
 
+/** Tailored guidance for known-unsupported file types, so the add flow can say
+ *  exactly what to do instead of a generic "binary file" rejection. Returns
+ *  undefined for anything that isn't a recognized dead-end. */
+const LEGACY_HINTS: Record<string, string> = {
+  doc: "Legacy Word documents (.doc) aren't supported — open it in Word and “Save As” .docx, then re-add (or paste the text as a .txt).",
+  ppt: "PowerPoint files aren't supported for text context — export the relevant slides as a PDF (or copy the text), then re-add.",
+  pptx: "PowerPoint files aren't supported for text context — export the relevant slides as a PDF (or copy the text), then re-add.",
+  rtf: "Rich Text (.rtf) isn't supported — “Save As” .docx or plain .txt, then re-add.",
+  key: "Keynote files aren't supported — export as PDF, then re-add.",
+  pages: "Pages files aren't supported — export as .docx or PDF, then re-add.",
+  numbers: "Numbers files aren't supported — export as .xlsx or CSV, then re-add.",
+};
+export function legacyFileHint(fileName: string): string | undefined {
+  return LEGACY_HINTS[fileName.toLowerCase().split(".").pop() ?? ""];
+}
+
 /** A short human label for a kind (tree description / pickers). */
 export function describeKind(kind: FileKind): string {
   switch (kind) {

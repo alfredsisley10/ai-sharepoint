@@ -423,10 +423,21 @@ function readChars(data: Buffer, grbitPos: number, cch: number): string {
   return s;
 }
 
-/** Read a legacy .xls buffer into every worksheet's rows of strings. */
+/** Read a legacy .xls buffer into every worksheet's rows of strings. Converts any
+ *  low-level corruption (a valid signature wrapping a malformed structure) into a
+ *  clean, actionable message instead of a raw RangeError. */
 export function readXls(buf: Buffer): Sheet[] {
-  const cfb = parseCfb(buf);
-  const wb = cfb.readByName("Workbook") ?? cfb.readByName("Book");
-  if (!wb) throw new Error("No Workbook stream found in the .xls — it may be corrupt. If it's very old, re-save it as .xlsx.");
-  return parseWorkbookStream(wb);
+  try {
+    const cfb = parseCfb(buf);
+    const wb = cfb.readByName("Workbook") ?? cfb.readByName("Book");
+    if (!wb) {
+      throw new Error("No Workbook stream found in the .xls — it may be corrupt. If it's very old, re-save it as .xlsx.");
+    }
+    return parseWorkbookStream(wb);
+  } catch (e) {
+    // Preserve the already-actionable messages; wrap anything lower-level.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/valid \.xls|Workbook stream|re-save/i.test(msg)) throw e;
+    throw new Error("Could not read this .xls — the file appears corrupt or uses an unsupported variant. Open it in Excel and “Save As” .xlsx, then re-add.");
+  }
 }

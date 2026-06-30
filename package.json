@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.105.0",
+  "version": "0.106.0",
   "release": {
     "channel": "standard"
   },
@@ -3075,8 +3075,8 @@
     "lint": "eslint \"src/**/*.ts\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "tsc -p tsconfig.test.json && node scripts/run-tests.js",
-    "coverage": "tsc -p tsconfig.test.json && node scripts/run-tests.js --coverage",
+    "test": "node scripts/clean-out-test.js && tsc -p tsconfig.test.json && node scripts/run-tests.js",
+    "coverage": "node scripts/clean-out-test.js && tsc -p tsconfig.test.json && node scripts/run-tests.js --coverage",
     "test:integration": "node test-integration/runTest.js",
     "check:native": "node scripts/check-native-deps.js",
     "check:vsix": "node esbuild.js && node scripts/check-vsix.js",

@@ -10,6 +10,7 @@ import {
   renderFileContent,
   summarizeFileContent,
   describeKind,
+  legacyFileHint,
 } from "../src/context/files/fileContent";
 
 const u16 = (n: number) => { const b = Buffer.alloc(2); b.writeUInt16LE(n & 0xffff); return b; };
@@ -218,4 +219,38 @@ test("summarizeFileContent + describeKind give friendly summaries", () => {
   );
   assert.equal(describeKind("xls"), "Excel (legacy)");
   assert.equal(describeKind("docx"), "Word");
+});
+
+// --- robustness / graceful failure ---------------------------------------
+
+test("readXls fails cleanly on non-.xls and on a CFB with no Workbook stream", () => {
+  assert.throws(() => readXls(Buffer.from("this is not an OLE2 file at all")), /valid \.xls/i);
+  const wb = Buffer.concat([biffRec(0x0809, Buffer.concat([u16(0x0600), u16(0x0005)])), biffRec(0x000a, Buffer.alloc(0))]);
+  assert.throws(() => readXls(makeCfb("SummaryInformation", wb)), /No Workbook stream/i);
+});
+
+test("extractContentText reads hex strings and TJ arrays with kerning", () => {
+  assert.equal(extractContentText("BT <48656C6C6F> Tj ET"), "Hello"); // hex "Hello"
+  assert.equal(extractContentText("BT [(Wor)-15(ld)] TJ ET"), "World");
+});
+
+test("extractPdfText concatenates multiple content streams in order", () => {
+  const pdf = Buffer.from(
+    "%PDF-1.4\n<< /Length 18 >>\nstream\nBT (First) Tj ET\nendstream\n<< /Length 19 >>\nstream\nBT (Second) Tj ET\nendstream\n%%EOF",
+    "latin1",
+  );
+  assert.equal(extractPdfText(pdf), "First\nSecond");
+});
+
+test("extractPdfText returns empty (not a crash) for non-PDF / textless input", () => {
+  assert.equal(extractPdfText(Buffer.from("not a pdf at all")), "");
+  assert.equal(extractPdfText(Buffer.alloc(0)), "");
+});
+
+test("legacyFileHint guides known dead-end types; detectFileKind leaves them unknown", () => {
+  assert.match(legacyFileHint("Report.doc") ?? "", /Save As.*\.docx/i);
+  assert.match(legacyFileHint("deck.pptx") ?? "", /PDF/i);
+  assert.equal(legacyFileHint("data.csv"), undefined);
+  assert.equal(detectFileKind("Report.doc"), "unknown");
+  assert.equal(detectFileKind("deck.pptx"), "unknown");
 });
