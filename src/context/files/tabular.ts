@@ -1,11 +1,12 @@
 import { parseCsv } from "./csv";
-import { readXlsx } from "./xlsx";
+import { readXlsxSheets } from "./xlsx";
+import { Sheet } from "./sheet";
 
 /**
- * Tabular file context: detect a local file's kind, parse it to rows, and render
- * a bounded Markdown table for the assistant. CSV/TSV and .xlsx are supported;
- * everything tabular collapses to `string[][]`. Pure except `readTabularBuffer`,
- * which dispatches on kind.
+ * Tabular file context: detect a local file's kind, parse it to named sheets, and
+ * render bounded Markdown tables for the assistant. CSV/TSV (one sheet) and .xlsx
+ * (every sheet) are supported here; .xls is handled by ./xls. Pure except the
+ * dispatch in `readTabularBuffer`.
  */
 
 export type TabularKind = "csv" | "tsv" | "xlsx" | "unknown";
@@ -26,17 +27,16 @@ function escapeCell(s: string): string {
   return s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ").slice(0, CELL_MAX);
 }
 
-/** Render rows as a Markdown table (first row = header), bounded for size. */
-export function renderTable(label: string, rows: string[][]): string {
-  if (rows.length === 0) return `# ${label}\n\n_Empty file._`;
+/** Render rows as a Markdown table (first row = header), bounded for size. No
+ *  heading — the caller adds the file/sheet title. */
+export function renderRows(rows: string[][]): string {
+  if (rows.length === 0) return "_Empty._";
   const cols = Math.min(TABLE_MAX_COLS, Math.max(...rows.map((r) => r.length)));
   const shown = rows.slice(0, TABLE_MAX_ROWS);
   const pad = (r: string[]) => Array.from({ length: cols }, (_, i) => escapeCell(r[i] ?? ""));
   const header = pad(shown[0]);
   const body = shown.slice(1).map(pad);
   const lines = [
-    `# ${label}`,
-    "",
     `_${rows.length} row(s) × ${Math.max(...rows.map((r) => r.length))} column(s). Read-only context._`,
     "",
     `| ${header.join(" | ")} |`,
@@ -52,11 +52,17 @@ export function renderTable(label: string, rows: string[][]): string {
   return lines.join("\n");
 }
 
-/** Parse a file's bytes into rows by kind. `xlsx` needs the raw Buffer; the
- *  text kinds accept the decoded string (callers pass utf8). */
-export function readTabularBuffer(kind: TabularKind, buf: Buffer): string[][] {
-  if (kind === "xlsx") return readXlsx(buf);
-  const text = buf.toString("utf8");
-  if (kind === "tsv") return parseCsv(text); // parseCsv sniffs tab too
-  return parseCsv(text);
+/** Render a single-sheet table with a top-level heading. */
+export function renderTable(label: string, rows: string[][]): string {
+  if (rows.length === 0) return `# ${label}\n\n_Empty file._`;
+  return `# ${label}\n\n${renderRows(rows)}`;
+}
+
+/** Parse a file's bytes into named sheets by kind. `xlsx` needs the raw Buffer;
+ *  the text kinds accept the decoded string (callers pass utf8). CSV/TSV are a
+ *  single unnamed sheet; .xlsx returns every worksheet. */
+export function readTabularBuffer(kind: TabularKind, buf: Buffer): Sheet[] {
+  if (kind === "xlsx") return readXlsxSheets(buf);
+  const rows = parseCsv(buf.toString("utf8")); // parseCsv sniffs tab/semicolon too
+  return [{ name: "", rows }];
 }

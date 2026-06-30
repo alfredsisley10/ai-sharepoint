@@ -1,21 +1,21 @@
 import * as vscode from "vscode";
 import { FileSourcesStore } from "../context/files/fileSourcesStore";
 import { FileSource } from "../context/files/fileSources";
-import { renderTable } from "../context/files/tabular";
+import { FileContent, renderFileContent } from "../context/files/fileContent";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 
 /**
- * Read-only file context tool: lets @sharepoint read a registered spreadsheet/CSV
- * (local now; OneDrive/shared SharePoint later) into the chat as a bounded table.
- * Reads only files the user has explicitly registered — never an arbitrary path —
- * and is release-expiry gated.
+ * Read-only file context tool: lets @sharepoint read a registered file —
+ * spreadsheet (CSV/TSV, .xlsx, .xls; all worksheets), Word (.docx), PDF, or plain
+ * text — into the chat as bounded Markdown. Reads only files the user has
+ * explicitly registered — never an arbitrary path — and is release-expiry gated.
  */
 export function registerFileTools(
   files: FileSourcesStore,
-  read: (source: FileSource) => Promise<string[][]>,
+  read: (source: FileSource) => Promise<FileContent>,
   telemetry: TelemetryService,
   errors: ErrorReportStore,
 ): vscode.Disposable[] {
@@ -44,9 +44,9 @@ export function registerFileTools(
           if (!source) {
             return text(`Which file? Registered: ${all.map((f) => `"${f.label}"`).join(", ")}. Pass one as 'name'.`);
           }
-          const rows = await read(source);
-          telemetry.record("file.read", { kind: source.tabular, rows: rows.length });
-          return text(renderTable(source.label, rows));
+          const content = await read(source);
+          telemetry.record("file.read", { kind: source.kind });
+          return text(renderFileContent(source.label, content));
         } catch (err) {
           errors.capture("tool:aisharepoint_read_file", err);
           return text(`Could not read the file: ${redactError(err).message}`);

@@ -655,6 +655,26 @@ Dashboards, alert-rule state, annotations, and **live panel data** (ADR-0033/003
   *Alert rules — current state* and *Recent annotations* candidates. Datasource listings may
   need admin permission — the error says so; everything else reads with Viewer.
 
+### Files (Excel, CSV, Word, PDF, text) — local or OneDrive/SharePoint
+
+Register individual files as read-only context — no server or connector needed:
+
+- **Add** from the **Reference Sources** panel's **`…` overflow menu** (top-right of the panel):
+  - **Add Local File for Context** — pick a file from disk. Supported: **Excel** (`.xlsx` and
+    legacy `.xls`), **CSV/TSV**, **Word** (`.docx`), **PDF**, and **plain text** (`.txt`, `.md`,
+    `.log`, `.json`, `.xml`, …). The picker also has an *All files* filter so you can add any
+    text-based file; binary files you can't read as text are rejected with a clear message.
+  - **Add OneDrive/SharePoint File for Context** — pick from files shared with you, or paste a
+    sharing link. Reuses your Microsoft 365 sign-in (connect a SharePoint site first).
+- **See what's registered:** every added file now appears **as an item in the Reference Sources
+  tree** (with its kind and location), alongside your connectors and sites. Click a file to open
+  a read-only preview; use the inline **Read** / **Remove** actions on the item (removing only
+  unregisters it — the file itself is never touched).
+- **In chat:** `@sharepoint` reads a registered file with the **`#spReadFile`** tool. Spreadsheets
+  render as Markdown tables — **every worksheet** of a workbook, each under its sheet name (large
+  sheets are row/column-bounded); Word/PDF/text render as bounded text. PDF extraction is
+  best-effort — a **scanned/image-only PDF has no text** and will say so.
+
 ### Export search results to a workspace file (ADR-0031)
 
 Chat results are capped on purpose — when you want the **dataset itself**, export it instead

@@ -1,11 +1,11 @@
-import { TabularKind } from "./tabular";
+import type { FileKind } from "./fileContent";
 
 /**
- * Registered file context sources: local spreadsheets/CSVs (and, later, OneDrive
- * / shared SharePoint files) the assistant may read for context. We store only a
- * pointer (path or Graph ref) + label + detected kind — never the file content.
- * Pure types + list ops here; the vscode persistence wrapper is in
- * fileSourcesStore.ts.
+ * Registered file context sources: local or OneDrive/shared SharePoint files the
+ * assistant may read for context — spreadsheets (CSV/TSV, .xlsx, .xls), Word
+ * (.docx), PDF, and plain text. We store only a pointer (path or Graph ref) +
+ * label + detected kind — never the file content. Pure types + list ops here;
+ * the vscode persistence wrapper is in fileSourcesStore.ts.
  */
 
 export type FileLocation =
@@ -16,9 +16,21 @@ export interface FileSource {
   id: string;
   label: string;
   location: FileLocation;
-  /** Tabular kind detected from the name/extension. */
-  tabular: TabularKind;
+  /** File kind detected from the name/extension (csv/tsv/xlsx/xls/docx/pdf/text). */
+  kind: FileKind;
   addedAt: string;
+}
+
+/** Legacy shape: pre-0.100 builds stored the field as `tabular`. */
+interface LegacyFileSource {
+  kind?: FileKind;
+  tabular?: FileKind;
+}
+
+/** Normalize a possibly-legacy persisted record so callers always see `kind`. */
+export function normalizeFileSource(raw: FileSource): FileSource {
+  const legacy = raw as FileSource & LegacyFileSource;
+  return { ...raw, kind: legacy.kind ?? legacy.tabular ?? "unknown" };
 }
 
 export function withFile(items: FileSource[], item: FileSource): FileSource[] {

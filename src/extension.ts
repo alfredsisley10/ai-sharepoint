@@ -160,7 +160,7 @@ import { registerOutlookTools } from "./chat/outlookTools";
 import { MailFormat, ComposedAttachment, contentTypeForName, attachmentIssue } from "./comms/mailCompose";
 import { FileSourcesStore } from "./context/files/fileSourcesStore";
 import { FileSource, findByLocation } from "./context/files/fileSources";
-import { detectTabularKind, readTabularBuffer, renderTable } from "./context/files/tabular";
+import { detectFileKind, readFileContent, renderFileContent, describeKind, summarizeFileContent, FileContent } from "./context/files/fileContent";
 import { registerFileTools } from "./chat/fileTools";
 import {
   OutlookReadScope,
@@ -405,10 +405,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Read a registered file source into rows. Local files read from disk; remote
   // (OneDrive / shared SharePoint) items download via Graph using the M365
   // sign-in the file was registered under.
-  const readFileSource = async (source: FileSource): Promise<string[][]> => {
+  const readFileSource = async (source: FileSource): Promise<FileContent> => {
     if (source.location.kind === "local") {
       const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(source.location.path));
-      return readTabularBuffer(source.tabular, Buffer.from(bytes));
+      return readFileContent(source.kind, Buffer.from(bytes));
     }
     const loc = source.location;
     const conn = sites.list().find((c) => c.cacheHandle === loc.connectionHandle) ?? sites.list()[0];
@@ -417,7 +417,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     const client = new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false);
     const buf = await client.downloadDriveItem(loc.driveId, loc.itemId);
-    return readTabularBuffer(source.tabular, buf);
+    return readFileContent(source.kind, buf);
   };
   const syncConfigs = new SyncConfigStore(context.globalState);
 
@@ -518,6 +518,7 @@ export function activate(context: vscode.ExtensionContext): void {
     schemas,
     catalogs,
     memory,
+    fileSources,
     nowIso,
     (all) => projects.scope(all),
   );
@@ -5016,17 +5017,21 @@ export function activate(context: vscode.ExtensionContext): void {
     const picked = await vscode.window.showOpenDialog({
       canSelectMany: false,
       openLabel: "Add for Context",
-      filters: { "Spreadsheets & CSV": ["csv", "tsv", "tab", "xlsx"] },
-      title: "Add a local file for read-only context",
+      filters: {
+        "All supported": ["csv", "tsv", "tab", "xlsx", "xls", "docx", "pdf", "txt", "md", "log", "json", "xml", "yaml", "yml", "html", "htm", "sql", "ini", "cfg", "conf"],
+        Spreadsheets: ["xlsx", "xls", "csv", "tsv", "tab"],
+        Documents: ["docx", "pdf"],
+        Text: ["txt", "md", "log", "json", "xml", "yaml", "yml", "html", "htm", "sql"],
+        "All files": ["*"],
+      },
+      title: "Add a local file for read-only context (Excel, CSV, Word, PDF, text)",
     });
     if (!picked?.[0]) return;
     const fsPath = picked[0].fsPath;
     const name = fsPath.split(/[\\/]/).pop() || fsPath;
-    const tabular = detectTabularKind(name);
-    if (tabular === "unknown") {
-      void vscode.window.showWarningMessage("Only .csv, .tsv, and .xlsx files are supported for tabular context.");
-      return;
-    }
+    // Unknown extension → try as text; the binary sniff inside readFileContent
+    // rejects true binaries with a clear message.
+    const kind = detectFileKind(name) === "unknown" ? "text" : detectFileKind(name);
     const dup = findByLocation(fileSources.list(), { kind: "local", path: fsPath });
     if (dup) {
       void vscode.window.showInformationMessage(`Already registered as “${dup.label}”.`);
@@ -5039,13 +5044,13 @@ export function activate(context: vscode.ExtensionContext): void {
       validateInput: (v) => (v.trim() ? undefined : "Required."),
     });
     if (!label) return;
-    // Validate it parses before registering, so a bad file fails loudly now.
+    // Validate it parses before registering, so a bad/binary file fails loudly now.
     try {
       const bytes = await vscode.workspace.fs.readFile(picked[0]);
-      const rows = readTabularBuffer(tabular, Buffer.from(bytes));
-      await fileSources.add({ id: crypto.randomUUID(), label: label.trim(), location: { kind: "local", path: fsPath }, tabular, addedAt: nowIso() });
-      telemetry.record("file.add", { kind: tabular });
-      void vscode.window.showInformationMessage(`Added “${label.trim()}” (${rows.length} row(s)). @sharepoint can read it with #spReadFile.`);
+      const content = readFileContent(kind, Buffer.from(bytes));
+      await fileSources.add({ id: crypto.randomUUID(), label: label.trim(), location: { kind: "local", path: fsPath }, kind, addedAt: nowIso() });
+      telemetry.record("file.add", { kind });
+      void vscode.window.showInformationMessage(`Added “${label.trim()}” (${summarizeFileContent(content)}). @sharepoint can read it with #spReadFile, and it's listed under Reference Sources.`);
     } catch (e) {
       void vscode.window.showErrorMessage(`Could not read that file: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -5061,35 +5066,39 @@ export function activate(context: vscode.ExtensionContext): void {
     let source = arg && typeof arg === "object" && typeof (arg as FileSource).id === "string" ? (arg as FileSource) : undefined;
     if (!source) {
       const pick = await vscode.window.showQuickPick(
-        all.map((f) => ({ label: f.label, description: f.tabular, detail: f.location.kind === "local" ? f.location.path : f.location.webUrl, f })),
+        all.map((f) => ({ label: f.label, description: describeKind(f.kind), detail: f.location.kind === "local" ? f.location.path : f.location.webUrl, f })),
         { title: "Read which file?", ignoreFocusOut: true, matchOnDetail: true },
       );
       if (!pick) return;
       source = pick.f;
     }
     try {
-      const rows = await vscode.window.withProgress(
+      const content = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: `Reading “${source.label}”…` },
         () => readFileSource(source!),
       );
-      const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderTable(source.label, rows) });
+      const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderFileContent(source.label, content) });
       await vscode.window.showTextDocument(doc, { preview: true });
-      telemetry.record("file.read", { kind: source.tabular, rows: rows.length });
+      telemetry.record("file.read", { kind: source.kind });
     } catch (e) {
       void vscode.window.showErrorMessage(`Could not read “${source.label}”: ${e instanceof Error ? e.message : String(e)}`);
     }
   });
 
-  register("aiSharePoint.removeFileSource", async () => {
+  register("aiSharePoint.removeFileSource", async (arg?: unknown) => {
     const all = fileSources.list();
     if (all.length === 0) return;
-    const pick = await vscode.window.showQuickPick(
-      all.map((f) => ({ label: f.label, description: f.location.kind === "local" ? f.location.path : f.location.webUrl, id: f.id })),
-      { title: "Remove which file from context? (the file itself is not deleted)", ignoreFocusOut: true },
-    );
-    if (!pick) return;
-    await fileSources.remove(pick.id);
-    void vscode.window.showInformationMessage(`Removed “${pick.label}” from context.`);
+    // Invoked from the tree item's inline trash → the FileSource is passed in.
+    const direct = arg && typeof arg === "object" && typeof (arg as FileSource).id === "string" ? (arg as FileSource) : undefined;
+    const target = direct
+      ? { label: direct.label, id: direct.id }
+      : await vscode.window.showQuickPick(
+          all.map((f) => ({ label: f.label, description: f.location.kind === "local" ? f.location.path : f.location.webUrl, id: f.id })),
+          { title: "Remove which file from context? (the file itself is not deleted)", ignoreFocusOut: true },
+        );
+    if (!target) return;
+    await fileSources.remove(target.id);
+    void vscode.window.showInformationMessage(`Removed “${target.label}” from context.`);
   });
 
   register("aiSharePoint.discoverActiveDirectory", async () => {
@@ -5456,13 +5465,13 @@ export function activate(context: vscode.ExtensionContext): void {
         ref = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Resolving the shared file…" }, () => client.resolveSharedItem(url));
       } else {
         const shared = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Listing files shared with you…" }, () => client.listSharedWithMe());
-        const tabularOnly = shared.filter((r) => detectTabularKind(r.name) !== "unknown");
-        if (tabularOnly.length === 0) {
-          void vscode.window.showInformationMessage("No shared Excel/CSV files found. Use “Paste a sharing link…” for a specific file.");
+        const supported = shared.filter((r) => detectFileKind(r.name) !== "unknown");
+        if (supported.length === 0) {
+          void vscode.window.showInformationMessage("No supported shared files found (Excel, CSV, Word, PDF, text). Use “Paste a sharing link…” for a specific file.");
           return;
         }
         const pick = await vscode.window.showQuickPick(
-          tabularOnly.map((r) => ({ label: r.name, description: r.webUrl, ref: r })),
+          supported.map((r) => ({ label: r.name, description: `${describeKind(detectFileKind(r.name))} · ${r.webUrl ?? ""}`, ref: r })),
           { title: "Pick a shared file", ignoreFocusOut: true, matchOnDescription: true },
         );
         if (!pick) return;
@@ -5472,11 +5481,9 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(`Could not access the shared file: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
-    const tabular = detectTabularKind(ref.name);
-    if (tabular === "unknown") {
-      void vscode.window.showWarningMessage(`“${ref.name}” isn't a supported tabular file (.xlsx/.csv/.tsv).`);
-      return;
-    }
+    // Unknown extension (e.g. from a pasted link) → try as text; the binary
+    // sniff inside readFileContent rejects true binaries with a clear message.
+    const kind = detectFileKind(ref.name) === "unknown" ? "text" : detectFileKind(ref.name);
     const location = { kind: "graph" as const, connectionHandle: conn.cacheHandle, driveId: ref.driveId, itemId: ref.itemId, ...(ref.webUrl ? { webUrl: ref.webUrl } : {}) };
     const dup = findByLocation(fileSources.list(), location);
     if (dup) {
@@ -5487,10 +5494,10 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!label) return;
     try {
       const buf = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Reading the file…" }, () => client.downloadDriveItem(ref.driveId, ref.itemId));
-      const rows = readTabularBuffer(tabular, buf);
-      await fileSources.add({ id: crypto.randomUUID(), label: label.trim(), location, tabular, addedAt: nowIso() });
-      telemetry.record("file.add", { kind: tabular, remote: true });
-      void vscode.window.showInformationMessage(`Added “${label.trim()}” (${rows.length} row(s)). @sharepoint can read it with #spReadFile.`);
+      const content = readFileContent(kind, buf);
+      await fileSources.add({ id: crypto.randomUUID(), label: label.trim(), location, kind, addedAt: nowIso() });
+      telemetry.record("file.add", { kind, remote: true });
+      void vscode.window.showInformationMessage(`Added “${label.trim()}” (${summarizeFileContent(content)}). @sharepoint can read it with #spReadFile, and it's listed under Reference Sources.`);
     } catch (e) {
       void vscode.window.showErrorMessage(`Could not read “${ref.name}”: ${e instanceof Error ? e.message : String(e)}`);
     }

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.100.0 — 2026-06-30
+
+### Added — file reference sources: more formats, all sheets, and they're now visible
+- **Registered files now appear in the Reference Sources tree.** Previously a file added for
+  context was invisible — there was no way to see what was available. Each file is now a tree item
+  (with its kind and location) alongside connectors and sites; click to open a read-only preview,
+  with inline **Read** / **Remove** actions (Remove only unregisters it — the file is untouched).
+- **More file types.** Beyond Excel `.xlsx` and CSV/TSV, you can now add **legacy Excel `.xls`**,
+  **Word `.docx`**, **PDF**, and **plain text** (`.txt`, `.md`, `.log`, `.json`, `.xml`, and other
+  text-based files). The local picker gained an *All files* filter; binary files that can't be read
+  as text are rejected with a clear message. OneDrive/SharePoint shared files support the same set.
+- **All worksheets, not just the first.** `.xlsx` and `.xls` workbooks now read **every sheet**,
+  each rendered under its sheet name (previously only the first worksheet was read).
+- All parsers are **dependency-free** (no new bundled libraries): `.xlsx`/`.docx` use the existing
+  pure-JS zip support; `.xls` is read via a built-in OLE2/BIFF8 reader; PDF text is extracted from
+  content streams. `.xls` and PDF extraction are **best-effort** for common files — a scanned/
+  image-only PDF has no text and says so, and a legacy file that won't parse suggests saving as
+  `.xlsx`/`.docx`. The menu entry is retitled accordingly ("Add Local File for Context…").
+
 ## 0.99.0 — 2026-06-30
 
 ### Removed — Google Vertex AI Search connector

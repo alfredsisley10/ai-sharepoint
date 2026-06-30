@@ -1,15 +1,17 @@
 import * as zlib from "zlib";
+import { Sheet } from "./sheet";
 
 /**
- * Dependency-free .xlsx reader: just enough to pull the first worksheet into
- * rows of strings for tabular context. An .xlsx is a ZIP of XML; we read the
- * central directory, inflate the entries we need (Node's built-in zlib — no
- * native module), and scan `sharedStrings.xml` + the first `sheetN.xml`.
+ * Dependency-free .xlsx reader: pulls EVERY worksheet into rows of strings for
+ * tabular context. An .xlsx is a ZIP of XML; we read the central directory,
+ * inflate the entries we need (Node's built-in zlib — no native module), and
+ * scan `sharedStrings.xml`, `workbook.xml` (sheet names + order), its rels (the
+ * name→file mapping), and each `sheetN.xml`.
  *
- * Scope (deliberately small, documented): first worksheet only, values rendered
- * as text (shared strings, inline strings, numbers, booleans). Formulas resolve
- * to their cached value. The XML scanners are pure and unit-tested; the ZIP
- * layer is exercised end-to-end with a fixture built in the tests.
+ * Scope (deliberately small, documented): all worksheets, values rendered as
+ * text (shared strings, inline strings, numbers, booleans). Formulas resolve to
+ * their cached value. The XML scanners are pure and unit-tested; the ZIP layer
+ * is exercised end-to-end with a fixture built in the tests.
  */
 
 const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
@@ -154,22 +156,74 @@ function readEntry(buf: Buffer, entry: ZipEntry): string {
   throw new Error(`Unsupported ZIP compression method ${entry.method}.`);
 }
 
-/** Read the first worksheet of an .xlsx buffer into rows of strings. */
-export function readXlsx(buf: Buffer): string[][] {
+/** Parse `xl/workbook.xml` <sheet> elements into ordered {name, rid} pairs. */
+export function parseWorkbookSheets(xml: string): { name: string; rid: string }[] {
+  const out: { name: string; rid: string }[] = [];
+  const re = /<sheet\b[^>]*?\/?>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml))) {
+    const tag = m[0];
+    const name = /\bname="([^"]*)"/.exec(tag)?.[1] ?? "";
+    const rid = /\br:id="([^"]*)"/i.exec(tag)?.[1] ?? "";
+    out.push({ name: decodeXmlEntities(name), rid });
+  }
+  return out;
+}
+
+/** Parse `xl/_rels/workbook.xml.rels` into a relationship-id → target map. */
+export function parseRels(xml: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const re = /<Relationship\b[^>]*?\/?>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml))) {
+    const tag = m[0];
+    const id = /\bId="([^"]*)"/.exec(tag)?.[1];
+    const target = /\bTarget="([^"]*)"/.exec(tag)?.[1];
+    if (id && target) map.set(id, target);
+  }
+  return map;
+}
+
+/** A rels Target (relative to xl/) → its central-directory entry name. */
+function relTargetToEntry(target: string): string {
+  if (target.startsWith("/")) return target.slice(1); // absolute within the package
+  return "xl/" + target.replace(/^\.\//, "");
+}
+
+/** Read EVERY worksheet of an .xlsx buffer, in workbook order, with names. */
+export function readXlsxSheets(buf: Buffer): Sheet[] {
   const entries = readCentralDirectory(buf);
   const byName = new Map(entries.map((e) => [e.name, e]));
   const sharedEntry = byName.get("xl/sharedStrings.xml");
   const shared = sharedEntry ? parseSharedStrings(readEntry(buf, sharedEntry)) : [];
-  // First worksheet: prefer sheet1.xml, else the lowest-numbered sheetN.xml.
-  const sheetNames = entries
-    .map((e) => e.name)
-    .filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
-    .sort((a, b) => {
-      const na = Number(a.match(/sheet(\d+)\.xml$/)![1]);
-      const nb = Number(b.match(/sheet(\d+)\.xml$/)![1]);
-      return na - nb;
-    });
-  if (sheetNames.length === 0) throw new Error("No worksheet found in the .xlsx.");
-  const sheet = readEntry(buf, byName.get(sheetNames[0])!);
-  return parseSheet(sheet, shared);
+
+  const sheets: Sheet[] = [];
+  // Preferred path: workbook.xml gives names + order, its rels give name→file.
+  const wbEntry = byName.get("xl/workbook.xml");
+  const relsEntry = byName.get("xl/_rels/workbook.xml.rels");
+  if (wbEntry && relsEntry) {
+    const wbSheets = parseWorkbookSheets(readEntry(buf, wbEntry));
+    const rels = parseRels(readEntry(buf, relsEntry));
+    for (const ws of wbSheets) {
+      const target = rels.get(ws.rid);
+      const entry = target ? byName.get(relTargetToEntry(target)) : undefined;
+      if (!entry) continue;
+      sheets.push({ name: ws.name || `Sheet ${sheets.length + 1}`, rows: parseSheet(readEntry(buf, entry), shared) });
+    }
+  }
+  // Fallback: every sheetN.xml in numeric order with generic names.
+  if (sheets.length === 0) {
+    const sheetEntries = entries
+      .map((e) => e.name)
+      .filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
+      .sort((a, b) => Number(a.match(/sheet(\d+)\.xml$/)![1]) - Number(b.match(/sheet(\d+)\.xml$/)![1]));
+    sheetEntries.forEach((n, i) => sheets.push({ name: `Sheet ${i + 1}`, rows: parseSheet(readEntry(buf, byName.get(n)!), shared) }));
+  }
+  if (sheets.length === 0) throw new Error("No worksheet found in the .xlsx.");
+  return sheets;
+}
+
+/** Read the first worksheet of an .xlsx buffer into rows (back-compat helper). */
+export function readXlsx(buf: Buffer): string[][] {
+  return readXlsxSheets(buf)[0]?.rows ?? [];
 }

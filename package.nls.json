@@ -53,7 +53,7 @@
   "aiSharePoint.addTeamsScope.title": "Teams: Add Readable Scope (chat or channel)…",
   "aiSharePoint.readTeamsMessages.title": "Teams: Read Messages (read-only)…",
   "aiSharePoint.removeTeamsScope.title": "Teams: Remove a Readable Scope…",
-  "aiSharePoint.addLocalFile.title": "Add File for Context (Excel/CSV)…",
+  "aiSharePoint.addLocalFile.title": "Add Local File for Context (Excel, CSV, Word, PDF, text)…",
   "aiSharePoint.addSharedFile.title": "Add OneDrive/SharePoint File for Context…",
   "aiSharePoint.composeRichOutlookEmail.title": "Compose Rich Email (HTML / Rich Text / attachments)…",
   "aiSharePoint.readFileSource.title": "Read a Context File…",

@@ -10,6 +10,9 @@ import { SitesStore, SiteConnection } from "../auth/sitesStore";
 import { siteTreeItem } from "./sitesView";
 import { MemoryStore } from "../context/memoryStore";
 import { MemoryItem } from "../context/memory";
+import { FileSourcesStore } from "../context/files/fileSourcesStore";
+import { FileSource } from "../context/files/fileSources";
+import { describeKind } from "../context/files/fileContent";
 import {
   MemoryGroupNode,
   isMemoryGroup,
@@ -22,7 +25,7 @@ import {
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
-type Node = ContextSource | ContextBookmark | SiteConnection | MemoryGroupNode | MemoryItem;
+type Node = ContextSource | ContextBookmark | SiteConnection | MemoryGroupNode | MemoryItem | FileSource;
 
 function isBookmark(node: Node): node is ContextBookmark {
   return (node as ContextBookmark).locator !== undefined && (node as MemoryItem).origin === undefined;
@@ -30,6 +33,12 @@ function isBookmark(node: Node): node is ContextBookmark {
 
 function isSiteConnection(node: Node): node is SiteConnection {
   return (node as SiteConnection).siteUrl !== undefined && (node as SiteConnection).role !== undefined;
+}
+
+/** A registered file context source (local or OneDrive/SharePoint). Unique among
+ *  node types by its `location` field. */
+function isFileSource(node: Node): node is FileSource {
+  return (node as FileSource).location !== undefined && (node as FileSource).kind !== undefined;
 }
 
 /**
@@ -48,6 +57,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     private readonly schemas: SchemaStore,
     private readonly catalogs: CatalogStore,
     private readonly memory: MemoryStore,
+    private readonly files: FileSourcesStore,
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly scope: (all: ContextSource[]) => ContextSource[] = (all) => all,
   ) {
@@ -57,6 +67,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     schemas.onDidChange(() => this.emitter.fire());
     catalogs.onDidChange(() => this.emitter.fire());
     memory.onDidChange(() => this.emitter.fire());
+    files.onDidChange(() => this.emitter.fire());
   }
 
   refresh(): void {
@@ -66,6 +77,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   getTreeItem(node: Node): vscode.TreeItem {
     if (isMemoryGroup(node)) return memoryGroupTreeItem(node, this.memory);
     if (isMemoryItem(node)) return memoryItemTreeItem(node);
+    if (isFileSource(node)) return this.fileItem(node);
     if (isSiteConnection(node)) {
       const item = siteTreeItem(node);
       // A reference site can carry memory → make it expandable for the group.
@@ -83,15 +95,44 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
       // Managed context sources (e.g. a managed Confluence space) live under
       // Managed Sites; Reference Sources keeps the read-only ones.
       const referenceSources = this.scope(this.sources.list().filter((s) => s.role !== "managed"));
-      return [...referenceSites, ...referenceSources];
+      // Registered files (local + OneDrive/SharePoint) are read-only context too,
+      // so they belong in this list — otherwise the user can't see what's added.
+      return [...referenceSites, ...referenceSources, ...this.files.list()];
     }
     if (isMemoryGroup(node)) return this.memory.listForScope(node.memoryScope);
-    if (isMemoryItem(node) || isBookmark(node)) return [];
+    if (isMemoryItem(node) || isBookmark(node) || isFileSource(node)) return [];
     if (isSiteConnection(node)) return memoryGroupChildren(this.memory, { kind: "site", key: node.siteUrl });
     return [
       ...this.bookmarks.listForSource(node.id),
       ...memoryGroupChildren(this.memory, { kind: "source", key: node.id }),
     ];
+  }
+
+  private fileItem(source: FileSource): vscode.TreeItem {
+    const item = new vscode.TreeItem(source.label, vscode.TreeItemCollapsibleState.None);
+    item.id = `file:${source.id}`;
+    const where = source.location.kind === "local" ? "local file" : "OneDrive/SharePoint";
+    item.description = `${describeKind(source.kind)} · ${where}`;
+    const tabular = source.kind === "csv" || source.kind === "tsv" || source.kind === "xlsx" || source.kind === "xls";
+    item.iconPath = new vscode.ThemeIcon(tabular ? "table" : "file");
+    item.contextValue = "context-file";
+    const loc = source.location.kind === "local" ? source.location.path : (source.location.webUrl ?? "OneDrive/SharePoint item");
+    const cell = (s: string) => s.replace(/\|/g, "\\|");
+    item.tooltip = new vscode.MarkdownString(
+      [
+        `**${cell(source.label)}** _(read-only file context)_`,
+        "",
+        `| | |`,
+        `|---|---|`,
+        `| Kind | ${describeKind(source.kind)} |`,
+        `| Location | ${cell(loc)} |`,
+        `| Added | ${source.addedAt} |`,
+        "",
+        `_Click to read · @sharepoint reads it with \`#spReadFile\`._`,
+      ].join("\n"),
+    );
+    item.command = { command: "aiSharePoint.readFileSource", title: "Read", arguments: [source] };
+    return item;
   }
 
   private sourceItem(source: ContextSource): vscode.TreeItem {

@@ -1,12 +1,13 @@
 import * as vscode from "vscode";
-import { FileSource, withFile, withoutFile } from "./fileSources";
+import { FileSource, normalizeFileSource, withFile, withoutFile } from "./fileSources";
 
 const KEY = "aiSharePoint.fileSources";
 
 /**
- * Persists registered file context sources (local spreadsheets/CSVs and, later,
- * OneDrive/shared SharePoint files). Global state; stores only the pointer +
- * label + kind, never file content. Pure logic lives in fileSources.ts.
+ * Persists registered file context sources (local and OneDrive/shared SharePoint
+ * files). Global state; stores only the pointer + label + kind, never file
+ * content. Pure logic lives in fileSources.ts. Records are normalized on read so
+ * legacy entries (which stored the field as `tabular`) keep working.
  */
 export class FileSourcesStore {
   private readonly emitter = new vscode.EventEmitter<void>();
@@ -15,7 +16,7 @@ export class FileSourcesStore {
   constructor(private readonly state: vscode.Memento) {}
 
   list(): FileSource[] {
-    return this.state.get<FileSource[]>(KEY) ?? [];
+    return (this.state.get<FileSource[]>(KEY) ?? []).map(normalizeFileSource);
   }
 
   get(id: string): FileSource | undefined {

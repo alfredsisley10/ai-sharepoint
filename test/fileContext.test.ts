@@ -8,9 +8,13 @@ import {
   columnToIndex,
   decodeXmlEntities,
   readXlsx,
+  readXlsxSheets,
+  parseWorkbookSheets,
+  parseRels,
 } from "../src/context/files/xlsx";
 import { detectTabularKind, renderTable, readTabularBuffer } from "../src/context/files/tabular";
-import { withFile, withoutFile, findByLocation, fileLocationKey } from "../src/context/files/fileSources";
+import { readDocx, extractDocumentXmlText } from "../src/context/files/docx";
+import { withFile, withoutFile, findByLocation, fileLocationKey, normalizeFileSource } from "../src/context/files/fileSources";
 import type { FileSource } from "../src/context/files/fileSources";
 import { encodeSharingUrl, driveItemToRef } from "../src/context/files/graphFiles";
 
@@ -107,8 +111,54 @@ test("readXlsx reads the first sheet end-to-end (real ZIP + deflate)", () => {
     { name: "xl/worksheets/sheet1.xml", data: Buffer.from(sheet) },
   ]);
   assert.deepEqual(readXlsx(buf), [["Name", "Age"], ["Ann", "30"]]);
-  // Same path via the tabular dispatcher.
-  assert.deepEqual(readTabularBuffer("xlsx", buf), [["Name", "Age"], ["Ann", "30"]]);
+  // Same path via the tabular dispatcher (now returns named sheets).
+  assert.deepEqual(readTabularBuffer("xlsx", buf), [{ name: "Sheet 1", rows: [["Name", "Age"], ["Ann", "30"]] }]);
+});
+
+test("parseWorkbookSheets + parseRels map sheet names to worksheet files", () => {
+  const wb = `<workbook><sheets><sheet name="Budget" sheetId="1" r:id="rId1"/><sheet name="Q&amp;A" sheetId="2" r:id="rId2"/></sheets></workbook>`;
+  assert.deepEqual(parseWorkbookSheets(wb), [{ name: "Budget", rid: "rId1" }, { name: "Q&A", rid: "rId2" }]);
+  const rels = `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>`;
+  assert.equal(parseRels(rels).get("rId2"), "worksheets/sheet2.xml");
+});
+
+test("readXlsxSheets reads EVERY worksheet, named and in workbook order", () => {
+  const shared = `<sst><si><t>A</t></si><si><t>B</t></si></sst>`;
+  const wb = `<workbook><sheets><sheet name="First" sheetId="1" r:id="rId1"/><sheet name="Second" sheetId="2" r:id="rId2"/></sheets></workbook>`;
+  const rels = `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>`;
+  const s1 = `<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>`;
+  const s2 = `<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row></sheetData></worksheet>`;
+  const buf = makeZip([
+    { name: "xl/sharedStrings.xml", data: Buffer.from(shared) },
+    { name: "xl/workbook.xml", data: Buffer.from(wb) },
+    { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(rels) },
+    { name: "xl/worksheets/sheet1.xml", data: Buffer.from(s1) },
+    { name: "xl/worksheets/sheet2.xml", data: Buffer.from(s2) },
+  ]);
+  const sheets = readXlsxSheets(buf);
+  assert.deepEqual(sheets, [
+    { name: "First", rows: [["A"]] },
+    { name: "Second", rows: [["B"]] },
+  ]);
+});
+
+// --- .docx (ZIP of XML; built with the same makeZip helper) --------------
+
+test("extractDocumentXmlText pulls paragraph text, tabs, and breaks; entities decoded", () => {
+  const xml = `<w:document><w:body>
+    <w:p><w:r><w:t>Hello</w:t></w:r><w:tab/><w:r><w:t xml:space="preserve">world &amp; co</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Line two</w:t></w:r><w:br/><w:r><w:t>after break</w:t></w:r></w:p>
+  </w:body></w:document>`;
+  assert.equal(extractDocumentXmlText(xml), "Hello\tworld & co\nLine two\nafter break");
+});
+
+test("readDocx reads word/document.xml from the archive", () => {
+  const doc = `<w:document><w:body><w:p><w:r><w:t>Contract text</w:t></w:r></w:p></w:body></w:document>`;
+  const buf = makeZip([
+    { name: "[Content_Types].xml", data: Buffer.from("<Types/>") },
+    { name: "word/document.xml", data: Buffer.from(doc) },
+  ]);
+  assert.equal(readDocx(buf), "Contract text");
 });
 
 // --- tabular render + detect ---------------------------------------------
@@ -149,7 +199,7 @@ test("driveItemToRef reads a /shares result and a sharedWithMe (remoteItem) shap
 });
 
 test("file source ops: add/replace/remove, dedup by location", () => {
-  const a: FileSource = { id: "1", label: "A", location: { kind: "local", path: "/x/A.csv" }, tabular: "csv", addedAt: "t" };
+  const a: FileSource = { id: "1", label: "A", location: { kind: "local", path: "/x/A.csv" }, kind: "csv", addedAt: "t" };
   let items = withFile([], a);
   assert.equal(items.length, 1);
   // same location (case-folded) is found for dedup
@@ -157,4 +207,14 @@ test("file source ops: add/replace/remove, dedup by location", () => {
   assert.equal(fileLocationKey({ kind: "graph", connectionHandle: "h", driveId: "d", itemId: "IT" }), "graph:IT");
   items = withoutFile(items, "1");
   assert.equal(items.length, 0);
+});
+
+test("normalizeFileSource upgrades legacy {tabular} records to {kind}", () => {
+  // Pre-0.100 builds stored the field as `tabular`.
+  const legacy = { id: "1", label: "Old", location: { kind: "local", path: "/x.csv" }, tabular: "csv", addedAt: "t" } as unknown as FileSource;
+  assert.equal(normalizeFileSource(legacy).kind, "csv");
+  const current: FileSource = { id: "2", label: "New", location: { kind: "local", path: "/y.docx" }, kind: "docx", addedAt: "t" };
+  assert.equal(normalizeFileSource(current).kind, "docx");
+  const neither = { id: "3", label: "?", location: { kind: "local", path: "/z" }, addedAt: "t" } as unknown as FileSource;
+  assert.equal(normalizeFileSource(neither).kind, "unknown");
 });
