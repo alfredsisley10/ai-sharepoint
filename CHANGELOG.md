@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.94.0 — 2026-06-30
+
+### Added — rich email composition (HTML / Rich Text / plain text + attachments)
+- New *Compose Rich Email* command drafts straight into your **Outlook Drafts** folder in any format
+  Outlook supports: **HTML** (paste/enter markup), **Rich Text** (type text, sent as formatted HTML
+  with newlines preserved), or **Plain text** — plus **file attachments** (pick one or more local
+  files; bounded to the ~3 MB inline limit with a clear message if exceeded). Finish and send from
+  Outlook, as always — nothing is sent from here.
+- The assistant's `aisharepoint_draft_communication` tool gained a **`format`** option, so
+  @sharepoint can draft **HTML** email (rich formatting), not just plain text.
+- `createMailDraft` now builds the Graph `body` by content type and emits `fileAttachment`s; plain
+  text under HTML format is escaped + line-broken so it never renders as raw markup. Pure compose
+  core (`normalizeMailFormat`, `buildMessageBody`, MIME detection, size guard, attachment payload)
+  is unit-tested. Completes Phase 7.
+
 ## 0.93.0 — 2026-06-30
 
 ### Added — OneDrive & shared SharePoint files as context

@@ -8,6 +8,7 @@ import {
 } from "./outlookWorkspace";
 import { DriveItemRef, encodeSharingUrl, driveItemToRef } from "../context/files/graphFiles";
 import { AppError } from "../core/errors";
+import { MailFormat, ComposedAttachment, buildMessageBody, buildFileAttachment } from "./mailCompose";
 
 /**
  * Graph client for Communication Channels (ADR-0025). Send-capable scopes
@@ -120,19 +121,24 @@ export class CommsClient extends SharePointClient {
     );
   }
 
-  /** Create an Outlook draft in the user's mailbox (nothing is sent). */
+  /** Create an Outlook draft in the user's mailbox (nothing is sent). Defaults to
+   *  plain text with no attachments (back-compatible); pass `opts` for HTML/Rich
+   *  Text bodies and file attachments. */
   async createMailDraft(
     recipients: ResolvedRecipient[],
     subject: string,
     body: string,
+    opts?: { format?: MailFormat; attachments?: ComposedAttachment[] },
   ): Promise<{ id: string; webLink?: string }> {
+    const attachments = opts?.attachments ?? [];
     return this.request<{ id: string; webLink?: string }>(
       "POST",
       "/me/messages",
       {
         subject,
-        body: { contentType: "Text", content: body },
+        body: buildMessageBody(opts?.format ?? "text", body),
         toRecipients: recipients.map((r) => ({ emailAddress: { address: r.address } })),
+        ...(attachments.length ? { attachments: attachments.map(buildFileAttachment) } : {}),
       },
       MAIL_DRAFT_SCOPES,
     );

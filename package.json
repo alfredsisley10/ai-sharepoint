@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.93.0",
+  "version": "0.94.0",
   "release": {
     "channel": "standard"
   },
@@ -362,6 +362,12 @@
         "title": "%aiSharePoint.addSharedFile.title%",
         "category": "%category%",
         "icon": "$(cloud)"
+      },
+      {
+        "command": "aiSharePoint.composeRichOutlookEmail",
+        "title": "%aiSharePoint.composeRichOutlookEmail.title%",
+        "category": "%category%",
+        "icon": "$(mail)"
       },
       {
         "command": "aiSharePoint.readFileSource",
@@ -1484,7 +1490,15 @@
             },
             "body": {
               "type": "string",
-              "description": "Plain-text message body."
+              "description": "Message body. Plain text by default; if 'format' is 'html', provide HTML markup (Outlook email only)."
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "html",
+                "text"
+              ],
+              "description": "Outlook email body format. 'html' for rich formatting (provide HTML in 'body'); 'text' (default) for plain text. Ignored for teams."
             },
             "reason": {
               "type": "string",
@@ -2095,6 +2109,11 @@
         },
         {
           "command": "aiSharePoint.draftOutlookEmail",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aiSharePoint.composeRichOutlookEmail",
           "when": "view == aiSharePoint.commsView",
           "group": "navigation@2"
         },

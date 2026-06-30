@@ -166,6 +166,7 @@ import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
 import { OutlookWorkspaceStore } from "./comms/outlookWorkspaceStore";
 import { registerOutlookTools } from "./chat/outlookTools";
+import { MailFormat, ComposedAttachment, contentTypeForName, attachmentIssue } from "./comms/mailCompose";
 import { FileSourcesStore } from "./context/files/fileSourcesStore";
 import { FileSource, findByLocation } from "./context/files/fileSources";
 import { detectTabularKind, readTabularBuffer, renderTable } from "./context/files/tabular";
@@ -5527,6 +5528,7 @@ export function activate(context: vscode.ExtensionContext): void {
     to: string[],
     subject: string,
     body: string,
+    opts?: { format?: MailFormat; attachments?: ComposedAttachment[] },
   ): Promise<{ webLink?: string; failures: string[] }> => {
     const client = await commsClientFor();
     if (!client) {
@@ -5547,14 +5549,73 @@ export function activate(context: vscode.ExtensionContext): void {
     if (resolved.length === 0) {
       throw new AppError(`No recipients could be resolved in the directory: ${failures.join(", ")}.`, "config");
     }
-    const created = await client.createMailDraft(resolved, subject, body);
+    const created = await client.createMailDraft(resolved, subject, body, opts);
     return { ...(created.webLink ? { webLink: created.webLink } : {}), failures };
   };
   context.subscriptions.push(
     ...tryRegister("communication tools", () =>
-      registerCommsTools(outbox, createOutlookDraftDirect, telemetry, errors, nowIso),
+      // The tool may pass a format ("html" lets the assistant craft formatted
+      // email); attachments are added by the user via Compose Rich Email.
+      registerCommsTools(
+        outbox,
+        (to, subject, body, format) => createOutlookDraftDirect(to, subject, body, format ? { format } : undefined),
+        telemetry,
+        errors,
+        nowIso,
+      ),
     ),
   );
+
+  // Compose a richly-formatted email (HTML / Rich Text / plain) with optional
+  // file attachments, straight into the user's Outlook Drafts folder. Outlook's
+  // own composer is the finish-and-send surface — nothing is sent here.
+  register("aiSharePoint.composeRichOutlookEmail", async () => {
+    const toRaw = await vscode.window.showInputBox({ title: "New email — recipients", prompt: "Comma/space-separated emails or UPNs", ignoreFocusOut: true, validateInput: (v) => (parseRecipients(v).length ? recipientIssue(parseRecipients(v)) : "Add at least one recipient.") });
+    if (!toRaw) return;
+    const to = parseRecipients(toRaw);
+    const subject = await vscode.window.showInputBox({ title: "New email — subject", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (subject === undefined) return;
+    const fmtPick = await vscode.window.showQuickPick(
+      [
+        { label: "$(code) HTML", description: "paste/enter HTML markup for full formatting", fmt: "html" as MailFormat },
+        { label: "$(text-size) Rich Text", description: "type text; sent as formatted HTML (newlines preserved)", fmt: "html" as MailFormat },
+        { label: "$(output) Plain text", description: "no formatting", fmt: "text" as MailFormat },
+      ],
+      { title: "Email format", placeHolder: "Outlook's full formatting is available — finish in Outlook after this.", ignoreFocusOut: true },
+    );
+    if (!fmtPick) return;
+    const body = await vscode.window.showInputBox({ title: `New email — body (${fmtPick.label.replace(/^\$\([^)]*\)\s*/, "")})`, prompt: fmtPick.fmt === "html" ? "HTML or plain text (plain is converted to HTML)" : "Plain text", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (!body) return;
+    // Optional attachments (local files; inline, bounded total size).
+    const attachments: ComposedAttachment[] = [];
+    const files = await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: "Attach", title: "Attach files (optional — Esc to skip)" });
+    if (files && files.length) {
+      for (const uri of files) {
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const name = uri.fsPath.split(/[\\/]/).pop() || "attachment";
+        attachments.push({ name, contentType: contentTypeForName(name), base64: Buffer.from(bytes).toString("base64"), bytes: bytes.byteLength });
+      }
+      const issue = attachmentIssue(attachments);
+      if (issue) {
+        void vscode.window.showErrorMessage(issue);
+        return;
+      }
+    }
+    try {
+      const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Saving the draft to your Outlook Drafts…" },
+        () => createOutlookDraftDirect(to, subject, body, { format: fmtPick.fmt, ...(attachments.length ? { attachments } : {}) }),
+      );
+      telemetry.record("comms.draft", { channel: "outlook", via: "user", format: fmtPick.fmt, attachments: attachments.length });
+      const open = await vscode.window.showInformationMessage(
+        `Draft saved to your Outlook Drafts${attachments.length ? ` with ${attachments.length} attachment(s)` : ""}.${result.failures.length ? ` Unresolved recipients: ${result.failures.join(", ")}.` : ""} Open it in Outlook to review and send.`,
+        ...(result.webLink ? ["Open in Outlook"] : []),
+      );
+      if (open && result.webLink) await vscode.env.openExternal(vscode.Uri.parse(result.webLink));
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not save the draft: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
 
   // Teams Incoming Webhooks (ADR-0025 amendment): the no-admin-consent
   // delivery path. URLs embed a token, so they live in the keychain (never
