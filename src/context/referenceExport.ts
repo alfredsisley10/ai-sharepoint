@@ -2,6 +2,8 @@ import { ContextSource, ContextBookmark, ContextAuthMethod } from "./types";
 import { normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./sourceRef";
 import { SourceSchema } from "./db/schemaIndex";
 import { Project, INSTRUCTIONS_MAX_CHARS, GOALS_MAX_CHARS, AI_CONTEXT_MAX_CHARS } from "./types";
+import { MemoryItem, MemoryScope, MemoryScopeKind, memoryKey, normalizeMemoryInput } from "./memory";
+import { scanForLeaks } from "../diagnostics/bundle";
 
 /**
  * Secret-free reference-config sharing (ADR-0013 slice 1).
@@ -58,6 +60,20 @@ export interface ExportedSite {
   role: "managed" | "reference";
 }
 
+/** A memory note, portably keyed: site memory references its `siteUrl` (stable
+ *  across machines); source memory references the source **displayName** (ids are
+ *  machine-local) and is remapped to the local id on import. User-authored,
+ *  secret-free — shared so a team carries the same conventions/gotchas. */
+export interface ExportedMemory {
+  scopeKind: MemoryScopeKind;
+  /** site → siteUrl; source → source displayName. */
+  scopeRef: string;
+  title: string;
+  text: string;
+  tags?: string[];
+  origin: "user" | "ai";
+}
+
 export interface ReferenceExport {
   $schema: typeof REFERENCE_EXPORT_SCHEMA;
   exportedAt: string;
@@ -80,12 +96,30 @@ export interface ReferenceExport {
   /** Managed/reference SharePoint sites — secret-free descriptors; recipients
    *  sign in on import. Optional so older importers (and the schema) tolerate it. */
   sites?: ExportedSite[];
+  /** Per-entity memory notes (user + assistant-proposed), portably keyed. Optional
+   *  so older importers tolerate it. Imported with review + dedup/merge. */
+  memory?: ExportedMemory[];
 }
 
 export const EXPORT_NOTICE =
   "Reference-source configuration shared from the AI SharePoint extension. " +
   "Contains connection descriptors and bookmarks only — no credentials, tokens, or accounts. " +
   "Each recipient supplies their own credentials on first use (verified lockout-safe).";
+
+/**
+ * Defense-in-depth gate for a serialized export: the names of any block-severity
+ * leak findings that should STOP the write (empty = safe). Excludes
+ * `raw-tenant-host` on purpose — a site/source URL is the intended payload of a
+ * user-initiated, peer-to-peer config share (the recipient connects to it). That
+ * rule guards a *different* threat model: keeping tenant hosts out of the
+ * telemetry we send to our own servers. Everything genuinely secret-shaped
+ * (tokens, PEM blocks, bearer creds, emails, auth codes in URLs) still blocks.
+ */
+export function exportLeakBlockers(json: string): string[] {
+  return scanForLeaks(json)
+    .filter((f) => f.severity === "block" && f.pattern !== "raw-tenant-host")
+    .map((f) => f.pattern);
+}
 
 export function buildReferenceExport(
   sources: ContextSource[],
@@ -94,8 +128,14 @@ export function buildReferenceExport(
   schemasById?: Map<string, SourceSchema>,
   projects?: Project[],
   sites?: Array<{ siteUrl: string; displayName: string; role: "managed" | "reference" }>,
+  memoryItems?: MemoryItem[],
+  /** id→displayName for ALL sources (not just exported ones) so source-memory
+   *  re-keys even when its source descriptor isn't part of this export — the
+   *  recipient resolves it against a same-named source they already have. */
+  sourceNamesById?: Map<string, string>,
 ): ReferenceExport {
   const byId = new Map(sources.map((s) => [s.id, s.displayName]));
+  const memNames = sourceNamesById ?? byId;
   const schemas: Record<string, SourceSchema> = {};
   if (schemasById) {
     for (const s of sources) {
@@ -103,6 +143,18 @@ export function buildReferenceExport(
       if (schema) schemas[s.displayName] = schema;
     }
   }
+  // Memory: site notes carry their (portable) siteUrl key; source notes are
+  // re-keyed to the source displayName (machine-local ids never travel). A
+  // source note whose source can't be named (gone entirely) is dropped — its
+  // scopeRef would dangle on import.
+  const memory: ExportedMemory[] = (memoryItems ?? [])
+    .map((m): ExportedMemory | undefined => {
+      const base = { title: m.title, text: m.text, ...(m.tags?.length ? { tags: m.tags } : {}), origin: m.origin };
+      if (m.scope.kind === "site") return { scopeKind: "site", scopeRef: m.scope.key, ...base };
+      const name = memNames.get(m.scope.key);
+      return name ? { scopeKind: "source", scopeRef: name, ...base } : undefined;
+    })
+    .filter((m): m is ExportedMemory => Boolean(m));
   return {
     $schema: REFERENCE_EXPORT_SCHEMA,
     exportedAt,
@@ -146,7 +198,20 @@ export function buildReferenceExport(
     ...(sites && sites.length > 0
       ? { sites: sites.map((s) => ({ siteUrl: s.siteUrl, displayName: s.displayName, role: s.role })) }
       : {}),
+    ...(memory.length > 0 ? { memory } : {}),
   };
+}
+
+/** A memory note from an import file, still keyed by its portable reference
+ *  (siteUrl, or source displayName). The command layer resolves source refs to a
+ *  local source id and applies dedup/merge before storing. */
+export interface ParsedMemory {
+  scopeKind: MemoryScopeKind;
+  scopeRef: string;
+  title: string;
+  text: string;
+  tags?: string[];
+  origin: "user" | "ai";
 }
 
 export interface ParsedImport {
@@ -159,6 +224,8 @@ export interface ParsedImport {
   projects: Project[];
   /** Managed/reference sites to (re-)create; recipient signs in afterwards. */
   sites: ExportedSite[];
+  /** Memory notes, still portably keyed; the command remaps source refs + merges. */
+  memory: ParsedMemory[];
 }
 
 const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai", "powerbi", "servicenow", "splunk", "splunkobs", "grafana", "m365copilot"]);
@@ -171,7 +238,7 @@ export function parseReferenceImport(
   importedAt: string,
   newId: () => string,
 ): ParsedImport {
-  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [], sites: [] };
+  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [], sites: [], memory: [] };
   let raw: ReferenceExport;
   try {
     raw = JSON.parse(json) as ReferenceExport;
@@ -307,5 +374,78 @@ export function parseReferenceImport(
     seenSiteUrls.add(siteUrl.toLowerCase());
     out.sites.push({ siteUrl, displayName: s.displayName.trim().slice(0, 200) || siteUrl, role: s.role });
   }
+
+  // Memory: keep the portable ref (siteUrl / source displayName); the command
+  // resolves source refs to a local id and applies dedup/merge. Clamp lengths and
+  // sanitize the origin here so storage limits hold regardless of the file.
+  for (const m of Array.isArray(raw.memory) ? raw.memory : ([] as ExportedMemory[])) {
+    if (!m || (m.scopeKind !== "site" && m.scopeKind !== "source") || typeof m.scopeRef !== "string" || !m.scopeRef.trim() || typeof m.title !== "string" || typeof m.text !== "string" || !m.title.trim() || !m.text.trim()) {
+      out.warnings.push("A memory note was malformed and was skipped.");
+      continue;
+    }
+    const norm = normalizeMemoryInput(m.title, m.text, Array.isArray(m.tags) ? m.tags.filter((t): t is string => typeof t === "string") : undefined);
+    out.memory.push({
+      scopeKind: m.scopeKind,
+      scopeRef: m.scopeKind === "site" ? m.scopeRef.trim().replace(/\/+$/, "") : m.scopeRef.trim(),
+      title: norm.title,
+      text: norm.text,
+      ...(norm.tags ? { tags: norm.tags } : {}),
+      origin: m.origin === "ai" ? "ai" : "user",
+    });
+  }
   return out;
+}
+
+export interface MemoryImportPlan {
+  /** New notes to store (scope resolved, not duplicates of existing notes). */
+  toAdd: MemoryItem[];
+  /** Notes skipped because an entry with the same scope+title already exists.
+   *  (Phase 4 will offer intelligent merge instead of a plain skip.) */
+  duplicates: number;
+  /** Notes whose `scopeRef` couldn't be mapped to a local site/source. */
+  unresolved: ParsedMemory[];
+}
+
+/**
+ * Plan a memory import: resolve each note's portable ref to a local scope, drop
+ * exact duplicates (same scope + folded title — `memoryKey`), and mint ids for
+ * the rest. Pure (the caller supplies `resolveScope`, closing over the local
+ * site/source lists incl. freshly-imported ones), so it's unit-tested. Phase 2
+ * dedup = skip; Phase 4 layers intelligent merge on top of this same plan.
+ */
+export function planMemoryImport(
+  parsed: ParsedMemory[],
+  resolveScope: (kind: MemoryScopeKind, ref: string) => MemoryScope | undefined,
+  existing: MemoryItem[],
+  newId: () => string,
+  now: string,
+): MemoryImportPlan {
+  const keys = new Set(existing.map((m) => memoryKey(m)));
+  const toAdd: MemoryItem[] = [];
+  const unresolved: ParsedMemory[] = [];
+  let duplicates = 0;
+  for (const p of parsed) {
+    const scope = resolveScope(p.scopeKind, p.scopeRef);
+    if (!scope) {
+      unresolved.push(p);
+      continue;
+    }
+    const key = memoryKey({ scope, title: p.title });
+    if (keys.has(key)) {
+      duplicates++;
+      continue;
+    }
+    keys.add(key); // also dedup within the incoming batch
+    toAdd.push({
+      id: newId(),
+      scope,
+      title: p.title,
+      text: p.text,
+      ...(p.tags ? { tags: p.tags } : {}),
+      origin: p.origin,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return { toAdd, duplicates, unresolved };
 }

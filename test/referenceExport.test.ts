@@ -3,10 +3,13 @@ import * as assert from "node:assert/strict";
 import {
   buildReferenceExport,
   parseReferenceImport,
+  planMemoryImport,
+  exportLeakBlockers,
   isReferenceExportSchema,
   REFERENCE_EXPORT_SCHEMA,
 } from "../src/context/referenceExport";
 import { ContextSource, ContextBookmark } from "../src/context/types";
+import { MemoryItem, MemoryScope, MemoryScopeKind } from "../src/context/memory";
 import { scanForLeaks } from "../src/diagnostics/bundle";
 
 const T0 = "2026-06-11T12:00:00.000Z";
@@ -180,6 +183,19 @@ test("reference-config is portable across white-labeled builds (neutral + legacy
   assert.equal(parsed.sources.length, 1, "cross-brand reference-config imported");
 });
 
+test("export gate allows a real SharePoint site URL but still blocks genuine secrets", () => {
+  // Regression: a managed-site export carries the real `*.sharepoint.com` URL —
+  // that's the payload the recipient connects to, NOT a leak. The gate must let
+  // it through (the raw-tenant-host rule guards telemetry, a different path).
+  const ok = buildReferenceExport([], [], T0, undefined, undefined, [
+    { siteUrl: "https://contoso.sharepoint.com/sites/intra", displayName: "Intranet", role: "managed" },
+  ]);
+  assert.deepEqual(exportLeakBlockers(JSON.stringify(ok)), [], "site URL alone is not a blocker");
+  // But an actual secret (an email here) still stops the write.
+  const leaky = { ...ok, notice: "ping me at admin@contoso.com" };
+  assert.ok(exportLeakBlockers(JSON.stringify(leaky)).includes("email-address"), "real secrets still block");
+});
+
 test("export/import round-trips managed sites — secret-free (URL, title, role only)", () => {
   const exp = buildReferenceExport([], [], T0, undefined, undefined, [
     { siteUrl: "https://contoso.sharepoint.com/sites/intra", displayName: "Intranet", role: "managed" },
@@ -213,6 +229,110 @@ test("import skips malformed/invalid sites and dedupes by URL", () => {
   assert.equal(parsed.sites.length, 1, "one valid, deduped site");
   assert.equal(parsed.sites[0].displayName, "X");
   assert.ok(parsed.warnings.length >= 2, "malformed entries warned");
+});
+
+const SITE_URL = "https://contoso.sharepoint.com/sites/intra";
+function memItems(): MemoryItem[] {
+  return [
+    { id: "m1", scope: { kind: "source", key: "s1" }, title: "Soft deletes", text: "Rows use is_active, not DELETE.", origin: "user", createdAt: T0, updatedAt: T0 },
+    { id: "m2", scope: { kind: "site", key: SITE_URL }, title: "Owners", text: "Owned by the Platform team.", tags: ["ownership"], origin: "ai", createdAt: T0, updatedAt: T0 },
+  ];
+}
+
+test("memory round-trips: source notes re-key to displayName, site notes keep the URL", () => {
+  const exp = buildReferenceExport(
+    sources(),
+    [],
+    T0,
+    undefined,
+    undefined,
+    [{ siteUrl: SITE_URL, displayName: "Intranet", role: "managed" }],
+    memItems(),
+  );
+  assert.equal(exp.memory?.length, 2);
+  const src = exp.memory!.find((m) => m.scopeKind === "source")!;
+  assert.equal(src.scopeRef, "Corp Wiki", "source memory re-keyed to displayName (ids never travel)");
+  const site = exp.memory!.find((m) => m.scopeKind === "site")!;
+  assert.equal(site.scopeRef, SITE_URL);
+  assert.equal(site.origin, "ai");
+  assert.deepEqual(site.tags, ["ownership"]);
+  // Secret-free: memory text passes the export gate like the rest of the file
+  // (the site URL it contains is intended payload, not a leak).
+  assert.deepEqual(exportLeakBlockers(JSON.stringify(exp)), []);
+  const parsed = parseReferenceImport(JSON.stringify(exp), T0, () => "x");
+  assert.equal(parsed.memory.length, 2);
+  assert.equal(parsed.memory.find((m) => m.scopeKind === "source")!.scopeRef, "Corp Wiki");
+});
+
+test("source memory exports via the all-sources name map even when its source descriptor isn't included", () => {
+  // Export only s2; m1 references s1 (not exported) — the name map resolves it.
+  const withMap = buildReferenceExport([sources()[1]], [], T0, undefined, undefined, undefined, memItems(), new Map([["s1", "Corp Wiki"], ["s2", "Corp AD"]]));
+  assert.equal(withMap.memory?.length, 2);
+  assert.ok(withMap.memory!.some((m) => m.scopeKind === "source" && m.scopeRef === "Corp Wiki"));
+  // Without the map (and s1 absent), the dangling source note is dropped; the site note stays.
+  const noMap = buildReferenceExport([sources()[1]], [], T0, undefined, undefined, undefined, memItems());
+  assert.equal(noMap.memory?.length, 1);
+  assert.equal(noMap.memory?.[0].scopeKind, "site");
+});
+
+test("planMemoryImport resolves refs, mints ids, and reports unresolved", () => {
+  const parsedMem = [
+    { scopeKind: "site" as MemoryScopeKind, scopeRef: SITE_URL, title: "Owners", text: "Platform team.", origin: "user" as const },
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "Soft deletes", text: "is_active.", origin: "user" as const },
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Unknown Src", title: "Orphan", text: "x", origin: "user" as const },
+  ];
+  const resolve = (kind: MemoryScopeKind, ref: string): MemoryScope | undefined => {
+    if (kind === "site" && ref === SITE_URL) return { kind: "site", key: SITE_URL };
+    if (kind === "source" && ref === "Corp Wiki") return { kind: "source", key: "local-s1" };
+    return undefined;
+  };
+  let n = 0;
+  const plan = planMemoryImport(parsedMem, resolve, [], () => `nm-${n++}`, T0);
+  assert.equal(plan.toAdd.length, 2);
+  assert.equal(plan.unresolved.length, 1);
+  assert.equal(plan.unresolved[0].scopeRef, "Unknown Src");
+  assert.equal(plan.toAdd[0].scope.key, SITE_URL);
+  assert.equal(plan.toAdd[1].scope.key, "local-s1");
+  assert.equal(plan.toAdd[0].createdAt, T0);
+});
+
+test("planMemoryImport skips exact duplicates (existing + within-batch)", () => {
+  const resolve = (kind: MemoryScopeKind): MemoryScope | undefined => ({ kind, key: "local-s1" });
+  const existing: MemoryItem[] = [
+    { id: "e1", scope: { kind: "source", key: "local-s1" }, title: "Soft deletes", text: "old text", origin: "user", createdAt: T0, updatedAt: T0 },
+  ];
+  const incoming = [
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "Soft Deletes", text: "new", origin: "user" as const }, // dup of existing (case-folded)
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "Keys", text: "a", origin: "user" as const },
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "keys", text: "b", origin: "user" as const }, // dup of the previous (within batch)
+  ];
+  let n = 0;
+  const plan = planMemoryImport(incoming, resolve, existing, () => `nm-${n++}`, T0);
+  assert.equal(plan.toAdd.length, 1, "only the first 'Keys' added");
+  assert.equal(plan.toAdd[0].title, "Keys");
+  assert.equal(plan.duplicates, 2);
+});
+
+test("import parses and clamps memory notes; malformed ones are skipped with a warning", () => {
+  const doc = {
+    $schema: REFERENCE_EXPORT_SCHEMA,
+    exportedAt: T0,
+    notice: "",
+    sources: [],
+    bookmarks: [],
+    memory: [
+      { scopeKind: "site", scopeRef: SITE_URL + "/", title: "  Owners  ", text: "Platform.", origin: "ai" },
+      { scopeKind: "source", scopeRef: "Corp Wiki", title: "X", text: "y", origin: "weird" }, // bad origin → user
+      { scopeKind: "nope", scopeRef: "z", title: "T", text: "t", origin: "user" }, // bad kind → skipped
+      { scopeKind: "site", scopeRef: "u", title: "", text: "t", origin: "user" }, // empty title → skipped
+    ],
+  };
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => "x");
+  assert.equal(parsed.memory.length, 2);
+  assert.equal(parsed.memory[0].scopeRef, SITE_URL, "trailing slash normalized on site ref");
+  assert.equal(parsed.memory[0].title, "Owners", "title trimmed");
+  assert.equal(parsed.memory[1].origin, "user", "unknown origin coerced to user");
+  assert.ok(parsed.warnings.some((w) => /memory note/i.test(w)));
 });
 
 test("import skips malformed entries with warnings, keeps valid ones", () => {

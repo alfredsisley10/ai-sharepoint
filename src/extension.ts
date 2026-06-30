@@ -65,7 +65,7 @@ import {
 } from "./context/adapters/confluenceScope";
 import { summarizeProbe, summarizeFunctionalityProbe } from "./context/adapters/confluenceProbe";
 import { registerContextTools } from "./chat/contextTools";
-import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
+import { buildReferenceExport, parseReferenceImport, planMemoryImport, exportLeakBlockers } from "./context/referenceExport";
 import { aliasIssue, normalizeAlias, resolveSourceRef, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
 import {
   rowsToCsv,
@@ -197,7 +197,7 @@ import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { MemoryStore } from "./context/memoryStore";
-import { MemoryItem, MemoryScope, normalizeMemoryInput } from "./context/memory";
+import { MemoryItem, MemoryScope, MemoryScopeKind, normalizeMemoryInput } from "./context/memory";
 import { ContextBookmark } from "./context/types";
 import { discoverActiveDirectory } from "./context/ldap/discoveryHost";
 import { guessBindUpn, domainToBaseDn } from "./context/ldap/discovery";
@@ -4443,8 +4443,9 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage("Nothing to export yet — connect a site, add a reference source, or create a project first.");
       return;
     }
-    // One combined, grouped multi-select: pick any subset of sites, sources, projects.
-    type PickItem = vscode.QuickPickItem & { kind2?: "site" | "source" | "project"; key?: string };
+    // One combined, grouped multi-select: pick any subset of sites, sources,
+    // projects, and per-entity memory.
+    type PickItem = vscode.QuickPickItem & { kind2?: "site" | "source" | "project" | "memory"; key?: string };
     const items: PickItem[] = [];
     if (allSites.length) {
       items.push({ label: "Managed sites", kind: vscode.QuickPickItemKind.Separator });
@@ -4464,35 +4465,63 @@ export function activate(context: vscode.ExtensionContext): void {
         items.push({ label: p.name, description: `${p.sourceIds.length} source(s)`, picked: true, kind2: "project", key: p.id });
       }
     }
+    // Memory notes: one row per entity that has any. Key encodes the scope
+    // (`site:<url>` / `source:<id>`) so it never collides with the entity rows.
+    const memSites = allSites.filter((s) => memory.listForScope({ kind: "site", key: s.siteUrl }).length > 0);
+    const memSources = allSources.filter((s) => memory.listForScope({ kind: "source", key: s.id }).length > 0);
+    if (memSites.length || memSources.length) {
+      items.push({ label: "Memory notes", kind: vscode.QuickPickItemKind.Separator });
+      for (const s of memSites) {
+        const n = memory.listForScope({ kind: "site", key: s.siteUrl }).length;
+        items.push({ label: `${s.displayName || s.siteUrl} — memory`, description: `${n} note(s)`, picked: true, kind2: "memory", key: `site:${s.siteUrl}` });
+      }
+      for (const s of memSources) {
+        const n = memory.listForScope({ kind: "source", key: s.id }).length;
+        items.push({ label: `${s.displayName} — memory`, description: `${n} note(s)`, picked: true, kind2: "memory", key: `source:${s.id}` });
+      }
+    }
     const chosen = await vscode.window.showQuickPick(items, {
       canPickMany: true,
       ignoreFocusOut: true,
-      title: "Export — select sites, sources, and projects",
+      title: "Export — select sites, sources, projects, and memory",
       placeHolder: "Everything is pre-selected; toggle off anything you don't want. Esc cancels — nothing is written.",
     });
     if (!chosen || chosen.length === 0) return;
     const pickedSites = new Set(chosen.filter((c) => c.kind2 === "site").map((c) => c.key));
     const pickedSources = new Set(chosen.filter((c) => c.kind2 === "source").map((c) => c.key));
     const pickedProjects = new Set(chosen.filter((c) => c.kind2 === "project").map((c) => c.key));
+    const pickedMemory = chosen.filter((c) => c.kind2 === "memory").map((c) => c.key!);
     const selSites = allSites.filter((s) => pickedSites.has(s.siteUrl));
     const selSources = allSources.filter((s) => pickedSources.has(s.id));
     const selProjects = allProjects.filter((p) => pickedProjects.has(p.id));
     const selSourceIds = new Set(selSources.map((s) => s.id));
     const selBookmarks = bookmarks.list().filter((b) => selSourceIds.has(b.sourceId));
+    // Collect the memory for every picked entity. Source-scoped notes re-key to
+    // the source displayName via a map over ALL sources (so a note exports even
+    // if its source descriptor isn't selected — recipients match it by name).
+    const selMemory: MemoryItem[] = [];
+    for (const k of pickedMemory) {
+      const sep = k.indexOf(":");
+      const kind = k.slice(0, sep) as MemoryScopeKind;
+      const key = k.slice(sep + 1);
+      selMemory.push(...memory.listForScope({ kind, key }));
+    }
+    const allSourceNames = new Map(allSources.map((s) => [s.id, s.displayName] as const));
     const schemasById = new Map(
       selSources.flatMap((s) => {
         const schema = schemas.getSync(s.id);
         return schema ? [[s.id, schema] as const] : [];
       }),
     );
-    const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites);
+    const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites, selMemory, allSourceNames);
     const json = JSON.stringify(exportDoc, null, 2);
     // Defense in depth (ADR-0013): the builder is secret-free by construction;
-    // the scan refuses to write if anything credential-shaped slipped through.
-    const blockers = scanForLeaks(json).filter((f) => f.severity === "block");
+    // exportLeakBlockers refuses to write if anything credential-shaped slipped
+    // through (it deliberately allows the site/source URLs that ARE the payload).
+    const blockers = exportLeakBlockers(json);
     if (blockers.length > 0) {
       void vscode.window.showErrorMessage(
-        `Export blocked by the safety scan (${blockers.map((f) => f.pattern).join(", ")}). Nothing was written.`,
+        `Export blocked by the safety scan (${blockers.join(", ")}). Nothing was written.`,
       );
       return;
     }
@@ -4503,6 +4532,7 @@ export function activate(context: vscode.ExtensionContext): void {
       exportDoc.sources.length ? `${exportDoc.sources.length} source(s)` : "",
       exportDoc.projects?.length ? `${exportDoc.projects.length} project(s)` : "",
       exportDoc.bookmarks.length ? `${exportDoc.bookmarks.length} bookmark(s)` : "",
+      exportDoc.memory?.length ? `${exportDoc.memory.length} memory note(s)` : "",
     ].filter(Boolean).join(", ");
     const confirm = await vscode.window.showInformationMessage(
       `Export ${summary}? The file contains descriptors and bookmarks only — no credentials, tokens, or accounts; recipients sign in with their own.`,
@@ -4521,6 +4551,7 @@ export function activate(context: vscode.ExtensionContext): void {
       sites: exportDoc.sites?.length ?? 0,
       sources: exportDoc.sources.length,
       projects: exportDoc.projects?.length ?? 0,
+      memory: exportDoc.memory?.length ?? 0,
     });
     void vscode.window.showInformationMessage("Configuration exported (secret-free).");
   });
@@ -4529,7 +4560,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const picked = await vscode.window.showOpenDialog({
       canSelectMany: false,
       filters: { "Workspace config (JSON)": ["json"] },
-      title: "Import sites, sources & projects (no credentials)",
+      title: "Import sites, sources, projects & memory (no credentials)",
     });
     if (!picked?.[0]) return;
     const json = Buffer.from(await vscode.workspace.fs.readFile(picked[0])).toString("utf8");
@@ -4540,14 +4571,14 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(`Could not import: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
-    if (parsed.sites.length === 0 && parsed.sources.length === 0 && parsed.projects.length === 0) {
+    if (parsed.sites.length === 0 && parsed.sources.length === 0 && parsed.projects.length === 0 && parsed.memory.length === 0) {
       void vscode.window.showWarningMessage(
         `Nothing to import.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) were malformed.` : ""}`,
       );
       return;
     }
     // Let the user choose which items in the file to bring in.
-    type PickItem = vscode.QuickPickItem & { kind2?: "site" | "source" | "project"; key?: string };
+    type PickItem = vscode.QuickPickItem & { kind2?: "site" | "source" | "project" | "memory"; key?: string };
     const items: PickItem[] = [];
     if (parsed.sites.length) {
       items.push({ label: "Managed sites", kind: vscode.QuickPickItemKind.Separator });
@@ -4561,6 +4592,20 @@ export function activate(context: vscode.ExtensionContext): void {
       items.push({ label: "Projects", kind: vscode.QuickPickItemKind.Separator });
       for (const p of parsed.projects) items.push({ label: p.name, description: `${p.sourceIds.length} source(s)`, picked: true, kind2: "project", key: p.id });
     }
+    if (parsed.memory.length) {
+      items.push({ label: "Memory notes (review / decline)", kind: vscode.QuickPickItemKind.Separator });
+      // Per-note rows so the user can decline individually (key = stable index).
+      parsed.memory.forEach((m, i) =>
+        items.push({
+          label: m.title,
+          description: `${m.scopeKind === "site" ? "site" : "source"}: ${m.scopeRef}${m.origin === "ai" ? " · AI-proposed" : ""}`,
+          detail: m.text.length > 100 ? `${m.text.slice(0, 100)}…` : m.text,
+          picked: true,
+          kind2: "memory",
+          key: `mem:${i}`,
+        }),
+      );
+    }
     const chosen = await vscode.window.showQuickPick(items, {
       canPickMany: true,
       ignoreFocusOut: true,
@@ -4571,6 +4616,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const pickSites = new Set(chosen.filter((c) => c.kind2 === "site").map((c) => c.key));
     const pickSources = new Set(chosen.filter((c) => c.kind2 === "source").map((c) => c.key));
     const pickProjects = new Set(chosen.filter((c) => c.kind2 === "project").map((c) => c.key));
+    const pickMemory = new Set(chosen.filter((c) => c.kind2 === "memory").map((c) => c.key));
 
     // Sites: create descriptors not already present (by URL); the user signs in after.
     const existingSiteUrls = new Set(sites.list().map((c) => c.siteUrl.toLowerCase()));
@@ -4594,9 +4640,32 @@ export function activate(context: vscode.ExtensionContext): void {
     const freshIds = new Set(fresh.map((s) => s.id));
     const freshBookmarks = parsed.bookmarks.filter((b) => freshIds.has(b.sourceId));
     const wantProjects = parsed.projects.filter((p) => pickProjects.has(p.id));
-    if (freshSites.length === 0 && fresh.length === 0 && freshBookmarks.length === 0 && wantProjects.length === 0) {
+
+    // Memory: resolve each selected note's portable ref to a LOCAL scope, then
+    // dedup against what's already stored (Phase 2 = skip exact matches; Phase 4
+    // adds intelligent merge). Site refs match a known site URL (existing or just-
+    // imported); source refs match a source displayName (just-imported or existing).
+    const knownSiteUrls = [...sites.list().map((c) => c.siteUrl), ...freshSites.map((s) => s.siteUrl)];
+    const sourceIdByName = new Map<string, string>();
+    for (const s of contextSources.list()) sourceIdByName.set(s.displayName.toLowerCase(), s.id);
+    for (const s of fresh) sourceIdByName.set(s.displayName.toLowerCase(), s.id);
+    const resolveScope = (kind: MemoryScopeKind, ref: string): MemoryScope | undefined => {
+      if (kind === "site") {
+        const url = knownSiteUrls.find((u) => u.toLowerCase().replace(/\/+$/, "") === ref.toLowerCase().replace(/\/+$/, ""));
+        return url ? { kind: "site", key: url } : undefined;
+      }
+      const id = sourceIdByName.get(ref.toLowerCase());
+      return id ? { kind: "source", key: id } : undefined;
+    };
+    const selectedMemory = parsed.memory.filter((_, i) => pickMemory.has(`mem:${i}`));
+    const memPlan = planMemoryImport(selectedMemory, resolveScope, memory.list(), () => crypto.randomUUID(), nowIso());
+    if (memPlan.unresolved.length) {
+      parsed.warnings.push(`${memPlan.unresolved.length} memory note(s) skipped — their site/source isn't here (import or add it first).`);
+    }
+
+    if (freshSites.length === 0 && fresh.length === 0 && freshBookmarks.length === 0 && wantProjects.length === 0 && memPlan.toAdd.length === 0) {
       void vscode.window.showWarningMessage(
-        `Nothing new to import${skipped + skippedSites ? ` (${skipped + skippedSites} item(s) already present)` : ""}.`,
+        `Nothing new to import${skipped + skippedSites + memPlan.duplicates ? ` (${skipped + skippedSites + memPlan.duplicates} item(s) already present)` : ""}.`,
       );
       return;
     }
@@ -4604,9 +4673,11 @@ export function activate(context: vscode.ExtensionContext): void {
       freshSites.length ? `${freshSites.length} site(s)` : "",
       fresh.length ? `${fresh.length} source(s)` : "",
       freshBookmarks.length ? `${freshBookmarks.length} bookmark(s)` : "",
+      memPlan.toAdd.length ? `${memPlan.toAdd.length} memory note(s)` : "",
     ].filter(Boolean).join(", ");
+    const alreadyPresent = skipped + skippedSites + memPlan.duplicates;
     const confirm = await vscode.window.showInformationMessage(
-      `Import ${parts || "the selected project(s)"}?${skipped + skippedSites ? ` ${skipped + skippedSites} already-present item(s) skipped.` : ""} Credentials are NOT included — sign in to each site/source afterwards.${parsed.warnings.length ? ` ${parsed.warnings.length} malformed entr(ies) skipped.` : ""}`,
+      `Import ${parts || "the selected project(s)"}?${alreadyPresent ? ` ${alreadyPresent} already-present item(s) skipped.` : ""} Credentials are NOT included — sign in to each site/source afterwards.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) skipped/malformed.` : ""}`,
       { modal: true },
       "Import",
     );
@@ -4642,16 +4713,21 @@ export function activate(context: vscode.ExtensionContext): void {
       await projects.upsert({ ...pr, sourceIds: memberIds });
       importedProjects++;
     }
+    for (const m of memPlan.toAdd) {
+      await memory.add(m);
+    }
     telemetry.record("context.importConfig", {
       sites: freshSites.length,
       sources: fresh.length,
       bookmarks: freshBookmarks.length,
       projects: importedProjects,
+      memory: memPlan.toAdd.length,
     });
     const done = [
       freshSites.length ? `${freshSites.length} site(s)` : "",
       fresh.length ? `${fresh.length} source(s)` : "",
       importedProjects ? `${importedProjects} project(s)` : "",
+      memPlan.toAdd.length ? `${memPlan.toAdd.length} memory note(s)` : "",
     ].filter(Boolean).join(", ");
     void vscode.window.showInformationMessage(
       `Imported ${done || "the selected items"}. Sign in to each site/source to activate (lockout-safe single verify).`,

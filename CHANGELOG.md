@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.86.0 — 2026-06-30
+
+### Added — memory in the combined export/import (with review + dedup)
+- The **Export Sites, Sources, Projects & Memory** command now offers a **Memory notes**
+  group — one row per site/source that has notes — so you choose whose memory travels. The
+  JSON preview + modal confirm are the review-before-export surface.
+- **Import** lists each incoming note individually under **Memory notes (review / decline)** so
+  you can keep or drop them one by one, then attaches them to the right local entity. Notes are
+  **portably keyed**: site notes by URL, source notes by the source's display name (machine-local
+  ids never travel), and source notes export even when their source descriptor isn't included —
+  the recipient matches them to a same-named source they already have.
+- **Dedup on import**: a note whose scope + title already exists is skipped (reported in the
+  summary), and notes whose site/source isn't present are listed as skipped rather than orphaned.
+  (This is the rule-based half of the planned merge; AI-assisted merge lands with the broader
+  intelligent-merge work.)
+- All still **secret-free**: memory carries only the user/AI note text, no credentials.
+
+### Fixed — exporting a managed/reference site no longer trips the safety scan
+- The export safety scan treated a real `*.sharepoint.com` site URL as a `raw-tenant-host` leak
+  and **blocked the whole export** ("Nothing was written") — which broke sharing any real
+  SharePoint site. The gate now allows the site/source URLs that ARE the payload of a
+  user-initiated, peer-to-peer config share, while still blocking genuine secrets (tokens, PEM
+  blocks, bearer creds, emails, auth codes in URLs). The tenant-host rule still applies to the
+  separate telemetry path, where it belongs. Covered by a regression test.
+
 ## 0.85.0 — 2026-06-30
 
 ### Added — inline "Memory" group under each site/source in the tree
