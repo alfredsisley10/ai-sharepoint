@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.103.0 — 2026-06-30
+
+### Added — proxy defang is now transparent: click to see what was changed
+- When `aiSharePoint.proxy.mode` is **defang**, the extension rewrites outgoing chat messages to slip
+  past content-blocking corporate proxies (it inserts an invisible zero-width character inside each
+  avoid-list word so the proxy can't match it, while the AI model still reads the original text).
+  Previously you only saw a count; now a **🛡️ See what was changed** button appears under the
+  message and opens a read-only report listing **each term, how many times it occurred, and the first
+  occurrence in context** — so the rewriting is fully auditable. Nothing is removed and no meaning is
+  changed. The report is session-scoped (it can quote your prompt, so it isn't persisted).
+
 ## 0.102.0 — 2026-06-30
 
 ### Added — connection failures now auto-diagnose corporate proxy / TLS-inspection / content filters

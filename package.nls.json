@@ -72,6 +72,7 @@
   "aiSharePoint.exportDiagnostics.title": "Export Diagnostics Bundle (anonymized)",
   "aiSharePoint.reviewLessons.title": "Review Lessons Learned (anonymized)",
   "aiSharePoint.manageProxyTerms.title": "Manage Proxy Avoid-List",
+  "aiSharePoint.showProxyDefangDetails.title": "Show Proxy Avoidance Details (what was changed)",
   "aiSharePoint.showModelLimits.title": "Show Learned Model Context Limits",
   "aiSharePoint.manageProjectMemory.title": "Manage Project Memory",
   "aiSharePoint.exportLessons.title": "Export Lessons Learned (anonymized)",

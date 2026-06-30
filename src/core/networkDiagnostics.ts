@@ -133,7 +133,7 @@ function tlsAdvice(vendor?: string): string {
 function proxyAuthAdvice(): string {
   return [
     "Your corporate proxy requires authentication (HTTP 407).",
-    '• Set VS Code\'s "http.proxy" to "http://USER:PASSWORD@proxyhost:port", or set "http.proxyAuthorization" to the proxy\'s auth header value, then reload the window.',
+    '• Set VS Code\'s "http.proxy" to your proxy URL with your credentials included (VS Code accepts the standard user-info form in the URL), or set "http.proxyAuthorization" to the proxy\'s auth header value, then reload the window.',
     "• If the proxy uses Kerberos/NTLM single sign-on, launch VS Code from your authenticated OS session so it can negotiate automatically.",
     "See Admin Guide §3.",
   ].join("\n");

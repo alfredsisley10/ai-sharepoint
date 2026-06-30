@@ -15,7 +15,8 @@ import { LessonsStore } from "../diagnostics/lessonsStore";
 import { MemoryStore } from "../context/memoryStore";
 import { memoryContextBlock } from "../context/memory";
 import { BlockedTermsStore } from "../diagnostics/blockedTermsStore";
-import { buildProxyNudge, defang, scanForTerms, proxyBlockAdvice } from "../core/proxyShield";
+import { buildProxyNudge, defangDetails, renderDefangReport, scanForTerms, proxyBlockAdvice } from "../core/proxyShield";
+import { recordDefangReport } from "./proxyDefangLog";
 import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
 import {
   PromptSection,
@@ -510,9 +511,20 @@ async function answerWithModel(
   // flag the terms so the user can rephrase. The model-facing text is `outgoing`.
   let outgoing = prompt;
   if (proxyMode === "defang" && proxyTerms.length > 0) {
-    const r = defang(prompt, proxyTerms);
+    const r = defangDetails(prompt, proxyTerms);
     outgoing = r.text;
-    if (r.hit.length > 0) stream.progress(`🛡️ Adjusted ${r.hit.length} term(s) to avoid proxy filtering`);
+    if (r.changes.length > 0) {
+      const total = r.changes.reduce((n, c) => n + c.count, 0);
+      stream.progress(`🛡️ Adjusted ${total} occurrence(s) of ${r.changes.length} avoid-term(s) so a content proxy won't block this message`);
+      // Transparency: let the user open exactly what was rewritten (term, count,
+      // in-context) — the report is session-scoped and quotes only their prompt.
+      const reportId = recordDefangReport(renderDefangReport(r.changes));
+      stream.button({
+        command: "aiSharePoint.showProxyDefangDetails",
+        title: "🛡️ See what was changed",
+        arguments: [reportId],
+      });
+    }
   } else if (proxyMode === "warn" && proxyTerms.length > 0) {
     const hits = scanForTerms(`${request.prompt}\n${contextBlock ?? ""}`, proxyTerms);
     if (hits.length > 0) {

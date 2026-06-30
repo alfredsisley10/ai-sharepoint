@@ -25,6 +25,7 @@ import { registerLessonsTools } from "./chat/lessonsTools";
 import { registerMemoryTools } from "./chat/memoryTools";
 import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
+import { getDefangReport } from "./chat/proxyDefangLog";
 import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
 import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
@@ -6318,6 +6319,20 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       void vscode.window.showInformationMessage(`"${pick.label}" comes from settings — edit aiSharePoint.proxy.blockedTerms to change it.`);
     }
+  });
+
+  // Open the "what was changed" report for a defanged chat request (invoked from
+  // the button the participant renders). The report is session-scoped.
+  register("aiSharePoint.showProxyDefangDetails", async (arg?: unknown) => {
+    const md = typeof arg === "string" ? getDefangReport(arg) : undefined;
+    if (!md) {
+      void vscode.window.showInformationMessage(
+        "Those proxy-avoidance details are no longer available — the report is kept only for the current session.",
+      );
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: md });
+    await vscode.window.showTextDocument(doc, { preview: true });
   });
 
   // #2 — review/curate the active project's AI-managed memory item by item
