@@ -1,7 +1,7 @@
 /**
  * Verbose wire logging: one process-global tap that every integration
  * (Graph, Confluence/Jira HTTP, MSAL token endpoints, LDAP, databases,
- * Vertex, Power BI, Copilot/vscode.lm) emits request/response events into.
+ * Power BI, Copilot/vscode.lm) emits request/response events into.
  *
  * Redaction is layered and fail-closed:
  *  1. STRUCTURAL — taps never hand secrets to this module: Authorization
@@ -19,7 +19,7 @@
 
 export interface WireEvent {
   /** Integration tag: graph, http, msal, ldap, mssql, postgres, mysql,
-   *  mongodb, vertex, powerbi, copilot, tool. */
+   *  mongodb, powerbi, copilot, tool. */
   integration: string;
   /** "→" request · "←" response · "✗" failure. */
   direction: "→" | "←" | "✗";

@@ -19,10 +19,6 @@ test("each tool gets a meaningful, input-aware line", () => {
     "Reading CMDB schema for “ownership”…",
   );
   assert.equal(
-    describeToolCall("aisharepoint_vertex_answer", { source: "Corp Search", query: "policy" }),
-    "Asking Corp Search “policy”…",
-  );
-  assert.equal(
     describeToolCall("aisharepoint_run_bookmark", { name: "Open incidents" }),
     "Running bookmark “Open incidents”…",
   );

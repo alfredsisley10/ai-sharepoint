@@ -113,7 +113,7 @@ Connection** (also wipes tokens unless another connection uses the same tenant).
 
 ### Reference Sources
 Your read-only context: Confluence, Jira, GitHub (github.com or Enterprise Server), LDAP/AD,
-databases, Vertex AI Search, Power BI,
+databases, Power BI,
 Microsoft 365 Copilot, ServiceNow, Splunk. Add (+), test, browse & bookmark, schema tools, and the ER diagram all live
 here — see [Reference sources](#reference-sources-confluence--jira). When a project is active,
 the view header shows it and the list is scoped to that project's sources.
@@ -162,7 +162,7 @@ Click **Verbose Wire Logging** in the Support view (or run *Toggle Verbose Wire 
 the AI SharePoint log shows every integration's traffic as `[wire:…]` lines — request (`→`),
 response (`←`), failure (`✗`) — with method/target, status, timing, and capped payload detail:
 Graph (SharePoint/Teams/Outlook), Confluence/Jira, MSAL sign-in, LDAP binds & searches, the
-exact SQL sent to databases (with the server's error frames), MongoDB specs, Vertex AI Search,
+exact SQL sent to databases (with the server's error frames), MongoDB specs,
 Power BI, Copilot prompts/responses, and each chat tool call. **Secrets never appear**: auth
 headers are masked to their scheme, sign-in/token bodies are withheld entirely, passwords are
 structurally never logged, secret-shaped fields are scrubbed, and database/directory **result
@@ -474,37 +474,6 @@ reasons — ADR-0022):
   shown), so known-but-messy joins stay on the map.
 - **TLS** trusts the OS store and the shared pinned CA bundle setting
   (`aiSharePoint.ldap.caCertificatesFile` — applies to all non-HTTP sources).
-
-### Vertex AI Search (Google enterprise search)
-
-Connect your organization's **Vertex AI Search** app (the enterprise Gemini search portal):
-
-- **Add** (Reference Sources → `+` → *Vertex AI Search*): pick **"Find my search app via
-  Google SSO"** and the wizard lists your projects and apps (probing global/us/eu) — no IDs to
-  know. Or choose manual entry and **paste any URL you have** — including the **corporate
-  search page you open via SSO**
-  (`https://vertexaisearch.cloud.google/<region>/home/cid/<app id>?csesidx=…` — the region and
-  app id are read from it; the `csesidx` session id is ignored), a Cloud Console link, or the
-  serving config. It pre-fills whatever the URL carries; the corporate page doesn't name the
-  hosting project, so the wizard offers **"Find the project for me"** — it scans the projects
-  your Google sign-in can see and probes which one hosts the app (no IDs to know). Manual entry
-  remains for accounts that use the app without any project role (`gcloud projects list` —
-  locally or at shell.cloud.google.com — or ask whoever shared the page).
-- **SSO via the gcloud CLI (recommended)**: each call uses a **live token from your existing
-  `gcloud auth login` session** — your corporate Google SSO — and nothing is ever stored.
-  No CLI? Paste an OAuth access token instead (kept in your OS keychain; ~1 h lifetime, the
-  error message tells you when to refresh it).
-- **No GCP access at all?** (Common when the search page is reached via **Entra ID / Azure AD
-  SSO** federation.) Everything you need is in the **search page's own network traffic**: press
-  `F12` → **Network** on the page, run a search, click the request named `search`/`answer`/
-  `servingConfigs` — its **URL embeds `projects/<number>/locations/…/engines/…`** (paste it
-  into the wizard's project step; a project *number* works like an ID), and its **Request
-  Headers carry `Authorization: Bearer …`** — copy the token value (without the word `Bearer`)
-  as the pasted-token sign-in. The token is your own session's (~1 h); re-paste via *Test
-  Context Source* when it expires.
-- **Search and analysis in chat**: plain searches return enterprise hits; ask for analysis and
-  the `#spVertexAnswer` tool returns a **Gemini-grounded answer with citations** from your
-  corpus (*"@sharepoint ask Vertex what our data-retention policy says"*).
 
 ### GitHub
 
@@ -870,7 +839,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Apply Repository to SharePoint (write-back)… | Write repo changes to the live site — previewed, freshness-checked, snapshot-guarded |
 | Revert Site to Commit… | Make the live site match an earlier snapshot commit (ADR-0005) |
 | Export / Import Reference Config | Share sources + bookmarks with the team, secret-free (ADR-0013) |
-| Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases/Vertex AI Search) |
+| Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases/Power BI/ServiceNow) |
 | Load/Refresh / Index / View Database Schema · Pre-cache Source Catalog | Schema understanding (ADR-0024) and catalog pre-cache per source |
 | Draft Teams Message / Draft Outlook Email · Review & Send / Edit / Discard Communication Draft | Approval-gated communications (ADR-0025) |
 | Configure Teams Webhook (no admin consent)… | Add/remove channel Incoming Webhooks so Teams drafts can post without `Chat.ReadWrite` |

@@ -13,7 +13,6 @@ export type ContextSourceType =
   | "postgres"
   | "mysql"
   | "mongodb"
-  | "vertexai"
   | "powerbi"
   | "servicenow"
   | "splunk"
@@ -43,9 +42,7 @@ export function contextCredentialUi(type: ContextSourceType): ContextCredentialU
 
 /** Auth method descriptor persisted per source (ADR-0014/0015).
  *  ldap-simple = LDAP simple bind; ntlm = Windows Authentication (MSSQL);
- *  gcloud-sso = live token from the gcloud CLI's Google SSO session
- *  (nothing persisted — the keychain entry is a marker);
- *  az-sso = live token from the Azure CLI's `az login` session (same
+ *  az-sso = live token from the Azure CLI's `az login` session (a
  *  marker-only pattern — the no-admin-consent Power BI path);
  *  aad-sso = Microsoft 365 sign-in reused from a connected site (the
  *  keychain entry stores only the provider/cache handles, no secret). */
@@ -56,7 +53,6 @@ export type ContextAuthMethod =
   | "github-app"
   | "ldap-simple"
   | "ntlm"
-  | "gcloud-sso"
   | "az-sso"
   | "aad-sso"
   | "snow-oauth"

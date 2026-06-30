@@ -91,7 +91,7 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
           ? new vscode.ThemeIcon("eye", new vscode.ThemeColor("charts.yellow"))
           : new vscode.ThemeIcon("eye-closed"),
         tooltip:
-          "Log the full request/response detail of every integration — Graph (SharePoint/Teams/Outlook), Confluence/Jira, LDAP, databases, Vertex AI Search, Power BI, MSAL sign-in, and Copilot prompts. Secrets are redacted in layers (auth headers masked, token bodies withheld, credential-shaped values scrubbed). Local only; never included in diagnostics exports. Click to toggle.",
+          "Log the full request/response detail of every integration — Graph (SharePoint/Teams/Outlook), Confluence/Jira, LDAP, databases, Power BI, MSAL sign-in, and Copilot prompts. Secrets are redacted in layers (auth headers masked, token bodies withheld, credential-shaped values scrubbed). Local only; never included in diagnostics exports. Click to toggle.",
         command: { command: "aiSharePoint.toggleVerboseLogging", title: "Toggle" },
       },
       {

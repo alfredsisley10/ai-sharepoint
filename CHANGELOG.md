@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.99.0 — 2026-06-30
+
+### Removed — Google Vertex AI Search connector
+- The **Vertex AI Search** reference-source connector has been **removed**. In practice it could
+  not be made to work for normal end users: the Google sign-in/setup paths (gcloud SSO, pasted
+  OAuth token, project/engine discovery) were too fragile — particularly under Entra / Azure AD
+  federation, where accounts often hold no Google Cloud project role at all.
+- Gone: the **Vertex AI Search** option in *Add Context Source*, the `vertex_answer`
+  (`#spVertexAnswer`) grounded-answer tool, and all Vertex search/verify routing. The
+  now-orphaned **Google SSO (gcloud)** credential method was removed with it; no other connector
+  used it. Existing connectors (Confluence, Jira, GitHub, LDAP/AD, databases, Power BI,
+  Microsoft 365 Copilot, ServiceNow, Splunk, Splunk Observability, Grafana) are unaffected.
+- Any previously-saved Vertex source no longer loads and can be deleted from Reference Sources.
+  See ADR-0026 (now marked *Reverted*) for the rationale.
+
 ## 0.98.0 — 2026-06-30
 
 ### Fixed — Microsoft 365 Copilot reconnect asked for an "Atlassian account email"

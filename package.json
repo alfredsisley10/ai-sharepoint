@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.98.0",
+  "version": "0.99.0",
   "release": {
     "channel": "standard"
   },
@@ -853,7 +853,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "List the user's configured read-only reference sources (Confluence, Jira, GitHub (github.com or Enterprise Server), LDAP/Active Directory, SQL Server/PostgreSQL/MySQL/MongoDB databases, Vertex AI Search, Power BI, ServiceNow, Splunk, Splunk Observability Cloud, Grafana) with their chat alias (the short handle users say, e.g. \"CMDB\"), description of contents, type, deployment, and verification state. Use before searching to discover what is available and map a name the user mentioned to a source.",
+        "modelDescription": "List the user's configured read-only reference sources (Confluence, Jira, GitHub (github.com or Enterprise Server), LDAP/Active Directory, SQL Server/PostgreSQL/MySQL/MongoDB databases, Power BI, ServiceNow, Splunk, Splunk Observability Cloud, Grafana) with their chat alias (the short handle users say, e.g. \"CMDB\"), description of contents, type, deployment, and verification state. Use before searching to discover what is available and map a name the user mentioned to a source.",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -1256,7 +1256,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. GitHub (github.com or Enterprise Server): plain text searches issues & pull requests; prefix 'code:', 'repos:', or 'commits:' to search those corpora instead; or JSON {\"type\": \"code|issues|repositories|commits\", \"q\": \"...\", \"limit\": n} (q accepts GitHub's own qualifiers like repo:owner/name, org:, is:open, language:, author:). LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved). Vertex AI Search sources: plain-text queries return enterprise search hits (use the vertex_answer tool for synthesized answers). Power BI sources: JSON {\"dataset\": \"<id or name>\", \"dax\": \"EVALUATE …\"} runs a read-only DAX query (use db_schema-style starter EVALUATE INFO.TABLES() to discover tables). ServiceNow sources: plain text (text-index search of the default table), a native encoded query (\"active=true^priority=1\"), or JSON {\"table\": \"cmdb_ci_appl\", \"query\": \"...\", \"fields\": [...], \"limit\": n}. Splunk sources: plain keywords (default index, last 24h), raw SPL (\"search index=web error | stats count by host\", \"| tstats ...\"), or JSON {\"spl\": \"...\", \"earliest\": \"-7d\", \"latest\": \"now\", \"limit\": n} — write/exfil commands (delete/collect/outputlookup/sendemail/script) are blocked. Splunk Observability Cloud sources: plain text searches the configured default object type, or JSON {\"type\": \"metric|dimension|detector|dashboard|incident\", \"query\": \"cpu\", \"limit\": n} (incidents = alerts firing now). Grafana sources: plain text searches dashboards, or JSON {\"type\": \"dashboard|folder|alert|annotation|datasource|panel\", \"query\": \"...\", \"limit\": n, \"folderUid\": \"...\"} — alert returns unified-alerting rule STATE (firing/pending/inactive); panel returns LIVE PANEL DATA by running a dashboard panel's own queries via /api/ds/query and summarizing each series (last/min/max), via {\"type\":\"panel\",\"query\":\"<dashboard uid or title>\",\"panel\":\"<panel id or title>\",\"from\":\"now-6h\"} — so the Grafana connector reads real metric/series values, not only dashboard metadata. SQL Server statements are COST-GATED: table sizes and leading index columns are read from catalog stats first (instant), and a statement estimated to scan a big table runs against a bounded TOP-sample instead — the first result then says so and lists per-table row counts (use those instead of COUNT(*) to size tables). To run the original statement in full, set allowExpensive=true ONLY after the user explicitly accepts a potentially slow scan. Results are capped for chat — when the user wants the dataset itself, use aisharepoint_export_context_results instead (writes up to 50k rows to a workspace file without loading them into context).",
+        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. GitHub (github.com or Enterprise Server): plain text searches issues & pull requests; prefix 'code:', 'repos:', or 'commits:' to search those corpora instead; or JSON {\"type\": \"code|issues|repositories|commits\", \"q\": \"...\", \"limit\": n} (q accepts GitHub's own qualifiers like repo:owner/name, org:, is:open, language:, author:). LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved). Power BI sources: JSON {\"dataset\": \"<id or name>\", \"dax\": \"EVALUATE …\"} runs a read-only DAX query (use db_schema-style starter EVALUATE INFO.TABLES() to discover tables). ServiceNow sources: plain text (text-index search of the default table), a native encoded query (\"active=true^priority=1\"), or JSON {\"table\": \"cmdb_ci_appl\", \"query\": \"...\", \"fields\": [...], \"limit\": n}. Splunk sources: plain keywords (default index, last 24h), raw SPL (\"search index=web error | stats count by host\", \"| tstats ...\"), or JSON {\"spl\": \"...\", \"earliest\": \"-7d\", \"latest\": \"now\", \"limit\": n} — write/exfil commands (delete/collect/outputlookup/sendemail/script) are blocked. Splunk Observability Cloud sources: plain text searches the configured default object type, or JSON {\"type\": \"metric|dimension|detector|dashboard|incident\", \"query\": \"cpu\", \"limit\": n} (incidents = alerts firing now). Grafana sources: plain text searches dashboards, or JSON {\"type\": \"dashboard|folder|alert|annotation|datasource|panel\", \"query\": \"...\", \"limit\": n, \"folderUid\": \"...\"} — alert returns unified-alerting rule STATE (firing/pending/inactive); panel returns LIVE PANEL DATA by running a dashboard panel's own queries via /api/ds/query and summarizing each series (last/min/max), via {\"type\":\"panel\",\"query\":\"<dashboard uid or title>\",\"panel\":\"<panel id or title>\",\"from\":\"now-6h\"} — so the Grafana connector reads real metric/series values, not only dashboard metadata. SQL Server statements are COST-GATED: table sizes and leading index columns are read from catalog stats first (instant), and a statement estimated to scan a big table runs against a bounded TOP-sample instead — the first result then says so and lists per-table row counts (use those instead of COUNT(*) to size tables). To run the original statement in full, set allowExpensive=true ONLY after the user explicitly accepts a potentially slow scan. Results are capped for chat — when the user wants the dataset itself, use aisharepoint_export_context_results instead (writes up to 50k rows to a workspace file without loading them into context).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1446,34 +1446,6 @@
               "description": "Concept to find columns for — e.g. 'ownership', 'owned by', 'cost', 'application'. Omit to list tables."
             }
           }
-        }
-      },
-      {
-        "name": "aisharepoint_vertex_answer",
-        "displayName": "Vertex AI Search Answer",
-        "toolReferenceName": "spVertexAnswer",
-        "canBeReferencedInPrompt": true,
-        "icon": "$(search)",
-        "tags": [
-          "sharepoint",
-          "context"
-        ],
-        "modelDescription": "Ask a configured Vertex AI Search source (Google enterprise search) for a Gemini-grounded ANSWER with citations over its indexed corpus — use for analytical questions ('summarize our policy on X') where synthesized analysis beats raw hits. For raw result lists use the regular search tool against the same source. Read-only.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "source": {
-              "type": "string",
-              "description": "Vertex AI Search source alias, display name, or type. Optional when exactly one source exists."
-            },
-            "query": {
-              "type": "string",
-              "description": "The question to answer over the enterprise corpus."
-            }
-          },
-          "required": [
-            "query"
-          ]
         }
       },
       {

@@ -162,7 +162,7 @@ test("azInvocation uses shell:true for the Windows .cmd shim; parseAzTokenOutput
   const { azInvocation, parseAzTokenOutput, POWERBI_RESOURCE } = await import(
     "../src/context/adapters/powerbi"
   );
-  // Same CVE-2024-27980 posture as gcloud: .cmd shims need a shell on Windows.
+  // CVE-2024-27980 posture: Windows .cmd shims need a shell to invoke safely.
   assert.deepEqual(azInvocation("win32"), { bin: "az.cmd", shell: true });
   assert.deepEqual(azInvocation("linux"), { bin: "az", shell: false });
   assert.equal(

@@ -108,16 +108,6 @@ import {
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { CatalogStore } from "./context/catalogStore";
 import {
-  buildVertexServingConfig,
-  vertexUrlIssue,
-  parseVertexHint,
-  endpointForLocation,
-  listVertexEngines,
-  listGcloudProjects,
-  findVertexProjectForEngine,
-  getVertexToken,
-} from "./context/adapters/vertexSearch";
-import {
   buildCatalog,
   isExpired,
   catalogAge,
@@ -2023,7 +2013,6 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(database) PostgreSQL", description: "read-only session, capped", value: "postgres" as ContextSourceType },
         { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
         { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
-        { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
         { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Azure CLI or Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
         { label: "$(sparkle) Microsoft 365 Copilot", description: "grounded enterprise context via the Copilot Retrieval API — reuses your Microsoft 365 sign-in", value: "m365copilot" as ContextSourceType },
         { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
@@ -2503,190 +2492,6 @@ export function activate(context: vscode.ExtensionContext): void {
       // adding and later reconnecting an m365copilot source prompt identically.
       presetCredential = await pickM365GraphCredential();
       if (!presetCredential) return;
-    } else if (typePick.value === "vertexai") {
-      deployment = "cloud";
-      // Pilot: users often only have the corporate search URL — offer SSO
-      // discovery (projects → apps across global/us/eu) and hint-parsing of
-      // any pasted URL before falling back to manual IDs.
-      const setupMode = await vscode.window.showQuickPick(
-        [
-          {
-            label: "$(account) Find my search app via Google SSO (recommended)",
-            description: "uses your gcloud sign-in to list projects and apps — no IDs needed",
-            value: "discover" as const,
-          },
-          {
-            label: "$(edit) Enter details — or paste any URL you have",
-            description: "corporate search page, Cloud Console, or serving-config URL",
-            value: "manual" as const,
-          },
-        ],
-        { ignoreFocusOut: true, title: "Vertex AI Search — set up from what you have" },
-      );
-      if (!setupMode) return;
-      if (setupMode.value === "discover") {
-        const projects = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: "Listing your Google Cloud projects (gcloud SSO)…" },
-          () => listGcloudProjects(),
-        );
-        if (projects.length === 0) {
-          void vscode.window.showWarningMessage(
-            "Your Google SSO session sees no projects. Ask the search app's owner for the project ID and app ID, then re-add with manual entry.",
-          );
-          return;
-        }
-        const projPick = await vscode.window.showQuickPick(
-          projects.map((pr) => ({ label: pr.projectId, description: pr.name, pr })),
-          { ignoreFocusOut: true, title: "Which project hosts the search app? (ask the app owner if unsure)", matchOnDescription: true },
-        );
-        if (!projPick) return;
-        const token = await getVertexToken({ method: "gcloud-sso", secret: "gcloud-cli-session" });
-        const engines = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `Looking for search apps in ${projPick.pr.projectId} (global/us/eu)…` },
-          () => listVertexEngines(token, projPick.pr.projectId, 20_000),
-        );
-        if (engines.length === 0) {
-          void vscode.window.showWarningMessage(
-            `No search apps are visible to you in ${projPick.pr.projectId}. Your account may lack list permission even though searching works — ask the app owner for the location (global/us/eu) and app ID, then re-add with manual entry (pasting the corporate search page's URL pre-fills what it can).`,
-          );
-          return;
-        }
-        const engPick = await vscode.window.showQuickPick(
-          engines.map((e) => ({ label: e.displayName, description: `${e.engineId} · ${e.location}`, e })),
-          { ignoreFocusOut: true, title: "Pick your search app" },
-        );
-        if (!engPick) return;
-        baseUrl = buildVertexServingConfig({
-          projectId: projPick.pr.projectId,
-          location: engPick.e.location,
-          engineId: engPick.e.engineId,
-          endpoint: endpointForLocation(engPick.e.location),
-        });
-      } else {
-        const first = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          title: "Vertex AI Search — project ID, or paste ANY URL you have",
-          placeHolder: "my-corp-search-prod — or e.g. https://vertexaisearch.cloud.google/us/home/cid/… (your search page)",
-          prompt:
-            "Accepted URLs: the corporate search page you open via SSO (vertexaisearch.cloud.google/<region>/home/cid/<app>?csesidx=… — region and app are read from it; the csesidx session id is ignored), a Cloud Console app URL, or a full serving-config URL.",
-          validateInput: (v) => (v.trim() ? undefined : "Enter a project ID or paste a URL"),
-        });
-        if (!first) return;
-        if (vertexUrlIssue(first.trim()) === undefined) {
-          baseUrl = first.trim();
-        } else {
-          const isUrlish = /[/:]/.test(first.trim());
-          const hint = isUrlish ? parseVertexHint(first) : {};
-          let projectId = hint.projectId ?? (isUrlish ? undefined : first.trim());
-          // The corporate search page names the app (cid) and region but not
-          // the hosting project — and a standard user can rarely "ask the
-          // admin". With the app id + location known, the wizard can FIND the
-          // project itself: scan the projects the user's Google sign-in can
-          // already see and probe which one hosts this app.
-          if (!projectId && hint.engineId && hint.location) {
-            const how = await vscode.window.showQuickPick(
-              [
-                {
-                  label: "$(search) Find the project for me (recommended)",
-                  description: "scans the projects your gcloud sign-in can see for this app — no IDs to know",
-                  value: "auto" as const,
-                },
-                {
-                  label: "$(edit) Enter the project ID myself",
-                  description: "if you already know it",
-                  value: "manual" as const,
-                },
-              ],
-              {
-                ignoreFocusOut: true,
-                title: `Your search page names the app (${hint.engineId}) and region (${hint.location}) — only the hosting project is missing`,
-              },
-            );
-            if (!how) return;
-            if (how.value === "auto") {
-              try {
-                const token = await getVertexToken({ method: "gcloud-sso", secret: "gcloud-cli-session" });
-                const projects = await vscode.window.withProgress(
-                  { location: vscode.ProgressLocation.Notification, title: "Listing the projects your Google sign-in can see…" },
-                  () => listGcloudProjects(),
-                );
-                const matches = await vscode.window.withProgress(
-                  { location: vscode.ProgressLocation.Notification, title: `Searching ${projects.length} project(s) for app "${hint.engineId}"…` },
-                  (progress) =>
-                    findVertexProjectForEngine(token, projects, hint.engineId!, hint.location!, 15_000, (checked, total) =>
-                      progress.report({ message: `${checked}/${total} checked` }),
-                    ),
-                );
-                if (matches.length === 1) {
-                  projectId = matches[0];
-                  void vscode.window.showInformationMessage(
-                    `Found it: app "${hint.engineId}" lives in project "${projectId}".`,
-                  );
-                } else if (matches.length > 1) {
-                  const pick = await vscode.window.showQuickPick(
-                    matches.map((m) => ({ label: m })),
-                    { ignoreFocusOut: true, title: "This app id exists in several projects you can see — pick one" },
-                  );
-                  if (!pick) return;
-                  projectId = pick.label;
-                } else {
-                  void vscode.window.showWarningMessage(
-                    `None of the ${projects.length} project(s) visible to your Google sign-in host app "${hint.engineId}" in ${hint.location} — your account likely uses the app without any project role (common with Entra/Azure AD SSO). Continue to manual entry and paste a request URL from the search page's Network tab — it embeds the project number.`,
-                  );
-                }
-              } catch (err) {
-                log.warn(`Vertex project auto-detection failed: ${err instanceof Error ? err.message : String(err)}`);
-                void vscode.window.showWarningMessage(
-                  `Could not auto-detect the project: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              }
-            }
-          }
-          if (!projectId) {
-            const entered = (
-              await vscode.window.showInputBox({
-                ignoreFocusOut: true,
-                title: "Google Cloud project — ID, number, or a pasted request from your search page",
-                prompt: hint.engineId
-                  ? `No GCP access at all (e.g. you reach the search page via Entra/Azure AD SSO)? The page's OWN traffic carries it: on the search page press F12 → Network → run a search → click the request named search/answer/servingConfigs → copy its full URL and paste it here — it embeds projects/<number>/… and the project NUMBER works like an ID. Otherwise: "Find the project for me" (previous step), \`gcloud projects list\` (terminal or shell.cloud.google.com), or ask whoever shared the page.`
-                  : "That URL didn't carry a project ID — paste a request URL from the search page's Network tab (it embeds projects/<number>/…), or get the ID from the Cloud Console URL (?project=…) / the app owner.",
-                validateInput: (v) => (v.trim() ? undefined : "Enter a project ID/number, or paste a request URL containing projects/…"),
-              })
-            )?.trim();
-            if (!entered) return;
-            // A pasted request URL / resource string carries the project —
-            // and often a more precise location/engine; the fuller capture
-            // wins over the page-URL hint.
-            const pastedHint = /projects\//i.test(entered) ? parseVertexHint(entered) : {};
-            projectId = pastedHint.projectId ?? entered;
-            if (pastedHint.location) hint.location = pastedHint.location;
-            if (pastedHint.engineId) hint.engineId = pastedHint.engineId;
-          }
-          const location = await vscode.window.showInputBox({
-            ignoreFocusOut: true,
-            title: "Location",
-            value: hint.location ?? "global",
-            prompt: "global, us, or eu — pre-filled when your pasted URL contained it; otherwise the app owner knows. The connector probes the matching regional endpoint automatically.",
-            validateInput: (v) => (v.trim() ? undefined : "Enter the location (e.g. global)"),
-          });
-          if (!location) return;
-          const engineId = await vscode.window.showInputBox({
-            ignoreFocusOut: true,
-            title: "App (engine) ID",
-            value: hint.engineId ?? "",
-            placeHolder: "enterprise-search_1700000000000",
-            prompt: "Pre-filled when your pasted URL contained it; otherwise shown in the Cloud Console app list (ask the owner).",
-            validateInput: (v) => (v.trim() ? undefined : "Enter the app/engine ID"),
-          });
-          if (!engineId) return;
-          baseUrl = buildVertexServingConfig({
-            projectId,
-            location: location.trim(),
-            engineId: engineId.trim(),
-            endpoint: endpointForLocation(location.trim()),
-          });
-        }
-      }
     } else if (DB_TYPES.has(typePick.value)) {
       const placeholders: Record<string, string> = {
         postgres: "postgresql://pghost.corp.example:5432/mydb  (?ssl=false to disable TLS)",
@@ -7645,38 +7450,6 @@ async function promptContextCredential(
     });
     if (!secret) return undefined;
     return { method: "basic", username: username.trim(), secret };
-  }
-  if (type === "vertexai") {
-    const mode = await vscode.window.showQuickPick(
-      [
-        {
-          label: "$(account) Google SSO via the gcloud CLI (recommended)",
-          description: "uses your existing `gcloud auth login` session — tokens are never stored",
-          value: "gcloud-sso" as const,
-        },
-        {
-          label: "$(key) Paste an OAuth access token",
-          description: "expires after ~1 h — for machines without the gcloud CLI",
-          value: "pat" as const,
-        },
-      ],
-      { ignoreFocusOut: true, title: "Vertex AI Search sign-in (Google SSO)" },
-    );
-    if (!mode) return undefined;
-    if (mode.value === "gcloud-sso") {
-      // Marker only — each call asks the CLI for a live SSO token.
-      return { method: "gcloud-sso", secret: "gcloud-cli-session" };
-    }
-    const secret = await vscode.window.showInputBox({
-      ignoreFocusOut: true,
-      title: "Google OAuth access token",
-      password: true,
-      prompt:
-        "From `gcloud auth print-access-token` — or, with NO gcloud/GCP access (Entra/Azure AD SSO users): on your corporate search page press F12 → Network → run a search → click the search request → Request Headers → copy the `Authorization: Bearer …` value WITHOUT the word Bearer. It's your own session's token (~1 h; re-paste via Test Context Source). Stored only in your OS keychain.",
-      validateInput: (v) => (v.trim().replace(/^bearer\s+/i, "") ? undefined : "Paste the token value"),
-    });
-    if (!secret) return undefined;
-    return { method: "pat", secret: secret.trim().replace(/^bearer\s+/i, "") };
   }
   if (type === "mssql" || type === "postgres" || type === "mysql" || type === "mongodb") {
     let dbMethod: ContextCredential["method"] = "basic";

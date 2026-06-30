@@ -412,7 +412,6 @@ test("contextCredentialUi sends every non-Entra source type to the generic promp
     "postgres",
     "mysql",
     "mongodb",
-    "vertexai",
     "servicenow",
     "splunk",
     "splunkobs",

@@ -1,6 +1,12 @@
 # ADR-0026: Vertex AI Search connector (Google enterprise search, SSO)
 
-- **Status:** Accepted (2026-06-11)
+- **Status:** **Reverted** (2026-06-30) — the Vertex AI Search connector was removed in 0.99.0.
+  In practice pilots could not get it working: the Google auth/setup paths (gcloud SSO, pasted
+  OAuth token, project/engine discovery) were too fragile for normal end users — especially
+  under Entra/Azure AD federation, where accounts often hold no GCP project role at all. The
+  `vertexai` source type, the `vertexSearch` adapter, the `vertex_answer` tool, and the
+  `gcloud-sso` auth method were deleted. The record below is retained for history; this ADR
+  returns to consideration only if a reliable end-user auth path emerges.
 - **Context:** Pilots run an enterprise Gemini-grounded search portal on
   Vertex AI Search (vertexaisearch.cloud.google.com app; Discovery
   Engine API underneath) reached via Google SSO, and want the assistant

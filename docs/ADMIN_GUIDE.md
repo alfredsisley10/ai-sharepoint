@@ -71,7 +71,6 @@ accordingly.
 | Site repository push (optional) | `github.com` and/or your GitHub Enterprise Server host — via the user's own git |
 | Database sources (optional) | Your SQL Server (1433), PostgreSQL (5432), MySQL (3306), MongoDB (27017) hosts — direct TCP, read-only (ADR-0022) |
 | Communications (optional) | `graph.microsoft.com` (same host as site reads) — Teams chats / Outlook mail, send-capable scopes only on first use (ADR-0025). Teams **Incoming Webhook** alternative posts to `*.webhook.office.com` (or the Power Automate `*.logic.azure.com` host of the configured webhook) — no Graph, no consent |
-| Vertex AI Search (optional) | `discoveryengine.googleapis.com` (or regional `*-discoveryengine.googleapis.com`); SSO tokens come from the local gcloud CLI — no Google endpoints are contacted for auth by the extension itself (ADR-0026) |
 | Power BI (optional) | `api.powerbi.com` — read-only Table/executeQueries REST (ADR-0027) |
 | Microsoft 365 Copilot (optional) | `graph.microsoft.com` (same host as site reads) — read-only grounding; reuses the Microsoft 365 sign-in. Two engines, opt-in per source: **Retrieval API** (`POST /copilot/retrieval`, documents/connectors — needs a **Microsoft 365 Copilot licence** + `Files.Read.All`/`Sites.Read.All`, or `ExternalItem.Read.All` for connectors) and **Microsoft Search API** (`POST /search/query` — email `Mail.Read`, calendar `Calendars.Read`, Teams `Chat.Read`, people `People.Read`; **no Copilot licence required**). The delegated consent requested equals exactly the surfaces enabled (ADR-0034/0035) |
 | ServiceNow (optional) | Your instance host (`*.service-now.com` or custom) — read-only Table API (ADR-0028) |
@@ -220,7 +219,7 @@ user's own git** — the extension holds no Git credentials and never force-push
 - Git itself must be installed (the built-in VS Code Git extension is used). Credential setup
   (HTTPS credential manager, SSH keys) follows your existing developer onboarding.
 
-## 7. Reference sources (Confluence / Jira / LDAP / AD / databases / Vertex / Power BI / ServiceNow) — notes for admins
+## 7. Reference sources (Confluence / Jira / LDAP / AD / databases / Power BI / ServiceNow) — notes for admins
 
 - Strictly **read-only**: the extension ships no write path to these systems; results are
   size-capped and cached briefly on the client.
@@ -247,12 +246,8 @@ user's own git** — the extension holds no Git credentials and never force-push
   `aiSharePoint.context.allowSchemaIndexing: false` (machine-scoped, workspace-immutable in
   untrusted workspaces). Catalogs live in VS Code global storage and are wiped with the source.
 
-### Vertex AI Search (ADR-0026), Power BI (ADR-0027), ServiceNow (ADR-0028)
+### Power BI (ADR-0027), ServiceNow (ADR-0028)
 
-- **Vertex AI Search:** read-only `:search` / `:answer` calls. Default sign-in mode asks the
-  workstation's **gcloud CLI** for a live SSO token per call (nothing stored); the fallback is
-  a pasted OAuth access token in the OS keychain. The extension never holds Google refresh
-  tokens or service-account keys.
 - **Power BI:** reuses the Microsoft 365 sign-in (delegated `Workspace.Read.All` +
   `Dataset.Read.All`); no separate credential exists. Queries are DAX via `executeQueries` —
   a read-only API — and the user's licenses, workspace roles, and row-level security are
