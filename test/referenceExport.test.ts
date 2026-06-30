@@ -4,12 +4,14 @@ import {
   buildReferenceExport,
   parseReferenceImport,
   planMemoryImport,
+  planPromptImport,
   exportLeakBlockers,
   isReferenceExportSchema,
   REFERENCE_EXPORT_SCHEMA,
 } from "../src/context/referenceExport";
 import { ContextSource, ContextBookmark } from "../src/context/types";
 import { MemoryItem, MemoryScope, MemoryScopeKind } from "../src/context/memory";
+import { PromptItem, PromptScope, PromptScopeKind } from "../src/context/promptLibrary";
 import { scanForLeaks } from "../src/diagnostics/bundle";
 
 const T0 = "2026-06-11T12:00:00.000Z";
@@ -333,6 +335,90 @@ test("import parses and clamps memory notes; malformed ones are skipped with a w
   assert.equal(parsed.memory[0].title, "Owners", "title trimmed");
   assert.equal(parsed.memory[1].origin, "user", "unknown origin coerced to user");
   assert.ok(parsed.warnings.some((w) => /memory note/i.test(w)));
+});
+
+function promptItems(): PromptItem[] {
+  return [
+    { id: "g1", scope: { kind: "global" }, title: "Exec summary", body: "Summarize for execs.", createdAt: T0, updatedAt: T0 },
+    { id: "s1", scope: { kind: "source", key: "s1" }, title: "Bug triage", body: "Group open bugs by severity.", tags: ["triage"], createdAt: T0, updatedAt: T0 },
+    { id: "p1", scope: { kind: "project", key: "proj-1" }, title: "Kickoff", body: "Draft a kickoff agenda.", createdAt: T0, updatedAt: T0 },
+  ];
+}
+
+test("prompts round-trip: global carries no ref; source/project re-key to names", () => {
+  const exp = buildReferenceExport(
+    sources(),
+    [],
+    T0,
+    undefined,
+    [{ id: "proj-1", name: "AI Automation", sourceIds: ["s1"] }],
+    undefined,
+    undefined,
+    undefined,
+    promptItems(),
+    new Map([["proj-1", "AI Automation"]]),
+  );
+  assert.equal(exp.prompts?.length, 3);
+  const g = exp.prompts!.find((p) => p.scopeKind === "global")!;
+  assert.equal(g.scopeRef, undefined, "global prompt carries no ref");
+  assert.equal(exp.prompts!.find((p) => p.scopeKind === "source")!.scopeRef, "Corp Wiki");
+  assert.equal(exp.prompts!.find((p) => p.scopeKind === "project")!.scopeRef, "AI Automation");
+  assert.deepEqual(exportLeakBlockers(JSON.stringify(exp)), []);
+  const parsed = parseReferenceImport(JSON.stringify(exp), T0, () => "x");
+  assert.equal(parsed.prompts.length, 3);
+  assert.equal(parsed.prompts.find((p) => p.scopeKind === "global")!.scopeRef, undefined);
+});
+
+test("a project-scoped prompt is dropped if the project can't be named", () => {
+  // No project name map and the project isn't in the (empty) projects arg → dropped.
+  const exp = buildReferenceExport(sources(), [], T0, undefined, undefined, undefined, undefined, undefined, promptItems());
+  // global + source survive (source re-keys via byId); project drops.
+  assert.equal(exp.prompts?.length, 2);
+  assert.ok(!exp.prompts!.some((p) => p.scopeKind === "project"));
+});
+
+test("planPromptImport: global always resolves; scoped resolves or is unresolved; dedup by scope+title", () => {
+  const parsedPrompts = [
+    { scopeKind: "global" as PromptScopeKind, title: "Exec summary", body: "x" },
+    { scopeKind: "source" as PromptScopeKind, scopeRef: "Corp Wiki", title: "Bug triage", body: "y" },
+    { scopeKind: "project" as PromptScopeKind, scopeRef: "Unknown Proj", title: "Z", body: "z" },
+    { scopeKind: "global" as PromptScopeKind, title: "Exec Summary", body: "dup (case-folded)" },
+  ];
+  const resolve = (kind: PromptScopeKind, ref?: string): PromptScope | undefined => {
+    if (kind === "global") return { kind: "global" };
+    if (kind === "source" && ref === "Corp Wiki") return { kind: "source", key: "local-s1" };
+    return undefined;
+  };
+  let n = 0;
+  const plan = planPromptImport(parsedPrompts, resolve, [], () => `np-${n++}`, T0);
+  assert.equal(plan.toAdd.length, 2, "global + source; the case-dup is collapsed");
+  assert.equal(plan.duplicates, 1);
+  assert.equal(plan.unresolved.length, 1);
+  assert.equal(plan.unresolved[0].scopeRef, "Unknown Proj");
+  assert.equal(plan.toAdd.find((p) => p.scope.kind === "source")!.scope.key, "local-s1");
+});
+
+test("import parses prompts and clamps/validates; bad kinds and empty bodies are skipped", () => {
+  const doc = {
+    $schema: REFERENCE_EXPORT_SCHEMA,
+    exportedAt: T0,
+    notice: "",
+    sources: [],
+    bookmarks: [],
+    prompts: [
+      { scopeKind: "global", title: "  Keep  ", body: "ok" },
+      { scopeKind: "site", scopeRef: "https://x/", title: "Sited", body: "b" },
+      { scopeKind: "source", title: "No ref", body: "b" }, // scoped without ref → skipped
+      { scopeKind: "nope", title: "Bad kind", body: "b" }, // bad kind → skipped
+      { scopeKind: "global", title: "", body: "b" }, // empty title → skipped
+    ],
+  };
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => "x");
+  assert.equal(parsed.prompts.length, 2);
+  assert.equal(parsed.prompts[0].title, "Keep");
+  assert.equal(parsed.prompts[0].scopeRef, undefined, "global keeps no ref");
+  assert.equal(parsed.prompts[1].scopeRef, "https://x", "site ref trailing slash normalized");
+  assert.ok(parsed.warnings.some((w) => /prompt/i.test(w)));
 });
 
 test("import skips malformed entries with warnings, keeps valid ones", () => {

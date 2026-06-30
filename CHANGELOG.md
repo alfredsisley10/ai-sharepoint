@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.88.0 — 2026-06-30
+
+### Added — prompts in the combined export/import (with review + dedup)
+- The combined **Export Sites, Sources, Projects, Memory & Prompts** command now offers a **Prompt
+  Library** group — one row per scope that has prompts (**Global** + each site/source/project) — so
+  you choose which prompts travel.
+- **Import** lists each incoming prompt individually under **Prompt Library (review / decline)** so
+  you keep or drop them one by one, then attaches each to the right local scope. Prompts are
+  **portably keyed**: global prompts carry no reference; site prompts by URL; source prompts by the
+  source's display name; project prompts by the project's name (machine-local ids never travel).
+- **Dedup on import**: a prompt whose scope + title already exists is skipped (reported in the
+  summary); prompts whose site/source/project isn't present are listed as skipped rather than
+  orphaned. (Rule-based half of the planned merge; AI-assisted merge lands next.)
+- Still **secret-free**: prompts carry only title/body/tags. `planPromptImport` is pure and
+  unit-tested. This completes the Prompt Library (Phase 3): tab, scoping, copy-to-use, and sharing.
+
 ## 0.87.0 — 2026-06-30
 
 ### Added — Prompt Library (a new tab for reusable prompts)

@@ -3,6 +3,7 @@ import { normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./sourceRef";
 import { SourceSchema } from "./db/schemaIndex";
 import { Project, INSTRUCTIONS_MAX_CHARS, GOALS_MAX_CHARS, AI_CONTEXT_MAX_CHARS } from "./types";
 import { MemoryItem, MemoryScope, MemoryScopeKind, memoryKey, normalizeMemoryInput } from "./memory";
+import { PromptItem, PromptScope, PromptScopeKind, promptKey, normalizePromptInput } from "./promptLibrary";
 import { scanForLeaks } from "../diagnostics/bundle";
 
 /**
@@ -74,6 +75,18 @@ export interface ExportedMemory {
   origin: "user" | "ai";
 }
 
+/** A Prompt Library entry, portably keyed: global prompts carry no ref; site →
+ *  siteUrl; source → source displayName; project → project name (all remapped to
+ *  local ids on import). Secret-free reusable prompt text. */
+export interface ExportedPrompt {
+  scopeKind: PromptScopeKind;
+  /** Omitted for `global`; siteUrl / source displayName / project name otherwise. */
+  scopeRef?: string;
+  title: string;
+  body: string;
+  tags?: string[];
+}
+
 export interface ReferenceExport {
   $schema: typeof REFERENCE_EXPORT_SCHEMA;
   exportedAt: string;
@@ -99,6 +112,9 @@ export interface ReferenceExport {
   /** Per-entity memory notes (user + assistant-proposed), portably keyed. Optional
    *  so older importers tolerate it. Imported with review + dedup/merge. */
   memory?: ExportedMemory[];
+  /** Prompt Library entries (global or scoped), portably keyed. Optional so older
+   *  importers tolerate it. Imported with review + dedup/merge. */
+  prompts?: ExportedPrompt[];
 }
 
 export const EXPORT_NOTICE =
@@ -133,6 +149,10 @@ export function buildReferenceExport(
    *  re-keys even when its source descriptor isn't part of this export — the
    *  recipient resolves it against a same-named source they already have. */
   sourceNamesById?: Map<string, string>,
+  promptItems?: PromptItem[],
+  /** id→name for ALL projects, so a project-scoped prompt re-keys to the project
+   *  name (machine-local ids never travel) even if that project isn't exported. */
+  projectNamesById?: Map<string, string>,
 ): ReferenceExport {
   const byId = new Map(sources.map((s) => [s.id, s.displayName]));
   const memNames = sourceNamesById ?? byId;
@@ -155,6 +175,18 @@ export function buildReferenceExport(
       return name ? { scopeKind: "source", scopeRef: name, ...base } : undefined;
     })
     .filter((m): m is ExportedMemory => Boolean(m));
+  // Prompts: global carries no ref; site → siteUrl (portable); source/project →
+  // the entity NAME (ids never travel). A scoped prompt whose entity can't be
+  // named is dropped (its ref would dangle on import).
+  const prompts: ExportedPrompt[] = (promptItems ?? [])
+    .map((p): ExportedPrompt | undefined => {
+      const base = { title: p.title, body: p.body, ...(p.tags?.length ? { tags: p.tags } : {}) };
+      if (p.scope.kind === "global") return { scopeKind: "global", ...base };
+      if (p.scope.kind === "site") return { scopeKind: "site", scopeRef: p.scope.key, ...base };
+      const name = p.scope.kind === "source" ? memNames.get(p.scope.key ?? "") : projectNamesById?.get(p.scope.key ?? "");
+      return name ? { scopeKind: p.scope.kind, scopeRef: name, ...base } : undefined;
+    })
+    .filter((p): p is ExportedPrompt => Boolean(p));
   return {
     $schema: REFERENCE_EXPORT_SCHEMA,
     exportedAt,
@@ -199,6 +231,7 @@ export function buildReferenceExport(
       ? { sites: sites.map((s) => ({ siteUrl: s.siteUrl, displayName: s.displayName, role: s.role })) }
       : {}),
     ...(memory.length > 0 ? { memory } : {}),
+    ...(prompts.length > 0 ? { prompts } : {}),
   };
 }
 
@@ -214,6 +247,16 @@ export interface ParsedMemory {
   origin: "user" | "ai";
 }
 
+/** A Prompt Library entry from an import file, still keyed by its portable ref.
+ *  The command resolves the ref to a local scope and applies dedup/merge. */
+export interface ParsedPrompt {
+  scopeKind: PromptScopeKind;
+  scopeRef?: string;
+  title: string;
+  body: string;
+  tags?: string[];
+}
+
 export interface ParsedImport {
   sources: ContextSource[];
   bookmarks: ContextBookmark[];
@@ -226,6 +269,8 @@ export interface ParsedImport {
   sites: ExportedSite[];
   /** Memory notes, still portably keyed; the command remaps source refs + merges. */
   memory: ParsedMemory[];
+  /** Prompt Library entries, still portably keyed; the command remaps + merges. */
+  prompts: ParsedPrompt[];
 }
 
 const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "vertexai", "powerbi", "servicenow", "splunk", "splunkobs", "grafana", "m365copilot"]);
@@ -238,7 +283,7 @@ export function parseReferenceImport(
   importedAt: string,
   newId: () => string,
 ): ParsedImport {
-  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [], sites: [], memory: [] };
+  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [], sites: [], memory: [], prompts: [] };
   let raw: ReferenceExport;
   try {
     raw = JSON.parse(json) as ReferenceExport;
@@ -393,6 +438,25 @@ export function parseReferenceImport(
       origin: m.origin === "ai" ? "ai" : "user",
     });
   }
+
+  // Prompts: global needs no ref; scoped ones keep their portable ref for the
+  // command to resolve to a local scope. Clamp lengths here.
+  const PROMPT_KINDS = new Set(["global", "site", "source", "project"]);
+  for (const p of Array.isArray(raw.prompts) ? raw.prompts : ([] as ExportedPrompt[])) {
+    const scoped = p && p.scopeKind !== "global";
+    if (!p || !PROMPT_KINDS.has(p.scopeKind) || typeof p.title !== "string" || typeof p.body !== "string" || !p.title.trim() || !p.body.trim() || (scoped && (typeof p.scopeRef !== "string" || !p.scopeRef.trim()))) {
+      out.warnings.push("A prompt was malformed and was skipped.");
+      continue;
+    }
+    const norm = normalizePromptInput(p.title, p.body, Array.isArray(p.tags) ? p.tags.filter((t): t is string => typeof t === "string") : undefined);
+    out.prompts.push({
+      scopeKind: p.scopeKind,
+      ...(scoped ? { scopeRef: p.scopeKind === "site" ? p.scopeRef!.trim().replace(/\/+$/, "") : p.scopeRef!.trim() } : {}),
+      title: norm.title,
+      body: norm.body,
+      ...(norm.tags ? { tags: norm.tags } : {}),
+    });
+  }
   return out;
 }
 
@@ -443,6 +507,56 @@ export function planMemoryImport(
       text: p.text,
       ...(p.tags ? { tags: p.tags } : {}),
       origin: p.origin,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return { toAdd, duplicates, unresolved };
+}
+
+export interface PromptImportPlan {
+  toAdd: PromptItem[];
+  /** Skipped: a prompt with the same scope + title already exists. */
+  duplicates: number;
+  /** Skipped: a scoped prompt whose site/source/project isn't here. */
+  unresolved: ParsedPrompt[];
+}
+
+/**
+ * Plan a prompt import — the prompt twin of `planMemoryImport`. Global prompts
+ * always resolve; scoped ones resolve via the caller-supplied `resolveScope`
+ * (closing over the local site/source/project lists incl. just-imported ones).
+ * Exact duplicates (same scope + folded title — `promptKey`) are skipped.
+ */
+export function planPromptImport(
+  parsed: ParsedPrompt[],
+  resolveScope: (kind: PromptScopeKind, ref?: string) => PromptScope | undefined,
+  existing: PromptItem[],
+  newId: () => string,
+  now: string,
+): PromptImportPlan {
+  const keys = new Set(existing.map((p) => promptKey(p)));
+  const toAdd: PromptItem[] = [];
+  const unresolved: ParsedPrompt[] = [];
+  let duplicates = 0;
+  for (const p of parsed) {
+    const scope = resolveScope(p.scopeKind, p.scopeRef);
+    if (!scope) {
+      unresolved.push(p);
+      continue;
+    }
+    const key = promptKey({ scope, title: p.title });
+    if (keys.has(key)) {
+      duplicates++;
+      continue;
+    }
+    keys.add(key);
+    toAdd.push({
+      id: newId(),
+      scope,
+      title: p.title,
+      body: p.body,
+      ...(p.tags ? { tags: p.tags } : {}),
       createdAt: now,
       updatedAt: now,
     });
