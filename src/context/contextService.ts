@@ -645,6 +645,29 @@ export class ContextService {
     });
   }
 
+  /** Resolve which space a page lives in (a global READ, never gated by the
+   *  write scope). The write gate uses this to show the destination space for
+   *  an INSTANCE-scoped connector before it mutates a page — the synchronous
+   *  approval card can't do the lookup. Lockout-gated; never cached so it always
+   *  reflects the live page. */
+  async resolveConfluencePageSpace(
+    source: ContextSource,
+    pageId: string,
+  ): Promise<{ spaceKey?: string; title?: string }> {
+    if (source.type !== "confluence") {
+      throw new AppError("Page-space resolution targets a Confluence source.", "config");
+    }
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
+      return {
+        ...(meta.spaceKey ? { spaceKey: meta.spaceKey } : {}),
+        ...(meta.title ? { title: meta.title } : {}),
+      };
+    });
+  }
+
   /** Non-destructive write-access probe for a managed Confluence connector:
    *  create → update → delete a throwaway page within the connector's write
    *  scope, cleaning up after itself, so write-permission gaps surface at setup

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.109.0 — 2026-06-30
+
+### Added — exact-space confirmation for instance-scoped Confluence writes + one-click defang
+- **Instance-scoped Confluence connectors now name the destination space before a page write.** A
+  connector bound to a single space already showed (and enforced) that space on the approval card. A
+  connector scoped to the **entire instance** couldn't — the approval card is synchronous and can't
+  look up where a page lives — so a page-targeted change (update, archive, move, remove-from-search,
+  add/remove label) now performs a quick read to resolve the page's **actual space** and shows a
+  **second confirmation naming it** before mutating. Declining cancels the write. A failed lookup
+  doesn't block — the write proceeds and surfaces the server's own error. Space/page-bound connectors
+  are unchanged (no extra prompt).
+- **One-click “Enable defang” when a content proxy is suspected.** When an @sharepoint turn fails at
+  the network layer and a corporate content proxy looks like the cause (repeated network failures, or
+  an avoid-list word present in your message), the failed turn now shows a **🛡️ Enable defang** button
+  that flips `aiSharePoint.proxy.mode` to `defang` in one click — future messages auto-obfuscate
+  avoid-list words (an invisible zero-width character the proxy can't match; the AI still reads the
+  original). The button is hidden once defang is already on. Also available as a command,
+  **Enable Proxy Defang**.
+
 ## 0.108.0 — 2026-06-30
 
 ### Added — anonymized resilience counters (opt-in telemetry)

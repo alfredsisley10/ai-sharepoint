@@ -14,6 +14,7 @@ import {
   decodeEntities,
   sanitizeStorageBody,
   confluenceWriteConfirmationText,
+  confluenceInstanceSpaceConfirmText,
 } from "../src/context/adapters/confluenceWrite";
 import { ContextSource, ContextCredential } from "../src/context/types";
 
@@ -260,4 +261,22 @@ test("confluenceWriteConfirmationText always surfaces the instance URL + write s
   const m3 = confluenceWriteConfirmationText(undefined, "Wiki", ["**Action:** remove page `9` from search"]);
   assert.match(m3, /\*\*Source:\*\* Wiki/);
   assert.match(m3, /remove page `9` from search/);
+});
+
+test("confluenceInstanceSpaceConfirmText names the resolved space for an instance-scoped write (#70)", () => {
+  // The instance connector couldn't show the space on the sync approval card;
+  // once resolved, the second confirmation must name it (and the page/title).
+  const m = confluenceInstanceSpaceConfirmText("archive", "12345", "DOCS", "Runbook");
+  assert.match(m, /anywhere in the instance/);
+  assert.match(m, /page 12345 \("Runbook"\)/);
+  assert.match(m, /archive/);
+  assert.match(m, /space "DOCS"/);
+  assert.match(m, /Confirm writing to space "DOCS"\?/);
+});
+
+test("confluenceInstanceSpaceConfirmText degrades cleanly when the space can't be resolved", () => {
+  const m = confluenceInstanceSpaceConfirmText("update", "9", undefined);
+  assert.match(m, /an unrecognized space/);
+  assert.match(m, /page 9\b/);
+  assert.doesNotMatch(m, /\("/); // no empty title parenthesis
 });

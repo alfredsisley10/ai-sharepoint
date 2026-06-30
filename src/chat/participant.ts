@@ -253,6 +253,7 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
       }
       // Learn over time (#4): repeated network-level chat failures are most
       // often the corporate proxy blocking message content, not connectivity.
+      let proxySuspected = false;
       if (code === "network") {
         const networkFailures = deps.errors
           .list()
@@ -266,15 +267,26 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
           mode: deps.proxyTerms.mode(),
         });
         if (rw) advice = advice ? `${advice}\n\n${rw}` : rw;
+        proxySuspected = Boolean(pb || rw);
         // Counter (categorical only): we surfaced a proxy-block hint this turn —
         // either the repeated-failure heuristic or a named avoid-list word.
-        if (pb || rw) deps.telemetry.record("chat.proxySuspected", { hint: rw ? "reword" : "heuristic" });
+        if (proxySuspected) deps.telemetry.record("chat.proxySuspected", { hint: rw ? "reword" : "heuristic" });
       }
       stream.markdown(
         `⚠️ **Something went wrong:** ${safe.message}${advice ? `\n\n${advice}` : ""}`,
       );
       // The request + its context are cached locally — offer a one-click restart.
       stream.button({ command: "aiSharePoint.restartLastInteraction", title: "↻ Restart this request" });
+      // One-click remediation when a content proxy is the likely culprit and
+      // defang isn't already on: flip aiSharePoint.proxy.mode to "defang" so
+      // future messages auto-obfuscate avoid-list words (the model still reads
+      // the original). Hidden once defang is active — it would be a no-op.
+      if (proxySuspected && deps.proxyTerms.mode() !== "defang") {
+        stream.button({
+          command: "aiSharePoint.enableProxyDefang",
+          title: "🛡️ Enable defang (auto-obfuscate blocked words)",
+        });
+      }
       return { errorDetails: { message: safe.message } };
     }
   };

@@ -52,6 +52,29 @@ export function confluenceWriteConfirmationText(
 }
 
 /**
+ * Confirmation body for an INSTANCE-scoped connector about to write to a
+ * SPECIFIC page. The (synchronous) tool approval card can't resolve where a page
+ * lives, so a connector that can write anywhere in the instance would otherwise
+ * mutate it without the user ever seeing the destination space. Once the tool
+ * layer resolves the page's real space, this names it for an explicit second
+ * confirmation. Plain text (shown in a modal dialog), so no Markdown. Pure.
+ */
+export function confluenceInstanceSpaceConfirmText(
+  action: string,
+  pageId: string,
+  spaceKey: string | undefined,
+  title?: string,
+): string {
+  const where = spaceKey ? `space "${spaceKey}"` : "an unrecognized space";
+  const page = `page ${pageId}${title ? ` ("${title}")` : ""}`;
+  return [
+    "This Confluence connector can write anywhere in the instance — it isn't bound to a single space.",
+    `The ${page} you're about to ${action} lives in ${where}.`,
+    `Confirm writing to ${where}?`,
+  ].join("\n\n");
+}
+
+/**
  * Headers that make a Confluence WRITE behave like the Atlassian Python client
  * (atlassian-python-api on `requests`), which succeeds where VS Code's Electron
  * `fetch` fails its CSRF check:

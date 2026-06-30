@@ -20,7 +20,7 @@ import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { sourceChatLabel, resolveSourceRef } from "../context/sourceRef";
 import { EXPORT_MAX_ROWS, EXPORT_TIMEOUT_MS, EXPORT_DIR } from "../context/exportData";
-import { markdownToStorage, confluenceWriteConfirmationText } from "../context/adapters/confluenceWrite";
+import { markdownToStorage, confluenceWriteConfirmationText, confluenceInstanceSpaceConfirmText } from "../context/adapters/confluenceWrite";
 import { catalogByCategory, CapabilityReport, RenderedValidation } from "../context/adapters/confluenceMacros";
 import { OwnerResolution } from "../context/adapters/confluenceOwnership";
 import { ManageabilityReport } from "../context/adapters/confluenceEntitlements";
@@ -238,6 +238,35 @@ export function registerContextTools(
   const confluenceWriteConfirmation = (ref: string | undefined, opLines: string[]): vscode.MarkdownString =>
     new vscode.MarkdownString(confluenceWriteConfirmationText(resolveSourceRef(scopedSources(), ref), ref, opLines));
 
+  /** Second-stage gate for an INSTANCE-scoped Confluence connector writing to a
+   *  specific page. The synchronous approval card can't resolve where a page
+   *  lives, so a connector that can write anywhere in the instance would mutate
+   *  it without the user seeing the destination. Resolve the page's real space
+   *  now and require an explicit modal confirmation naming it. Space/page-bound
+   *  connectors already show + enforce their space, so they pass straight
+   *  through; a failed pre-read also passes (the write then surfaces the real
+   *  server error rather than blocking on a flaky lookup). */
+  const confirmInstanceWriteSpace = async (
+    source: ContextSource,
+    pageId: string,
+    action: string,
+  ): Promise<boolean> => {
+    if (source.type !== "confluence") return true;
+    if (source.writeScope && source.writeScope.kind !== "instance") return true;
+    let space: { spaceKey?: string; title?: string };
+    try {
+      space = await service.resolveConfluencePageSpace(source, pageId);
+    } catch {
+      return true;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      confluenceInstanceSpaceConfirmText(action, pageId, space.spaceKey, space.title),
+      { modal: true },
+      "Write to this space",
+    );
+    return choice === "Write to this space";
+  };
+
   /** Catalog on demand: cached on disk; first touch loads it live (stored
    *  credential only — a tool call never prompts). */
   const schemaFor = async (source: ContextSource): Promise<SourceSchema> => {
@@ -327,6 +356,12 @@ export function registerContextTools(
             i.format === "storage" || (i.format !== "markdown" && looksLikeStorage)
               ? i.markdown
               : markdownToStorage(i.markdown);
+          // Instance-scoped connector + page-targeted update: confirm the page's
+          // real space (the approval card couldn't resolve it). Create supplies
+          // an explicit spaceKey already shown on the card, so it needs no recheck.
+          if (action === "update" && i.pageId && !(await confirmInstanceWriteSpace(source, i.pageId.trim(), "update"))) {
+            return text("Cancelled — the destination space wasn't confirmed.");
+          }
           const res = await service.writeConfluencePage(source, {
             action,
             ...(i.spaceKey ? { spaceKey: i.spaceKey.trim() } : {}),
@@ -414,6 +449,9 @@ export function registerContextTools(
             if (action !== "list" && (!i.labels || i.labels.length === 0)) {
               return text(`Provide at least one label to ${action}.`);
             }
+            if (action !== "list" && !(await confirmInstanceWriteSpace(source, i.pageId.trim(), `${action} a label on`))) {
+              return text("Cancelled — the destination space wasn't confirmed.");
+            }
             const res = await service.manageConfluenceLabels(source, {
               action,
               pageId: i.pageId.trim(),
@@ -451,6 +489,9 @@ export function registerContextTools(
           const source = resolveOrExplain(i.source);
           if (source.type !== "confluence") return text(`"${source.displayName}" is a ${source.type} source — archiving targets Confluence.`);
           if (!i.pageId?.trim()) return text("A pageId is required (search the source first to find it).");
+          if (!(await confirmInstanceWriteSpace(source, i.pageId.trim(), "archive"))) {
+            return text("Cancelled — the destination space wasn't confirmed.");
+          }
           const r = await service.archiveConfluencePage(source, i.pageId.trim());
           telemetry.record("confluence.archive");
           return text(`Archived page ${r.pageId} under "${r.archiveRootTitle}"${r.createdArchiveRoot ? " (created the Archive root)" : ""}.`);
@@ -492,6 +533,9 @@ export function registerContextTools(
             const source = resolveOrExplain(i.source);
             if (source.type !== "confluence") return text(`"${source.displayName}" is a ${source.type} source — moving pages targets Confluence.`);
             if (!i.pageId?.trim()) return text("A pageId is required (search the source first to find it).");
+            if (!(await confirmInstanceWriteSpace(source, i.pageId.trim(), "move"))) {
+              return text("Cancelled — the destination space wasn't confirmed.");
+            }
             const res = await service.moveConfluencePage(source, {
               pageId: i.pageId.trim(),
               ...(i.parentId ? { parentId: i.parentId.trim() } : {}),
@@ -528,6 +572,9 @@ export function registerContextTools(
           const source = resolveOrExplain(i.source);
           if (source.type !== "confluence") return text(`"${source.displayName}" is a ${source.type} source — this targets Confluence.`);
           if (!i.pageId?.trim()) return text("A pageId is required.");
+          if (!(await confirmInstanceWriteSpace(source, i.pageId.trim(), "remove from search"))) {
+            return text("Cancelled — the destination space wasn't confirmed.");
+          }
           const r = await service.removeConfluencePageFromSearch(source, i.pageId.trim());
           telemetry.record("confluence.removeFromSearch");
           return text(`Removed page ${r.id} from search (content blanked, now v${r.version}; prior versions retain the original). ${r.url}`);

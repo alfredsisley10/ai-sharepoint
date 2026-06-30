@@ -6398,6 +6398,28 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.window.showTextDocument(doc, { preview: true });
   });
 
+  // One-click remediation for a suspected content-proxy block (surfaced as a
+  // button under a failed @sharepoint turn): turn on defang so outgoing chat
+  // messages auto-obfuscate avoid-list words. Idempotent and reversible via the
+  // aiSharePoint.proxy.mode setting / Manage Proxy Avoid-List.
+  register("aiSharePoint.enableProxyDefang", async () => {
+    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    if (cfg.get<string>("proxy.mode", "off") === "defang") {
+      void vscode.window.showInformationMessage(
+        "Proxy defang is already on — outgoing chat messages auto-obfuscate avoid-list words so a content proxy can't match them (the AI still reads the original).",
+      );
+      return;
+    }
+    await cfg.update("proxy.mode", "defang", vscode.ConfigurationTarget.Global);
+    const pick = await vscode.window.showInformationMessage(
+      "Proxy defang enabled. Outgoing chat messages now auto-obfuscate avoid-list words (an invisible zero-width character is inserted so a content proxy can't match them; the AI still reads the original text). Retry your request — and add any specific trigger words via Manage Proxy Avoid-List.",
+      "Manage Avoid-List",
+    );
+    if (pick === "Manage Avoid-List") {
+      await vscode.commands.executeCommand("aiSharePoint.manageProxyTerms");
+    }
+  });
+
   // Intelligent restart: re-open the chat prefilled with the last (interrupted)
   // request from the local interaction cache, so a turn lost to a proxy block /
   // dropped connection / context overflow can be resubmitted in one click.
