@@ -138,6 +138,15 @@ test("repackageCommand avoids && on PowerShell — Windows 5.1 rejects && as a s
   }
 });
 
+test("repackageCommand { verbose } adds --verbose to the install on each shell family", () => {
+  // POSIX / cmd.exe → && form.
+  assert.equal(repackageCommand("/bin/bash", { verbose: true }), "npm install --verbose && npm run package");
+  // PowerShell → guarded ;-form, still --verbose, never &&.
+  const pwsh = repackageCommand("pwsh", { verbose: true });
+  assert.equal(pwsh, "npm install --verbose; if ($LASTEXITCODE -eq 0) { npm run package }");
+  assert.ok(!pwsh.includes("&&"));
+});
+
 test("summarizeBrand lists only the changed fields", () => {
   const lines = summarizeBrand(
     { ...base, publisher: ORIGIN_BRAND.publisher, displayName: ORIGIN_BRAND.displayName },

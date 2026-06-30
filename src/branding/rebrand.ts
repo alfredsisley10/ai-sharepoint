@@ -189,13 +189,16 @@ export function replacePhrase(
  * @param shell the resolved default shell path (pass `vscode.env.shell`); may be
  *   undefined/empty in environments without shell detection, in which case the
  *   `&&` form is used (correct for macOS/Linux and Windows cmd.exe).
+ * @param opts.verbose append `--verbose` to the install (full diagnostics behind
+ *   a corporate proxy / private registry).
  */
-export function repackageCommand(shell: string | undefined): string {
+export function repackageCommand(shell: string | undefined, opts: { verbose?: boolean } = {}): string {
   const s = (shell ?? "").toLowerCase();
   const isPowerShell = s.includes("powershell") || s.includes("pwsh");
+  const install = opts.verbose ? "npm install --verbose" : "npm install";
   return isPowerShell
-    ? "npm install; if ($LASTEXITCODE -eq 0) { npm run package }"
-    : "npm install && npm run package";
+    ? `${install}; if ($LASTEXITCODE -eq 0) { npm run package }`
+    : `${install} && npm run package`;
 }
 
 /** Human-readable summary of what a rebrand will change, for confirmation. */

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.96.0 — 2026-06-30
+
+### Reviewed + polished — white-label build is cross-platform (macOS & Windows)
+- Audited the whole white-label path end-to-end for macOS/Windows compatibility and confirmed it's
+  sound: the in-app wizard writes output via VS Code URI APIs and splits archive keys on `/`; the
+  source bundler emits forward-slash zip entries even on a Windows dev build; `repackageCommand`
+  already avoids `&&` on PowerShell 5.1; and `rebrand-package.js` / `preflight-deps.js` run each step
+  as a single `shell:true` command (resolving `npm.cmd` on Windows) with OS-trust-store TLS. The
+  generated guides (BUILD.md, MAINTAINING.md) and README/REBRANDING already document bash, PowerShell,
+  **and** cmd.exe — verified accurate.
+- **Fixes from the review:** the maintainer-facing `preflight-deps.js` CLI now prints **ASCII-only**
+  (no `…`/`—`) so it renders cleanly in legacy Windows code pages, matching the build driver. And the
+  wizard's "quick build" line now reuses the unit-tested `repackageCommand` (with a new `verbose`
+  option) instead of a parallel inline copy, so the command shown can't drift from the tested logic.
+
 ## 0.95.0 — 2026-06-30
 
 ### Changed — "Splunk HEC token" is now the "Splunk Attribution Identifier"
