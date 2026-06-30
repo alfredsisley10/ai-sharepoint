@@ -8,6 +8,8 @@
  * promptStore.ts, and prompts ride the same secret-free export/import as the rest.
  */
 
+import { mergeText, mergeTags } from "./memory";
+
 export type PromptScopeKind = "global" | "site" | "source" | "project";
 
 /** Where a prompt lives. `key` is the site URL / source id / project id; it is
@@ -70,6 +72,23 @@ export function withoutPrompt(items: PromptItem[], id: string): PromptItem[] {
 export function withoutPromptScope(items: PromptItem[], scope: PromptScope): PromptItem[] {
   if (scope.kind === "global") return items;
   return items.filter((p) => !samePromptScope(p.scope, scope));
+}
+
+/** Rule-based merge of an incoming prompt into an existing one (same scope+title):
+ *  union tags, losslessly combine the body. Keeps the existing id/scope. */
+export function mergePrompt(existing: PromptItem, incomingBody: string, incomingTags: string[] | undefined, now: string): PromptItem {
+  const tags = mergeTags(existing.tags, incomingTags);
+  const merged: PromptItem = { ...existing, body: mergeText(existing.body, incomingBody, PROMPT_BODY_MAX), updatedAt: now };
+  if (tags) merged.tags = tags;
+  else delete merged.tags;
+  return merged;
+}
+
+/** True duplicate (body + tags identical) — nothing to merge. */
+export function samePromptContent(a: Pick<PromptItem, "body" | "tags">, bBody: string, bTags?: string[]): boolean {
+  const tagsA = [...(a.tags ?? [])].sort().join("");
+  const tagsB = [...(bTags ?? [])].sort().join("");
+  return a.body.trim() === bBody.trim() && tagsA === tagsB;
 }
 
 /** Clamp/normalize user input into a storable shape (no id/timestamps). */

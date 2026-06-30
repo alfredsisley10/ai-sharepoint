@@ -4754,18 +4754,36 @@ export function activate(context: vscode.ExtensionContext): void {
       parsed.warnings.push(`${promptPlan.unresolved.length} prompt(s) skipped — their site/source/project isn't here (import or add it first).`);
     }
 
-    if (freshSites.length === 0 && fresh.length === 0 && freshBookmarks.length === 0 && wantProjects.length === 0 && memPlan.toAdd.length === 0 && promptPlan.toAdd.length === 0) {
+    const conflicts = memPlan.toMerge.length + promptPlan.toMerge.length;
+    if (freshSites.length === 0 && fresh.length === 0 && freshBookmarks.length === 0 && wantProjects.length === 0 && memPlan.toAdd.length === 0 && promptPlan.toAdd.length === 0 && conflicts === 0) {
       void vscode.window.showWarningMessage(
         `Nothing new to import${skipped + skippedSites + memPlan.duplicates + promptPlan.duplicates ? ` (${skipped + skippedSites + memPlan.duplicates + promptPlan.duplicates} item(s) already present)` : ""}.`,
       );
       return;
     }
+    // Conflicts = same scope+title but different content. Intelligent merge
+    // (ADR-0013): rule-based union by default, an AI pass on request, or skip.
+    let mergeMode: "rule" | "ai" | "skip" = "rule";
+    if (conflicts > 0) {
+      const pick = await vscode.window.showQuickPick(
+        [
+          { label: "$(git-merge) Smart merge (recommended)", description: "combine text + tags — nothing is lost", mode: "rule" as const },
+          { label: "$(sparkle) Let @sharepoint merge (AI)", description: "uses your Copilot subscription to de-duplicate the combined text", mode: "ai" as const },
+          { label: "$(circle-slash) Keep my versions", description: "leave my copies untouched; skip the incoming ones", mode: "skip" as const },
+        ],
+        { title: `${conflicts} incoming item(s) match something you already have`, placeHolder: "Same title, different content — how should I combine them?", ignoreFocusOut: true },
+      );
+      if (!pick) return;
+      mergeMode = pick.mode;
+    }
+    const mergesApplied = mergeMode === "skip" ? 0 : conflicts;
     const parts = [
       freshSites.length ? `${freshSites.length} site(s)` : "",
       fresh.length ? `${fresh.length} source(s)` : "",
       freshBookmarks.length ? `${freshBookmarks.length} bookmark(s)` : "",
       memPlan.toAdd.length ? `${memPlan.toAdd.length} memory note(s)` : "",
       promptPlan.toAdd.length ? `${promptPlan.toAdd.length} prompt(s)` : "",
+      mergesApplied ? `${mergesApplied} merged${mergeMode === "ai" ? " (AI)" : ""}` : "",
     ].filter(Boolean).join(", ");
     const alreadyPresent = skipped + skippedSites + memPlan.duplicates + promptPlan.duplicates;
     const confirm = await vscode.window.showInformationMessage(
@@ -4811,6 +4829,44 @@ export function activate(context: vscode.ExtensionContext): void {
     for (const p of promptPlan.toAdd) {
       await prompts.add(p);
     }
+    // AI pass over the rule-merged union: condense without losing facts. Any
+    // failure (not entitled, offline, refusal) silently keeps the rule merge.
+    let aiFailures = 0;
+    const aiCondense = async (title: string, combined: string): Promise<string> => {
+      try {
+        const res = await copilot.ask(
+          {
+            label: "mergeImport",
+            prompt: `Two entries titled "${title}" were combined below. Rewrite them into ONE clear entry that keeps every distinct fact/instruction and removes only redundancy. Return ONLY the merged text — no preamble, no markdown fences.\n\n---\n${combined}\n---`,
+          },
+          nowIso,
+        );
+        const out = res.text.trim();
+        if (out) return out;
+      } catch {
+        // fall through to the rule-based union
+      }
+      aiFailures++;
+      return combined;
+    };
+    if (mergeMode !== "skip") {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: mergeMode === "ai" ? "Merging shared items with @sharepoint…" : "Merging shared items…" },
+        async () => {
+          for (const m of memPlan.toMerge) {
+            const text = mergeMode === "ai" ? await aiCondense(m.merged.title, m.merged.text) : m.merged.text;
+            await memory.update({ ...m.merged, text });
+          }
+          for (const p of promptPlan.toMerge) {
+            const body = mergeMode === "ai" ? await aiCondense(p.merged.title, p.merged.body) : p.merged.body;
+            await prompts.update({ ...p.merged, body });
+          }
+        },
+      );
+      if (mergeMode === "ai" && aiFailures > 0) {
+        parsed.warnings.push(`AI merge was unavailable for ${aiFailures} item(s) — used smart (rule-based) merge for those.`);
+      }
+    }
     telemetry.record("context.importConfig", {
       sites: freshSites.length,
       sources: fresh.length,
@@ -4818,6 +4874,8 @@ export function activate(context: vscode.ExtensionContext): void {
       projects: importedProjects,
       memory: memPlan.toAdd.length,
       prompts: promptPlan.toAdd.length,
+      merged: mergesApplied,
+      mergeMode,
     });
     const done = [
       freshSites.length ? `${freshSites.length} site(s)` : "",
@@ -4825,9 +4883,10 @@ export function activate(context: vscode.ExtensionContext): void {
       importedProjects ? `${importedProjects} project(s)` : "",
       memPlan.toAdd.length ? `${memPlan.toAdd.length} memory note(s)` : "",
       promptPlan.toAdd.length ? `${promptPlan.toAdd.length} prompt(s)` : "",
+      mergesApplied ? `${mergesApplied} merged` : "",
     ].filter(Boolean).join(", ");
     void vscode.window.showInformationMessage(
-      `Imported ${done || "the selected items"}. Sign in to each site/source to activate (lockout-safe single verify).`,
+      `Imported ${done || "the selected items"}.${parsed.warnings.length ? ` (${parsed.warnings.length} note(s): ${parsed.warnings.slice(0, 2).join(" ")}${parsed.warnings.length > 2 ? " …" : ""})` : ""} Sign in to each site/source to activate (lockout-safe single verify).`,
     );
   });
 

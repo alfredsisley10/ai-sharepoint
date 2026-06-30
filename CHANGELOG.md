@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.89.0 — 2026-06-30
+
+### Added — intelligent merge on import (memory + prompts)
+- Sharing customizations no longer forces all-or-nothing. When an imported memory note or prompt
+  has the **same scope + title** as one you already have but **different content**, it's now a
+  **merge**, not a silent skip. On import you pick once how to combine all such conflicts:
+  - **Smart merge (default, rule-based)** — unions tags and combines the text losslessly (identical
+    or superset → keeps the richer; otherwise joins with a blank line). No model calls, instant.
+  - **Let @sharepoint merge (AI)** — runs the combined text through your Copilot subscription to
+    de-duplicate the prose while keeping every distinct fact; falls back to the rule-based merge for
+    any item the model can't handle (and tells you how many).
+  - **Keep my versions** — leaves your copies untouched and skips the incoming ones.
+- **True duplicates** (same scope, title, *and* content) are still skipped silently. Within a single
+  import, multiple same-titled entries also fold together before being written.
+- Pure, unit-tested core (`mergeText`/`mergeTags`/`mergeMemory`/`mergePrompt`, and the `toMerge`
+  classification in `planMemoryImport`/`planPromptImport`). Completes Phase 4.
+
 ## 0.88.0 — 2026-06-30
 
 ### Added — prompts in the combined export/import (with review + dedup)

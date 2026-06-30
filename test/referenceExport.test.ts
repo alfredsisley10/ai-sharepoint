@@ -298,21 +298,28 @@ test("planMemoryImport resolves refs, mints ids, and reports unresolved", () => 
   assert.equal(plan.toAdd[0].createdAt, T0);
 });
 
-test("planMemoryImport skips exact duplicates (existing + within-batch)", () => {
+test("planMemoryImport: identical → duplicate; same-title-different → rule merge; within-batch merges", () => {
   const resolve = (kind: MemoryScopeKind): MemoryScope | undefined => ({ kind, key: "local-s1" });
   const existing: MemoryItem[] = [
-    { id: "e1", scope: { kind: "source", key: "local-s1" }, title: "Soft deletes", text: "old text", origin: "user", createdAt: T0, updatedAt: T0 },
+    { id: "e1", scope: { kind: "source", key: "local-s1" }, title: "Soft deletes", text: "Rows use is_active.", tags: ["db"], origin: "user", createdAt: T0, updatedAt: T0 },
+    { id: "e2", scope: { kind: "source", key: "local-s1" }, title: "Owners", text: "Platform team.", origin: "user", createdAt: T0, updatedAt: T0 },
   ];
   const incoming = [
-    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "Soft Deletes", text: "new", origin: "user" as const }, // dup of existing (case-folded)
-    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "Keys", text: "a", origin: "user" as const },
-    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "keys", text: "b", origin: "user" as const }, // dup of the previous (within batch)
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "Soft deletes", text: "Rows use is_active.", tags: ["db"], origin: "user" as const }, // identical → duplicate
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "Owners", text: "Also notify SecOps.", origin: "user" as const }, // conflict → merge
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "Keys", text: "a", origin: "user" as const }, // new → add
+    { scopeKind: "source" as MemoryScopeKind, scopeRef: "Corp Wiki", title: "keys", text: "b", origin: "user" as const }, // within-batch → merges into "Keys"
   ];
   let n = 0;
   const plan = planMemoryImport(incoming, resolve, existing, () => `nm-${n++}`, T0);
-  assert.equal(plan.toAdd.length, 1, "only the first 'Keys' added");
+  assert.equal(plan.duplicates, 1, "the identical note is a pure duplicate");
+  assert.equal(plan.toMerge.length, 1, "the differing 'Owners' note merges");
+  assert.equal(plan.toMerge[0].existing.id, "e2");
+  assert.match(plan.toMerge[0].merged.text, /Platform team\./);
+  assert.match(plan.toMerge[0].merged.text, /Also notify SecOps\./);
+  assert.equal(plan.toAdd.length, 1, "one new 'Keys' note");
   assert.equal(plan.toAdd[0].title, "Keys");
-  assert.equal(plan.duplicates, 2);
+  assert.match(plan.toAdd[0].text, /a\n\nb/, "the within-batch 'keys' merged into it");
 });
 
 test("import parses and clamps memory notes; malformed ones are skipped with a warning", () => {
@@ -377,12 +384,12 @@ test("a project-scoped prompt is dropped if the project can't be named", () => {
   assert.ok(!exp.prompts!.some((p) => p.scopeKind === "project"));
 });
 
-test("planPromptImport: global always resolves; scoped resolves or is unresolved; dedup by scope+title", () => {
+test("planPromptImport: global always resolves; scoped resolves or is unresolved; within-batch same-title merges", () => {
   const parsedPrompts = [
     { scopeKind: "global" as PromptScopeKind, title: "Exec summary", body: "x" },
     { scopeKind: "source" as PromptScopeKind, scopeRef: "Corp Wiki", title: "Bug triage", body: "y" },
     { scopeKind: "project" as PromptScopeKind, scopeRef: "Unknown Proj", title: "Z", body: "z" },
-    { scopeKind: "global" as PromptScopeKind, title: "Exec Summary", body: "dup (case-folded)" },
+    { scopeKind: "global" as PromptScopeKind, title: "Exec Summary", body: "different body (case-folded title)" },
   ];
   const resolve = (kind: PromptScopeKind, ref?: string): PromptScope | undefined => {
     if (kind === "global") return { kind: "global" };
@@ -391,11 +398,32 @@ test("planPromptImport: global always resolves; scoped resolves or is unresolved
   };
   let n = 0;
   const plan = planPromptImport(parsedPrompts, resolve, [], () => `np-${n++}`, T0);
-  assert.equal(plan.toAdd.length, 2, "global + source; the case-dup is collapsed");
-  assert.equal(plan.duplicates, 1);
+  // global "Exec summary" + source "Bug triage" are added; the 2nd "Exec Summary"
+  // (different body) merges into the first within the same batch (no existing store).
+  assert.equal(plan.toAdd.length, 2, "global + source added");
+  assert.equal(plan.duplicates, 0);
   assert.equal(plan.unresolved.length, 1);
   assert.equal(plan.unresolved[0].scopeRef, "Unknown Proj");
+  const exec = plan.toAdd.find((p) => p.scope.kind === "global")!;
+  assert.match(exec.body, /x\n\ndifferent body/, "within-batch bodies combined losslessly");
   assert.equal(plan.toAdd.find((p) => p.scope.kind === "source")!.scope.key, "local-s1");
+});
+
+test("planPromptImport: identical existing prompt is a pure duplicate; differing one merges", () => {
+  const resolve = (_kind: PromptScopeKind): PromptScope | undefined => ({ kind: "global" });
+  const existing: PromptItem[] = [
+    { id: "g1", scope: { kind: "global" }, title: "Exec summary", body: "Summarize for execs.", createdAt: T0, updatedAt: T0 },
+    { id: "g2", scope: { kind: "global" }, title: "Triage", body: "By severity.", createdAt: T0, updatedAt: T0 },
+  ];
+  const incoming = [
+    { scopeKind: "global" as PromptScopeKind, title: "Exec summary", body: "Summarize for execs." }, // identical → duplicate
+    { scopeKind: "global" as PromptScopeKind, title: "Triage", body: "Also by component." }, // conflict → merge
+  ];
+  const plan = planPromptImport(incoming, resolve, existing, () => "np", T0);
+  assert.equal(plan.duplicates, 1);
+  assert.equal(plan.toMerge.length, 1);
+  assert.equal(plan.toMerge[0].existing.id, "g2");
+  assert.match(plan.toMerge[0].merged.body, /By severity\.\n\nAlso by component\./);
 });
 
 test("import parses prompts and clamps/validates; bad kinds and empty bodies are skipped", () => {

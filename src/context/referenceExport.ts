@@ -2,8 +2,8 @@ import { ContextSource, ContextBookmark, ContextAuthMethod } from "./types";
 import { normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./sourceRef";
 import { SourceSchema } from "./db/schemaIndex";
 import { Project, INSTRUCTIONS_MAX_CHARS, GOALS_MAX_CHARS, AI_CONTEXT_MAX_CHARS } from "./types";
-import { MemoryItem, MemoryScope, MemoryScopeKind, memoryKey, normalizeMemoryInput } from "./memory";
-import { PromptItem, PromptScope, PromptScopeKind, promptKey, normalizePromptInput } from "./promptLibrary";
+import { MemoryItem, MemoryScope, MemoryScopeKind, memoryKey, mergeMemory, sameMemoryContent, normalizeMemoryInput } from "./memory";
+import { PromptItem, PromptScope, PromptScopeKind, promptKey, mergePrompt, samePromptContent, normalizePromptInput } from "./promptLibrary";
 import { scanForLeaks } from "../diagnostics/bundle";
 
 /**
@@ -461,21 +461,26 @@ export function parseReferenceImport(
 }
 
 export interface MemoryImportPlan {
-  /** New notes to store (scope resolved, not duplicates of existing notes). */
+  /** New notes to store (scope resolved, key not already present). */
   toAdd: MemoryItem[];
-  /** Notes skipped because an entry with the same scope+title already exists.
-   *  (Phase 4 will offer intelligent merge instead of a plain skip.) */
+  /** Same scope+title, different content → rule-based merged result to write
+   *  over the existing note (intelligent-merge default). `existing` is kept so
+   *  the caller can offer AI merge / keep-mine instead. */
+  toMerge: Array<{ existing: MemoryItem; merged: MemoryItem }>;
+  /** Same scope+title AND identical content — nothing to do. */
   duplicates: number;
   /** Notes whose `scopeRef` couldn't be mapped to a local site/source. */
   unresolved: ParsedMemory[];
 }
 
 /**
- * Plan a memory import: resolve each note's portable ref to a local scope, drop
- * exact duplicates (same scope + folded title — `memoryKey`), and mint ids for
- * the rest. Pure (the caller supplies `resolveScope`, closing over the local
- * site/source lists incl. freshly-imported ones), so it's unit-tested. Phase 2
- * dedup = skip; Phase 4 layers intelligent merge on top of this same plan.
+ * Plan a memory import: resolve each note's portable ref to a local scope, then
+ * classify against what's already stored (and earlier items in the same batch):
+ *  - new key            → add
+ *  - same key, same body→ duplicate (skip)
+ *  - same key, different→ rule-based MERGE (union tags + lossless text join)
+ * Pure (the caller supplies `resolveScope`), so it's unit-tested. The command
+ * applies merges by default and can offer an AI pass over each merged result.
  */
 export function planMemoryImport(
   parsed: ParsedMemory[],
@@ -484,8 +489,10 @@ export function planMemoryImport(
   newId: () => string,
   now: string,
 ): MemoryImportPlan {
-  const keys = new Set(existing.map((m) => memoryKey(m)));
-  const toAdd: MemoryItem[] = [];
+  const existingByKey = new Map(existing.map((m) => [memoryKey(m), m]));
+  // work tracks the item we'll write per key (so a 2nd same-key item in the
+  // batch merges into the 1st rather than spawning a duplicate).
+  const work = new Map<string, { item: MemoryItem; kind: "add" | "merge"; base?: MemoryItem }>();
   const unresolved: ParsedMemory[] = [];
   let duplicates = 0;
   for (const p of parsed) {
@@ -495,28 +502,40 @@ export function planMemoryImport(
       continue;
     }
     const key = memoryKey({ scope, title: p.title });
-    if (keys.has(key)) {
-      duplicates++;
+    const inProgress = work.get(key);
+    if (inProgress) {
+      inProgress.item = mergeMemory(inProgress.item, p.text, p.tags, now);
       continue;
     }
-    keys.add(key); // also dedup within the incoming batch
-    toAdd.push({
-      id: newId(),
-      scope,
-      title: p.title,
-      text: p.text,
-      ...(p.tags ? { tags: p.tags } : {}),
-      origin: p.origin,
-      createdAt: now,
-      updatedAt: now,
-    });
+    const exist = existingByKey.get(key);
+    if (exist) {
+      if (sameMemoryContent(exist, p.text, p.tags)) {
+        duplicates++;
+        continue;
+      }
+      work.set(key, { item: mergeMemory(exist, p.text, p.tags, now), kind: "merge", base: exist });
+    } else {
+      work.set(key, {
+        item: { id: newId(), scope, title: p.title, text: p.text, ...(p.tags ? { tags: p.tags } : {}), origin: p.origin, createdAt: now, updatedAt: now },
+        kind: "add",
+      });
+    }
   }
-  return { toAdd, duplicates, unresolved };
+  const toAdd: MemoryItem[] = [];
+  const toMerge: Array<{ existing: MemoryItem; merged: MemoryItem }> = [];
+  for (const w of work.values()) {
+    if (w.kind === "add") toAdd.push(w.item);
+    else toMerge.push({ existing: w.base!, merged: w.item });
+  }
+  return { toAdd, toMerge, duplicates, unresolved };
 }
 
 export interface PromptImportPlan {
   toAdd: PromptItem[];
-  /** Skipped: a prompt with the same scope + title already exists. */
+  /** Same scope+title, different body → rule-based merged result + the existing
+   *  prompt (so the caller can offer AI merge / keep-mine). */
+  toMerge: Array<{ existing: PromptItem; merged: PromptItem }>;
+  /** Same scope+title AND identical body — nothing to do. */
   duplicates: number;
   /** Skipped: a scoped prompt whose site/source/project isn't here. */
   unresolved: ParsedPrompt[];
@@ -524,9 +543,10 @@ export interface PromptImportPlan {
 
 /**
  * Plan a prompt import — the prompt twin of `planMemoryImport`. Global prompts
- * always resolve; scoped ones resolve via the caller-supplied `resolveScope`
- * (closing over the local site/source/project lists incl. just-imported ones).
- * Exact duplicates (same scope + folded title — `promptKey`) are skipped.
+ * always resolve; scoped ones resolve via the caller-supplied `resolveScope`.
+ * New key → add; same key + same body → duplicate; same key + different body →
+ * rule-based merge (union tags + lossless body join), which the command applies
+ * by default and can refine with an AI pass.
  */
 export function planPromptImport(
   parsed: ParsedPrompt[],
@@ -535,8 +555,8 @@ export function planPromptImport(
   newId: () => string,
   now: string,
 ): PromptImportPlan {
-  const keys = new Set(existing.map((p) => promptKey(p)));
-  const toAdd: PromptItem[] = [];
+  const existingByKey = new Map(existing.map((p) => [promptKey(p), p]));
+  const work = new Map<string, { item: PromptItem; kind: "add" | "merge"; base?: PromptItem }>();
   const unresolved: ParsedPrompt[] = [];
   let duplicates = 0;
   for (const p of parsed) {
@@ -546,20 +566,30 @@ export function planPromptImport(
       continue;
     }
     const key = promptKey({ scope, title: p.title });
-    if (keys.has(key)) {
-      duplicates++;
+    const inProgress = work.get(key);
+    if (inProgress) {
+      inProgress.item = mergePrompt(inProgress.item, p.body, p.tags, now);
       continue;
     }
-    keys.add(key);
-    toAdd.push({
-      id: newId(),
-      scope,
-      title: p.title,
-      body: p.body,
-      ...(p.tags ? { tags: p.tags } : {}),
-      createdAt: now,
-      updatedAt: now,
-    });
+    const exist = existingByKey.get(key);
+    if (exist) {
+      if (samePromptContent(exist, p.body, p.tags)) {
+        duplicates++;
+        continue;
+      }
+      work.set(key, { item: mergePrompt(exist, p.body, p.tags, now), kind: "merge", base: exist });
+    } else {
+      work.set(key, {
+        item: { id: newId(), scope, title: p.title, body: p.body, ...(p.tags ? { tags: p.tags } : {}), createdAt: now, updatedAt: now },
+        kind: "add",
+      });
+    }
   }
-  return { toAdd, duplicates, unresolved };
+  const toAdd: PromptItem[] = [];
+  const toMerge: Array<{ existing: PromptItem; merged: PromptItem }> = [];
+  for (const w of work.values()) {
+    if (w.kind === "add") toAdd.push(w.item);
+    else toMerge.push({ existing: w.base!, merged: w.item });
+  }
+  return { toAdd, toMerge, duplicates, unresolved };
 }
