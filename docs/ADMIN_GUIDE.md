@@ -97,6 +97,19 @@ VS Code (`Developer: Show Logs… → Network`), (3) `login.microsoftonline.com`
 authority) and `graph.microsoft.com` are allowlisted on the proxy. PAC-file edge cases follow VS
 Code's own behavior — test one machine before fleet rollout.
 
+**Auto-diagnosis (0.102.0+):** the extension recognizes the common filtering failure modes and
+surfaces the fix in the error itself, so end users aren't left with a bare "fetch failed":
+- an **untrusted, re-signed TLS certificate** (the SSL-inspection signature — the code hides in the
+  error's `cause`, which it unwraps) → trust the root CA via `NODE_EXTRA_CA_CERTS`, the OS trust
+  store (`http.systemCertificates`), or `aiSharePoint.ldap.caCertificatesFile`; **never** disable
+  validation;
+- **HTTP 407** → set `http.proxy` credentials / `http.proxyAuthorization`;
+- a **block page** (named when the appliance fingerprint is present — Zscaler, Netskope, Forcepoint,
+  Blue Coat/Symantec, Palo Alto, Fortinet, Cisco Umbrella, Squid, …) → which host to allowlist;
+- **DNS** failure (filter vs. offline/VPN) and an **unreachable proxy** each get a specific hint.
+Detection is conservative (only fires on a real fingerprint), so an ordinary API 403/500 is never
+mislabeled a proxy problem. Turn on `aiSharePoint.logging.verboseWire` to capture the raw exchange.
+
 ## 4. Entra ID options
 
 ### Default: Microsoft Graph PowerShell first-party app

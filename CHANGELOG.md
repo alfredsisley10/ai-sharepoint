@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.102.0 — 2026-06-30
+
+### Added — connection failures now auto-diagnose corporate proxy / TLS-inspection / content filters
+- When a network request fails, the extension now recognizes the tell-tale signs of a corporate
+  **proxy, TLS-inspection appliance, or web content filter** and responds with targeted, actionable
+  guidance instead of a bare "fetch failed":
+  - **TLS interception** (an untrusted, re-signed certificate — the #1 cause). The TLS error code
+    hides in the error's `cause`, which generic handling misses; we now unwrap it and explain how to
+    **trust the proxy's root CA** (`NODE_EXTRA_CA_CERTS` / OS trust store / `aiSharePoint.ldap.caCertificatesFile`)
+    — never by disabling certificate validation.
+  - **Proxy authentication required (HTTP 407)** → how to set `http.proxy` credentials / `http.proxyAuthorization`.
+  - **Content-filter block pages** → names the appliance when its fingerprint is present (Zscaler,
+    Netskope, Forcepoint, Blue Coat/Symantec, Palo Alto, Fortinet, Cisco Umbrella, Squid, and more)
+    and tells you which host to ask IT to allowlist.
+  - **DNS failures** (filter vs. offline/VPN) and an **unreachable proxy** each get their own hint.
+- Detection is conservative — it only fires on a real fingerprint (a 407, an untrusted cert, a named
+  appliance, a block page, a proxy-unreachable error, a DNS failure), so an ordinary API 403/500 is
+  never misread as a proxy problem. Wired into the shared HTTP layer and the Microsoft Graph client,
+  so it covers sign-in, SharePoint/Teams/Outlook, and every reference connector.
+
 ## 0.101.0 — 2026-06-30
 
 ### Changed — Confluence writes now confirm the space and instance URL before changing anything

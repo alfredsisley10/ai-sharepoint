@@ -1,5 +1,6 @@
 import { SharePointAuthProvider } from "./types";
 import { AppError } from "../core/errors";
+import { detectProxyInterference, detectProxyFromError, hostOf } from "../core/networkDiagnostics";
 import { wireEnabled, emitWire, capDetail, safeJson, safeUrl } from "../core/wireLog";
 
 /** Microsoft Graph delegated scope to read sites. */
@@ -308,6 +309,11 @@ export class SharePointClient {
         "✗",
         `${method} ${safeUrl(path)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`,
       );
+      // Auto-detect a corporate proxy / TLS-inspection / content filter (the
+      // TLS errno hides in err.cause) and give targeted guidance — sign-in and
+      // every Graph read travel this path, so it's the broadest place to catch it.
+      const proxy = detectProxyFromError(err, url);
+      if (proxy) throw new AppError(`${proxy.message}\n\n${proxy.summary}`, "network", proxy.summary);
       throw new AppError(
         `Graph request failed: ${err instanceof Error ? err.message : String(err)}`,
         "network",
@@ -340,6 +346,12 @@ export class SharePointClient {
         `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`,
         wireEnabled() ? capDetail(errBody) : undefined,
       );
+      // A 407, or a filter block page in place of Graph's JSON, means a proxy —
+      // not Microsoft — refused this. Diagnose that so the user fixes the proxy.
+      const filtered = detectProxyInterference({ status: res.status, bodyText: errBody, headers: res.headers, host: hostOf(url) });
+      if (filtered && (res.status === 407 || filtered.kind !== "dns-filtered")) {
+        throw new AppError(`${filtered.message}\n\n${filtered.summary}`, "network", filtered.summary);
+      }
       const code =
         res.status === 401
           ? "auth.failed"
