@@ -136,6 +136,14 @@ If your tenant requires admin consent for it, grant consent in Entra admin cente
      registration, no admin consent, no Graph token; the webhook URL is stored in the user's OS
      keychain. Posts go to the channel (not 1:1 chats) and can't @-mention. Outlook drafts
      (`Mail.ReadWrite`, no `Mail.Send`) are the other no-send-consent path.
+   - **Read-only context (opt-in, ADR-0025 extension):** with the same delegated sign-in the
+     assistant can *read* — strictly read-only, scoped to what the user designates, never a write
+     path. Scopes are requested incrementally only when the user enables each: **Outlook
+     workspace** `Mail.Read` + `Calendars.Read`; **OneDrive / shared SharePoint files**
+     `Files.Read.All`; **Teams** `Chat.Read` for a registered **chat** (no admin consent), and for
+     a registered **channel** additionally `Channel.ReadBasic.All` + `ChannelMessage.Read.All` —
+     the latter **may require admin consent** in your tenant (channel reading simply won't be
+     offered if it isn't granted). All are governed by the user's own permissions and tenant DLP.
    - **Power BI** (ADR-0027): *Power BI Service* API → Delegated → `Workspace.Read.All` +
      `Dataset.Read.All` (read-only; the user's Power BI licenses/roles/RLS govern access).
      **No-consent alternative:** users can instead sign in **as the Azure CLI first-party

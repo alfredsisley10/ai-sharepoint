@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.96.0",
+  "version": "0.97.0",
   "release": {
     "channel": "standard"
   },
@@ -352,6 +352,24 @@
         "icon": "$(inbox)"
       },
       {
+        "command": "aiSharePoint.addTeamsScope",
+        "title": "%aiSharePoint.addTeamsScope.title%",
+        "category": "%category%",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "aiSharePoint.readTeamsMessages",
+        "title": "%aiSharePoint.readTeamsMessages.title%",
+        "category": "%category%",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "aiSharePoint.removeTeamsScope",
+        "title": "%aiSharePoint.removeTeamsScope.title%",
+        "category": "%category%",
+        "icon": "$(trash)"
+      },
+      {
         "command": "aiSharePoint.addLocalFile",
         "title": "%aiSharePoint.addLocalFile.title%",
         "category": "%category%",
@@ -667,7 +685,7 @@
       },
       {
         "view": "aiSharePoint.commsView",
-        "contents": "No Teams drafts pending. Prepare a message yourself or ask @sharepoint to draft one.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\n**Teams** drafts wait **here** in this outbox until YOU approve sending them. **Outlook** emails are saved straight to your **Outlook Drafts folder** — review and send them from Outlook (this view won't list them). Nothing is ever sent without your approval (ADR-0025).\nWant @sharepoint to **read** mail/calendar too? Set up a read-only **Outlook workspace** (one folder, scoped access).\n[Configure Outlook Workspace](command:aiSharePoint.configureOutlookWorkspace)"
+        "contents": "No Teams drafts pending. Prepare a message yourself or ask @sharepoint to draft one.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\n**Teams** drafts wait **here** in this outbox until YOU approve sending them. **Outlook** emails are saved straight to your **Outlook Drafts folder** — review and send them from Outlook (this view won't list them). Nothing is ever sent without your approval (ADR-0025).\nWant @sharepoint to **read** mail/calendar too? Set up a read-only **Outlook workspace** (one folder, scoped access).\n[Configure Outlook Workspace](command:aiSharePoint.configureOutlookWorkspace)\nFor **Teams**, register a specific chat or channel as a read-only scope — @sharepoint reads only what you pick.\n[Add Teams Scope](command:aiSharePoint.addTeamsScope)"
       },
       {
         "view": "aiSharePoint.projectsView",
@@ -2005,6 +2023,32 @@
         }
       },
       {
+        "name": "aisharepoint_read_teams",
+        "displayName": "Read scoped Teams messages",
+        "toolReferenceName": "spReadTeams",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(comment-discussion)",
+        "tags": [
+          "sharepoint",
+          "teams",
+          "context"
+        ],
+        "modelDescription": "Read recent messages (READ-ONLY) from a Teams chat or channel the user registered as a scope. Pass 'scope' = the scope's label (or a distinctive part of it); if omitted and exactly one scope is registered, that one is used, otherwise the tool lists the registered labels — pick one and call again. 'count' caps how many recent messages to read (1–50, default 20). This reads ONLY scopes the user explicitly registered — never all of Teams — and never posts, edits, or deletes. If none are registered the tool says so; then ask the user to run 'Teams: Add Readable Scope', and do NOT guess or fabricate conversation contents. Summarize for the user; don't expose private messages beyond what's needed to answer.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "description": "Label (or distinctive substring) of the registered Teams chat/channel to read."
+            },
+            "count": {
+              "type": "number",
+              "description": "How many recent messages to read (1–50, default 20)."
+            }
+          }
+        }
+      },
+      {
         "name": "aisharepoint_read_file",
         "displayName": "Read a Context File (Excel/CSV)",
         "toolReferenceName": "spReadFile",
@@ -2128,9 +2172,19 @@
           "group": "navigation@4"
         },
         {
+          "command": "aiSharePoint.readTeamsMessages",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@5"
+        },
+        {
           "command": "aiSharePoint.configureTeamsWebhook",
           "when": "view == aiSharePoint.commsView",
           "group": "1_config@1"
+        },
+        {
+          "command": "aiSharePoint.addTeamsScope",
+          "when": "view == aiSharePoint.commsView",
+          "group": "1_config@5"
         },
         {
           "command": "aiSharePoint.testCommsMethod",

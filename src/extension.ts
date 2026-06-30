@@ -180,6 +180,9 @@ import {
   renderCalendarDigest,
   withTrackedSubject,
 } from "./comms/outlookWorkspace";
+import { TeamsScopeStore } from "./comms/teamsScopeStore";
+import { registerTeamsTools } from "./chat/teamsTools";
+import { TeamsScope, TeamsScopeEntry, renderTeamsDigest, clampTeamsTop } from "./comms/teamsScope";
 import {
   TeamsWebhook,
   teamsWebhookUrlIssue,
@@ -404,6 +407,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const prompts = new PromptStore(context.globalState);
   const outlookWorkspaces = new OutlookWorkspaceStore(context.globalState);
   context.subscriptions.push(outlookWorkspaces);
+  const teamsScopes = new TeamsScopeStore(context.globalState);
+  context.subscriptions.push(teamsScopes);
   const fileSources = new FileSourcesStore(context.globalState);
   context.subscriptions.push(fileSources);
   // Read a registered file source into rows. Local files read from disk; remote
@@ -702,6 +707,15 @@ export function activate(context: vscode.ExtensionContext): void {
         telemetry,
         errors,
         nowIso,
+      ),
+    ),
+    ...tryRegister("teams tools", () =>
+      registerTeamsTools(
+        teamsScopes,
+        sites,
+        (conn) => new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false),
+        telemetry,
+        errors,
       ),
     ),
     ...tryRegister("file tools", () => registerFileTools(fileSources, readFileSource, telemetry, errors)),
@@ -5451,6 +5465,135 @@ export function activate(context: vscode.ExtensionContext): void {
     await outlookWorkspaces.upsert({ ...got.ws, trackedSubjects: withTrackedSubject(got.ws.trackedSubjects, subject), updatedAt: nowIso() });
     telemetry.record("comms.trackReplies");
     void vscode.window.showInformationMessage(`Rule created — replies matching “${rule.conditions.subjectContains[0]}” will collect in “${got.ws.folderName}”.`);
+  });
+
+  // --- Read-only, scoped Teams messages (ADR-0025 extension) ---------------
+  // Reads reuse the Microsoft 365 sign-in; @sharepoint may read ONLY chats/
+  // channels the user explicitly registers as a scope — never all of Teams.
+
+  register("aiSharePoint.addTeamsScope", async () => {
+    const picked = await commsConnAndClient("Read Teams using which Microsoft 365 sign-in?");
+    if (!picked) return;
+    const { conn, client } = picked;
+    const kind = await vscode.window.showQuickPick(
+      [
+        { label: "$(comment-discussion) A chat (1:1 or group)", how: "chat" as const, description: "uses Chat.Read — no admin consent" },
+        { label: "$(organization) A team channel", how: "channel" as const, description: "may require ChannelMessage.Read.All consent" },
+      ],
+      { title: "Add a readable Teams scope", placeHolder: "@sharepoint will read ONLY what you pick here (read-only).", ignoreFocusOut: true },
+    );
+    if (!kind) return;
+    let scope: TeamsScope | undefined;
+    let label = "";
+    try {
+      if (kind.how === "chat") {
+        const chats = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Listing your Teams chats…" },
+          () => client.listMyChats(50),
+        );
+        if (chats.length === 0) {
+          void vscode.window.showInformationMessage("No Teams chats found for this sign-in.");
+          return;
+        }
+        const pick = await vscode.window.showQuickPick(
+          chats.map((c) => ({ label: c.label, description: c.chatType, id: c.id })),
+          { title: "Pick a chat to read", placeHolder: "Only this chat becomes readable.", ignoreFocusOut: true, matchOnDescription: true },
+        );
+        if (!pick) return;
+        scope = { kind: "chat", chatId: pick.id };
+        label = pick.label;
+      } else {
+        const teams = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Listing your teams…" },
+          () => client.listJoinedTeams(),
+        );
+        if (teams.length === 0) {
+          void vscode.window.showInformationMessage("You don't appear to be a member of any teams on this sign-in.");
+          return;
+        }
+        const teamPick = await vscode.window.showQuickPick(
+          teams.map((t) => ({ label: t.displayName, id: t.id })),
+          { title: "Pick a team", ignoreFocusOut: true },
+        );
+        if (!teamPick) return;
+        const channels = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Listing channels in “${teamPick.label}”…` },
+          () => client.listChannels(teamPick.id),
+        );
+        const chanPick = await vscode.window.showQuickPick(
+          channels.map((c) => ({ label: c.displayName, id: c.id })),
+          { title: `Pick a channel in “${teamPick.label}”`, ignoreFocusOut: true },
+        );
+        if (!chanPick) return;
+        scope = { kind: "channel", teamId: teamPick.id, channelId: chanPick.id };
+        label = `${teamPick.label} › ${chanPick.label}`;
+      }
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      void vscode.window.showErrorMessage(
+        /403|consent|permission/i.test(m)
+          ? "Reading Teams needs the relevant Graph permission consented for this sign-in (chats: Chat.Read; channels: ChannelMessage.Read.All — may need an admin). See the Admin Guide."
+          : `Could not list Teams ${kind.how === "chat" ? "chats" : "channels"}: ${m}`,
+      );
+      return;
+    }
+    if (teamsScopes.findByScope(scope)) {
+      void vscode.window.showInformationMessage(`“${label}” is already a registered Teams scope.`);
+      return;
+    }
+    await teamsScopes.add({ id: crypto.randomUUID(), connectionHandle: conn.cacheHandle, scope, label, createdAt: nowIso() });
+    telemetry.record("comms.addTeamsScope", { kind: scope.kind });
+    void vscode.window.showInformationMessage(`Added Teams scope “${label}”. @sharepoint can read it with #spReadTeams.`);
+  });
+
+  register("aiSharePoint.readTeamsMessages", async (arg?: unknown) => {
+    const all = teamsScopes.list();
+    if (all.length === 0) {
+      const add = await vscode.window.showInformationMessage("No Teams scopes registered yet.", "Add Teams Scope…");
+      if (add) await vscode.commands.executeCommand("aiSharePoint.addTeamsScope");
+      return;
+    }
+    let entry = arg && typeof arg === "object" && typeof (arg as TeamsScopeEntry).id === "string" ? (arg as TeamsScopeEntry) : undefined;
+    if (!entry) {
+      const pick = await vscode.window.showQuickPick(
+        all.map((s) => ({ label: s.label, description: s.scope.kind === "chat" ? "chat" : "channel", e: s })),
+        { title: "Read which Teams scope?", ignoreFocusOut: true },
+      );
+      if (!pick) return;
+      entry = pick.e;
+    }
+    const conn = sites.list().find((c) => c.cacheHandle === entry!.connectionHandle);
+    if (!conn) {
+      void vscode.window.showWarningMessage("That scope's Microsoft 365 sign-in is no longer connected. Re-add the scope.");
+      return;
+    }
+    const client = new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false);
+    try {
+      const messages = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Reading Teams “${entry.label}” (read-only)…` },
+        () =>
+          entry!.scope.kind === "chat"
+            ? client.readChatMessages(entry!.scope.chatId, clampTeamsTop(undefined))
+            : client.readChannelMessages(entry!.scope.teamId, entry!.scope.channelId, clampTeamsTop(undefined)),
+      );
+      const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderTeamsDigest(entry.label, messages) });
+      await vscode.window.showTextDocument(doc, { preview: true });
+      telemetry.record("comms.readTeams", { kind: entry.scope.kind, count: messages.length });
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read “${entry.label}”: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  register("aiSharePoint.removeTeamsScope", async () => {
+    const all = teamsScopes.list();
+    if (all.length === 0) return;
+    const pick = await vscode.window.showQuickPick(
+      all.map((s) => ({ label: s.label, description: s.scope.kind, id: s.id })),
+      { title: "Remove which Teams scope? (the chat/channel itself is untouched)", ignoreFocusOut: true },
+    );
+    if (!pick) return;
+    await teamsScopes.remove(pick.id);
+    void vscode.window.showInformationMessage(`Removed Teams scope “${pick.label}”.`);
   });
 
   register("aiSharePoint.addSharedFile", async () => {

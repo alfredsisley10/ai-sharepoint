@@ -9,6 +9,15 @@ import {
 import { DriveItemRef, encodeSharingUrl, driveItemToRef } from "../context/files/graphFiles";
 import { AppError } from "../core/errors";
 import { MailFormat, ComposedAttachment, buildMessageBody, buildFileAttachment } from "./mailCompose";
+import {
+  TeamsMessageView,
+  TeamsChatRaw,
+  chatLabel,
+  chatsListPath,
+  chatMessagesPath,
+  channelsListPath,
+  channelMessagesPath,
+} from "./teamsScope";
 
 /**
  * Graph client for Communication Channels (ADR-0025). Send-capable scopes
@@ -34,12 +43,32 @@ const CALENDAR_READ_SCOPES = ["https://graph.microsoft.com/Calendars.Read"];
 const MAILBOX_RULE_SCOPES = ["https://graph.microsoft.com/MailboxSettings.ReadWrite"];
 // Read OneDrive + shared SharePoint files the user can already access.
 const FILES_READ_SCOPES = ["https://graph.microsoft.com/Files.Read.All"];
+// Read-only, SCOPED Teams messages (ADR-0025 extension). Chats use the delegated
+// Chat.Read; channels additionally need Channel.ReadBasic.All + ChannelMessage.Read.All
+// (the message-read scope may require admin consent in some tenants).
+const TEAMS_CHAT_READ_SCOPES = [...DIRECTORY_SCOPES, "https://graph.microsoft.com/Chat.Read"];
+const TEAMS_CHANNEL_READ_SCOPES = [
+  "https://graph.microsoft.com/Team.ReadBasic.All",
+  "https://graph.microsoft.com/Channel.ReadBasic.All",
+  "https://graph.microsoft.com/ChannelMessage.Read.All",
+];
 const GRAPH_V1 = "https://graph.microsoft.com/v1.0";
 
 export interface MailFolderRef {
   id: string;
   displayName: string;
   totalItemCount?: number;
+}
+
+export interface TeamsChatRef {
+  id: string;
+  label: string;
+  chatType?: string;
+}
+
+export interface NamedRef {
+  id: string;
+  displayName: string;
 }
 
 export interface ResolvedRecipient {
@@ -259,5 +288,41 @@ export class CommsClient extends SharePointClient {
       throw new AppError(`Microsoft Graph returned ${res.status} downloading the file.`, res.status === 403 ? "graph.forbidden" : "graph.error");
     }
     return Buffer.from(await res.arrayBuffer());
+  }
+
+  // --- Read-only, scoped Teams messages (ADR-0025 extension) ---------------
+
+  /** List the signed-in user's chats with friendly labels (read-only, Chat.Read).
+   *  Used to pick a chat to register as a readable scope. */
+  async listMyChats(top = 50): Promise<TeamsChatRef[]> {
+    const myId = await this.myUserId();
+    const res = await this.request<{ value: TeamsChatRaw[] }>("GET", chatsListPath(top), undefined, TEAMS_CHAT_READ_SCOPES);
+    return (res.value ?? [])
+      .filter((c) => typeof c.id === "string")
+      .map((c) => ({ id: c.id as string, label: chatLabel(c, myId), ...(c.chatType ? { chatType: c.chatType } : {}) }));
+  }
+
+  /** Read recent messages from one chat (read-only). */
+  async readChatMessages(chatId: string, top: number): Promise<TeamsMessageView[]> {
+    const res = await this.request<{ value: TeamsMessageView[] }>("GET", chatMessagesPath(chatId, top), undefined, TEAMS_CHAT_READ_SCOPES);
+    return res.value ?? [];
+  }
+
+  /** List the teams the user has joined (read-only) — to pick a channel scope. */
+  async listJoinedTeams(): Promise<NamedRef[]> {
+    const res = await this.request<{ value: NamedRef[] }>("GET", "/me/joinedTeams?$select=id,displayName", undefined, TEAMS_CHANNEL_READ_SCOPES);
+    return res.value ?? [];
+  }
+
+  /** List a team's channels (read-only). */
+  async listChannels(teamId: string): Promise<NamedRef[]> {
+    const res = await this.request<{ value: NamedRef[] }>("GET", channelsListPath(teamId), undefined, TEAMS_CHANNEL_READ_SCOPES);
+    return res.value ?? [];
+  }
+
+  /** Read recent messages from one team channel (read-only). */
+  async readChannelMessages(teamId: string, channelId: string, top: number): Promise<TeamsMessageView[]> {
+    const res = await this.request<{ value: TeamsMessageView[] }>("GET", channelMessagesPath(teamId, channelId, top), undefined, TEAMS_CHANNEL_READ_SCOPES);
+    return res.value ?? [];
   }
 }

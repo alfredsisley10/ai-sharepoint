@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.97.0 — 2026-06-30
+
+### Added — read-only, scoped Teams messages
+- @sharepoint can now **read Teams messages** with the same Microsoft 365 sign-in — strictly
+  **read-only** and **scoped** to what you choose. *Teams: Add Readable Scope* registers a specific
+  **chat** (1:1 or group) or a **team channel**; the assistant reads **only** the scopes you add,
+  never all of Teams. Read them via *Teams: Read Messages* (Markdown digest, newest first) or the
+  new **`aisharepoint_read_teams`** tool (`#spReadTeams`, `count` 1–50). *Teams: Remove a Readable
+  Scope* unregisters one.
+- **Least-privilege, incremental consent:** chats use the delegated **Chat.Read** (no admin
+  consent); a channel scope additionally needs **Channel.ReadBasic.All** + **ChannelMessage.Read.All**
+  (may require admin consent — channel reading just isn't offered if it isn't granted). The read
+  path never posts, edits, or deletes; system/deleted messages are filtered and bodies are bounded.
+- Mirrors the read-only Outlook workspace: pure, unit-tested core (`teamsScope.ts` — scope keys,
+  Graph paths, chat-label derivation, HTML→text, digest render) + a Memento-backed scope store;
+  the store holds only ids/labels, never message content. Documented in the User & Admin guides.
+
 ## 0.96.0 — 2026-06-30
 
 ### Reviewed + polished — white-label build is cross-platform (macOS & Windows)

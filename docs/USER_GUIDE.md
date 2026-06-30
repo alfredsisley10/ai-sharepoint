@@ -134,6 +134,17 @@ billing/plan page is the authoritative source.
 Teams/Outlook drafts waiting for **your** approval — nothing sends without it (the badge counts
 pending drafts). Draft yourself or ask @sharepoint to prepare one.
 
+**Read-only context (opt-in).** Beyond drafts, you can let @sharepoint **read** Microsoft 365
+context with the same sign-in — always scoped and read-only:
+
+- **Outlook** — *Outlook: Configure Read-Only Workspace* picks a folder (or the whole mailbox) it
+  may read; *Read Mail / Read Calendar* render a digest. (`#spReadOutlook`)
+- **Teams** — *Teams: Add Readable Scope* registers a specific **chat** or **team channel**;
+  @sharepoint reads **only** the scopes you add — never all of Teams — via *Teams: Read Messages*
+  or the `#spReadTeams` tool. Chats use the delegated **Chat.Read** permission (no admin consent);
+  reading a **channel** also needs **Channel.ReadBasic.All** + **ChannelMessage.Read.All**, which
+  may require an administrator to consent in your tenant. Reads never post, edit, or delete.
+
 ### Support & Diagnostics
 Everything operational: **Export Diagnostics Bundle**, **Error Reports** (the view badge shows
 the count; **right-click → Delete Error Reports** to clear them, with confirmation), extension
