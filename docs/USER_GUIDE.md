@@ -163,8 +163,8 @@ bundles, and intentionally noisy — turn it off after debugging.
 Click **Usage Telemetry** in the Support view (or run *Manage Usage Telemetry (Splunk / OTEL)*)
 to optionally forward **anonymized** usage counters to a **Splunk HEC** endpoint and/or an
 **OTEL (OTLP/HTTP) metrics** platform. It's **off by default**. The guided menu lets you
-enable/disable it, set the Splunk HEC URL + token and the OTLP endpoint + auth header, send a
-**test event**, or clear everything.
+enable/disable it, set the Splunk HEC URL + **Splunk Attribution Identifier** and the OTLP
+endpoint + auth header, send a **test event**, or clear everything.
 
 - **What is sent:** only short categorical values — event names, enum dimensions (source type,
   error **code**, tool name), counts, and environment (extension/VS Code version, OS type/version,
@@ -172,9 +172,9 @@ enable/disable it, set the Splunk HEC URL + token and the OTLP endpoint + auth h
   content, credentials, PII, or error messages. Sending is **opportunistic** — a down or slow
   endpoint never blocks or breaks the extension. It also honors your `usageCapture` / VS Code
   telemetry stance.
-- **Where secrets live:** the connection details — including the HEC token and OTLP auth header —
-  are stored in your **OS keychain**, never in `settings.json` and never in a diagnostics export.
-  Saved tokens are **write-only**: the UI shows only *set / not set*, never the value.
+- **Where secrets live:** the connection details — including the **Splunk Attribution Identifier**
+  and OTLP auth header — are stored in your **OS keychain**, never in `settings.json` and never in a
+  diagnostics export. Saved secrets are **write-only**: the UI shows only *set / not set*, never the value.
 
 ## Chatting with @sharepoint
 

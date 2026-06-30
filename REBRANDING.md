@@ -106,19 +106,22 @@ The wizard also steps you through **what to bake into the build** and saves it f
 refreshing a release is quick and consistent:
 
 - **Bake-in settings.** After the identity prompts you choose what ships with the build:
-  anonymized **telemetry** (Splunk HEC / OTEL endpoints, and — optionally — a HEC token / OTLP
-  auth header that is **obfuscated** in the VSIX and moved to the OS keychain on first run; see
+  anonymized **telemetry** (Splunk HEC / OTEL endpoints, and — optionally — a **Splunk Attribution
+  Identifier** / OTLP auth header that is **obfuscated** in the VSIX and moved to the OS keychain on first run; see
   the security note below), **pre-defined connectors** (a snapshot of your current reference
   sources as non-secret descriptors — each user supplies their own credentials on first use),
   **project/memory defaults**, and **custom help** (a User Guide markdown + a first-run welcome
   note). On first launch the build seeds these **once** and never overwrites anything a user
   already has.
-- **Baked tokens are obfuscated, not encrypted.** A pre-packaged Splunk HEC token (or OTLP auth
-  header) is AES-obfuscated so it is **not** readable in `package.json` and never lands in
+- **Baked secrets are obfuscated, not encrypted.** A pre-packaged Splunk Attribution Identifier
+  (or OTLP auth header) is AES-obfuscated so it is **not** readable in `package.json` and never lands in
   settings, and on install it is moved into the OS keychain (never shown again, never exported).
   But because the de-obfuscation key ships in the build, a determined party with the VSIX can
   recover it — so treat baked tokens as **low-privilege, rotatable, HEC-ingest-only** credentials.
   The saved release profile (`whitelabel.profile.json`) never contains tokens — only endpoints.
+  **The packager refuses to bake a readable secret:** the build fails if a Splunk Attribution
+  Identifier (or OTLP auth value) is ever present in a non-obfuscated form, so a plaintext
+  credential can never land in `package.json` — even via a hand-edited profile.
 - **Release profile.** At the end, choose **Save profile** to write `whitelabel.profile.json`
   (no secrets) to the source folder. Commit it. Next time you run the wizard it offers to
   **Reuse profile**, pre-filling every prompt — so a refreshed release is a quick, repeatable

@@ -6571,7 +6571,7 @@ export function activate(context: vscode.ExtensionContext): void {
           action: "toggle",
         },
         { label: "$(server) Splunk HEC URL", description: st.splunkUrl ?? "not set", action: "splunkUrl" },
-        { label: "$(key) Splunk HEC token", description: st.splunkTokenSet ? "•••••• set" : "not set", action: "splunkToken" },
+        { label: "$(key) Splunk Attribution Identifier", description: st.splunkTokenSet ? "•••••• set" : "not set", action: "splunkToken" },
         { label: "$(dashboard) OTEL OTLP endpoint", description: st.otlpEndpoint ?? "not set", action: "otlpEndpoint" },
         { label: "$(key) OTEL auth header", description: st.otlpHeaderSet ? `•••••• set (${cur.otlpHeaderName})` : "not set", action: "otlpHeader" },
         { label: "$(beaker) Send a test event now", action: "test" },
@@ -6600,8 +6600,8 @@ export function activate(context: vscode.ExtensionContext): void {
         const v = await vscode.window.showInputBox({
           ignoreFocusOut: true,
           password: true,
-          title: "Splunk HEC token (write-only — never shown again)",
-          placeHolder: cur.splunkHecToken ? "type to replace; leave blank to keep the current token" : "paste the HEC token",
+          title: "Splunk Attribution Identifier (write-only — never shown again)",
+          placeHolder: cur.splunkHecToken ? "type to replace; leave blank to keep the current identifier" : "paste the Splunk Attribution Identifier",
         });
         if (v === undefined) continue;
         if (v.trim()) await telemetryConfigStore.save({ ...cur, splunkHecToken: v.trim() });

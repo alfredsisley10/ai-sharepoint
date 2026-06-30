@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 
 /**
  * Secret OBFUSCATION for values baked into a white-labeled VSIX (e.g. a Splunk
- * HEC token pre-packaged by the distributor).
+ * Attribution Identifier — the Splunk HEC token — pre-packaged by the distributor).
  *
  * IMPORTANT — this is obfuscation, NOT secrecy. The key is derived from a
  * constant compiled into the extension, so the value is recoverable at runtime

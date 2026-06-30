@@ -767,7 +767,7 @@ async function gatherProvisioning(
     if (splunkUrl === undefined) return undefined;
     if (splunkUrl.trim()) {
       tel.splunkHecUrl = splunkUrl.trim();
-      const token = await askSecret("Splunk HEC token to bake in (write-only — obfuscated in the build; blank to skip)");
+      const token = await askSecret("Splunk Attribution Identifier to bake in (write-only — obfuscated in the build; blank to skip)");
       if (token === undefined) return undefined;
       if (token.trim()) tel.splunkHecTokenObfuscated = obfuscateSecret(token.trim());
     }

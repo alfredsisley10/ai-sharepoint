@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.95.0 — 2026-06-30
+
+### Changed — "Splunk HEC token" is now the "Splunk Attribution Identifier"
+- Every user-facing reference to the Splunk HEC **token** — the telemetry management UI, the
+  white-label wizard prompt, and the User Guide / REBRANDING docs — now reads **Splunk Attribution
+  Identifier**. (The Splunk HEC **URL/endpoint** keeps its name; only the credential is renamed.)
+  Internal field names, the persisted keychain entry, and the Splunk wire-protocol token are
+  unchanged, so existing installs and the HEC integration keep working.
+
+### Hardened — a baked Attribution Identifier is always obfuscated, never plaintext
+- The white-label packager now **refuses to bake** a Splunk Attribution Identifier (or OTLP auth
+  value) unless it is in obfuscated form: `buildProvisioningManifest` throws if a secret field is
+  present but not an obfuscated blob, or if a plaintext-named secret field is present at all. This
+  is defense-in-depth on top of the existing flow (the wizard obfuscates with AES-256-GCM, the
+  committed release profile strips secrets, and first-run moves the value into the OS keychain) —
+  so a readable credential can never reach `package.json`, even via a hand-edited profile. Covered
+  by tests.
+
 ## 0.94.0 — 2026-06-30
 
 ### Added — rich email composition (HTML / Rich Text / plain text + attachments)

@@ -16,6 +16,8 @@
  * provisioning.ts and the VS Code wizard in rebrandFlow.ts.
  */
 
+import { isObfuscatedSecret } from "../diagnostics/secretObfuscation";
+
 /** A pre-defined reference source — NON-SECRET descriptor only. The user
  *  supplies credentials on first use (the connector seeds as "not verified"). */
 export interface ProvisionedConnector {
@@ -56,7 +58,7 @@ export interface ProvisionedHelp {
 export interface ProvisionedTelemetry {
   enabled?: boolean;
   splunkHecUrl?: string;
-  /** Obfuscated Splunk HEC token blob. */
+  /** Obfuscated Splunk Attribution Identifier blob (the Splunk HEC token). */
   splunkHecTokenObfuscated?: string;
   otlpEndpoint?: string;
   otlpHeaderName?: string;
@@ -142,6 +144,32 @@ export function stripProfileSecrets(content: ProvisioningContent): ProvisioningC
   };
 }
 
+/**
+ * Defense in depth: a telemetry section baked into a white-label package may
+ * carry ONLY obfuscated secret blobs — never a plaintext Splunk Attribution
+ * Identifier (HEC token) or OTLP auth value. Throws if a `*Obfuscated` field
+ * isn't actually obfuscated, or if a plaintext-named secret field slipped in.
+ * Called by `buildProvisioningManifest`, so the bake fails loudly rather than
+ * shipping a readable credential in package.json.
+ */
+export function assertTelemetrySecretsObfuscated(t: ProvisionedTelemetry): void {
+  const obfuscatedFields: Array<keyof ProvisionedTelemetry> = ["splunkHecTokenObfuscated", "otlpHeaderValueObfuscated"];
+  for (const f of obfuscatedFields) {
+    const v = t[f];
+    if (v !== undefined && !isObfuscatedSecret(v)) {
+      throw new Error(`Refusing to bake telemetry: '${f}' is present but not obfuscated. Baked secrets must be obfuscated (secretObfuscation.ts).`);
+    }
+  }
+  // Any field whose name reads like a plaintext secret (token/secret/password/
+  // key/auth header value) — but isn't an *Obfuscated blob — must not be baked.
+  const stray = Object.keys(t).filter(
+    (k) => /(token|secret|password|headervalue)$/i.test(k) && !/obfuscated$/i.test(k),
+  );
+  if (stray.length) {
+    throw new Error(`Refusing to bake telemetry: plaintext secret field(s) present (${stray.join(", ")}). Only obfuscated blobs (and non-secret endpoints/flags) may be baked.`);
+  }
+}
+
 /** Stamp a provisioning manifest from profile content + a per-build id. Omits
  *  empty sections so the baked block stays minimal. */
 export function buildProvisioningManifest(content: ProvisioningContent, id: string): ProvisioningManifest {
@@ -151,6 +179,8 @@ export function buildProvisioningManifest(content: ProvisioningContent, id: stri
   if (content.projects && content.projects.length) m.projects = content.projects;
   if (content.help && (content.help.userGuide || content.help.welcome)) m.help = content.help;
   if (content.telemetry && (content.telemetry.enabled || content.telemetry.splunkHecUrl || content.telemetry.otlpEndpoint)) {
+    // Guard: never bake a readable secret — only obfuscated blobs + endpoints.
+    assertTelemetrySecretsObfuscated(content.telemetry);
     m.telemetry = content.telemetry;
   }
   return m;
