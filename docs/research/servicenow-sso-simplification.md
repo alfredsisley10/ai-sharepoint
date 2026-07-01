@@ -156,6 +156,60 @@ The paste step is where standard users fail. Two supported ways to remove it:
    durable, refresh-free-of-charge, real-ACL path and the strategic end state.
 4. **Optional:** embedded Webview capture to delete the manual paste from the cookie path.
 
+## Update (2026-07-01): complete inbound-auth catalog + two new testable methods shipped
+
+Follow-up research enumerated **every** ServiceNow REST inbound authentication mechanism, so nothing
+is left unexplored, and two of the previously-recommended options were shipped for the pilot to test
+against a live instance.
+
+### The full ServiceNow inbound-auth catalog (what the platform accepts on `/api/now/*`)
+
+| Mechanism | In this extension | Fit for a "standard SSO user, no service account" |
+|---|---|---|
+| **Basic** (user + password) | ✅ `basic` | ❌ needs a password/service account; SSO-only users often have none |
+| **OAuth — authorization code (PKCE)** | ✅ `snow-oauth` | ✅ delegates to SSO in the browser; needs a one-time admin OAuth client |
+| **OAuth — client credentials** | — | ❌ authenticates as an app, not the human (no per-user ACLs) |
+| **OAuth — ROPC (password grant)** | — | ❌ needs an OAuth client AND the user's password; bypasses SSO |
+| **OAuth — JWT bearer grant** | — | ❌ service-to-service; needs a shared key/cert + OAuth client |
+| **OAuth — SAML 2.0 bearer assertion** | — (documented) | ⚠️ SAML-only orgs; hard to harvest the assertion from an extension |
+| **Third-party OIDC / JWT ID token** | ✅ **`snow-oidc` (new)** | ✅ reuse the org IdP (Entra/Okta) token; one-time admin OIDC registration |
+| **Inbound REST API Key (`x-sn-apikey`)** | ✅ **`snow-apikey` (new)** | ✅ admin-issued key tied to a user (ACLs apply); no OAuth client/password/expiry |
+| **HMAC token** | — | ❌ request-signing; heavy, integration-oriented |
+| **Mutual TLS (client certificate)** | — | ❌ needs a provisioned client cert + instance mTLS config |
+| **Browser session cookies + `g_ck`** | ✅ `snow-session` | ⚠️ zero-admin but fragile (CSRF token, WAF, short session) |
+
+Sources: [REST API auth requirements KB0793963](https://support.servicenow.com/kb?id=kb_article_view&sysparm_article=KB0793963),
+[API Key & HMAC for REST APIs (Xanadu docs)](https://www.servicenow.com/docs/bundle/xanadu-platform-security/page/integrate/authentication/concept/api-key-and-hmac-rest-apis.html),
+[Inbound REST API Keys (dev blog)](https://www.servicenow.com/community/developer-advocate-blog/inbound-rest-api-keys/ba-p/2854924),
+[Configure an API key (Zurich docs)](https://www.servicenow.com/docs/bundle/zurich-platform-security/page/integrate/authentication/task/configure-api-key.html).
+
+### Shipped this increment — two live-testable methods (neither needs a password or service account)
+
+1. **`snow-apikey` — Inbound REST API Key** (`x-sn-apikey` header). An admin creates a REST API Key
+   under *System Web Services → API Access Policies → REST API Key*, associates it with a user (so
+   **that user's ACLs apply**), and adds an Inbound Authentication Profile that reads the
+   `x-sn-apikey` header. The user pastes the key; the extension sends it in that header. No OAuth
+   client, no password, no token expiry — the simplest thing that can work against a locked-down
+   instance, and the fastest to try live.
+2. **`snow-oidc` — third-party OIDC / SSO token** (`Authorization: Bearer <IdP JWT>`). The user pastes
+   an ID/access token from their identity provider (Entra ID, Okta, …); the instance validates it
+   against a **registered OIDC provider** and maps a token claim to a ServiceNow user. This is the
+   strategic SSO path — the user authenticates with the org IdP they already use, no ServiceNow
+   credential at all. The extension decodes the token's `exp` to fail fast on an expired paste and
+   gives audience/JWKS/user-claim-specific guidance on a 401.
+
+Both route through the shared `fetchJson`, so the ADR-0009 lockout breaker, caps/caching, and
+secret-masked wire logging apply unchanged; the key/token lives only in the OS keychain.
+
+### Still recommended next (not yet shipped)
+
+- **Reuse the extension's Microsoft (Entra) token for `snow-oidc`.** Today the OIDC token is pasted;
+  the durable end state is to acquire it silently through the existing MSAL/`aad-sso` machinery for a
+  configurable ServiceNow audience (`aud` = the app registration's Application ID URI), so it
+  auto-refreshes and needs no paste. Requires a settings-driven resource/scope and provider plumbing.
+- **Auto-capture `g_ck`** in the cookie path, and **the turnkey PKCE admin recipe** (from the
+  original increment list) remain open.
+
 ## Open questions for the pilot org
 
 - Is ServiceNow's SSO IdP **Entra ID** (lets us reuse the extension's existing token) or SAML/Okta?

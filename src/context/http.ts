@@ -14,7 +14,10 @@ import { wireEnabled, emitWire, capDetail, safeHeaders, safeUrl } from "../core/
  *  timeouts, response-size caps, status→ErrorCode mapping. Pure. */
 
 export function authHeader(credential: ContextCredential): string {
-  if (credential.method === "pat") {
+  // A pasted OAuth token (pat) and a third-party OIDC/JWT ID token (snow-oidc)
+  // both travel as a Bearer token; ServiceNow validates the OIDC one against a
+  // registered provider, but on the wire it is an ordinary Authorization.
+  if (credential.method === "pat" || credential.method === "snow-oidc") {
     return `Bearer ${credential.secret}`;
   }
   const user = credential.username ?? "";
@@ -45,6 +48,11 @@ export function authHeaders(credential: ContextCredential): Record<string, strin
   }
   if (credential.method === "sfx-token") {
     return { "X-SF-TOKEN": credential.secret };
+  }
+  // ServiceNow Inbound REST API Key (Washington+): an opaque key tied to a
+  // ServiceNow user, sent in its own header — no Authorization, no cookies.
+  if (credential.method === "snow-apikey") {
+    return { "x-sn-apikey": credential.secret };
   }
   return { Authorization: authHeader(credential) };
 }
@@ -188,11 +196,13 @@ export async function fetchJson<T>(
       .trim()
       .slice(0, 300);
     if (res.status === 401) {
-      throw new AppError(
-        `Authentication rejected (401)${reason ? `: ${reason}` : ""}.`,
-        "auth.failed",
-        "The source rejected these credentials — re-check the username/token and that it hasn't expired.",
-      );
+      const summary =
+        credential.method === "snow-oidc"
+          ? "ServiceNow rejected the third-party OIDC/JWT token. Most often: (1) the token's `aud` (audience) doesn't match the Client ID registered on the instance's OIDC provider (System OAuth → Application Registry → the OIDC entity); (2) the instance can't reach your IdP's JWKS to verify the signature (\"Key ID not found in JWKS\"); (3) the user claim (e.g. `email`/`upn`) doesn't map to a ServiceNow `user_name`; or (4) the token expired — paste a fresh one. Ask your admin to confirm the OIDC provider registration and the User Claim → User Field mapping."
+          : credential.method === "snow-apikey"
+            ? "ServiceNow rejected the API key. Check that: the key is active and copied in full (System Web Services → API Access Policies → REST API Key); an Inbound Authentication Profile sends it via the `x-sn-apikey` header; and the associated user has read access to this table. Keys tie to a user, so the user's ACLs still apply."
+            : "The source rejected these credentials — re-check the username/token and that it hasn't expired.";
+      throw new AppError(`Authentication rejected (401)${reason ? `: ${reason}` : ""}.`, "auth.failed", summary);
     }
     // 403: authenticated, but not allowed to do THIS. Classified as
     // graph.forbidden (not auth.failed) so a write-permission denial never

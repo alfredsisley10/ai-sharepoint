@@ -1,10 +1,23 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { diagnoseTransportError, fetchJson } from "../src/context/http";
+import { diagnoseTransportError, fetchJson, authHeaders } from "../src/context/http";
 import { ContextCredential } from "../src/context/types";
 import { AppError } from "../src/core/errors";
 
 const CRED: ContextCredential = { method: "basic", username: "u", secret: "p" };
+
+test("authHeaders: snow-apikey → x-sn-apikey header, no Authorization/Cookie", () => {
+  const h = authHeaders({ method: "snow-apikey", secret: "KEY123" });
+  assert.equal(h["x-sn-apikey"], "KEY123");
+  assert.equal(h.Authorization, undefined);
+  assert.equal(h.Cookie, undefined);
+});
+
+test("authHeaders: snow-oidc → Bearer Authorization (third-party OIDC inbound)", () => {
+  const h = authHeaders({ method: "snow-oidc", secret: "eyJ.tok.en" });
+  assert.equal(h.Authorization, "Bearer eyJ.tok.en");
+  assert.equal(h["x-sn-apikey"], undefined);
+});
 
 async function withFetchResponse<T>(
   status: number,

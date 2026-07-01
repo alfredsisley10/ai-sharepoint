@@ -154,6 +154,8 @@ import {
   cookieNames,
   buildSnowSessionSecret,
   userTokenIssue,
+  snowApiKeyIssue,
+  snowOidcTokenIssue,
   SNOW_LOOPBACK_PORT,
 } from "./context/adapters/servicenowAuth";
 import {
@@ -2887,7 +2889,11 @@ export function activate(context: vscode.ExtensionContext): void {
             ? "Your Splunk browser session has likely expired — sign in to Splunk Web again and capture a fresh splunkd cookie."
             : credential!.method === "snow-session"
               ? "Your ServiceNow browser-session cookies were rejected (sessions expire with the browser; captures can also be incomplete) — re-capture the full Cookie header from a signed-in tab."
-              : "The stored token/credentials may have expired or been revoked.";
+              : credential!.method === "snow-oidc"
+                ? "Your ServiceNow OIDC/SSO token was rejected — it may have expired, or its audience/user-claim may not match the instance's registered OIDC provider. Paste a fresh token from your identity provider."
+                : credential!.method === "snow-apikey"
+                  ? "Your ServiceNow API key was rejected — confirm it is still active, sent via the x-sn-apikey header, and that its associated user can read the table."
+                  : "The stored token/credentials may have expired or been revoked.";
         const pick = await vscode.window.showWarningMessage(
           `"${source.displayName}" rejected its stored sign-in. ${hint}`,
           "Refresh Sign-in",
@@ -7523,6 +7529,16 @@ async function promptContextCredential(
           value: "basic" as const,
         },
         {
+          label: "$(broadcast) SSO token — Microsoft/Okta OIDC (no service account)",
+          description: "paste an ID token from your IdP; the instance validates it (third-party OIDC inbound)",
+          value: "oidc" as const,
+        },
+        {
+          label: "$(key) API key (x-sn-apikey — no OAuth client, ties to a user)",
+          description: "an admin-issued Inbound REST API Key; the user's ACLs still apply",
+          value: "apikey" as const,
+        },
+        {
           label: "$(shield) OAuth bearer token",
           description: "paste an access token from your instance's OAuth provider",
           value: "pat" as const,
@@ -7531,6 +7547,32 @@ async function promptContextCredential(
       { ignoreFocusOut: true, title: "ServiceNow sign-in" },
     );
     if (!mode) return undefined;
+    if (mode.value === "oidc") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "ServiceNow — third-party OIDC / SSO token (Bearer)",
+        password: true,
+        placeHolder: "eyJ… (a JWT ID/access token from Entra ID, Okta, …)",
+        prompt:
+          "Paste an OIDC ID/access token from your identity provider. The instance must have an OIDC provider registered (System OAuth → Application Registry) whose Client ID matches the token's `aud`, with a User Claim mapped to a ServiceNow user — then the user's own ACLs apply. Stored only in your OS keychain; verified with a single read (lockout-safe). The token expires; re-paste a fresh one via Test Context Source.",
+        validateInput: (v) => snowOidcTokenIssue(v, Date.now()),
+      });
+      if (!secret) return undefined;
+      return { method: "snow-oidc", secret: secret.trim() };
+    }
+    if (mode.value === "apikey") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "ServiceNow — Inbound REST API Key (x-sn-apikey)",
+        password: true,
+        placeHolder: "the REST API Key value (revealed with the lock icon)",
+        prompt:
+          "An admin creates this under System Web Services → API Access Policies → REST API Key (associated with a user, so that user's ACLs apply) plus an Inbound Authentication Profile that reads the `x-sn-apikey` header. No OAuth client, password, or expiry. Stored only in your OS keychain; verified with a single read (lockout-safe).",
+        validateInput: (v) => snowApiKeyIssue(v),
+      });
+      if (!secret) return undefined;
+      return { method: "snow-apikey", secret: secret.trim() };
+    }
     if (mode.value === "session") {
       const origin = (() => {
         try {

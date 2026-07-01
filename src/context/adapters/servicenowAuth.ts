@@ -330,6 +330,51 @@ export function buildSnowSessionSecret(cookies: string, userToken?: string): str
   return token ? JSON.stringify({ cookies, userToken: token }) : cookies;
 }
 
+/** ServiceNow Inbound REST API Key (`x-sn-apikey`, Washington+). The key is an
+ *  opaque string tied to a ServiceNow user, so the account's ACLs still apply —
+ *  no OAuth client, no password, no expiry. Sent as a request header. */
+export function snowApiKeyIssue(raw: string): string | undefined {
+  const t = raw.trim();
+  if (!t) return "Paste the REST API Key value (System Web Services → API Access Policies → REST API Key → reveal with the lock icon).";
+  if (/\s/.test(t)) return "An API key has no spaces — copy just the key value.";
+  if (t.length < 16) return "That looks too short for a ServiceNow API key — reveal and copy the full value.";
+  return undefined;
+}
+
+/** Decode the `exp` (epoch seconds) claim from a JWT WITHOUT verifying its
+ *  signature — purely to warn the user when a pasted OIDC token is already
+ *  expired (signature verification is ServiceNow's job, against the registered
+ *  OIDC provider's JWKS). Returns epoch ms, or undefined if the token isn't a
+ *  decodable JWT. Pure. */
+export function jwtExpiryMs(token: string): number | undefined {
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) return undefined;
+  try {
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = Buffer.from(payload, "base64").toString("utf8");
+    const exp = (JSON.parse(json) as { exp?: unknown }).exp;
+    return typeof exp === "number" && isFinite(exp) ? exp * 1000 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Validate a pasted third-party OIDC/JWT ID token for the snow-oidc method: it
+ *  must look like a JWT (three dot-separated segments) and, if its `exp` is
+ *  readable, not already be expired. */
+export function snowOidcTokenIssue(raw: string, nowMs: number): string | undefined {
+  const t = raw.trim();
+  if (!t) return "Paste an ID/access token from your identity provider (Entra ID, Okta, …).";
+  if (t.split(".").length !== 3) {
+    return "That doesn't look like a JWT (expected three dot-separated segments: header.payload.signature). Copy the raw ID token / access token your IdP issues.";
+  }
+  const exp = jwtExpiryMs(t);
+  if (exp !== undefined && nowMs >= exp) {
+    return "This token has already expired — get a fresh one from your identity provider and paste it again.";
+  }
+  return undefined;
+}
+
 /** Quick sanity check for a pasted g_ck value (long opaque token). */
 export function userTokenIssue(raw: string): string | undefined {
   const t = raw.trim().replace(/^["']|["']$/g, "");
