@@ -72,9 +72,9 @@ test("redactError strips stack paths to basenames", () => {
   err.stack = `Error: boom\n    at fn (/home/dave/proj/src/thing.ts:10:5)\n    at C:\\Users\\dave\\ext\\dist\\extension.js:1:2`;
   const safe = redactError(err);
   assert.ok(!safe.message.includes("user@contoso.com"));
-  assert.ok(!safe.stack!.includes("/home/dave"), safe.stack);
-  assert.ok(!safe.stack!.includes("C:\\Users"), safe.stack);
-  assert.ok(safe.stack!.includes("thing.ts:10:5"), safe.stack);
+  assert.ok(!safe.stack!.includes("/home/dave"), safe.stack ?? "");
+  assert.ok(!safe.stack!.includes("C:\\Users"), safe.stack ?? "");
+  assert.ok(safe.stack!.includes("thing.ts:10:5"), safe.stack ?? "");
 });
 
 test("stripStackPaths keeps line:col info", () => {

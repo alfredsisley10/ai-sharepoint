@@ -49,6 +49,15 @@ export default tseslint.config(
       // We deliberately match control chars (NUL etc.) when sanitizing LDAP
       // filters / DNs (RFC 4515) — that is the point, not an accident.
       "no-control-regex": "off",
+      // New in ESLint 10's recommended set — both are STYLISTIC, not the
+      // type-aware correctness class this config gates on (see header), so we
+      // keep them off to preserve the lint baseline across the v9→v10 bump:
+      //  - no-useless-assignment flags defensive initializers (e.g. `let x = ""`
+      //    later overwritten) that read more clearly with the default;
+      //  - preserve-caught-error wants every re-thrown error to chain `cause`,
+      //    a deliberate case-by-case improvement, not a blanket gate.
+      "no-useless-assignment": "off",
+      "preserve-caught-error": "off",
     },
   },
 );
