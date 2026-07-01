@@ -25,6 +25,17 @@ import { registerLessonsTools } from "./chat/lessonsTools";
 import { registerMemoryTools } from "./chat/memoryTools";
 import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
+import { getDefangReport } from "./chat/proxyDefangLog";
+import { InteractionCache } from "./chat/interactionCache";
+import { looksLikeOverflow } from "./core/contextBudget";
+import {
+  initialProbeWindow,
+  nextProbeSize,
+  probeConverged,
+  probeFiller,
+  PROBE_TOLERANCE,
+  PROBE_MAX_STEPS,
+} from "./core/contextProbe";
 import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
 import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
@@ -57,6 +68,7 @@ import {
   ContextDeployment,
   ContextSourceType,
   ConfluenceWriteScope,
+  contextCredentialUi,
 } from "./context/types";
 import {
   parseConfluenceUrl,
@@ -65,7 +77,7 @@ import {
 } from "./context/adapters/confluenceScope";
 import { summarizeProbe, summarizeFunctionalityProbe } from "./context/adapters/confluenceProbe";
 import { registerContextTools } from "./chat/contextTools";
-import { buildReferenceExport, parseReferenceImport } from "./context/referenceExport";
+import { buildReferenceExport, parseReferenceImport, planMemoryImport, planPromptImport, exportLeakBlockers } from "./context/referenceExport";
 import { aliasIssue, normalizeAlias, resolveSourceRef, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
 import {
   rowsToCsv,
@@ -106,16 +118,6 @@ import {
 } from "./context/db/erDiagram";
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { CatalogStore } from "./context/catalogStore";
-import {
-  buildVertexServingConfig,
-  vertexUrlIssue,
-  parseVertexHint,
-  endpointForLocation,
-  listVertexEngines,
-  listGcloudProjects,
-  findVertexProjectForEngine,
-  getVertexToken,
-} from "./context/adapters/vertexSearch";
 import {
   buildCatalog,
   isExpired,
@@ -164,6 +166,25 @@ import * as http from "node:http";
 import * as nodeCrypto from "node:crypto";
 import { OutboxStore } from "./comms/outboxStore";
 import { CommsClient } from "./comms/commsClient";
+import { OutlookWorkspaceStore } from "./comms/outlookWorkspaceStore";
+import { registerOutlookTools } from "./chat/outlookTools";
+import { MailFormat, ComposedAttachment, contentTypeForName, attachmentIssue } from "./comms/mailCompose";
+import { FileSourcesStore } from "./context/files/fileSourcesStore";
+import { FileSource, findByLocation } from "./context/files/fileSources";
+import { detectFileKind, readFileContent, renderFileContent, describeKind, summarizeFileContent, legacyFileHint, FileContent } from "./context/files/fileContent";
+import { registerFileTools } from "./chat/fileTools";
+import {
+  OutlookReadScope,
+  OutlookWorkspace,
+  buildSubjectMoveRule,
+  calendarWindow,
+  renderMailDigest,
+  renderCalendarDigest,
+  withTrackedSubject,
+} from "./comms/outlookWorkspace";
+import { TeamsScopeStore } from "./comms/teamsScopeStore";
+import { registerTeamsTools } from "./chat/teamsTools";
+import { TeamsScope, TeamsScopeEntry, renderTeamsDigest, clampTeamsTop } from "./comms/teamsScope";
 import {
   TeamsWebhook,
   teamsWebhookUrlIssue,
@@ -197,7 +218,10 @@ import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { MemoryStore } from "./context/memoryStore";
-import { MemoryItem, MemoryScope, normalizeMemoryInput } from "./context/memory";
+import { PromptStore } from "./context/promptStore";
+import { PromptsTreeProvider } from "./ui/promptsView";
+import { PromptItem, PromptScope, PromptScopeKind, normalizePromptInput } from "./context/promptLibrary";
+import { MemoryItem, MemoryScope, MemoryScopeKind, normalizeMemoryInput } from "./context/memory";
 import { ContextBookmark } from "./context/types";
 import { discoverActiveDirectory } from "./context/ldap/discoveryHost";
 import { guessBindUpn, domainToBaseDn } from "./context/ldap/discovery";
@@ -219,9 +243,47 @@ import { deobfuscateSecret } from "./diagnostics/secretObfuscation";
 import { UsageDashboard } from "./ui/dashboard";
 import { registerChatParticipant } from "./chat/participant";
 import { registerLanguageModelTools } from "./chat/tools";
+import {
+  DEFAULT_PROBE_TARGETS,
+  ProbeTarget,
+  ProbeOutcome,
+  ProbeReport,
+  interpretProbe,
+  renderConnectivityReport,
+  summarizeConnectivity,
+} from "./core/connectivityProbe";
 
 /** Host clock, isolated so it's the single source of "now" (ISO, UTC). */
 const nowIso = () => new Date().toISOString();
+
+/** One connectivity probe: an unauthenticated HTTPS round-trip whose ONLY
+ *  purpose is to reveal whether a corporate proxy / TLS inspector / content
+ *  filter sits in the path. Any HTTP status counts as "a response" (the filter
+ *  detector decides what it means); a throw is captured for diagnosis. Bounded
+ *  by an 8s timeout and the command's cancellation token. */
+async function probeConnectivity(
+  target: ProbeTarget,
+  token: vscode.CancellationToken,
+): Promise<ProbeOutcome> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8_000);
+  const sub = token.onCancellationRequested(() => ctrl.abort());
+  try {
+    const res = await fetch(target.url, { signal: ctrl.signal, redirect: "manual" });
+    let bodyText = "";
+    try {
+      bodyText = (await res.text()).slice(0, 4_000);
+    } catch {
+      /* body unreadable — status + headers still inform the verdict */
+    }
+    return { status: res.status, bodyText, headers: res.headers };
+  } catch (error) {
+    return { error };
+  } finally {
+    clearTimeout(timer);
+    sub.dispose();
+  }
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   const log = new Logger("AI SharePoint");
@@ -275,6 +337,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const lessons = new LessonsStore(context.globalState, EXTENSION_VERSION, nowIso);
   const blockedTerms = new BlockedTermsStore(context.globalState);
   const modelLimits = new ModelLimitsStore(context.globalState, nowIso);
+  // Workspace-scoped local cache of the last @sharepoint turn, for intelligent
+  // restart after an interruption (proxy block / dropped connection / overflow).
+  const interactions = new InteractionCache(context.workspaceState, nowIso);
   const meter = new UsageMeter(context.globalState);
   const copilot = new CopilotService(meter);
   const sites = new SitesStore(context.globalState, context.workspaceState);
@@ -382,6 +447,30 @@ export function activate(context: vscode.ExtensionContext): void {
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
   const memory = new MemoryStore(context.globalState);
+  const prompts = new PromptStore(context.globalState);
+  const outlookWorkspaces = new OutlookWorkspaceStore(context.globalState);
+  context.subscriptions.push(outlookWorkspaces);
+  const teamsScopes = new TeamsScopeStore(context.globalState);
+  context.subscriptions.push(teamsScopes);
+  const fileSources = new FileSourcesStore(context.globalState);
+  context.subscriptions.push(fileSources);
+  // Read a registered file source into rows. Local files read from disk; remote
+  // (OneDrive / shared SharePoint) items download via Graph using the M365
+  // sign-in the file was registered under.
+  const readFileSource = async (source: FileSource): Promise<FileContent> => {
+    if (source.location.kind === "local") {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(source.location.path));
+      return readFileContent(source.kind, Buffer.from(bytes));
+    }
+    const loc = source.location;
+    const conn = sites.list().find((c) => c.cacheHandle === loc.connectionHandle) ?? sites.list()[0];
+    if (!conn) {
+      throw new AppError("Connect the Microsoft 365 sign-in for this file first (connect a SharePoint site).", "config");
+    }
+    const client = new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false);
+    const buf = await client.downloadDriveItem(loc.driveId, loc.itemId);
+    return readFileContent(source.kind, buf);
+  };
   const syncConfigs = new SyncConfigStore(context.globalState);
 
   // First-run provisioning: seed any pre-defined connectors / projects /
@@ -473,13 +562,15 @@ export function activate(context: vscode.ExtensionContext): void {
       });
   }
 
-  const sitesProvider = new SitesTreeProvider(sites, contextSources);
+  const sitesProvider = new SitesTreeProvider(sites, contextSources, memory);
   const sourcesProvider = new SourcesTreeProvider(
     contextSources,
     sites,
     bookmarks,
     schemas,
     catalogs,
+    memory,
+    fileSources,
     nowIso,
     (all) => projects.scope(all),
   );
@@ -651,6 +742,27 @@ export function activate(context: vscode.ExtensionContext): void {
     ...tryRegister("memory tools", () =>
       registerMemoryTools(memory, contextSources, sites, telemetry, errors, () => crypto.randomUUID(), nowIso),
     ),
+    ...tryRegister("outlook tools", () =>
+      registerOutlookTools(
+        outlookWorkspaces,
+        sites,
+        (conn) => new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false),
+        () => context.globalState.get<string>("aiSharePoint.commsConnection"),
+        telemetry,
+        errors,
+        nowIso,
+      ),
+    ),
+    ...tryRegister("teams tools", () =>
+      registerTeamsTools(
+        teamsScopes,
+        sites,
+        (conn) => new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false),
+        telemetry,
+        errors,
+      ),
+    ),
+    ...tryRegister("file tools", () => registerFileTools(fileSources, readFileSource, telemetry, errors)),
     ...tryRegister("proxy tools", () => registerProxyTools(blockedTerms, telemetry, errors)),
     blockedTerms,
     lessons,
@@ -658,6 +770,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const projectsProvider = new ProjectsTreeProvider(projects, contextSources);
   const projectsView = tryCreateTreeView("aiSharePoint.projectsView", projectsProvider);
   if (projectsView) context.subscriptions.push(projectsView, projectsProvider);
+  const promptsProvider = new PromptsTreeProvider(prompts, sites, contextSources, projects);
+  const promptsView = tryCreateTreeView("aiSharePoint.promptsView", promptsProvider);
+  if (promptsView) context.subscriptions.push(promptsView, promptsProvider, prompts);
   for (const v of [sitesView, usageView, supportView, commsView]) {
     if (v) context.subscriptions.push(v);
   }
@@ -766,6 +881,7 @@ export function activate(context: vscode.ExtensionContext): void {
         memory,
         proxyTerms: blockedTerms,
         modelLimits,
+        interactions,
         log,
         now: nowIso,
       }),
@@ -1200,6 +1316,10 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (confirm === "Remove Connection") {
       await sites.remove(conn.siteUrl, secrets);
+      // Drop the memory notes + prompts attached to this site so they don't
+      // orphan (a re-added site at the same URL would otherwise inherit them).
+      await memory.removeForScope({ kind: "site", key: conn.siteUrl });
+      await prompts.removeForScope({ kind: "site", key: conn.siteUrl });
       telemetry.record("site.remove");
     }
   });
@@ -1833,6 +1953,91 @@ export function activate(context: vscode.ExtensionContext): void {
     };
   };
 
+  /** Microsoft 365 Copilot (Graph) sign-in. The Copilot Retrieval / Search
+   *  surfaces are Graph calls that reuse the SAME Microsoft 365 sign-in as
+   *  SharePoint — an `aad-sso` token for graph.microsoft.com via a connected
+   *  site — or a pasted Graph access token. This mirrors `pickAadCredential`
+   *  (Power BI) so the connect/reconnect "plug" path routes m365copilot to
+   *  Microsoft Entra rather than falling through to `promptContextCredential`'s
+   *  Atlassian Cloud credential prompt ("Atlassian account email"). */
+  const pickM365GraphCredential = async (): Promise<ContextCredential | undefined> => {
+    const signIn = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
+          description: "reuses a connected site's sign-in — recommended",
+          value: "aad" as const,
+        },
+        {
+          label: "$(key) Paste a Graph access token",
+          description: "from shell.azure.com or another machine — ~1 h lifetime",
+          value: "pat" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Microsoft 365 Copilot sign-in" },
+    );
+    if (!signIn) return undefined;
+    if (signIn.value === "pat") {
+      const token = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        password: true,
+        title: "Microsoft Graph access token",
+        prompt:
+          "No CLI installed? Open shell.azure.com and run `az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv`, then paste it. Stored only in your OS keychain; expires after ~1 h (re-paste via Test Context Source).",
+      });
+      if (!token?.trim()) return undefined;
+      return { method: "pat", secret: token.trim() };
+    }
+    const all = sites.list();
+    if (all.length === 0) {
+      const add = await vscode.window.showInformationMessage(
+        "This reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
+        "Connect Site",
+      );
+      if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
+      return undefined;
+    }
+    let conn = all.length === 1 ? all[0] : undefined;
+    if (!conn) {
+      const pick = await vscode.window.showQuickPick(
+        all.map((c) => ({
+          label: c.displayName,
+          description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
+          conn: c,
+        })),
+        { ignoreFocusOut: true, title: "Use which Microsoft 365 sign-in for Copilot retrieval?" },
+      );
+      if (!pick) return undefined;
+      conn = pick.conn;
+    }
+    return {
+      method: "aad-sso",
+      secret: JSON.stringify({ providerId: conn.authProviderId, cacheHandle: conn.cacheHandle }),
+    };
+  };
+
+  /** The single credential-picker router shared by the add wizard and the
+   *  reconnect "plug" path (`testContextSource`). Routing lived inline at both
+   *  sites and they diverged — the add path special-cased m365copilot but the
+   *  reconnect path didn't, so reconnecting an imported m365copilot source fell
+   *  through to the Atlassian "account email" prompt. Funnelling both through
+   *  `contextCredentialUi` makes that impossible to repeat. */
+  const promptCredentialFor = (
+    type: ContextSourceType,
+    deployment: ContextDeployment,
+    baseUrl?: string,
+    defaultUpn?: string,
+  ): Promise<ContextCredential | undefined> => {
+    switch (contextCredentialUi(type)) {
+      case "powerbi-aad":
+        return pickAadCredential();
+      case "m365-graph":
+        return pickM365GraphCredential();
+      default:
+        return promptContextCredential(type, deployment, defaultUpn, baseUrl);
+    }
+  };
+
   /** Power BI token getter for a credential of any of the three methods —
    *  the wizard-side mirror of ContextService's routing. */
   const pbiTokenGetter =
@@ -1862,7 +2067,6 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(database) PostgreSQL", description: "read-only session, capped", value: "postgres" as ContextSourceType },
         { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
         { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
-        { label: "$(search) Vertex AI Search", description: "Google enterprise search — Gemini-grounded answers, SSO via gcloud", value: "vertexai" as ContextSourceType },
         { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Azure CLI or Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
         { label: "$(sparkle) Microsoft 365 Copilot", description: "grounded enterprise context via the Copilot Retrieval API — reuses your Microsoft 365 sign-in", value: "m365copilot" as ContextSourceType },
         { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
@@ -2338,245 +2542,10 @@ export function activate(context: vscode.ExtensionContext): void {
       const surfaces = surfacePicks.map((p) => p.value);
       baseUrl = `https://graph.microsoft.com/v1.0/copilot/retrieval?surfaces=${surfaces.join(",")}`;
 
-      const signIn = await vscode.window.showQuickPick(
-        [
-          {
-            label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
-            description: "reuses a connected site's sign-in — recommended",
-            value: "aad" as const,
-          },
-          {
-            label: "$(key) Paste a Graph access token",
-            description: "from shell.azure.com or another machine — ~1 h lifetime",
-            value: "pat" as const,
-          },
-        ],
-        { ignoreFocusOut: true, title: "Microsoft 365 Copilot sign-in" },
-      );
-      if (!signIn) return;
-      if (signIn.value === "pat") {
-        const token = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          password: true,
-          title: "Microsoft Graph access token",
-          prompt:
-            "No CLI installed? Open shell.azure.com and run `az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv`, then paste it. Stored only in your OS keychain; expires after ~1 h (re-paste via Test Context Source).",
-        });
-        if (!token?.trim()) return;
-        presetCredential = { method: "pat", secret: token.trim() };
-      } else {
-        const all = sites.list();
-        if (all.length === 0) {
-          const add = await vscode.window.showInformationMessage(
-            "This reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
-            "Connect Site",
-          );
-          if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
-          return;
-        }
-        let conn = all.length === 1 ? all[0] : undefined;
-        if (!conn) {
-          const pick = await vscode.window.showQuickPick(
-            all.map((c) => ({
-              label: c.displayName,
-              description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
-              conn: c,
-            })),
-            { ignoreFocusOut: true, title: "Use which Microsoft 365 sign-in for Copilot retrieval?" },
-          );
-          if (!pick) return;
-          conn = pick.conn;
-        }
-        presetCredential = {
-          method: "aad-sso",
-          secret: JSON.stringify({ providerId: conn.authProviderId, cacheHandle: conn.cacheHandle }),
-        };
-      }
+      // Same Microsoft Entra / Graph sign-in the reconnect "plug" path uses, so
+      // adding and later reconnecting an m365copilot source prompt identically.
+      presetCredential = await pickM365GraphCredential();
       if (!presetCredential) return;
-    } else if (typePick.value === "vertexai") {
-      deployment = "cloud";
-      // Pilot: users often only have the corporate search URL — offer SSO
-      // discovery (projects → apps across global/us/eu) and hint-parsing of
-      // any pasted URL before falling back to manual IDs.
-      const setupMode = await vscode.window.showQuickPick(
-        [
-          {
-            label: "$(account) Find my search app via Google SSO (recommended)",
-            description: "uses your gcloud sign-in to list projects and apps — no IDs needed",
-            value: "discover" as const,
-          },
-          {
-            label: "$(edit) Enter details — or paste any URL you have",
-            description: "corporate search page, Cloud Console, or serving-config URL",
-            value: "manual" as const,
-          },
-        ],
-        { ignoreFocusOut: true, title: "Vertex AI Search — set up from what you have" },
-      );
-      if (!setupMode) return;
-      if (setupMode.value === "discover") {
-        const projects = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: "Listing your Google Cloud projects (gcloud SSO)…" },
-          () => listGcloudProjects(),
-        );
-        if (projects.length === 0) {
-          void vscode.window.showWarningMessage(
-            "Your Google SSO session sees no projects. Ask the search app's owner for the project ID and app ID, then re-add with manual entry.",
-          );
-          return;
-        }
-        const projPick = await vscode.window.showQuickPick(
-          projects.map((pr) => ({ label: pr.projectId, description: pr.name, pr })),
-          { ignoreFocusOut: true, title: "Which project hosts the search app? (ask the app owner if unsure)", matchOnDescription: true },
-        );
-        if (!projPick) return;
-        const token = await getVertexToken({ method: "gcloud-sso", secret: "gcloud-cli-session" });
-        const engines = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `Looking for search apps in ${projPick.pr.projectId} (global/us/eu)…` },
-          () => listVertexEngines(token, projPick.pr.projectId, 20_000),
-        );
-        if (engines.length === 0) {
-          void vscode.window.showWarningMessage(
-            `No search apps are visible to you in ${projPick.pr.projectId}. Your account may lack list permission even though searching works — ask the app owner for the location (global/us/eu) and app ID, then re-add with manual entry (pasting the corporate search page's URL pre-fills what it can).`,
-          );
-          return;
-        }
-        const engPick = await vscode.window.showQuickPick(
-          engines.map((e) => ({ label: e.displayName, description: `${e.engineId} · ${e.location}`, e })),
-          { ignoreFocusOut: true, title: "Pick your search app" },
-        );
-        if (!engPick) return;
-        baseUrl = buildVertexServingConfig({
-          projectId: projPick.pr.projectId,
-          location: engPick.e.location,
-          engineId: engPick.e.engineId,
-          endpoint: endpointForLocation(engPick.e.location),
-        });
-      } else {
-        const first = await vscode.window.showInputBox({
-          ignoreFocusOut: true,
-          title: "Vertex AI Search — project ID, or paste ANY URL you have",
-          placeHolder: "my-corp-search-prod — or e.g. https://vertexaisearch.cloud.google/us/home/cid/… (your search page)",
-          prompt:
-            "Accepted URLs: the corporate search page you open via SSO (vertexaisearch.cloud.google/<region>/home/cid/<app>?csesidx=… — region and app are read from it; the csesidx session id is ignored), a Cloud Console app URL, or a full serving-config URL.",
-          validateInput: (v) => (v.trim() ? undefined : "Enter a project ID or paste a URL"),
-        });
-        if (!first) return;
-        if (vertexUrlIssue(first.trim()) === undefined) {
-          baseUrl = first.trim();
-        } else {
-          const isUrlish = /[/:]/.test(first.trim());
-          const hint = isUrlish ? parseVertexHint(first) : {};
-          let projectId = hint.projectId ?? (isUrlish ? undefined : first.trim());
-          // The corporate search page names the app (cid) and region but not
-          // the hosting project — and a standard user can rarely "ask the
-          // admin". With the app id + location known, the wizard can FIND the
-          // project itself: scan the projects the user's Google sign-in can
-          // already see and probe which one hosts this app.
-          if (!projectId && hint.engineId && hint.location) {
-            const how = await vscode.window.showQuickPick(
-              [
-                {
-                  label: "$(search) Find the project for me (recommended)",
-                  description: "scans the projects your gcloud sign-in can see for this app — no IDs to know",
-                  value: "auto" as const,
-                },
-                {
-                  label: "$(edit) Enter the project ID myself",
-                  description: "if you already know it",
-                  value: "manual" as const,
-                },
-              ],
-              {
-                ignoreFocusOut: true,
-                title: `Your search page names the app (${hint.engineId}) and region (${hint.location}) — only the hosting project is missing`,
-              },
-            );
-            if (!how) return;
-            if (how.value === "auto") {
-              try {
-                const token = await getVertexToken({ method: "gcloud-sso", secret: "gcloud-cli-session" });
-                const projects = await vscode.window.withProgress(
-                  { location: vscode.ProgressLocation.Notification, title: "Listing the projects your Google sign-in can see…" },
-                  () => listGcloudProjects(),
-                );
-                const matches = await vscode.window.withProgress(
-                  { location: vscode.ProgressLocation.Notification, title: `Searching ${projects.length} project(s) for app "${hint.engineId}"…` },
-                  (progress) =>
-                    findVertexProjectForEngine(token, projects, hint.engineId!, hint.location!, 15_000, (checked, total) =>
-                      progress.report({ message: `${checked}/${total} checked` }),
-                    ),
-                );
-                if (matches.length === 1) {
-                  projectId = matches[0];
-                  void vscode.window.showInformationMessage(
-                    `Found it: app "${hint.engineId}" lives in project "${projectId}".`,
-                  );
-                } else if (matches.length > 1) {
-                  const pick = await vscode.window.showQuickPick(
-                    matches.map((m) => ({ label: m })),
-                    { ignoreFocusOut: true, title: "This app id exists in several projects you can see — pick one" },
-                  );
-                  if (!pick) return;
-                  projectId = pick.label;
-                } else {
-                  void vscode.window.showWarningMessage(
-                    `None of the ${projects.length} project(s) visible to your Google sign-in host app "${hint.engineId}" in ${hint.location} — your account likely uses the app without any project role (common with Entra/Azure AD SSO). Continue to manual entry and paste a request URL from the search page's Network tab — it embeds the project number.`,
-                  );
-                }
-              } catch (err) {
-                log.warn(`Vertex project auto-detection failed: ${err instanceof Error ? err.message : String(err)}`);
-                void vscode.window.showWarningMessage(
-                  `Could not auto-detect the project: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              }
-            }
-          }
-          if (!projectId) {
-            const entered = (
-              await vscode.window.showInputBox({
-                ignoreFocusOut: true,
-                title: "Google Cloud project — ID, number, or a pasted request from your search page",
-                prompt: hint.engineId
-                  ? `No GCP access at all (e.g. you reach the search page via Entra/Azure AD SSO)? The page's OWN traffic carries it: on the search page press F12 → Network → run a search → click the request named search/answer/servingConfigs → copy its full URL and paste it here — it embeds projects/<number>/… and the project NUMBER works like an ID. Otherwise: "Find the project for me" (previous step), \`gcloud projects list\` (terminal or shell.cloud.google.com), or ask whoever shared the page.`
-                  : "That URL didn't carry a project ID — paste a request URL from the search page's Network tab (it embeds projects/<number>/…), or get the ID from the Cloud Console URL (?project=…) / the app owner.",
-                validateInput: (v) => (v.trim() ? undefined : "Enter a project ID/number, or paste a request URL containing projects/…"),
-              })
-            )?.trim();
-            if (!entered) return;
-            // A pasted request URL / resource string carries the project —
-            // and often a more precise location/engine; the fuller capture
-            // wins over the page-URL hint.
-            const pastedHint = /projects\//i.test(entered) ? parseVertexHint(entered) : {};
-            projectId = pastedHint.projectId ?? entered;
-            if (pastedHint.location) hint.location = pastedHint.location;
-            if (pastedHint.engineId) hint.engineId = pastedHint.engineId;
-          }
-          const location = await vscode.window.showInputBox({
-            ignoreFocusOut: true,
-            title: "Location",
-            value: hint.location ?? "global",
-            prompt: "global, us, or eu — pre-filled when your pasted URL contained it; otherwise the app owner knows. The connector probes the matching regional endpoint automatically.",
-            validateInput: (v) => (v.trim() ? undefined : "Enter the location (e.g. global)"),
-          });
-          if (!location) return;
-          const engineId = await vscode.window.showInputBox({
-            ignoreFocusOut: true,
-            title: "App (engine) ID",
-            value: hint.engineId ?? "",
-            placeHolder: "enterprise-search_1700000000000",
-            prompt: "Pre-filled when your pasted URL contained it; otherwise shown in the Cloud Console app list (ask the owner).",
-            validateInput: (v) => (v.trim() ? undefined : "Enter the app/engine ID"),
-          });
-          if (!engineId) return;
-          baseUrl = buildVertexServingConfig({
-            projectId,
-            location: location.trim(),
-            engineId: engineId.trim(),
-            endpoint: endpointForLocation(location.trim()),
-          });
-        }
-      }
     } else if (DB_TYPES.has(typePick.value)) {
       const placeholders: Record<string, string> = {
         postgres: "postgresql://pghost.corp.example:5432/mydb  (?ssl=false to disable TLS)",
@@ -2679,10 +2648,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     const credential =
-      presetCredential ??
-      (typePick.value === "powerbi"
-        ? await pickAadCredential()
-        : await promptContextCredential(typePick.value, deployment, defaultUpn));
+      presetCredential ?? (await promptCredentialFor(typePick.value, deployment, undefined, defaultUpn));
     if (!credential) return;
     const hostLabel = (() => {
       try {
@@ -2893,10 +2859,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       return;
     }
-    const promptCredential = () =>
-      source.type === "powerbi"
-        ? pickAadCredential()
-        : promptContextCredential(source.type, source.deployment, undefined, source.baseUrl);
+    const promptCredential = () => promptCredentialFor(source.type, source.deployment, source.baseUrl);
     let credential = await contextSources.getCredential(source.id);
     let fresh = false;
     if (!credential || (!gateNow.allowed && gateNow.reason === "credential-bad")) {
@@ -2992,6 +2955,8 @@ export function activate(context: vscode.ExtensionContext): void {
       await schemas.remove(source.id);
       await catalogs.remove(source.id);
       await projects.forgetSource(source.id);
+      await memory.removeForScope({ kind: "source", key: source.id });
+      await prompts.removeForScope({ kind: "source", key: source.id });
       contextCache.invalidateSource(source.id);
       telemetry.record("context.remove");
     }
@@ -3148,6 +3113,8 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (confirm !== "Remove Project") return;
     await projects.remove(pick.pr.id);
+    // Prompts scoped to this project would otherwise orphan in the library.
+    await prompts.removeForScope({ kind: "project", key: pick.pr.id });
   });
 
   // Click-to-activate from the Projects view (arg = project id).
@@ -4442,8 +4409,9 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage("Nothing to export yet — connect a site, add a reference source, or create a project first.");
       return;
     }
-    // One combined, grouped multi-select: pick any subset of sites, sources, projects.
-    type PickItem = vscode.QuickPickItem & { kind2?: "site" | "source" | "project"; key?: string };
+    // One combined, grouped multi-select: pick any subset of sites, sources,
+    // projects, per-entity memory, and prompts.
+    type PickItem = vscode.QuickPickItem & { kind2?: "site" | "source" | "project" | "memory" | "prompt"; key?: string };
     const items: PickItem[] = [];
     if (allSites.length) {
       items.push({ label: "Managed sites", kind: vscode.QuickPickItemKind.Separator });
@@ -4463,35 +4431,98 @@ export function activate(context: vscode.ExtensionContext): void {
         items.push({ label: p.name, description: `${p.sourceIds.length} source(s)`, picked: true, kind2: "project", key: p.id });
       }
     }
+    // Memory notes: one row per entity that has any. Key encodes the scope
+    // (`site:<url>` / `source:<id>`) so it never collides with the entity rows.
+    const memSites = allSites.filter((s) => memory.listForScope({ kind: "site", key: s.siteUrl }).length > 0);
+    const memSources = allSources.filter((s) => memory.listForScope({ kind: "source", key: s.id }).length > 0);
+    if (memSites.length || memSources.length) {
+      items.push({ label: "Memory notes", kind: vscode.QuickPickItemKind.Separator });
+      for (const s of memSites) {
+        const n = memory.listForScope({ kind: "site", key: s.siteUrl }).length;
+        items.push({ label: `${s.displayName || s.siteUrl} — memory`, description: `${n} note(s)`, picked: true, kind2: "memory", key: `site:${s.siteUrl}` });
+      }
+      for (const s of memSources) {
+        const n = memory.listForScope({ kind: "source", key: s.id }).length;
+        items.push({ label: `${s.displayName} — memory`, description: `${n} note(s)`, picked: true, kind2: "memory", key: `source:${s.id}` });
+      }
+    }
+    // Prompts: one row per scope that has any (Global + per-entity). Key encodes
+    // the scope (`global` / `site:<url>` / `source:<id>` / `project:<id>`).
+    const promptScopeRows: Array<{ label: string; n: number; key: string }> = [];
+    const globalPrompts = prompts.listForScope({ kind: "global" }).length;
+    if (globalPrompts) promptScopeRows.push({ label: "Global prompts", n: globalPrompts, key: "global" });
+    for (const s of allSites) {
+      const n = prompts.listForScope({ kind: "site", key: s.siteUrl }).length;
+      if (n) promptScopeRows.push({ label: `${s.displayName || s.siteUrl} — prompts`, n, key: `site:${s.siteUrl}` });
+    }
+    for (const s of allSources) {
+      const n = prompts.listForScope({ kind: "source", key: s.id }).length;
+      if (n) promptScopeRows.push({ label: `${s.displayName} — prompts`, n, key: `source:${s.id}` });
+    }
+    for (const p of allProjects) {
+      const n = prompts.listForScope({ kind: "project", key: p.id }).length;
+      if (n) promptScopeRows.push({ label: `${p.name} — prompts`, n, key: `project:${p.id}` });
+    }
+    if (promptScopeRows.length) {
+      items.push({ label: "Prompt Library", kind: vscode.QuickPickItemKind.Separator });
+      for (const r of promptScopeRows) items.push({ label: r.label, description: `${r.n} prompt(s)`, picked: true, kind2: "prompt", key: r.key });
+    }
     const chosen = await vscode.window.showQuickPick(items, {
       canPickMany: true,
       ignoreFocusOut: true,
-      title: "Export — select sites, sources, and projects",
+      title: "Export — select sites, sources, projects, memory, and prompts",
       placeHolder: "Everything is pre-selected; toggle off anything you don't want. Esc cancels — nothing is written.",
     });
     if (!chosen || chosen.length === 0) return;
     const pickedSites = new Set(chosen.filter((c) => c.kind2 === "site").map((c) => c.key));
     const pickedSources = new Set(chosen.filter((c) => c.kind2 === "source").map((c) => c.key));
     const pickedProjects = new Set(chosen.filter((c) => c.kind2 === "project").map((c) => c.key));
+    const pickedMemory = chosen.filter((c) => c.kind2 === "memory").map((c) => c.key!);
+    const pickedPrompts = chosen.filter((c) => c.kind2 === "prompt").map((c) => c.key!);
     const selSites = allSites.filter((s) => pickedSites.has(s.siteUrl));
     const selSources = allSources.filter((s) => pickedSources.has(s.id));
     const selProjects = allProjects.filter((p) => pickedProjects.has(p.id));
     const selSourceIds = new Set(selSources.map((s) => s.id));
     const selBookmarks = bookmarks.list().filter((b) => selSourceIds.has(b.sourceId));
+    // Collect the memory for every picked entity. Source-scoped notes re-key to
+    // the source displayName via a map over ALL sources (so a note exports even
+    // if its source descriptor isn't selected — recipients match it by name).
+    const selMemory: MemoryItem[] = [];
+    for (const k of pickedMemory) {
+      const sep = k.indexOf(":");
+      const kind = k.slice(0, sep) as MemoryScopeKind;
+      const key = k.slice(sep + 1);
+      selMemory.push(...memory.listForScope({ kind, key }));
+    }
+    // Collect the prompts for every picked scope (Global + per-entity).
+    const selPrompts: PromptItem[] = [];
+    for (const k of pickedPrompts) {
+      if (k === "global") {
+        selPrompts.push(...prompts.listForScope({ kind: "global" }));
+        continue;
+      }
+      const sep = k.indexOf(":");
+      const kind = k.slice(0, sep) as PromptScopeKind;
+      const key = k.slice(sep + 1);
+      selPrompts.push(...prompts.listForScope({ kind, key }));
+    }
+    const allSourceNames = new Map(allSources.map((s) => [s.id, s.displayName] as const));
+    const allProjectNames = new Map(allProjects.map((p) => [p.id, p.name] as const));
     const schemasById = new Map(
       selSources.flatMap((s) => {
         const schema = schemas.getSync(s.id);
         return schema ? [[s.id, schema] as const] : [];
       }),
     );
-    const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites);
+    const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites, selMemory, allSourceNames, selPrompts, allProjectNames);
     const json = JSON.stringify(exportDoc, null, 2);
     // Defense in depth (ADR-0013): the builder is secret-free by construction;
-    // the scan refuses to write if anything credential-shaped slipped through.
-    const blockers = scanForLeaks(json).filter((f) => f.severity === "block");
+    // exportLeakBlockers refuses to write if anything credential-shaped slipped
+    // through (it deliberately allows the site/source URLs that ARE the payload).
+    const blockers = exportLeakBlockers(json);
     if (blockers.length > 0) {
       void vscode.window.showErrorMessage(
-        `Export blocked by the safety scan (${blockers.map((f) => f.pattern).join(", ")}). Nothing was written.`,
+        `Export blocked by the safety scan (${blockers.join(", ")}). Nothing was written.`,
       );
       return;
     }
@@ -4502,6 +4533,8 @@ export function activate(context: vscode.ExtensionContext): void {
       exportDoc.sources.length ? `${exportDoc.sources.length} source(s)` : "",
       exportDoc.projects?.length ? `${exportDoc.projects.length} project(s)` : "",
       exportDoc.bookmarks.length ? `${exportDoc.bookmarks.length} bookmark(s)` : "",
+      exportDoc.memory?.length ? `${exportDoc.memory.length} memory note(s)` : "",
+      exportDoc.prompts?.length ? `${exportDoc.prompts.length} prompt(s)` : "",
     ].filter(Boolean).join(", ");
     const confirm = await vscode.window.showInformationMessage(
       `Export ${summary}? The file contains descriptors and bookmarks only — no credentials, tokens, or accounts; recipients sign in with their own.`,
@@ -4520,6 +4553,8 @@ export function activate(context: vscode.ExtensionContext): void {
       sites: exportDoc.sites?.length ?? 0,
       sources: exportDoc.sources.length,
       projects: exportDoc.projects?.length ?? 0,
+      memory: exportDoc.memory?.length ?? 0,
+      prompts: exportDoc.prompts?.length ?? 0,
     });
     void vscode.window.showInformationMessage("Configuration exported (secret-free).");
   });
@@ -4528,7 +4563,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const picked = await vscode.window.showOpenDialog({
       canSelectMany: false,
       filters: { "Workspace config (JSON)": ["json"] },
-      title: "Import sites, sources & projects (no credentials)",
+      title: "Import sites, sources, projects, memory & prompts (no credentials)",
     });
     if (!picked?.[0]) return;
     const json = Buffer.from(await vscode.workspace.fs.readFile(picked[0])).toString("utf8");
@@ -4539,14 +4574,14 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(`Could not import: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
-    if (parsed.sites.length === 0 && parsed.sources.length === 0 && parsed.projects.length === 0) {
+    if (parsed.sites.length === 0 && parsed.sources.length === 0 && parsed.projects.length === 0 && parsed.memory.length === 0 && parsed.prompts.length === 0) {
       void vscode.window.showWarningMessage(
         `Nothing to import.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) were malformed.` : ""}`,
       );
       return;
     }
     // Let the user choose which items in the file to bring in.
-    type PickItem = vscode.QuickPickItem & { kind2?: "site" | "source" | "project"; key?: string };
+    type PickItem = vscode.QuickPickItem & { kind2?: "site" | "source" | "project" | "memory" | "prompt"; key?: string };
     const items: PickItem[] = [];
     if (parsed.sites.length) {
       items.push({ label: "Managed sites", kind: vscode.QuickPickItemKind.Separator });
@@ -4560,6 +4595,33 @@ export function activate(context: vscode.ExtensionContext): void {
       items.push({ label: "Projects", kind: vscode.QuickPickItemKind.Separator });
       for (const p of parsed.projects) items.push({ label: p.name, description: `${p.sourceIds.length} source(s)`, picked: true, kind2: "project", key: p.id });
     }
+    if (parsed.memory.length) {
+      items.push({ label: "Memory notes (review / decline)", kind: vscode.QuickPickItemKind.Separator });
+      // Per-note rows so the user can decline individually (key = stable index).
+      parsed.memory.forEach((m, i) =>
+        items.push({
+          label: m.title,
+          description: `${m.scopeKind === "site" ? "site" : "source"}: ${m.scopeRef}${m.origin === "ai" ? " · AI-proposed" : ""}`,
+          detail: m.text.length > 100 ? `${m.text.slice(0, 100)}…` : m.text,
+          picked: true,
+          kind2: "memory",
+          key: `mem:${i}`,
+        }),
+      );
+    }
+    if (parsed.prompts.length) {
+      items.push({ label: "Prompt Library (review / decline)", kind: vscode.QuickPickItemKind.Separator });
+      parsed.prompts.forEach((p, i) =>
+        items.push({
+          label: p.title,
+          description: p.scopeKind === "global" ? "global" : `${p.scopeKind}: ${p.scopeRef}`,
+          detail: p.body.length > 100 ? `${p.body.slice(0, 100)}…` : p.body,
+          picked: true,
+          kind2: "prompt",
+          key: `prompt:${i}`,
+        }),
+      );
+    }
     const chosen = await vscode.window.showQuickPick(items, {
       canPickMany: true,
       ignoreFocusOut: true,
@@ -4570,6 +4632,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const pickSites = new Set(chosen.filter((c) => c.kind2 === "site").map((c) => c.key));
     const pickSources = new Set(chosen.filter((c) => c.kind2 === "source").map((c) => c.key));
     const pickProjects = new Set(chosen.filter((c) => c.kind2 === "project").map((c) => c.key));
+    const pickMemory = new Set(chosen.filter((c) => c.kind2 === "memory").map((c) => c.key));
+    const pickPrompts = new Set(chosen.filter((c) => c.kind2 === "prompt").map((c) => c.key));
 
     // Sites: create descriptors not already present (by URL); the user signs in after.
     const existingSiteUrls = new Set(sites.list().map((c) => c.siteUrl.toLowerCase()));
@@ -4593,19 +4657,88 @@ export function activate(context: vscode.ExtensionContext): void {
     const freshIds = new Set(fresh.map((s) => s.id));
     const freshBookmarks = parsed.bookmarks.filter((b) => freshIds.has(b.sourceId));
     const wantProjects = parsed.projects.filter((p) => pickProjects.has(p.id));
-    if (freshSites.length === 0 && fresh.length === 0 && freshBookmarks.length === 0 && wantProjects.length === 0) {
+
+    // Memory: resolve each selected note's portable ref to a LOCAL scope, then
+    // dedup against what's already stored (Phase 2 = skip exact matches; Phase 4
+    // adds intelligent merge). Site refs match a known site URL (existing or just-
+    // imported); source refs match a source displayName (just-imported or existing).
+    const knownSiteUrls = [...sites.list().map((c) => c.siteUrl), ...freshSites.map((s) => s.siteUrl)];
+    const sourceIdByName = new Map<string, string>();
+    for (const s of contextSources.list()) sourceIdByName.set(s.displayName.toLowerCase(), s.id);
+    for (const s of fresh) sourceIdByName.set(s.displayName.toLowerCase(), s.id);
+    const resolveScope = (kind: MemoryScopeKind, ref: string): MemoryScope | undefined => {
+      if (kind === "site") {
+        const url = knownSiteUrls.find((u) => u.toLowerCase().replace(/\/+$/, "") === ref.toLowerCase().replace(/\/+$/, ""));
+        return url ? { kind: "site", key: url } : undefined;
+      }
+      const id = sourceIdByName.get(ref.toLowerCase());
+      return id ? { kind: "source", key: id } : undefined;
+    };
+    const selectedMemory = parsed.memory.filter((_, i) => pickMemory.has(`mem:${i}`));
+    const memPlan = planMemoryImport(selectedMemory, resolveScope, memory.list(), () => crypto.randomUUID(), nowIso());
+    if (memPlan.unresolved.length) {
+      parsed.warnings.push(`${memPlan.unresolved.length} memory note(s) skipped — their site/source isn't here (import or add it first).`);
+    }
+
+    // Prompts: global always resolves; scoped ones resolve a site by URL, a
+    // source by displayName, or a project by name (existing or just-imported).
+    const projectIdByName = new Map<string, string>();
+    for (const pr of projects.list()) projectIdByName.set(pr.name.toLowerCase(), pr.id);
+    for (const pr of wantProjects) projectIdByName.set(pr.name.toLowerCase(), pr.id);
+    const resolvePromptScope = (kind: PromptScopeKind, ref?: string): PromptScope | undefined => {
+      if (kind === "global") return { kind: "global" };
+      if (!ref) return undefined;
+      if (kind === "site") {
+        const url = knownSiteUrls.find((u) => u.toLowerCase().replace(/\/+$/, "") === ref.toLowerCase().replace(/\/+$/, ""));
+        return url ? { kind: "site", key: url } : undefined;
+      }
+      if (kind === "source") {
+        const id = sourceIdByName.get(ref.toLowerCase());
+        return id ? { kind: "source", key: id } : undefined;
+      }
+      const id = projectIdByName.get(ref.toLowerCase());
+      return id ? { kind: "project", key: id } : undefined;
+    };
+    const selectedPrompts = parsed.prompts.filter((_, i) => pickPrompts.has(`prompt:${i}`));
+    const promptPlan = planPromptImport(selectedPrompts, resolvePromptScope, prompts.list(), () => crypto.randomUUID(), nowIso());
+    if (promptPlan.unresolved.length) {
+      parsed.warnings.push(`${promptPlan.unresolved.length} prompt(s) skipped — their site/source/project isn't here (import or add it first).`);
+    }
+
+    const conflicts = memPlan.toMerge.length + promptPlan.toMerge.length;
+    if (freshSites.length === 0 && fresh.length === 0 && freshBookmarks.length === 0 && wantProjects.length === 0 && memPlan.toAdd.length === 0 && promptPlan.toAdd.length === 0 && conflicts === 0) {
       void vscode.window.showWarningMessage(
-        `Nothing new to import${skipped + skippedSites ? ` (${skipped + skippedSites} item(s) already present)` : ""}.`,
+        `Nothing new to import${skipped + skippedSites + memPlan.duplicates + promptPlan.duplicates ? ` (${skipped + skippedSites + memPlan.duplicates + promptPlan.duplicates} item(s) already present)` : ""}.`,
       );
       return;
     }
+    // Conflicts = same scope+title but different content. Intelligent merge
+    // (ADR-0013): rule-based union by default, an AI pass on request, or skip.
+    let mergeMode: "rule" | "ai" | "skip" = "rule";
+    if (conflicts > 0) {
+      const pick = await vscode.window.showQuickPick(
+        [
+          { label: "$(git-merge) Smart merge (recommended)", description: "combine text + tags — nothing is lost", mode: "rule" as const },
+          { label: "$(sparkle) Let @sharepoint merge (AI)", description: "uses your Copilot subscription to de-duplicate the combined text", mode: "ai" as const },
+          { label: "$(circle-slash) Keep my versions", description: "leave my copies untouched; skip the incoming ones", mode: "skip" as const },
+        ],
+        { title: `${conflicts} incoming item(s) match something you already have`, placeHolder: "Same title, different content — how should I combine them?", ignoreFocusOut: true },
+      );
+      if (!pick) return;
+      mergeMode = pick.mode;
+    }
+    const mergesApplied = mergeMode === "skip" ? 0 : conflicts;
     const parts = [
       freshSites.length ? `${freshSites.length} site(s)` : "",
       fresh.length ? `${fresh.length} source(s)` : "",
       freshBookmarks.length ? `${freshBookmarks.length} bookmark(s)` : "",
+      memPlan.toAdd.length ? `${memPlan.toAdd.length} memory note(s)` : "",
+      promptPlan.toAdd.length ? `${promptPlan.toAdd.length} prompt(s)` : "",
+      mergesApplied ? `${mergesApplied} merged${mergeMode === "ai" ? " (AI)" : ""}` : "",
     ].filter(Boolean).join(", ");
+    const alreadyPresent = skipped + skippedSites + memPlan.duplicates + promptPlan.duplicates;
     const confirm = await vscode.window.showInformationMessage(
-      `Import ${parts || "the selected project(s)"}?${skipped + skippedSites ? ` ${skipped + skippedSites} already-present item(s) skipped.` : ""} Credentials are NOT included — sign in to each site/source afterwards.${parsed.warnings.length ? ` ${parsed.warnings.length} malformed entr(ies) skipped.` : ""}`,
+      `Import ${parts || "the selected project(s)"}?${alreadyPresent ? ` ${alreadyPresent} already-present item(s) skipped.` : ""} Credentials are NOT included — sign in to each site/source afterwards.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) skipped/malformed.` : ""}`,
       { modal: true },
       "Import",
     );
@@ -4641,29 +4774,91 @@ export function activate(context: vscode.ExtensionContext): void {
       await projects.upsert({ ...pr, sourceIds: memberIds });
       importedProjects++;
     }
+    for (const m of memPlan.toAdd) {
+      await memory.add(m);
+    }
+    for (const p of promptPlan.toAdd) {
+      await prompts.add(p);
+    }
+    // AI pass over the rule-merged union: condense without losing facts. Any
+    // failure (not entitled, offline, refusal) silently keeps the rule merge.
+    let aiFailures = 0;
+    const aiCondense = async (title: string, combined: string): Promise<string> => {
+      try {
+        const res = await copilot.ask(
+          {
+            label: "mergeImport",
+            prompt: `Two entries titled "${title}" were combined below. Rewrite them into ONE clear entry that keeps every distinct fact/instruction and removes only redundancy. Return ONLY the merged text — no preamble, no markdown fences.\n\n---\n${combined}\n---`,
+          },
+          nowIso,
+        );
+        const out = res.text.trim();
+        if (out) return out;
+      } catch {
+        // fall through to the rule-based union
+      }
+      aiFailures++;
+      return combined;
+    };
+    if (mergeMode !== "skip") {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: mergeMode === "ai" ? "Merging shared items with @sharepoint…" : "Merging shared items…" },
+        async () => {
+          for (const m of memPlan.toMerge) {
+            const text = mergeMode === "ai" ? await aiCondense(m.merged.title, m.merged.text) : m.merged.text;
+            await memory.update({ ...m.merged, text });
+          }
+          for (const p of promptPlan.toMerge) {
+            const body = mergeMode === "ai" ? await aiCondense(p.merged.title, p.merged.body) : p.merged.body;
+            await prompts.update({ ...p.merged, body });
+          }
+        },
+      );
+      if (mergeMode === "ai" && aiFailures > 0) {
+        parsed.warnings.push(`AI merge was unavailable for ${aiFailures} item(s) — used smart (rule-based) merge for those.`);
+      }
+    }
     telemetry.record("context.importConfig", {
       sites: freshSites.length,
       sources: fresh.length,
       bookmarks: freshBookmarks.length,
       projects: importedProjects,
+      memory: memPlan.toAdd.length,
+      prompts: promptPlan.toAdd.length,
+      merged: mergesApplied,
+      mergeMode,
     });
     const done = [
       freshSites.length ? `${freshSites.length} site(s)` : "",
       fresh.length ? `${fresh.length} source(s)` : "",
       importedProjects ? `${importedProjects} project(s)` : "",
+      memPlan.toAdd.length ? `${memPlan.toAdd.length} memory note(s)` : "",
+      promptPlan.toAdd.length ? `${promptPlan.toAdd.length} prompt(s)` : "",
+      mergesApplied ? `${mergesApplied} merged` : "",
     ].filter(Boolean).join(", ");
     void vscode.window.showInformationMessage(
-      `Imported ${done || "the selected items"}. Sign in to each site/source to activate (lockout-safe single verify).`,
+      `Imported ${done || "the selected items"}.${parsed.warnings.length ? ` (${parsed.warnings.length} note(s): ${parsed.warnings.slice(0, 2).join(" ")}${parsed.warnings.length > 2 ? " …" : ""})` : ""} Sign in to each site/source to activate (lockout-safe single verify).`,
     );
   });
 
   // Memory: per-entity notes (user + AI) that give @sharepoint extra context about
   // a site/source. Managed here via a picker; injected into chat when in scope.
+  // Resolve a human label for a memory scope (for the manage loop title) by
+  // looking up the owning site/source; falls back to the raw key.
+  const labelForScope = (s: MemoryScope): string =>
+    s.kind === "site"
+      ? sites.list().find((c) => c.siteUrl === s.key)?.displayName || s.key
+      : contextSources.list().find((src) => src.id === s.key)?.displayName || s.key;
   register("aiSharePoint.manageMemory", async (preselect?: unknown) => {
     let scope: MemoryScope | undefined;
     let label = "";
-    const node = preselect && typeof preselect === "object" ? (preselect as Partial<SiteConnection & ContextSource>) : undefined;
-    if (node && typeof node.siteUrl === "string" && typeof node.role === "string") {
+    const node = preselect && typeof preselect === "object" ? (preselect as Partial<SiteConnection & ContextSource> & { memoryScope?: MemoryScope; scope?: MemoryScope }) : undefined;
+    // Right-clicked the "Memory (N)" folder or a note → that exact scope.
+    const fromTree = node?.memoryScope ?? (node?.scope && typeof node.scope === "object" && "kind" in node.scope ? node.scope : undefined);
+    if (fromTree && (fromTree.kind === "site" || fromTree.kind === "source") && typeof fromTree.key === "string") {
+      scope = fromTree;
+      label = labelForScope(fromTree);
+    } else if (node && typeof node.siteUrl === "string" && typeof node.role === "string") {
       scope = { kind: "site", key: node.siteUrl };
       label = node.displayName || node.siteUrl;
     } else if (node && typeof node.id === "string" && typeof node.type === "string") {
@@ -4741,6 +4936,230 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  // --- Prompt Library (Phase 3) --------------------------------------------
+  // Reusable prompt snippets, global or attached to a site/source/project.
+  // Reuse = copy to the clipboard; management is add/edit/copy/delete.
+
+  /** Resolve a tree node (or palette invocation) to a prompt scope + label.
+   *  Handles prompt group/item nodes, site/source connections, and project rows. */
+  const resolvePromptScope = (preselect?: unknown): { scope: PromptScope; label: string } | undefined => {
+    const n = preselect && typeof preselect === "object" ? (preselect as Record<string, unknown>) : undefined;
+    if (!n) return undefined;
+    // Prompt Library nodes carry the scope directly.
+    if (n.promptScope && typeof n.promptScope === "object") {
+      const s = n.promptScope as PromptScope;
+      return { scope: s, label: promptsProvider.labelForScope(s) };
+    }
+    if (n.scope && typeof n.scope === "object" && typeof (n.scope as PromptScope).kind === "string" && typeof n.body === "string") {
+      const s = n.scope as PromptScope;
+      return { scope: s, label: promptsProvider.labelForScope(s) };
+    }
+    // A projects-view row: { kind: "project", project: {...} }.
+    if (n.kind === "project" && n.project && typeof n.project === "object") {
+      const p = n.project as { id: string; name: string };
+      return { scope: { kind: "project", key: p.id }, label: p.name };
+    }
+    // A site connection.
+    if (typeof n.siteUrl === "string" && typeof n.role === "string") {
+      return { scope: { kind: "site", key: n.siteUrl }, label: (n.displayName as string) || (n.siteUrl as string) };
+    }
+    // A context source.
+    if (typeof n.id === "string" && typeof n.type === "string") {
+      return { scope: { kind: "source", key: n.id }, label: (n.displayName as string) ?? (n.id as string) };
+    }
+    return undefined;
+  };
+
+  /** Ask the user to pick a scope (Global, or a specific site/source/project). */
+  const pickPromptScope = async (): Promise<{ scope: PromptScope; label: string } | undefined> => {
+    type ScopePick = vscode.QuickPickItem & { scope: PromptScope; lbl: string };
+    const choices: ScopePick[] = [
+      { label: "$(globe) Global", description: "available everywhere", scope: { kind: "global" }, lbl: "Global" },
+    ];
+    for (const c of sites.list()) choices.push({ label: `$(cloud) ${c.displayName || c.siteUrl}`, description: `site · ${c.role}`, scope: { kind: "site", key: c.siteUrl }, lbl: c.displayName || c.siteUrl });
+    for (const s of contextSources.list()) choices.push({ label: `$(book) ${s.displayName}`, description: `source · ${s.type}`, scope: { kind: "source", key: s.id }, lbl: s.displayName });
+    for (const p of projects.list()) choices.push({ label: `$(folder) ${p.name}`, description: "project", scope: { kind: "project", key: p.id }, lbl: p.name });
+    const pick = await vscode.window.showQuickPick(choices, {
+      title: "Prompt Library — where should this prompt live?",
+      placeHolder: "Global prompts show everywhere; scoped prompts group under their site/source/project.",
+      ignoreFocusOut: true,
+    });
+    return pick ? { scope: pick.scope, label: pick.lbl } : undefined;
+  };
+
+  /** Shared add flow: title + body inputs, then store under `scope`. */
+  const addPromptTo = async (scope: PromptScope, label: string): Promise<boolean> => {
+    const title = await vscode.window.showInputBox({ title: `New prompt for ${label} — short title`, prompt: "e.g. Summarize a page for execs", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (!title) return false;
+    const body = await vscode.window.showInputBox({ title: "New prompt — the prompt text", prompt: "The reusable prompt you'll paste into chat", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (!body) return false;
+    const norm = normalizePromptInput(title, body);
+    const at = nowIso();
+    await prompts.add({ id: crypto.randomUUID(), scope, title: norm.title, body: norm.body, ...(norm.tags ? { tags: norm.tags } : {}), createdAt: at, updatedAt: at });
+    telemetry.record("prompt.add", { scope: scope.kind });
+    return true;
+  };
+
+  register("aiSharePoint.usePrompt", async (preselect?: unknown) => {
+    let item = preselect && typeof preselect === "object" && typeof (preselect as PromptItem).body === "string" ? (preselect as PromptItem) : undefined;
+    if (!item) {
+      const all = prompts.list();
+      if (all.length === 0) {
+        void vscode.window.showInformationMessage("No prompts yet — add one with the “+” in the Prompt Library, or right-click a site/source/project.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        all.map((p) => ({ label: p.title, description: promptsProvider.labelForScope(p.scope), detail: p.body.length > 120 ? `${p.body.slice(0, 120)}…` : p.body, item: p })),
+        { title: "Use a prompt — copy to clipboard", placeHolder: "Pick a prompt to copy.", ignoreFocusOut: true, matchOnDetail: true },
+      );
+      if (!pick) return;
+      item = pick.item;
+    }
+    await vscode.env.clipboard.writeText(item.body);
+    telemetry.record("prompt.use", { scope: item.scope.kind });
+    void vscode.window.showInformationMessage(`Prompt “${item.title}” copied to the clipboard.`);
+  });
+
+  register("aiSharePoint.addPrompt", async (preselect?: unknown) => {
+    const target = resolvePromptScope(preselect) ?? (await pickPromptScope());
+    if (!target) return;
+    await addPromptTo(target.scope, target.label);
+  });
+
+  register("aiSharePoint.managePrompt", async (preselect?: unknown) => {
+    const target = resolvePromptScope(preselect) ?? (await pickPromptScope());
+    if (!target) return;
+    const { scope, label } = target;
+    for (;;) {
+      const items = prompts.listForScope(scope);
+      const ADD = "$(add) Add a prompt…";
+      const chosen = await vscode.window.showQuickPick(
+        [
+          { label: ADD, alwaysShow: true } as vscode.QuickPickItem & { item?: PromptItem },
+          ...items.map((p) => ({ label: `$(comment-discussion) ${p.title}`, description: p.tags?.join(", ") ?? "", detail: p.body.length > 120 ? `${p.body.slice(0, 120)}…` : p.body, item: p })),
+        ],
+        { title: `Prompts for ${label} — ${items.length}`, placeHolder: "Pick a prompt to use/edit/delete, or add one. Esc closes.", ignoreFocusOut: true, matchOnDetail: true },
+      );
+      if (!chosen) return;
+      if (chosen.label === ADD) {
+        await addPromptTo(scope, label);
+        continue;
+      }
+      const p = chosen.item;
+      if (!p) continue;
+      const act = await vscode.window.showQuickPick(["Use (copy)", "Edit", "Delete"], { title: `“${p.title}”`, placeHolder: p.body.slice(0, 120), ignoreFocusOut: true });
+      if (act === "Use (copy)") {
+        await vscode.env.clipboard.writeText(p.body);
+        telemetry.record("prompt.use", { scope: p.scope.kind });
+        void vscode.window.showInformationMessage(`Prompt “${p.title}” copied to the clipboard.`);
+      } else if (act === "Edit") {
+        const title = await vscode.window.showInputBox({ title: "Edit title", value: p.title, ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+        if (title === undefined) continue;
+        const body = await vscode.window.showInputBox({ title: "Edit prompt text", value: p.body, ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+        if (body === undefined) continue;
+        const norm = normalizePromptInput(title, body);
+        await prompts.update({ ...p, title: norm.title, body: norm.body, ...(norm.tags ? { tags: norm.tags } : {}), updatedAt: nowIso() });
+      } else if (act === "Delete") {
+        await prompts.remove(p.id);
+      }
+    }
+  });
+
+  // --- File context sources (Phase 6): local spreadsheets/CSVs ------------
+  register("aiSharePoint.addLocalFile", async () => {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      openLabel: "Add for Context",
+      filters: {
+        "All supported": ["csv", "tsv", "tab", "xlsx", "xls", "docx", "pdf", "txt", "md", "log", "json", "xml", "yaml", "yml", "html", "htm", "sql", "ini", "cfg", "conf"],
+        Spreadsheets: ["xlsx", "xls", "csv", "tsv", "tab"],
+        Documents: ["docx", "pdf"],
+        Text: ["txt", "md", "log", "json", "xml", "yaml", "yml", "html", "htm", "sql"],
+        "All files": ["*"],
+      },
+      title: "Add a local file for read-only context (Excel, CSV, Word, PDF, text)",
+    });
+    if (!picked?.[0]) return;
+    const fsPath = picked[0].fsPath;
+    const name = fsPath.split(/[\\/]/).pop() || fsPath;
+    // Known dead-end types (legacy .doc, PowerPoint, …) get tailored guidance.
+    const legacyHint = legacyFileHint(name);
+    if (legacyHint) {
+      void vscode.window.showWarningMessage(legacyHint);
+      return;
+    }
+    // Unknown extension → try as text; the binary sniff inside readFileContent
+    // rejects true binaries with a clear message.
+    const kind = detectFileKind(name) === "unknown" ? "text" : detectFileKind(name);
+    const dup = findByLocation(fileSources.list(), { kind: "local", path: fsPath });
+    if (dup) {
+      void vscode.window.showInformationMessage(`Already registered as “${dup.label}”.`);
+      return;
+    }
+    const label = await vscode.window.showInputBox({
+      title: "Label for this file",
+      value: name,
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? undefined : "Required."),
+    });
+    if (!label) return;
+    // Validate it parses before registering, so a bad/binary file fails loudly now.
+    try {
+      const bytes = await vscode.workspace.fs.readFile(picked[0]);
+      const content = readFileContent(kind, Buffer.from(bytes));
+      await fileSources.add({ id: crypto.randomUUID(), label: label.trim(), location: { kind: "local", path: fsPath }, kind, addedAt: nowIso() });
+      telemetry.record("file.add", { kind });
+      void vscode.window.showInformationMessage(`Added “${label.trim()}” (${summarizeFileContent(content)}). @sharepoint can read it with #spReadFile, and it's listed under Reference Sources.`);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read that file: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  register("aiSharePoint.readFileSource", async (arg?: unknown) => {
+    const all = fileSources.list();
+    if (all.length === 0) {
+      const add = await vscode.window.showInformationMessage("No files registered yet.", "Add File…");
+      if (add) await vscode.commands.executeCommand("aiSharePoint.addLocalFile");
+      return;
+    }
+    let source = arg && typeof arg === "object" && typeof (arg as FileSource).id === "string" ? (arg as FileSource) : undefined;
+    if (!source) {
+      const pick = await vscode.window.showQuickPick(
+        all.map((f) => ({ label: f.label, description: describeKind(f.kind), detail: f.location.kind === "local" ? f.location.path : f.location.webUrl, f })),
+        { title: "Read which file?", ignoreFocusOut: true, matchOnDetail: true },
+      );
+      if (!pick) return;
+      source = pick.f;
+    }
+    try {
+      const content = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Reading “${source.label}”…` },
+        () => readFileSource(source!),
+      );
+      const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderFileContent(source.label, content) });
+      await vscode.window.showTextDocument(doc, { preview: true });
+      telemetry.record("file.read", { kind: source.kind });
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read “${source.label}”: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  register("aiSharePoint.removeFileSource", async (arg?: unknown) => {
+    const all = fileSources.list();
+    if (all.length === 0) return;
+    // Invoked from the tree item's inline trash → the FileSource is passed in.
+    const direct = arg && typeof arg === "object" && typeof (arg as FileSource).id === "string" ? (arg as FileSource) : undefined;
+    const target = direct
+      ? { label: direct.label, id: direct.id }
+      : await vscode.window.showQuickPick(
+          all.map((f) => ({ label: f.label, description: f.location.kind === "local" ? f.location.path : f.location.webUrl, id: f.id })),
+          { title: "Remove which file from context? (the file itself is not deleted)", ignoreFocusOut: true },
+        );
+    if (!target) return;
+    await fileSources.remove(target.id);
+    void vscode.window.showInformationMessage(`Removed “${target.label}” from context.`);
+  });
+
   register("aiSharePoint.discoverActiveDirectory", async () => {
     const result = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Discovering Active Directory via DNS…" },
@@ -4780,7 +5199,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // reviewCommDraft after a modal approval that names every recipient.
 
   const COMMS_CONN_KEY = "aiSharePoint.commsConnection";
-  const commsClientFor = async (): Promise<CommsClient | undefined> => {
+  /** Resolve which Microsoft 365 sign-in to use for comms (single → that one;
+   *  else remembered; else ask), and return both the connection and a client. */
+  const commsConnAndClient = async (
+    titleWhenAsking = "Send using which Microsoft 365 sign-in?",
+  ): Promise<{ conn: SiteConnection; client: CommsClient } | undefined> => {
     const all = sites.list();
     if (all.length === 0) {
       const add = await vscode.window.showInformationMessage(
@@ -4802,15 +5225,347 @@ export function activate(context: vscode.ExtensionContext): void {
           description: `${c.tenantHost}${c.account ? ` · ${c.account}` : ""}`,
           conn: c,
         })),
-        { ignoreFocusOut: true, title: "Send using which Microsoft 365 sign-in?" },
+        { ignoreFocusOut: true, title: titleWhenAsking },
       );
       if (!pick) return undefined;
       conn = pick.conn;
       await context.globalState.update(COMMS_CONN_KEY, conn.cacheHandle);
     }
     const provider = registry.create(conn.authProviderId, conn.cacheHandle);
-    return new CommsClient(provider, false);
+    return { conn, client: new CommsClient(provider, false) };
   };
+  const commsClientFor = async (): Promise<CommsClient | undefined> => {
+    return (await commsConnAndClient())?.client;
+  };
+
+  // --- Read-only Outlook workspace (ADR-0025 extension) --------------------
+  // Reads reuse the Microsoft 365 send sign-in; the only writes are creating the
+  // workspace folder and (on request) a move-replies rule — both explicit.
+
+  /** Ensure a workspace is configured for the active comms connection, walking
+   *  the user through folder + scope setup when it isn't. Returns the client +
+   *  workspace, or undefined if the user cancels. */
+  const ensureOutlookWorkspace = async (): Promise<{ client: CommsClient; ws: OutlookWorkspace } | undefined> => {
+    const picked = await commsConnAndClient("Read Outlook using which Microsoft 365 sign-in?");
+    if (!picked) return undefined;
+    const existing = outlookWorkspaces.get(picked.conn.cacheHandle);
+    if (existing) return { client: picked.client, ws: existing };
+    const setUp = await vscode.window.showInformationMessage(
+      "No Outlook workspace yet for this sign-in. A workspace is an Outlook folder @sharepoint can read (read-only). Set one up now?",
+      { modal: true },
+      "Set Up Workspace",
+    );
+    if (setUp !== "Set Up Workspace") return undefined;
+    const ws = await configureWorkspace(picked.conn.cacheHandle, picked.client);
+    return ws ? { client: picked.client, ws } : undefined;
+  };
+
+  /** Folder + scope setup, stored against the connection. Shared by the explicit
+   *  command and the just-in-time path above. */
+  const configureWorkspace = async (handle: string, client: CommsClient): Promise<OutlookWorkspace | undefined> => {
+    const folders = await client.listMailFolders().catch((e) => {
+      throw new AppError(
+        e instanceof Error && /403|consent|permission/i.test(e.message)
+          ? "Reading Outlook needs the Mail.Read permission consented for this sign-in (Admin Guide §4)."
+          : `Could not list Outlook folders: ${e instanceof Error ? e.message : String(e)}`,
+        e instanceof Error && /403|consent|permission/i.test(e.message) ? "graph.forbidden" : "graph.error",
+      );
+    });
+    const CREATE = "$(add) Create a new workspace folder…";
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: CREATE, alwaysShow: true } as vscode.QuickPickItem & { id?: string },
+        ...folders.map((f) => ({ label: f.displayName, description: f.totalItemCount != null ? `${f.totalItemCount} item(s)` : "", id: f.id })),
+      ],
+      { title: "Pick or create the Outlook workspace folder", placeHolder: "@sharepoint will read this folder (read-only).", ignoreFocusOut: true },
+    );
+    if (!pick) return undefined;
+    let folderId = pick.id;
+    let folderName = pick.label;
+    if (pick.label === CREATE || !folderId) {
+      const name = await vscode.window.showInputBox({ title: "New workspace folder name", value: "AI SharePoint Workspace", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+      if (!name) return undefined;
+      const created = await client.createMailFolder(name.trim());
+      folderId = created.id;
+      folderName = created.displayName;
+    }
+    const scopePick = await vscode.window.showQuickPick(
+      [
+        { label: "$(folder) Just this workspace folder", description: "@sharepoint reads only the workspace folder (recommended)", scope: "workspace" as OutlookReadScope },
+        { label: "$(mail) The whole mailbox", description: "@sharepoint may read any mail in this account", scope: "mailbox" as OutlookReadScope },
+      ],
+      { title: "How much Outlook mail may @sharepoint read?", placeHolder: "You can change this later by reconfiguring the workspace.", ignoreFocusOut: true },
+    );
+    if (!scopePick) return undefined;
+    const at = nowIso();
+    const ws: OutlookWorkspace = {
+      connectionHandle: handle,
+      folderId: folderId!,
+      folderName,
+      readScope: scopePick.scope,
+      trackedSubjects: outlookWorkspaces.get(handle)?.trackedSubjects ?? [],
+      createdAt: outlookWorkspaces.get(handle)?.createdAt ?? at,
+      updatedAt: at,
+    };
+    await outlookWorkspaces.upsert(ws);
+    telemetry.record("comms.workspaceConfigured", { scope: ws.readScope });
+    void vscode.window.showInformationMessage(`Outlook workspace set to “${folderName}” (${ws.readScope === "workspace" ? "folder-only" : "whole mailbox"} read access).`);
+    return ws;
+  };
+
+  register("aiSharePoint.configureOutlookWorkspace", async () => {
+    const picked = await commsConnAndClient("Configure Outlook workspace for which Microsoft 365 sign-in?");
+    if (!picked) return;
+    await configureWorkspace(picked.conn.cacheHandle, picked.client);
+  });
+
+  register("aiSharePoint.readOutlookMail", async () => {
+    const got = await ensureOutlookWorkspace();
+    if (!got) return;
+    const messages = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Reading Outlook (read-only)…" },
+      () => got.client.readMessages(got.ws.readScope, got.ws.folderId, 25),
+    );
+    const label = got.ws.readScope === "workspace" ? `${got.ws.folderName} (workspace)` : "whole mailbox";
+    const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderMailDigest(label, messages) });
+    await vscode.window.showTextDocument(doc, { preview: true });
+    telemetry.record("comms.readMail", { scope: got.ws.readScope, count: messages.length });
+  });
+
+  register("aiSharePoint.readOutlookCalendar", async () => {
+    const got = await ensureOutlookWorkspace();
+    if (!got) return;
+    const days = 7;
+    const { startIso, endIso } = calendarWindow(nowIso(), days);
+    const events = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Reading your Outlook calendar (read-only)…" },
+      () => got.client.readCalendar(startIso, endIso, 50),
+    );
+    const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderCalendarDigest(`next ${days} days`, events) });
+    await vscode.window.showTextDocument(doc, { preview: true });
+    telemetry.record("comms.readCalendar", { count: events.length });
+  });
+
+  register("aiSharePoint.trackRepliesToWorkspace", async () => {
+    const got = await ensureOutlookWorkspace();
+    if (!got) return;
+    const subject = await vscode.window.showInputBox({
+      title: "Move replies to the workspace folder — match which subject?",
+      prompt: `An Outlook rule will move messages whose subject contains this into “${got.ws.folderName}”.`,
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? undefined : "Enter the subject (or a distinctive part of it)."),
+    });
+    if (!subject) return;
+    const rule = buildSubjectMoveRule(subject, got.ws.folderId, got.ws.folderName, got.ws.trackedSubjects.length + 1);
+    const confirm = await vscode.window.showInformationMessage(
+      `Create an Outlook rule “${rule.displayName}”? Future messages whose subject contains “${rule.conditions.subjectContains[0]}” will be moved to “${got.ws.folderName}”. This changes your Outlook rules (reversible in Outlook).`,
+      { modal: true },
+      "Create Rule",
+    );
+    if (confirm !== "Create Rule") return;
+    await got.client.createMessageRule(rule);
+    await outlookWorkspaces.upsert({ ...got.ws, trackedSubjects: withTrackedSubject(got.ws.trackedSubjects, subject), updatedAt: nowIso() });
+    telemetry.record("comms.trackReplies");
+    void vscode.window.showInformationMessage(`Rule created — replies matching “${rule.conditions.subjectContains[0]}” will collect in “${got.ws.folderName}”.`);
+  });
+
+  // --- Read-only, scoped Teams messages (ADR-0025 extension) ---------------
+  // Reads reuse the Microsoft 365 sign-in; @sharepoint may read ONLY chats/
+  // channels the user explicitly registers as a scope — never all of Teams.
+
+  register("aiSharePoint.addTeamsScope", async () => {
+    const picked = await commsConnAndClient("Read Teams using which Microsoft 365 sign-in?");
+    if (!picked) return;
+    const { conn, client } = picked;
+    const kind = await vscode.window.showQuickPick(
+      [
+        { label: "$(comment-discussion) A chat (1:1 or group)", how: "chat" as const, description: "uses Chat.Read — no admin consent" },
+        { label: "$(organization) A team channel", how: "channel" as const, description: "may require ChannelMessage.Read.All consent" },
+      ],
+      { title: "Add a readable Teams scope", placeHolder: "@sharepoint will read ONLY what you pick here (read-only).", ignoreFocusOut: true },
+    );
+    if (!kind) return;
+    let scope: TeamsScope | undefined;
+    let label = "";
+    try {
+      if (kind.how === "chat") {
+        const chats = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Listing your Teams chats…" },
+          () => client.listMyChats(50),
+        );
+        if (chats.length === 0) {
+          void vscode.window.showInformationMessage("No Teams chats found for this sign-in.");
+          return;
+        }
+        const pick = await vscode.window.showQuickPick(
+          chats.map((c) => ({ label: c.label, description: c.chatType, id: c.id })),
+          { title: "Pick a chat to read", placeHolder: "Only this chat becomes readable.", ignoreFocusOut: true, matchOnDescription: true },
+        );
+        if (!pick) return;
+        scope = { kind: "chat", chatId: pick.id };
+        label = pick.label;
+      } else {
+        const teams = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Listing your teams…" },
+          () => client.listJoinedTeams(),
+        );
+        if (teams.length === 0) {
+          void vscode.window.showInformationMessage("You don't appear to be a member of any teams on this sign-in.");
+          return;
+        }
+        const teamPick = await vscode.window.showQuickPick(
+          teams.map((t) => ({ label: t.displayName, id: t.id })),
+          { title: "Pick a team", ignoreFocusOut: true },
+        );
+        if (!teamPick) return;
+        const channels = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Listing channels in “${teamPick.label}”…` },
+          () => client.listChannels(teamPick.id),
+        );
+        const chanPick = await vscode.window.showQuickPick(
+          channels.map((c) => ({ label: c.displayName, id: c.id })),
+          { title: `Pick a channel in “${teamPick.label}”`, ignoreFocusOut: true },
+        );
+        if (!chanPick) return;
+        scope = { kind: "channel", teamId: teamPick.id, channelId: chanPick.id };
+        label = `${teamPick.label} › ${chanPick.label}`;
+      }
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      void vscode.window.showErrorMessage(
+        /403|consent|permission/i.test(m)
+          ? "Reading Teams needs the relevant Graph permission consented for this sign-in (chats: Chat.Read; channels: ChannelMessage.Read.All — may need an admin). See the Admin Guide."
+          : `Could not list Teams ${kind.how === "chat" ? "chats" : "channels"}: ${m}`,
+      );
+      return;
+    }
+    if (teamsScopes.findByScope(scope)) {
+      void vscode.window.showInformationMessage(`“${label}” is already a registered Teams scope.`);
+      return;
+    }
+    await teamsScopes.add({ id: crypto.randomUUID(), connectionHandle: conn.cacheHandle, scope, label, createdAt: nowIso() });
+    telemetry.record("comms.addTeamsScope", { kind: scope.kind });
+    void vscode.window.showInformationMessage(`Added Teams scope “${label}”. @sharepoint can read it with #spReadTeams.`);
+  });
+
+  register("aiSharePoint.readTeamsMessages", async (arg?: unknown) => {
+    const all = teamsScopes.list();
+    if (all.length === 0) {
+      const add = await vscode.window.showInformationMessage("No Teams scopes registered yet.", "Add Teams Scope…");
+      if (add) await vscode.commands.executeCommand("aiSharePoint.addTeamsScope");
+      return;
+    }
+    let entry = arg && typeof arg === "object" && typeof (arg as TeamsScopeEntry).id === "string" ? (arg as TeamsScopeEntry) : undefined;
+    if (!entry) {
+      const pick = await vscode.window.showQuickPick(
+        all.map((s) => ({ label: s.label, description: s.scope.kind === "chat" ? "chat" : "channel", e: s })),
+        { title: "Read which Teams scope?", ignoreFocusOut: true },
+      );
+      if (!pick) return;
+      entry = pick.e;
+    }
+    const conn = sites.list().find((c) => c.cacheHandle === entry!.connectionHandle);
+    if (!conn) {
+      void vscode.window.showWarningMessage("That scope's Microsoft 365 sign-in is no longer connected. Re-add the scope.");
+      return;
+    }
+    const client = new CommsClient(registry.create(conn.authProviderId, conn.cacheHandle), false);
+    try {
+      const messages = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Reading Teams “${entry.label}” (read-only)…` },
+        () =>
+          entry!.scope.kind === "chat"
+            ? client.readChatMessages(entry!.scope.chatId, clampTeamsTop(undefined))
+            : client.readChannelMessages(entry!.scope.teamId, entry!.scope.channelId, clampTeamsTop(undefined)),
+      );
+      const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: renderTeamsDigest(entry.label, messages) });
+      await vscode.window.showTextDocument(doc, { preview: true });
+      telemetry.record("comms.readTeams", { kind: entry.scope.kind, count: messages.length });
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read “${entry.label}”: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  register("aiSharePoint.removeTeamsScope", async () => {
+    const all = teamsScopes.list();
+    if (all.length === 0) return;
+    const pick = await vscode.window.showQuickPick(
+      all.map((s) => ({ label: s.label, description: s.scope.kind, id: s.id })),
+      { title: "Remove which Teams scope? (the chat/channel itself is untouched)", ignoreFocusOut: true },
+    );
+    if (!pick) return;
+    await teamsScopes.remove(pick.id);
+    void vscode.window.showInformationMessage(`Removed Teams scope “${pick.label}”.`);
+  });
+
+  register("aiSharePoint.addSharedFile", async () => {
+    const picked = await commsConnAndClient("Read shared files using which Microsoft 365 sign-in?");
+    if (!picked) return;
+    const { conn, client } = picked;
+    const PASTE = "$(link) Paste a sharing link…";
+    const mode = await vscode.window.showQuickPick(
+      [
+        { label: "$(cloud) Pick from files shared with me", how: "shared" as const },
+        { label: PASTE, how: "link" as const },
+      ],
+      { title: "Add a OneDrive / SharePoint file for context", ignoreFocusOut: true },
+    );
+    if (!mode) return;
+    let ref;
+    try {
+      if (mode.how === "link") {
+        const url = await vscode.window.showInputBox({
+          title: "Paste the OneDrive / SharePoint sharing link",
+          prompt: "The 'Copy link' URL for a file shared with you.",
+          ignoreFocusOut: true,
+          validateInput: (v) => (/^https?:\/\//i.test(v.trim()) ? undefined : "Enter a valid https link."),
+        });
+        if (!url) return;
+        ref = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Resolving the shared file…" }, () => client.resolveSharedItem(url));
+      } else {
+        const shared = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Listing files shared with you…" }, () => client.listSharedWithMe());
+        const supported = shared.filter((r) => detectFileKind(r.name) !== "unknown");
+        if (supported.length === 0) {
+          void vscode.window.showInformationMessage("No supported shared files found (Excel, CSV, Word, PDF, text). Use “Paste a sharing link…” for a specific file.");
+          return;
+        }
+        const pick = await vscode.window.showQuickPick(
+          supported.map((r) => ({ label: r.name, description: `${describeKind(detectFileKind(r.name))} · ${r.webUrl ?? ""}`, ref: r })),
+          { title: "Pick a shared file", ignoreFocusOut: true, matchOnDescription: true },
+        );
+        if (!pick) return;
+        ref = pick.ref;
+      }
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not access the shared file: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    const legacyHint = legacyFileHint(ref.name);
+    if (legacyHint) {
+      void vscode.window.showWarningMessage(legacyHint);
+      return;
+    }
+    // Unknown extension (e.g. from a pasted link) → try as text; the binary
+    // sniff inside readFileContent rejects true binaries with a clear message.
+    const kind = detectFileKind(ref.name) === "unknown" ? "text" : detectFileKind(ref.name);
+    const location = { kind: "graph" as const, connectionHandle: conn.cacheHandle, driveId: ref.driveId, itemId: ref.itemId, ...(ref.webUrl ? { webUrl: ref.webUrl } : {}) };
+    const dup = findByLocation(fileSources.list(), location);
+    if (dup) {
+      void vscode.window.showInformationMessage(`Already registered as “${dup.label}”.`);
+      return;
+    }
+    const label = await vscode.window.showInputBox({ title: "Label for this file", value: ref.name, ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (!label) return;
+    try {
+      const buf = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Reading the file…" }, () => client.downloadDriveItem(ref.driveId, ref.itemId));
+      const content = readFileContent(kind, buf);
+      await fileSources.add({ id: crypto.randomUUID(), label: label.trim(), location, kind, addedAt: nowIso() });
+      telemetry.record("file.add", { kind, remote: true });
+      void vscode.window.showInformationMessage(`Added “${label.trim()}” (${summarizeFileContent(content)}). @sharepoint can read it with #spReadFile, and it's listed under Reference Sources.`);
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not read “${ref.name}”: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
 
   /** Create an email draft directly in the user's Outlook Drafts folder.
    *  Outlook's own Drafts is the review surface (the user finishes/sends it
@@ -4821,6 +5576,7 @@ export function activate(context: vscode.ExtensionContext): void {
     to: string[],
     subject: string,
     body: string,
+    opts?: { format?: MailFormat; attachments?: ComposedAttachment[] },
   ): Promise<{ webLink?: string; failures: string[] }> => {
     const client = await commsClientFor();
     if (!client) {
@@ -4841,14 +5597,73 @@ export function activate(context: vscode.ExtensionContext): void {
     if (resolved.length === 0) {
       throw new AppError(`No recipients could be resolved in the directory: ${failures.join(", ")}.`, "config");
     }
-    const created = await client.createMailDraft(resolved, subject, body);
+    const created = await client.createMailDraft(resolved, subject, body, opts);
     return { ...(created.webLink ? { webLink: created.webLink } : {}), failures };
   };
   context.subscriptions.push(
     ...tryRegister("communication tools", () =>
-      registerCommsTools(outbox, createOutlookDraftDirect, telemetry, errors, nowIso),
+      // The tool may pass a format ("html" lets the assistant craft formatted
+      // email); attachments are added by the user via Compose Rich Email.
+      registerCommsTools(
+        outbox,
+        (to, subject, body, format) => createOutlookDraftDirect(to, subject, body, format ? { format } : undefined),
+        telemetry,
+        errors,
+        nowIso,
+      ),
     ),
   );
+
+  // Compose a richly-formatted email (HTML / Rich Text / plain) with optional
+  // file attachments, straight into the user's Outlook Drafts folder. Outlook's
+  // own composer is the finish-and-send surface — nothing is sent here.
+  register("aiSharePoint.composeRichOutlookEmail", async () => {
+    const toRaw = await vscode.window.showInputBox({ title: "New email — recipients", prompt: "Comma/space-separated emails or UPNs", ignoreFocusOut: true, validateInput: (v) => (parseRecipients(v).length ? recipientIssue(parseRecipients(v)) : "Add at least one recipient.") });
+    if (!toRaw) return;
+    const to = parseRecipients(toRaw);
+    const subject = await vscode.window.showInputBox({ title: "New email — subject", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (subject === undefined) return;
+    const fmtPick = await vscode.window.showQuickPick(
+      [
+        { label: "$(code) HTML", description: "paste/enter HTML markup for full formatting", fmt: "html" as MailFormat },
+        { label: "$(text-size) Rich Text", description: "type text; sent as formatted HTML (newlines preserved)", fmt: "html" as MailFormat },
+        { label: "$(output) Plain text", description: "no formatting", fmt: "text" as MailFormat },
+      ],
+      { title: "Email format", placeHolder: "Outlook's full formatting is available — finish in Outlook after this.", ignoreFocusOut: true },
+    );
+    if (!fmtPick) return;
+    const body = await vscode.window.showInputBox({ title: `New email — body (${fmtPick.label.replace(/^\$\([^)]*\)\s*/, "")})`, prompt: fmtPick.fmt === "html" ? "HTML or plain text (plain is converted to HTML)" : "Plain text", ignoreFocusOut: true, validateInput: (v) => (v.trim() ? undefined : "Required.") });
+    if (!body) return;
+    // Optional attachments (local files; inline, bounded total size).
+    const attachments: ComposedAttachment[] = [];
+    const files = await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: "Attach", title: "Attach files (optional — Esc to skip)" });
+    if (files && files.length) {
+      for (const uri of files) {
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const name = uri.fsPath.split(/[\\/]/).pop() || "attachment";
+        attachments.push({ name, contentType: contentTypeForName(name), base64: Buffer.from(bytes).toString("base64"), bytes: bytes.byteLength });
+      }
+      const issue = attachmentIssue(attachments);
+      if (issue) {
+        void vscode.window.showErrorMessage(issue);
+        return;
+      }
+    }
+    try {
+      const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Saving the draft to your Outlook Drafts…" },
+        () => createOutlookDraftDirect(to, subject, body, { format: fmtPick.fmt, ...(attachments.length ? { attachments } : {}) }),
+      );
+      telemetry.record("comms.draft", { channel: "outlook", via: "user", format: fmtPick.fmt, attachments: attachments.length });
+      const open = await vscode.window.showInformationMessage(
+        `Draft saved to your Outlook Drafts${attachments.length ? ` with ${attachments.length} attachment(s)` : ""}.${result.failures.length ? ` Unresolved recipients: ${result.failures.join(", ")}.` : ""} Open it in Outlook to review and send.`,
+        ...(result.webLink ? ["Open in Outlook"] : []),
+      );
+      if (open && result.webLink) await vscode.env.openExternal(vscode.Uri.parse(result.webLink));
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Could not save the draft: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
 
   // Teams Incoming Webhooks (ADR-0025 amendment): the no-admin-consent
   // delivery path. URLs embed a token, so they live in the keychain (never
@@ -5569,6 +6384,135 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  // Open the "what was changed" report for a defanged chat request (invoked from
+  // the button the participant renders). The report is session-scoped.
+  register("aiSharePoint.showProxyDefangDetails", async (arg?: unknown) => {
+    const md = typeof arg === "string" ? getDefangReport(arg) : undefined;
+    if (!md) {
+      void vscode.window.showInformationMessage(
+        "Those proxy-avoidance details are no longer available — the report is kept only for the current session.",
+      );
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: md });
+    await vscode.window.showTextDocument(doc, { preview: true });
+  });
+
+  // One-click remediation for a suspected content-proxy block (surfaced as a
+  // button under a failed @sharepoint turn): turn on defang so outgoing chat
+  // messages auto-obfuscate avoid-list words. Idempotent and reversible via the
+  // aiSharePoint.proxy.mode setting / Manage Proxy Avoid-List.
+  register("aiSharePoint.enableProxyDefang", async () => {
+    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    if (cfg.get<string>("proxy.mode", "off") === "defang") {
+      void vscode.window.showInformationMessage(
+        "Proxy defang is already on — outgoing chat messages auto-obfuscate avoid-list words so a content proxy can't match them (the AI still reads the original).",
+      );
+      return;
+    }
+    await cfg.update("proxy.mode", "defang", vscode.ConfigurationTarget.Global);
+    const pick = await vscode.window.showInformationMessage(
+      "Proxy defang enabled. Outgoing chat messages now auto-obfuscate avoid-list words (an invisible zero-width character is inserted so a content proxy can't match them; the AI still reads the original text). Retry your request — and add any specific trigger words via Manage Proxy Avoid-List.",
+      "Manage Avoid-List",
+    );
+    if (pick === "Manage Avoid-List") {
+      await vscode.commands.executeCommand("aiSharePoint.manageProxyTerms");
+    }
+  });
+
+  // Intelligent restart: re-open the chat prefilled with the last (interrupted)
+  // request from the local interaction cache, so a turn lost to a proxy block /
+  // dropped connection / context overflow can be resubmitted in one click.
+  register("aiSharePoint.restartLastInteraction", async () => {
+    const last = interactions.last();
+    if (!last?.prompt) {
+      void vscode.window.showInformationMessage("No recent @sharepoint request to restart.");
+      return;
+    }
+    const query = `@sharepoint ${last.prompt}`;
+    // `workbench.action.chat.open` accepts different argument shapes across VS
+    // Code versions — try the object form, then the bare-string form, before
+    // falling back to the clipboard. Each is guarded so an unsupported shape
+    // (which rejects) just moves to the next.
+    for (const arg of [{ query } as unknown, query]) {
+      try {
+        await vscode.commands.executeCommand("workbench.action.chat.open", arg);
+        return;
+      } catch {
+        /* try the next shape */
+      }
+    }
+    await vscode.env.clipboard.writeText(query);
+    void vscode.window.showInformationMessage(
+      "Copied your last request to the clipboard — paste it into Copilot Chat (@sharepoint) to retry.",
+    );
+  });
+
+  // Actively measure a model's REAL input-context limit. Copilot can deliver less
+  // than the advertised maxInputTokens (varies by org), so this binary-searches
+  // the accept/reject boundary with filler prompts and records it for budgeting.
+  register("aiSharePoint.probeModelContextLimit", async () => {
+    const model = await copilot.pickDefaultModel().catch(() => undefined);
+    if (!model) {
+      void vscode.window.showErrorMessage("No GitHub Copilot model is available — sign in to Copilot and retry.");
+      return;
+    }
+    const proceed = await vscode.window.showWarningMessage(
+      `Probe the real context limit for “${model.name}”? This sends up to ${PROBE_MAX_STEPS} test prompts using your Copilot allowance to find the largest input it actually accepts (advertised: ${model.maxInputTokens?.toLocaleString() ?? "unknown"} tokens).`,
+      { modal: true },
+      "Probe",
+    );
+    if (proceed !== "Probe") return;
+    const key = model.family || model.id;
+    const advertised = model.maxInputTokens;
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Measuring the real context limit for ${model.name}…`, cancellable: true },
+      async (progress, ptoken) => {
+        let { low, high } = initialProbeWindow(advertised, modelLimits.get(key)?.knownGood);
+        let lastGood = low;
+        for (let step = 0; step < PROBE_MAX_STEPS && !probeConverged(low, high, PROBE_TOLERANCE) && !ptoken.isCancellationRequested; step++) {
+          const target = nextProbeSize(low, high, PROBE_TOLERANCE);
+          if (target === undefined) break;
+          progress.report({ message: `testing ~${target.toLocaleString()} tokens (step ${step + 1}/${PROBE_MAX_STEPS})…` });
+          const filler = probeFiller(target);
+          let measured = target;
+          try {
+            measured = await model.countTokens(filler);
+          } catch {
+            /* keep the requested target as the estimate */
+          }
+          try {
+            const resp = await model.sendRequest(
+              [vscode.LanguageModelChatMessage.User(`${filler}\n\nReply with exactly: OK`)],
+              { justification: "AI SharePoint context-limit probe" },
+              ptoken,
+            );
+            for await (const _part of resp.stream) {
+              /* drain — success is reaching the end without an overflow throw */
+            }
+            lastGood = Math.max(lastGood, measured);
+            low = Math.max(low, measured);
+            await modelLimits.recordSuccess(key, advertised, measured).catch(() => undefined);
+          } catch (err) {
+            if (looksLikeOverflow(redactError(err).message)) {
+              high = Math.min(high, measured);
+              await modelLimits.recordOverflow(key, advertised, measured).catch(() => undefined);
+            } else {
+              throw err; // network/entitlement — stop and surface it
+            }
+          }
+        }
+        const effective = modelLimits.effectiveLimit(key, advertised) ?? lastGood;
+        // Anonymized counter (categorical only): a probe ran and whether it
+        // finished or the user cancelled — never the prompt or the measured size.
+        telemetry.record("context.probe", { outcome: ptoken.isCancellationRequested ? "cancelled" : "completed" });
+        void vscode.window.showInformationMessage(
+          `Context probe for ${model.name}: advertised ${advertised?.toLocaleString() ?? "unknown"}, measured usable ≈ ${lastGood.toLocaleString()} tokens (budgeting cap ${effective.toLocaleString()}). Saved — chats now budget to this.`,
+        );
+      },
+    );
+  });
+
   // #2 — review/curate the active project's AI-managed memory item by item
   // (today the edit flow only lets you wipe the whole blob).
   register("aiSharePoint.manageProjectMemory", async () => {
@@ -5622,7 +6566,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const rows = modelLimits.list();
     if (rows.length === 0) {
       void vscode.window.showInformationMessage(
-        "No model context limits learned yet — they're recorded automatically as you chat.",
+        "No model context limits learned yet — they're recorded automatically as you chat. Run “Probe Model Context Limit” to actively measure a model's real limit now.",
       );
       return;
     }
@@ -5640,7 +6584,7 @@ export function activate(context: vscode.ExtensionContext): void {
       language: "markdown",
       content: `# Learned model context limits (#3)\n\n${lines.join(
         "\n",
-      )}\n\n_“Learned cap” is recorded when a prompt overflows a model; “known-good” is the largest prompt that has succeeded. Prompts are budgeted to stay under the effective ceiling, trimming the lowest-value sections first._\n`,
+      )}\n\n_“Learned cap” is recorded when a prompt overflows a model; “known-good” is the largest prompt that has succeeded. Prompts are budgeted to stay under the effective ceiling, trimming the lowest-value sections first. The advertised limit can be capped lower by your organization — run **“Probe Model Context Limit”** to actively measure the real ceiling._\n`,
     });
     await vscode.window.showTextDocument(doc, { preview: true });
   });
@@ -5778,6 +6722,38 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  register("aiSharePoint.testNetworkConnectivity", async () => {
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Testing network / proxy connectivity…", cancellable: true },
+      async (progress, token) => {
+        const reports: ProbeReport[] = [];
+        for (const target of DEFAULT_PROBE_TARGETS) {
+          if (token.isCancellationRequested) break;
+          progress.report({ message: `${target.label}…` });
+          reports.push(interpretProbe(target, await probeConnectivity(target, token)));
+        }
+        if (reports.length === 0) return; // cancelled before the first probe
+        // The full report (per-endpoint verdict + remediation) goes to the log;
+        // the toast carries the headline and a way to open it.
+        log.info(`\n${renderConnectivityReport(reports, nowIso())}`);
+        const summary = summarizeConnectivity(reports);
+        // Counter (categorical only): clean vs. a detected proxy/filter — and,
+        // when blocked, the worst diagnosis kind — never a host or error body.
+        const worst = reports.find((r) => !r.reachable)?.diagnosis?.kind;
+        telemetry.record("network.check", { result: summary.ok ? "clean" : "blocked", ...(worst ? { kind: worst } : {}) });
+        if (summary.ok) {
+          void vscode.window.showInformationMessage(`Network check: ${summary.message}`);
+        } else {
+          const choice = await vscode.window.showWarningMessage(
+            `Network check: ${summary.message}`,
+            "Show Details",
+          );
+          if (choice === "Show Details") log.show();
+        }
+      },
+    );
+  });
+
   register("aiSharePoint.openLogs", async () => {
     log.info("Extension logs opened from Support & Diagnostics.");
     // OutputChannel.show() alone can fail to reopen a closed Output panel
@@ -5804,7 +6780,7 @@ export function activate(context: vscode.ExtensionContext): void {
           action: "toggle",
         },
         { label: "$(server) Splunk HEC URL", description: st.splunkUrl ?? "not set", action: "splunkUrl" },
-        { label: "$(key) Splunk HEC token", description: st.splunkTokenSet ? "•••••• set" : "not set", action: "splunkToken" },
+        { label: "$(key) Splunk Attribution Identifier", description: st.splunkTokenSet ? "•••••• set" : "not set", action: "splunkToken" },
         { label: "$(dashboard) OTEL OTLP endpoint", description: st.otlpEndpoint ?? "not set", action: "otlpEndpoint" },
         { label: "$(key) OTEL auth header", description: st.otlpHeaderSet ? `•••••• set (${cur.otlpHeaderName})` : "not set", action: "otlpHeader" },
         { label: "$(beaker) Send a test event now", action: "test" },
@@ -5833,8 +6809,8 @@ export function activate(context: vscode.ExtensionContext): void {
         const v = await vscode.window.showInputBox({
           ignoreFocusOut: true,
           password: true,
-          title: "Splunk HEC token (write-only — never shown again)",
-          placeHolder: cur.splunkHecToken ? "type to replace; leave blank to keep the current token" : "paste the HEC token",
+          title: "Splunk Attribution Identifier (write-only — never shown again)",
+          placeHolder: cur.splunkHecToken ? "type to replace; leave blank to keep the current identifier" : "paste the Splunk Attribution Identifier",
         });
         if (v === undefined) continue;
         if (v.trim()) await telemetryConfigStore.save({ ...cur, splunkHecToken: v.trim() });
@@ -6706,38 +7682,6 @@ async function promptContextCredential(
     });
     if (!secret) return undefined;
     return { method: "basic", username: username.trim(), secret };
-  }
-  if (type === "vertexai") {
-    const mode = await vscode.window.showQuickPick(
-      [
-        {
-          label: "$(account) Google SSO via the gcloud CLI (recommended)",
-          description: "uses your existing `gcloud auth login` session — tokens are never stored",
-          value: "gcloud-sso" as const,
-        },
-        {
-          label: "$(key) Paste an OAuth access token",
-          description: "expires after ~1 h — for machines without the gcloud CLI",
-          value: "pat" as const,
-        },
-      ],
-      { ignoreFocusOut: true, title: "Vertex AI Search sign-in (Google SSO)" },
-    );
-    if (!mode) return undefined;
-    if (mode.value === "gcloud-sso") {
-      // Marker only — each call asks the CLI for a live SSO token.
-      return { method: "gcloud-sso", secret: "gcloud-cli-session" };
-    }
-    const secret = await vscode.window.showInputBox({
-      ignoreFocusOut: true,
-      title: "Google OAuth access token",
-      password: true,
-      prompt:
-        "From `gcloud auth print-access-token` — or, with NO gcloud/GCP access (Entra/Azure AD SSO users): on your corporate search page press F12 → Network → run a search → click the search request → Request Headers → copy the `Authorization: Bearer …` value WITHOUT the word Bearer. It's your own session's token (~1 h; re-paste via Test Context Source). Stored only in your OS keychain.",
-      validateInput: (v) => (v.trim().replace(/^bearer\s+/i, "") ? undefined : "Paste the token value"),
-    });
-    if (!secret) return undefined;
-    return { method: "pat", secret: secret.trim().replace(/^bearer\s+/i, "") };
   }
   if (type === "mssql" || type === "postgres" || type === "mysql" || type === "mongodb") {
     let dbMethod: ContextCredential["method"] = "basic";

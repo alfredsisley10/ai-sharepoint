@@ -49,6 +49,7 @@ import {
 } from "./queryCost";
 import { loadTrustedCAs } from "../ldap/osTrust";
 import { AppError } from "../../core/errors";
+import { detectProxyInterference, flattenNetworkError } from "../../core/networkDiagnostics";
 import { wireEnabled, emitWire, capDetail, safeJson } from "../../core/wireLog";
 
 /** Wire-log helper shared by the SQL runners: the statement is logged in
@@ -116,11 +117,18 @@ function guardSql(query: string): string {
   return query;
 }
 
-function mapDbError(err: unknown, engine: string): AppError {
+export function mapDbError(err: unknown, engine: string): AppError {
   if (err instanceof AppError) return err;
   const e = err as { code?: string | number; errno?: number; message?: string };
   const msg = e?.message ?? String(err);
   const code = String(e?.code ?? "");
+  // A corporate SSL-inspection appliance re-signing the database TLS handshake
+  // with a CA the workstation doesn't trust is a top "can't connect" cause on
+  // locked-down networks. The shared detector recognizes more interception
+  // variants than a bare "certificate" match and names the appliance when it
+  // can (the proxy itself sits on raw TCP here, so we surface only this TLS
+  // case — the HTTP-oriented block-page/DNS advice wouldn't fit a SQL socket).
+  const proxy = detectProxyInterference({ errorText: flattenNetworkError(err) });
   const authPatterns =
     /ELOGIN|28P01|28000|ER_ACCESS_DENIED|1045|Authentication ?failed|auth failed|SCRAM/i;
   if (authPatterns.test(code) || authPatterns.test(msg) || e?.errno === 1045 || e?.code === 18) {
@@ -139,11 +147,11 @@ function mapDbError(err: unknown, engine: string): AppError {
         : "The database rejected these credentials.",
     );
   }
-  if (/unable to get local issuer|self.signed|certificate/i.test(msg)) {
+  if (proxy?.kind === "tls-inspection" || /unable to get local issuer|self.signed|certificate/i.test(msg)) {
     return new AppError(
       `${engine} TLS certificate validation failed: ${msg}`,
       "config",
-      "Database TLS certificate not trusted — deploy the corporate CA to the OS store, set aiSharePoint.ldap.caCertificatesFile (shared pinned bundle), or for SQL Server with a self-signed certificate append ?trustServerCertificate=true to the connection URL (the SSMS checkbox equivalent).",
+      `Database TLS certificate not trusted${proxy?.vendor ? ` (looks like ${proxy.vendor})` : ""} — deploy the corporate CA to the OS store, set aiSharePoint.ldap.caCertificatesFile (shared pinned bundle), or for SQL Server with a self-signed certificate append ?trustServerCertificate=true to the connection URL (the SSMS checkbox equivalent).`,
     );
   }
   // A query that ran out of time is NOT a connection problem — say so, with

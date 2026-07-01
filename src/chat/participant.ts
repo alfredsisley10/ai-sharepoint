@@ -15,14 +15,18 @@ import { LessonsStore } from "../diagnostics/lessonsStore";
 import { MemoryStore } from "../context/memoryStore";
 import { memoryContextBlock } from "../context/memory";
 import { BlockedTermsStore } from "../diagnostics/blockedTermsStore";
-import { buildProxyNudge, defang, scanForTerms, proxyBlockAdvice } from "../core/proxyShield";
+import { buildProxyNudge, defangDetails, renderDefangReport, scanForTerms, proxyBlockAdvice } from "../core/proxyShield";
+import { recordDefangReport } from "./proxyDefangLog";
 import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
+import { InteractionCache } from "./interactionCache";
+import { maybeAutoCalibrate } from "./modelCalibration";
 import {
   PromptSection,
   budgetSections,
   effectiveInputCap,
   looksLikeOverflow,
 } from "../core/contextBudget";
+import { classifySendFailure, planSendRetry, tightenCap, suggestReword } from "../core/interactionResilience";
 import { redactError } from "../core/redaction";
 import { AppError, adviceFor } from "../core/errors";
 import { Logger } from "../core/log";
@@ -182,6 +186,7 @@ interface ChatDeps {
   memory: MemoryStore;
   proxyTerms: BlockedTermsStore;
   modelLimits: ModelLimitsStore;
+  interactions: InteractionCache;
   log: Logger;
   now: () => string;
 }
@@ -235,16 +240,20 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
     } catch (err) {
       const code = deps.errors.capture("chat", err);
       const safe = redactError(err);
+      const kind = classifySendFailure(safe.message);
+      // Mark the cached turn interrupted so "Restart this request" can recover it.
+      await deps.interactions.finish("interrupted", kind).catch(() => undefined);
       // An error that knows its own remediation (e.g. "your Splunk session
       // expired — re-capture the cookie") beats the generic per-code advice.
       let advice = (err instanceof AppError ? err.userSummary : undefined) ?? adviceFor(code);
       // Effective-context overflow (#3): the prompt exceeded the model's real
-      // usable context. We've just recorded a tighter ceiling, so say so.
+      // usable context (Copilot can cap below the advertised size, varying by org).
       if (looksLikeOverflow(safe.message)) {
-        advice = `This looks like the model's context limit. @sharepoint has recorded a tighter budget for it and will trim more aggressively next time — start a new chat or narrow the request to recover now.`;
+        advice = `This looks like the model's context limit — GitHub Copilot can cap it below the advertised size, and it varies by org. @sharepoint already retried under a tighter budget and recorded a lower ceiling for this model. Start a new chat or narrow the request to recover now, or run “Probe Model Context Limit” to measure the real limit.`;
       }
       // Learn over time (#4): repeated network-level chat failures are most
       // often the corporate proxy blocking message content, not connectivity.
+      let proxySuspected = false;
       if (code === "network") {
         const networkFailures = deps.errors
           .list()
@@ -252,10 +261,32 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
           .reduce((n, r) => n + r.count, 0);
         const pb = proxyBlockAdvice(networkFailures);
         if (pb) advice = advice ? `${advice}\n\n${pb}` : pb;
+        // Name the specific avoid-list words present in this message, if any.
+        const rw = suggestReword({
+          termsInPrompt: scanForTerms(request.prompt, deps.proxyTerms.terms()),
+          mode: deps.proxyTerms.mode(),
+        });
+        if (rw) advice = advice ? `${advice}\n\n${rw}` : rw;
+        proxySuspected = Boolean(pb || rw);
+        // Counter (categorical only): we surfaced a proxy-block hint this turn —
+        // either the repeated-failure heuristic or a named avoid-list word.
+        if (proxySuspected) deps.telemetry.record("chat.proxySuspected", { hint: rw ? "reword" : "heuristic" });
       }
       stream.markdown(
         `⚠️ **Something went wrong:** ${safe.message}${advice ? `\n\n${advice}` : ""}`,
       );
+      // The request + its context are cached locally — offer a one-click restart.
+      stream.button({ command: "aiSharePoint.restartLastInteraction", title: "↻ Restart this request" });
+      // One-click remediation when a content proxy is the likely culprit and
+      // defang isn't already on: flip aiSharePoint.proxy.mode to "defang" so
+      // future messages auto-obfuscate avoid-list words (the model still reads
+      // the original). Hidden once defang is active — it would be a no-op.
+      if (proxySuspected && deps.proxyTerms.mode() !== "defang") {
+        stream.button({
+          command: "aiSharePoint.enableProxyDefang",
+          title: "🛡️ Enable defang (auto-obfuscate blocked words)",
+        });
+      }
       return { errorDetails: { message: safe.message } };
     }
   };
@@ -486,42 +517,63 @@ async function answerWithModel(
         );
 
   const joinSections = (ss: PromptSection[]) => ss.map((s) => s.text).join("\n");
-  let prompt = joinSections(sections);
-  let inputTokens = await countText(prompt);
-  if (inputTokens > cap) {
-    // Over the model's effective budget — count each section and drop the
-    // lowest-priority ones until it fits, then tell the user what was dropped.
-    const counts = new Map<PromptSection, number>();
-    for (const s of sections) counts.set(s, await countText(s.text));
-    const r = budgetSections(sections, (s) => counts.get(s) ?? 0, cap);
-    if (r.dropped.length > 0) {
-      prompt = joinSections(r.kept);
-      inputTokens = await countText(prompt);
-      stream.markdown(
-        `> ℹ️ This turn was large for ${model.name} (~${cap.toLocaleString()} usable tokens). Trimmed ${r.dropped
-          .map((d) => d.label)
-          .join(", ")} to fit — start a new chat or narrow the request to keep everything.\n\n`,
-      );
-    }
-  }
 
-  // Slip the request past a content-blocking proxy: defang every avoid-term in
-  // the OUTGOING prompt (invisible to the model's meaning), or in warn mode just
-  // flag the terms so the user can rephrase. The model-facing text is `outgoing`.
-  let outgoing = prompt;
-  if (proxyMode === "defang" && proxyTerms.length > 0) {
-    const r = defang(prompt, proxyTerms);
-    outgoing = r.text;
-    if (r.hit.length > 0) stream.progress(`🛡️ Adjusted ${r.hit.length} term(s) to avoid proxy filtering`);
-  } else if (proxyMode === "warn" && proxyTerms.length > 0) {
-    const hits = scanForTerms(`${request.prompt}\n${contextBlock ?? ""}`, proxyTerms);
-    if (hits.length > 0) {
-      stream.markdown(
-        `> 🛡️ This message contains ${hits.length} word(s) a network proxy may block: ${hits.join(", ")}. Sending as-is — set \`aiSharePoint.proxy.mode\` to \`defang\` to slip past automatically, or rephrase.\n\n`,
-      );
+  // Build the model-facing message for a given token cap: budget the sections to
+  // fit, then defang avoid-terms. Reusable so the send can RE-BUDGET under a
+  // tighter cap and retry if the prompt overflows the model's real context limit.
+  // `announce` shows the trim note / defang transparency button — true on the
+  // first build, false on a tighter retry so the UI isn't repeated.
+  let activeCap = cap;
+  const rebuildOutgoing = async (capValue: number, announce: boolean): Promise<{ outgoing: string; inputTokens: number }> => {
+    let p = joinSections(sections);
+    let toks = await countText(p);
+    if (toks > capValue) {
+      const counts = new Map<PromptSection, number>();
+      for (const s of sections) counts.set(s, await countText(s.text));
+      const r = budgetSections(sections, (s) => counts.get(s) ?? 0, capValue);
+      if (r.dropped.length > 0) {
+        p = joinSections(r.kept);
+        toks = await countText(p);
+        if (announce) {
+          stream.markdown(
+            `> ℹ️ This turn was large for ${model.name} (~${capValue.toLocaleString()} usable tokens). Trimmed ${r.dropped
+              .map((d) => d.label)
+              .join(", ")} to fit — start a new chat or narrow the request to keep everything.\n\n`,
+          );
+        }
+      }
     }
-  }
-  if (outgoing !== prompt) inputTokens = await countText(outgoing);
+    // Slip the request past a content-blocking proxy: defang every avoid-term in
+    // the OUTGOING prompt (invisible to the model's meaning), or in warn mode just
+    // flag the terms so the user can rephrase.
+    let out = p;
+    if (proxyMode === "defang" && proxyTerms.length > 0) {
+      const r = defangDetails(p, proxyTerms);
+      out = r.text;
+      if (announce && r.changes.length > 0) {
+        const total = r.changes.reduce((n, c) => n + c.count, 0);
+        stream.progress(`🛡️ Adjusted ${total} occurrence(s) of ${r.changes.length} avoid-term(s) so a content proxy won't block this message`);
+        // Transparency: let the user open exactly what was rewritten.
+        const reportId = recordDefangReport(renderDefangReport(r.changes));
+        stream.button({
+          command: "aiSharePoint.showProxyDefangDetails",
+          title: "🛡️ See what was changed",
+          arguments: [reportId],
+        });
+      }
+    } else if (announce && proxyMode === "warn" && proxyTerms.length > 0) {
+      const hits = scanForTerms(`${request.prompt}\n${contextBlock ?? ""}`, proxyTerms);
+      if (hits.length > 0) {
+        stream.markdown(
+          `> 🛡️ This message contains ${hits.length} word(s) a network proxy may block: ${hits.join(", ")}. Sending as-is — set \`aiSharePoint.proxy.mode\` to \`defang\` to slip past automatically, or rephrase.\n\n`,
+        );
+      }
+    }
+    if (out !== p) toks = await countText(out);
+    return { outgoing: out, inputTokens: toks };
+  };
+
+  let { outgoing, inputTokens } = await rebuildOutgoing(activeCap, true);
 
   // This extension's tools (SharePoint + reference sources + bookmarks),
   // declared on the request so the model can call them from @sharepoint —
@@ -535,7 +587,15 @@ async function answerWithModel(
 
   const messages = [vscode.LanguageModelChatMessage.User(outgoing)];
 
+  // Checkpoint the turn locally so an interrupted chat (proxy block / dropped
+  // connection / context overflow) can be intelligently restarted.
+  await deps.interactions
+    .begin({ prompt: request.prompt, contextLabels: sections.map((s) => s.label), modelKey })
+    .catch(() => undefined);
+
   let sawText = false;
+  let overflowRetries = 0;
+  let transientRetries = 0;
   for (let round = 0; ; round++) {
     // Per-round status so the user can follow a multi-step turn (pilot):
     // name the model and the step so long turns read as a narrated plan.
@@ -574,13 +634,41 @@ async function answerWithModel(
       // copilot.entitlement error); anything else falls through to the existing
       // overflow handling and rethrow.
       deps.copilot.raiseIfEntitlementFailure(sendErr);
-      // Effective-context probing (#3): if the send failed because the prompt
-      // overflowed this model's real context, record a tighter ceiling so future
-      // turns budget down automatically. Then rethrow to the outer handler.
-      if (looksLikeOverflow(redactError(sendErr).message)) {
+      const kind = classifySendFailure(redactError(sendErr).message);
+      // Anonymized resilience counter — event TYPE only (overflow / blocked /
+      // transient / other), never the message — so the field rate of each
+      // failure mode is measurable without any content leaving the machine.
+      deps.telemetry.record("chat.sendFailure", { kind });
+      // Effective-context probing (#3): if the send overflowed this model's real
+      // context, record a tighter ceiling so future turns budget down automatically.
+      if (kind === "overflow") {
         await deps.modelLimits
           .recordOverflow(modelKey, model.maxInputTokens, inputTokens)
           .catch(() => undefined);
+      }
+      // DURABILITY: rather than lose the turn, auto-recover on the first round —
+      // re-budget tighter after an overflow, or retry once after a transient drop
+      // that produced no output yet. A content BLOCK isn't retried (re-sending the
+      // same text just re-blocks); the outer handler suggests a reword instead.
+      const plan = planSendRetry({
+        kind,
+        sawText,
+        overflowRetriesUsed: overflowRetries,
+        transientRetriesUsed: transientRetries,
+      });
+      if (plan.retry && round === 0) {
+        if (plan.tightenBudget) {
+          overflowRetries++;
+          activeCap = tightenCap(activeCap, inputTokens);
+          ({ outgoing, inputTokens } = await rebuildOutgoing(activeCap, false));
+          messages[0] = vscode.LanguageModelChatMessage.User(outgoing);
+        } else {
+          transientRetries++;
+        }
+        deps.telemetry.record("chat.autoRetry", { mode: plan.tightenBudget ? "overflow" : "transient" });
+        stream.progress(plan.note);
+        round--; // neutralize the loop's round++ so we re-attempt round 0
+        continue;
       }
       throw sendErr;
     } finally {
@@ -666,6 +754,11 @@ async function answerWithModel(
   if (!sawText) {
     stream.markdown("_(The model returned no text — try rephrasing.)_");
   }
+  // The turn completed — clear the interrupted-restart checkpoint.
+  await deps.interactions.finish("completed").catch(() => undefined);
+  // First-use calibration (opt-in): learn this model's REAL ceiling in the
+  // background now, so a later large turn doesn't discover it the hard way.
+  maybeAutoCalibrate(model, modelKey, deps.modelLimits);
   return { metadata: { modelId: model.id } };
 }
 

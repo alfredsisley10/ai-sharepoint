@@ -8,6 +8,9 @@ import {
   rebrandPackageJson,
   rebrandLicense,
   rebrandReadmeTagline,
+  rebrandChatParticipant,
+  setReleaseManifest,
+  setProvisioningManifest,
   replacePhrase,
   repackageCommand,
   summarizeBrand,
@@ -135,6 +138,50 @@ test("repackageCommand avoids && on PowerShell — Windows 5.1 rejects && as a s
     const cmd = repackageCommand(shell);
     assert.equal(cmd, guarded);
     assert.ok(!cmd.includes("&&"), `must not emit && for PowerShell shell ${shell}`);
+  }
+});
+
+test("repackageCommand { verbose } adds --verbose to the install on each shell family", () => {
+  // POSIX / cmd.exe → && form.
+  assert.equal(repackageCommand("/bin/bash", { verbose: true }), "npm install --verbose && npm run package");
+  // PowerShell → guarded ;-form, still --verbose, never &&.
+  const pwsh = repackageCommand("pwsh", { verbose: true });
+  assert.equal(pwsh, "npm install --verbose; if ($LASTEXITCODE -eq 0) { npm run package }");
+  assert.ok(!pwsh.includes("&&"));
+});
+
+test("rebrandChatParticipant renames the handle keyed off ORIGIN_BRAND.handle (white-label safe), and the fullName", () => {
+  // Fixture uses ORIGIN_BRAND.handle (NOT a hardcoded 'sharepoint') so this stays
+  // correct after a white-label export regenerates ORIGIN_BRAND — the exact case
+  // that broke when the rename searched for a literal "sharepoint".
+  const pkg = `{
+  "contributes": {
+    "chatParticipants": [
+      { "name": ${JSON.stringify(ORIGIN_BRAND.handle)}, "fullName": "SharePoint" }
+    ]
+  }
+}`;
+  const out = rebrandChatParticipant(pkg, "contosodocs", "Contoso Docs");
+  assert.match(out, /"name": "contosodocs"/);
+  assert.match(out, /"fullName": "Contoso Docs"/);
+  assert.doesNotMatch(out, new RegExp(`"name": ${JSON.stringify(ORIGIN_BRAND.handle)}`), "old handle gone");
+  // A participant whose name isn't the origin handle is left alone (scoped rename).
+  const other = rebrandChatParticipant('{ "name": "somethingelse" }', "contosodocs", "Contoso Docs");
+  assert.match(other, /"name": "somethingelse"/);
+});
+
+test("setReleaseManifest / setProvisioningManifest insert on a CRLF package.json (Windows autocrlf)", () => {
+  const lf = '{\n  "name": "x",\n  "version": "1.0.0",\n  "description": "d"\n}\n';
+  const crlf = lf.replace(/\n/g, "\r\n");
+  for (const [label, raw] of [["LF", lf], ["CRLF", crlf]] as const) {
+    const withRel = setReleaseManifest(raw, { channel: "whitelabel", builtAt: "t", productName: "P" });
+    assert.match(withRel, /"release":/, `${label}: release inserted`);
+    const withBoth = setProvisioningManifest(withRel, { id: "b1", settings: { a: 1 } });
+    assert.match(withBoth, /"provisioning":/, `${label}: provisioning inserted`);
+    // The inserted JSON is valid regardless of the surrounding line endings.
+    const parsed = JSON.parse(withBoth);
+    assert.equal(parsed.release.channel, "whitelabel");
+    assert.equal(parsed.provisioning.id, "b1");
   }
 });
 

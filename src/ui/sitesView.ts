@@ -3,6 +3,17 @@ import { SitesStore, SiteConnection } from "../auth/sitesStore";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { ContextSource } from "../context/types";
 import { describeWriteScope } from "../context/adapters/confluenceScope";
+import { MemoryStore } from "../context/memoryStore";
+import { MemoryItem } from "../context/memory";
+import {
+  MemoryGroupNode,
+  isMemoryGroup,
+  isMemoryItem,
+  memoryGroupChildren,
+  memoryGroupTreeItem,
+  memoryItemTreeItem,
+  hasMemory,
+} from "./memoryTree";
 
 /**
  * Render one site connection as a tree item. Shared by the Managed Sites view
@@ -83,10 +94,10 @@ export function managedSourceItem(source: ContextSource): vscode.TreeItem {
   return item;
 }
 
-type ManagedNode = SiteConnection | ContextSource;
+type ManagedNode = SiteConnection | ContextSource | MemoryGroupNode | MemoryItem;
 
 function isSiteConnection(node: ManagedNode): node is SiteConnection {
-  return (node as SiteConnection).siteUrl !== undefined;
+  return (node as SiteConnection).siteUrl !== undefined && (node as SiteConnection).role !== undefined;
 }
 
 /**
@@ -102,9 +113,11 @@ export class SitesTreeProvider implements vscode.TreeDataProvider<ManagedNode> {
   constructor(
     private readonly sites: SitesStore,
     private readonly sources: ContextSourcesStore,
+    private readonly memory: MemoryStore,
   ) {
     sites.onDidChange(() => this.emitter.fire());
     sources.onDidChange(() => this.emitter.fire());
+    memory.onDidChange(() => this.emitter.fire());
   }
 
   refresh(): void {
@@ -112,14 +125,33 @@ export class SitesTreeProvider implements vscode.TreeDataProvider<ManagedNode> {
   }
 
   getTreeItem(node: ManagedNode): vscode.TreeItem {
-    return isSiteConnection(node) ? siteTreeItem(node) : managedSourceItem(node);
+    if (isMemoryGroup(node)) return memoryGroupTreeItem(node, this.memory);
+    if (isMemoryItem(node)) return memoryItemTreeItem(node);
+    if (isSiteConnection(node)) {
+      const item = siteTreeItem(node);
+      // A managed site can carry memory → make it expandable for the group.
+      if (hasMemory(this.memory, { kind: "site", key: node.siteUrl })) {
+        item.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+      }
+      return item;
+    }
+    const item = managedSourceItem(node);
+    if (hasMemory(this.memory, { kind: "source", key: node.id })) {
+      item.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+    }
+    return item;
   }
 
-  getChildren(element?: ManagedNode): ManagedNode[] {
-    if (element) return [];
-    return [
-      ...this.sites.list().filter((c) => c.role === "managed"),
-      ...this.sources.list().filter((s) => s.role === "managed"),
-    ];
+  getChildren(node?: ManagedNode): ManagedNode[] {
+    if (!node) {
+      return [
+        ...this.sites.list().filter((c) => c.role === "managed"),
+        ...this.sources.list().filter((s) => s.role === "managed"),
+      ];
+    }
+    if (isMemoryGroup(node)) return this.memory.listForScope(node.memoryScope);
+    if (isMemoryItem(node)) return [];
+    if (isSiteConnection(node)) return memoryGroupChildren(this.memory, { kind: "site", key: node.siteUrl });
+    return memoryGroupChildren(this.memory, { kind: "source", key: node.id });
   }
 }

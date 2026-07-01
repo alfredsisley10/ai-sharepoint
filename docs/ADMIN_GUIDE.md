@@ -71,7 +71,6 @@ accordingly.
 | Site repository push (optional) | `github.com` and/or your GitHub Enterprise Server host — via the user's own git |
 | Database sources (optional) | Your SQL Server (1433), PostgreSQL (5432), MySQL (3306), MongoDB (27017) hosts — direct TCP, read-only (ADR-0022) |
 | Communications (optional) | `graph.microsoft.com` (same host as site reads) — Teams chats / Outlook mail, send-capable scopes only on first use (ADR-0025). Teams **Incoming Webhook** alternative posts to `*.webhook.office.com` (or the Power Automate `*.logic.azure.com` host of the configured webhook) — no Graph, no consent |
-| Vertex AI Search (optional) | `discoveryengine.googleapis.com` (or regional `*-discoveryengine.googleapis.com`); SSO tokens come from the local gcloud CLI — no Google endpoints are contacted for auth by the extension itself (ADR-0026) |
 | Power BI (optional) | `api.powerbi.com` — read-only Table/executeQueries REST (ADR-0027) |
 | Microsoft 365 Copilot (optional) | `graph.microsoft.com` (same host as site reads) — read-only grounding; reuses the Microsoft 365 sign-in. Two engines, opt-in per source: **Retrieval API** (`POST /copilot/retrieval`, documents/connectors — needs a **Microsoft 365 Copilot licence** + `Files.Read.All`/`Sites.Read.All`, or `ExternalItem.Read.All` for connectors) and **Microsoft Search API** (`POST /search/query` — email `Mail.Read`, calendar `Calendars.Read`, Teams `Chat.Read`, people `People.Read`; **no Copilot licence required**). The delegated consent requested equals exactly the surfaces enabled (ADR-0034/0035) |
 | ServiceNow (optional) | Your instance host (`*.service-now.com` or custom) — read-only Table API (ADR-0028) |
@@ -97,6 +96,19 @@ machine's OS trust store contains the inspection CA, (2) `http.proxy`/system pro
 VS Code (`Developer: Show Logs… → Network`), (3) `login.microsoftonline.com` (or your sovereign
 authority) and `graph.microsoft.com` are allowlisted on the proxy. PAC-file edge cases follow VS
 Code's own behavior — test one machine before fleet rollout.
+
+**Auto-diagnosis (0.102.0+):** the extension recognizes the common filtering failure modes and
+surfaces the fix in the error itself, so end users aren't left with a bare "fetch failed":
+- an **untrusted, re-signed TLS certificate** (the SSL-inspection signature — the code hides in the
+  error's `cause`, which it unwraps) → trust the root CA via `NODE_EXTRA_CA_CERTS`, the OS trust
+  store (`http.systemCertificates`), or `aiSharePoint.ldap.caCertificatesFile`; **never** disable
+  validation;
+- **HTTP 407** → set `http.proxy` credentials / `http.proxyAuthorization`;
+- a **block page** (named when the appliance fingerprint is present — Zscaler, Netskope, Forcepoint,
+  Blue Coat/Symantec, Palo Alto, Fortinet, Cisco Umbrella, Squid, …) → which host to allowlist;
+- **DNS** failure (filter vs. offline/VPN) and an **unreachable proxy** each get a specific hint.
+Detection is conservative (only fires on a real fingerprint), so an ordinary API 403/500 is never
+mislabeled a proxy problem. Turn on `aiSharePoint.logging.verboseWire` to capture the raw exchange.
 
 ## 4. Entra ID options
 
@@ -136,6 +148,14 @@ If your tenant requires admin consent for it, grant consent in Entra admin cente
      registration, no admin consent, no Graph token; the webhook URL is stored in the user's OS
      keychain. Posts go to the channel (not 1:1 chats) and can't @-mention. Outlook drafts
      (`Mail.ReadWrite`, no `Mail.Send`) are the other no-send-consent path.
+   - **Read-only context (opt-in, ADR-0025 extension):** with the same delegated sign-in the
+     assistant can *read* — strictly read-only, scoped to what the user designates, never a write
+     path. Scopes are requested incrementally only when the user enables each: **Outlook
+     workspace** `Mail.Read` + `Calendars.Read`; **OneDrive / shared SharePoint files**
+     `Files.Read.All`; **Teams** `Chat.Read` for a registered **chat** (no admin consent), and for
+     a registered **channel** additionally `Channel.ReadBasic.All` + `ChannelMessage.Read.All` —
+     the latter **may require admin consent** in your tenant (channel reading simply won't be
+     offered if it isn't granted). All are governed by the user's own permissions and tenant DLP.
    - **Power BI** (ADR-0027): *Power BI Service* API → Delegated → `Workspace.Read.All` +
      `Dataset.Read.All` (read-only; the user's Power BI licenses/roles/RLS govern access).
      **No-consent alternative:** users can instead sign in **as the Azure CLI first-party
@@ -212,7 +232,7 @@ user's own git** — the extension holds no Git credentials and never force-push
 - Git itself must be installed (the built-in VS Code Git extension is used). Credential setup
   (HTTPS credential manager, SSH keys) follows your existing developer onboarding.
 
-## 7. Reference sources (Confluence / Jira / LDAP / AD / databases / Vertex / Power BI / ServiceNow) — notes for admins
+## 7. Reference sources (Confluence / Jira / LDAP / AD / databases / Power BI / ServiceNow) — notes for admins
 
 - Strictly **read-only**: the extension ships no write path to these systems; results are
   size-capped and cached briefly on the client.
@@ -239,12 +259,8 @@ user's own git** — the extension holds no Git credentials and never force-push
   `aiSharePoint.context.allowSchemaIndexing: false` (machine-scoped, workspace-immutable in
   untrusted workspaces). Catalogs live in VS Code global storage and are wiped with the source.
 
-### Vertex AI Search (ADR-0026), Power BI (ADR-0027), ServiceNow (ADR-0028)
+### Power BI (ADR-0027), ServiceNow (ADR-0028)
 
-- **Vertex AI Search:** read-only `:search` / `:answer` calls. Default sign-in mode asks the
-  workstation's **gcloud CLI** for a live SSO token per call (nothing stored); the fallback is
-  a pasted OAuth access token in the OS keychain. The extension never holds Google refresh
-  tokens or service-account keys.
 - **Power BI:** reuses the Microsoft 365 sign-in (delegated `Workspace.Read.All` +
   `Dataset.Read.All`); no separate credential exists. Queries are DAX via `executeQueries` —
   a read-only API — and the user's licenses, workspace roles, and row-level security are

@@ -1,5 +1,6 @@
 import { AppError } from "../core/errors";
 import { redactText } from "../core/redaction";
+import { detectProxyInterference, detectProxyFromError, hostOf } from "../core/networkDiagnostics";
 import { ContextCredential } from "./types";
 import {
   cleanCookieString,
@@ -144,6 +145,11 @@ export async function fetchJson<T>(
     emitWire("http", "✗", `${method} ${safeUrl(url)} — ${raw} (${Date.now() - started}ms)`);
     const diag = diagnoseTransportError(method, raw);
     if (diag) throw new AppError(diag.message, "network", diag.summary);
+    // Auto-detect a corporate proxy / TLS-inspection / content filter as the
+    // likely cause (the TLS errno hides in err.cause, not err.message) and give
+    // targeted guidance instead of a bare "fetch failed".
+    const proxy = detectProxyFromError(err, url);
+    if (proxy) throw new AppError(`${proxy.message}\n\n${proxy.summary}`, "network", proxy.summary);
     throw new AppError(`Context request failed: ${raw}`, "network");
   }
   if (!res.ok && wireEnabled()) {
@@ -166,10 +172,17 @@ export async function fetchJson<T>(
       });
       throw new AppError(d.message, "auth.failed", d.summary);
     }
+    // A content filter can answer 401/403 with its OWN block page — diagnose
+    // that as a proxy/filter issue (the real fix), not "bad credentials".
+    const rawBody = await res.text().catch(() => "");
+    const filtered = detectProxyInterference({ status: res.status, bodyText: rawBody, headers: res.headers, host: hostOf(url) });
+    if (filtered && filtered.kind === "blocked") {
+      throw new AppError(`${filtered.message}\n\n${filtered.summary}`, "network", filtered.summary);
+    }
     // Surface the server's OWN reason (redacted, capped) — a 403 on a WRITE is
     // almost never "bad credentials" (reads work with the same token); it's a
     // permission/policy refusal whose body says exactly why.
-    const reason = redactText(await res.text().catch(() => ""))
+    const reason = redactText(rawBody)
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim()
@@ -192,6 +205,10 @@ export async function fetchJson<T>(
         ? `Confluence rejected this write's CSRF/XSRF check. The connector now mirrors the Atlassian Python client: a NON-browser User-Agent, "X-Atlassian-Token: no-check", and a same-origin Referer (a BROWSER User-Agent — which Electron fetch sends — is what triggers Confluence's strict CSRF path). Keep "http.electronFetch" ENABLED — your SSL-inspecting proxy needs Electron's OS trust store; turning it off breaks TLS for reads too. If it STILL fails: (1) turn on "aiSharePoint.logging.verboseWire" and retry to confirm User-Agent / X-Atlassian-Token / Referer actually leave the client; (2) if they do, an SSL-inspecting proxy is rewriting them — ask the proxy team to pass them through, or raw-tunnel the Confluence host for writes; (3) check the Confluence Server Base URL (Admin → General Configuration) matches the URL you connect through.`
         : `Authenticated, but the server refused this operation. For a WRITE this usually means your account lacks create/edit permission in this space, the space or instance is read-only, a personal space hasn't been created yet, or a proxy/WAF blocked the request.${reason ? ` The server said: “${reason}”.` : ""}`,
     );
+  }
+  if (res.status === 407) {
+    const p = detectProxyInterference({ status: 407, host: hostOf(url) })!;
+    throw new AppError(`${p.message}\n\n${p.summary}`, "network", p.summary);
   }
   if (res.status === 404) {
     throw new AppError(`Not found (404) at the source.`, "graph.notFound");
@@ -242,6 +259,10 @@ export async function fetchJson<T>(
       });
       throw new AppError(d.message, d.kind === "auth" ? "auth.failed" : "network", d.summary);
     }
+    // Non-JSON where JSON was expected is the classic shape of a filter's block
+    // page or a captive-portal/login redirect — name the filter when we can.
+    const filtered = detectProxyInterference({ status: res.status, bodyText: text, headers: res.headers, host: hostOf(url) });
+    if (filtered) throw new AppError(`${filtered.message}\n\n${filtered.summary}`, "network", filtered.summary);
     throw new AppError(
       "Source returned non-JSON content (proxy page or HTML login redirect?).",
       "network",

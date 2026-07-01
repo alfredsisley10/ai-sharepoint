@@ -15,6 +15,7 @@ import {
   RawEntry,
 } from "./ldapShape";
 import { AppError, classifyError } from "../../core/errors";
+import { detectProxyInterference, flattenNetworkError } from "../../core/networkDiagnostics";
 import { wireEnabled, emitWire } from "../../core/wireLog";
 import { parseLdapTarget, candidateUrls } from "./srvLocator";
 import { loadTrustedCAs } from "./osTrust";
@@ -96,7 +97,7 @@ function bindDn(credential: ContextCredential): string {
 
 /** Map an ldapts error to our taxonomy; bind rejections must classify as
  *  auth.failed so the lockout tracker counts them (ADR-0009). */
-function toAppError(err: unknown): AppError {
+export function toAppError(err: unknown): AppError {
   const e = err as { code?: number; name?: string; message?: string };
   const msg = e?.message ?? String(err);
   if (e?.code === LDAP_INVALID_CREDENTIALS || /invalid ?credentials/i.test(msg)) {
@@ -106,11 +107,20 @@ function toAppError(err: unknown): AppError {
       "Active Directory rejected these credentials.",
     );
   }
-  if (/unable to get local issuer|self.signed certificate|unable to verify the first certificate|certificate has expired|ERR_TLS_CERT/i.test(msg)) {
+  // An SSL-inspecting appliance re-signing LDAPS with an untrusted CA presents
+  // the same way as an internal-CA cert. The shared detector catches more
+  // interception variants than the local regex and names the appliance when it
+  // recognizes one (LDAP is a raw socket, so only this TLS case applies — the
+  // HTTP block-page/DNS guidance wouldn't fit).
+  const proxy = detectProxyInterference({ errorText: flattenNetworkError(err) });
+  if (
+    proxy?.kind === "tls-inspection" ||
+    /unable to get local issuer|self.signed certificate|unable to verify the first certificate|certificate has expired|ERR_TLS_CERT/i.test(msg)
+  ) {
     return new AppError(
       `LDAPS certificate validation failed: ${msg}. The server presents an internal-CA certificate not in the trusted set.`,
       "config",
-      "LDAPS certificate not trusted — ensure the corporate CA is in the OS trust store, or point aiSharePoint.ldap.caCertificatesFile at your CA bundle (Admin Guide §7).",
+      `LDAPS certificate not trusted${proxy?.vendor ? ` (looks like ${proxy.vendor})` : ""} — ensure the corporate CA is in the OS trust store, or point aiSharePoint.ldap.caCertificatesFile at your CA bundle (Admin Guide §7).`,
     );
   }
   if (/timeout|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|socket/i.test(msg)) {

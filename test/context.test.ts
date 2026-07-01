@@ -21,7 +21,7 @@ import {
   listAllJiraProjects,
 } from "../src/context/adapters/jira";
 import { buildCatalog, isExpired, catalogAge } from "../src/context/catalogCache";
-import { ContextSource, DEFAULT_CAPS } from "../src/context/types";
+import { ContextSource, ContextSourceType, contextCredentialUi, DEFAULT_CAPS } from "../src/context/types";
 
 const T0 = "2026-06-11T12:00:00.000Z";
 const KEY = "ctx:abc";
@@ -386,4 +386,38 @@ test("snow-session credentials authenticate by Cookie header, never Authorizatio
   );
   assert.equal(headers["Cookie"], "JSESSIONID=abc; glide=1");
   assert.equal(headers["Authorization"], undefined);
+});
+
+// --- credential UI routing (the add wizard + reconnect "plug" path) ----------
+
+test("contextCredentialUi routes the Microsoft Entra source types to their own pickers", () => {
+  // The reported bug: reconnecting an imported m365copilot source asked for an
+  // "Atlassian account email" — i.e. it resolved to "generic" (the Atlassian
+  // Cloud default) instead of the Microsoft 365 / Graph sign-in. Lock both
+  // Entra types so neither can fall through to "generic" again.
+  assert.equal(contextCredentialUi("powerbi"), "powerbi-aad");
+  assert.equal(contextCredentialUi("m365copilot"), "m365-graph");
+});
+
+test("contextCredentialUi sends every non-Entra source type to the generic prompt", () => {
+  // Exhaustive over the type union; if a future source type needs a dedicated
+  // (e.g. Entra) picker, it must be moved out of this list AND given a case in
+  // contextCredentialUi — otherwise it silently inherits the Atlassian default.
+  const GENERIC: ContextSourceType[] = [
+    "confluence",
+    "jira",
+    "github",
+    "ldap",
+    "mssql",
+    "postgres",
+    "mysql",
+    "mongodb",
+    "servicenow",
+    "splunk",
+    "splunkobs",
+    "grafana",
+  ];
+  for (const type of GENERIC) {
+    assert.equal(contextCredentialUi(type), "generic", `${type} should use the generic credential prompt`);
+  }
 });

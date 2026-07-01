@@ -12,8 +12,6 @@ import {
   WireEvent,
 } from "../src/core/wireLog";
 import { fetchJson } from "../src/context/http";
-import { searchVertex, buildVertexServingConfig } from "../src/context/adapters/vertexSearch";
-import { ContextSource, DEFAULT_CAPS } from "../src/context/types";
 
 function withSink<T>(run: () => Promise<T> | T): Promise<{ events: WireEvent[]; result: T }> {
   const events: WireEvent[] = [];
@@ -139,29 +137,6 @@ test("http tap: request/response events carry detail but the Basic credential ne
   assert.match(req?.detail ?? "", /Authorization: Basic \*\*\*/);
   assert.match(res?.summary ?? "", /200/);
   assert.match(res?.detail ?? "", /"results"/); // full (capped) body is visible
-});
-
-test("vertex tap: bearer token never appears; query and response detail do", async () => {
-  const src: ContextSource = {
-    id: "v1",
-    type: "vertexai",
-    displayName: "Search",
-    baseUrl: buildVertexServingConfig({ projectId: "p", location: "global", engineId: "e" }),
-    deployment: "cloud",
-    authMethod: "pat",
-    addedAt: "2026-06-11T00:00:00.000Z",
-  };
-  const { events } = await withSink(() =>
-    withFetch(
-      () => ({ body: { results: [{ document: { id: "d1", derivedStructData: { title: "T" } } }] } }),
-      () => searchVertex(src, { method: "pat", secret: "ya29.SECRET" }, "find things", DEFAULT_CAPS),
-    ),
-  );
-  const all = JSON.stringify(events);
-  assert.ok(!all.includes("ya29.SECRET"), "vertex token leaked into wire log");
-  assert.match(all, /Bearer \\\*\\\*\\\*|Bearer \*\*\*/);
-  assert.match(all, /find things/); // the query IS the sent detail
-  assert.match(all, /:search/);
 });
 
 test("emitting while disabled is free: no events recorded outside the sink window", async () => {

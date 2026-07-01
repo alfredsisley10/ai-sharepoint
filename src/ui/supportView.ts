@@ -78,6 +78,14 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
         contextValue: "errorReports",
       },
       {
+        id: "networkCheck",
+        label: "Test Network / Proxy Connectivity",
+        icon: new vscode.ThemeIcon("plug"),
+        tooltip:
+          "Check whether a corporate proxy, SSL-inspection appliance, or web content filter is blocking the Microsoft sign-in and Graph endpoints. Sends two unauthenticated requests and reports any proxy/TLS interference with targeted fixes. No credentials are used.",
+        command: { command: "aiSharePoint.testNetworkConnectivity", title: "Test" },
+      },
+      {
         id: "logs",
         label: "Open Extension Logs",
         icon: new vscode.ThemeIcon("output"),
@@ -91,7 +99,7 @@ export class SupportTreeProvider implements vscode.TreeDataProvider<SupportNode>
           ? new vscode.ThemeIcon("eye", new vscode.ThemeColor("charts.yellow"))
           : new vscode.ThemeIcon("eye-closed"),
         tooltip:
-          "Log the full request/response detail of every integration — Graph (SharePoint/Teams/Outlook), Confluence/Jira, LDAP, databases, Vertex AI Search, Power BI, MSAL sign-in, and Copilot prompts. Secrets are redacted in layers (auth headers masked, token bodies withheld, credential-shaped values scrubbed). Local only; never included in diagnostics exports. Click to toggle.",
+          "Log the full request/response detail of every integration — Graph (SharePoint/Teams/Outlook), Confluence/Jira, LDAP, databases, Power BI, MSAL sign-in, and Copilot prompts. Secrets are redacted in layers (auth headers masked, token bodies withheld, credential-shaped values scrubbed). Local only; never included in diagnostics exports. Click to toggle.",
         command: { command: "aiSharePoint.toggleVerboseLogging", title: "Toggle" },
       },
       {

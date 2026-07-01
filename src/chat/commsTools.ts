@@ -22,7 +22,7 @@ import { redactError } from "../core/redaction";
  */
 export function registerCommsTools(
   outbox: OutboxStore,
-  createOutlookDraft: (to: string[], subject: string, body: string) => Promise<{ webLink?: string; failures: string[] }>,
+  createOutlookDraft: (to: string[], subject: string, body: string, format?: "html" | "text") => Promise<{ webLink?: string; failures: string[] }>,
   telemetry: TelemetryService,
   errors: ErrorReportStore,
   nowIso: () => string,
@@ -34,6 +34,7 @@ export function registerCommsTools(
       to: string;
       subject?: string;
       body: string;
+      format?: "html" | "text";
       reason?: string;
     }>("aisharepoint_draft_communication", {
       prepareInvocation(options) {
@@ -74,7 +75,7 @@ export function registerCommsTools(
           if (!body.trim()) return text("A message body is required.");
 
           if (input.channel !== "teams") {
-            const { webLink, failures } = await createOutlookDraft(to, subject, body);
+            const { webLink, failures } = await createOutlookDraft(to, subject, body, input.format === "html" ? "html" : undefined);
             telemetry.record("comms.saveDraft", { channel: "outlook", via: "agent" });
             const unresolved = failures.length ? ` (couldn't resolve: ${failures.join(", ")})` : "";
             return text(

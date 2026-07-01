@@ -70,7 +70,10 @@ export function adviceFor(code: ErrorCode): string | undefined {
     case "copilot.entitlement":
       return "GitHub answered “not authorized for this Copilot feature” (403). Common causes: the Copilot subscription/seat lapsed, or an organization policy disables the feature (an org admin can check GitHub → Copilot → Policies). Requests are paused briefly so the refusal isn't hammered — run “Check Copilot Status” to retry once it's fixed.";
     case "network":
-      return "Network request failed. Behind a corporate proxy or TLS-inspection appliance, check VS Code's proxy settings (http.proxy) and that login.microsoftonline.com / graph.microsoft.com are allowlisted — see the Admin Guide §3.";
+      // Fallback only — a fingerprinted proxy/TLS-inspection/filter failure
+      // carries its own targeted summary (see core/networkDiagnostics). This
+      // covers the un-fingerprinted case.
+      return "Network request failed. On a corporate network this is usually a proxy or TLS-inspection appliance: check VS Code's \"http.proxy\", trust the proxy's root CA (e.g. NODE_EXTRA_CA_CERTS / \"http.systemCertificates\"), and confirm login.microsoftonline.com / graph.microsoft.com are allowlisted — see Admin Guide §3.";
     default:
       return undefined;
   }

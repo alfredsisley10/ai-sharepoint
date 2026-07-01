@@ -155,7 +155,7 @@ module.exports = {
 if (require.main === module) {
   const root = path.join(__dirname, "..");
   const timeoutMs = Number(process.env.REBRAND_PREFLIGHT_TIMEOUT_MS) || 60_000;
-  console.log("Pre-scanning the configured npm registry for build dependencies…");
+  console.log("Pre-scanning the configured npm registry for build dependencies...");
   const report = preflight(root, { timeoutMs });
   let missing = 0;
   let unreachable = 0;
@@ -164,10 +164,10 @@ if (require.main === module) {
       console.log(`  ok        ${r.name}@${r.range} -> ${r.pick}${r.adapted ? `  (adapted; latest ${r.latest} not available)` : ""}`);
     } else if (r.status === "missing") {
       missing++;
-      console.error(`  MISSING   ${r.name}@${r.range} — no version in range (latest available: ${r.latest || "none"})`);
+      console.error(`  MISSING   ${r.name}@${r.range} - no version in range (latest available: ${r.latest || "none"})`);
     } else {
       unreachable++;
-      console.error(`  unreachable ${r.name} — ${r.detail || "registry query failed"}`);
+      console.error(`  unreachable ${r.name} - ${r.detail || "registry query failed"}`);
     }
   }
   if (missing > 0) {

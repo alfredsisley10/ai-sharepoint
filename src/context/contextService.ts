@@ -31,7 +31,6 @@ import { ContextBookmark } from "./types";
 import { verifyDb, searchDb, searchDbRaw, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, DbTlsOptions } from "./db/dbAdapters";
 import { JoinProbeEnd, JoinProbeCounts, RowEstimates } from "./db/erDiagram";
 import { planProbeBudget } from "./db/queryBudget";
-import { verifyVertex, searchVertex, answerVertex, VertexAnswer } from "./adapters/vertexSearch";
 import {
   verifyPowerBi,
   searchPowerBi,
@@ -403,8 +402,6 @@ export class ContextService {
           return verifyJira(source, credential, caps);
         case "github":
           return this.githubCredential(source, credential, fresh).then((c) => verifyGithub(source, c, caps));
-        case "vertexai":
-          return verifyVertex(source, credential, caps);
         case "powerbi":
           return verifyPowerBi(
             this.powerBiTokens(credential),
@@ -489,8 +486,6 @@ export class ContextService {
         return this.githubCredential(source, credential, false).then((c) =>
           searchGithub(source, c, query, caps),
         );
-      case "vertexai":
-        return searchVertex(source, credential, query, caps);
       case "powerbi":
         return searchPowerBi(source, this.powerBiTokens(credential), query, caps);
       case "m365copilot":
@@ -546,12 +541,6 @@ export class ContextService {
           if (ContextService.DB_TYPES.has(source.type)) {
             throw new AppError(
               "Database sources have no item fetch — use search with a read-only SELECT statement (or a MongoDB JSON spec).",
-              "config",
-            );
-          }
-          if (source.type === "vertexai") {
-            throw new AppError(
-              "Vertex AI Search has no item fetch — use search, or the vertex_answer tool for a grounded answer.",
               "config",
             );
           }
@@ -653,6 +642,29 @@ export class ContextService {
         { spaceKey: op.spaceKey, title: op.title, body: op.body, parentId: op.parentId },
         caps.timeoutMs,
       );
+    });
+  }
+
+  /** Resolve which space a page lives in (a global READ, never gated by the
+   *  write scope). The write gate uses this to show the destination space for
+   *  an INSTANCE-scoped connector before it mutates a page — the synchronous
+   *  approval card can't do the lookup. Lockout-gated; never cached so it always
+   *  reflects the live page. */
+  async resolveConfluencePageSpace(
+    source: ContextSource,
+    pageId: string,
+  ): Promise<{ spaceKey?: string; title?: string }> {
+    if (source.type !== "confluence") {
+      throw new AppError("Page-space resolution targets a Confluence source.", "config");
+    }
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, async () => {
+      const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
+      return {
+        ...(meta.spaceKey ? { spaceKey: meta.spaceKey } : {}),
+        ...(meta.title ? { title: meta.title } : {}),
+      };
     });
   }
 
@@ -966,23 +978,6 @@ export class ContextService {
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
       validateConfluencePageRendered(source, credential, pageId, caps),
-    );
-  }
-
-  /** Gemini-grounded answer from a Vertex AI Search app (the "analysis"
-   *  surface — ADR-0026). Cached and lockout-gated like search. */
-  async vertexAnswer(source: ContextSource, query: string): Promise<VertexAnswer> {
-    if (source.type !== "vertexai") {
-      throw new AppError("Grounded answers require a Vertex AI Search source.", "config");
-    }
-    const caps = this.caps();
-    return this.cache.getOrLoad(
-      TtlCache.key(source.id, "answer", query),
-      this.ttlMs(),
-      async () => {
-        const credential = await this.storedCredential(source);
-        return this.tracked(source, false, () => answerVertex(source, credential, query, caps));
-      },
     );
   }
 

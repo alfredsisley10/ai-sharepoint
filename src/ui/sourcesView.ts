@@ -8,17 +8,37 @@ import { ContextSource, ContextBookmark } from "../context/types";
 import { isSrvLocator } from "../context/ldap/srvLocator";
 import { SitesStore, SiteConnection } from "../auth/sitesStore";
 import { siteTreeItem } from "./sitesView";
+import { MemoryStore } from "../context/memoryStore";
+import { MemoryItem } from "../context/memory";
+import { FileSourcesStore } from "../context/files/fileSourcesStore";
+import { FileSource } from "../context/files/fileSources";
+import { describeKind } from "../context/files/fileContent";
+import {
+  MemoryGroupNode,
+  isMemoryGroup,
+  isMemoryItem,
+  memoryGroupChildren,
+  memoryGroupTreeItem,
+  memoryItemTreeItem,
+  hasMemory,
+} from "./memoryTree";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
-type Node = ContextSource | ContextBookmark | SiteConnection;
+type Node = ContextSource | ContextBookmark | SiteConnection | MemoryGroupNode | MemoryItem | FileSource;
 
 function isBookmark(node: Node): node is ContextBookmark {
-  return (node as ContextBookmark).locator !== undefined;
+  return (node as ContextBookmark).locator !== undefined && (node as MemoryItem).origin === undefined;
 }
 
 function isSiteConnection(node: Node): node is SiteConnection {
   return (node as SiteConnection).siteUrl !== undefined && (node as SiteConnection).role !== undefined;
+}
+
+/** A registered file context source (local or OneDrive/SharePoint). Unique among
+ *  node types by its `location` field. */
+function isFileSource(node: Node): node is FileSource {
+  return (node as FileSource).location !== undefined && (node as FileSource).kind !== undefined;
 }
 
 /**
@@ -36,6 +56,8 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     private readonly bookmarks: BookmarksStore,
     private readonly schemas: SchemaStore,
     private readonly catalogs: CatalogStore,
+    private readonly memory: MemoryStore,
+    private readonly files: FileSourcesStore,
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly scope: (all: ContextSource[]) => ContextSource[] = (all) => all,
   ) {
@@ -44,6 +66,8 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     bookmarks.onDidChange(() => this.emitter.fire());
     schemas.onDidChange(() => this.emitter.fire());
     catalogs.onDidChange(() => this.emitter.fire());
+    memory.onDidChange(() => this.emitter.fire());
+    files.onDidChange(() => this.emitter.fire());
   }
 
   refresh(): void {
@@ -51,7 +75,17 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
-    if (isSiteConnection(node)) return siteTreeItem(node);
+    if (isMemoryGroup(node)) return memoryGroupTreeItem(node, this.memory);
+    if (isMemoryItem(node)) return memoryItemTreeItem(node);
+    if (isFileSource(node)) return this.fileItem(node);
+    if (isSiteConnection(node)) {
+      const item = siteTreeItem(node);
+      // A reference site can carry memory → make it expandable for the group.
+      if (hasMemory(this.memory, { kind: "site", key: node.siteUrl })) {
+        item.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+      }
+      return item;
+    }
     return isBookmark(node) ? this.bookmarkItem(node) : this.sourceItem(node);
   }
 
@@ -61,17 +95,52 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
       // Managed context sources (e.g. a managed Confluence space) live under
       // Managed Sites; Reference Sources keeps the read-only ones.
       const referenceSources = this.scope(this.sources.list().filter((s) => s.role !== "managed"));
-      return [...referenceSites, ...referenceSources];
+      // Registered files (local + OneDrive/SharePoint) are read-only context too,
+      // so they belong in this list — otherwise the user can't see what's added.
+      return [...referenceSites, ...referenceSources, ...this.files.list()];
     }
-    if (isBookmark(node) || isSiteConnection(node)) return [];
-    return this.bookmarks.listForSource(node.id);
+    if (isMemoryGroup(node)) return this.memory.listForScope(node.memoryScope);
+    if (isMemoryItem(node) || isBookmark(node) || isFileSource(node)) return [];
+    if (isSiteConnection(node)) return memoryGroupChildren(this.memory, { kind: "site", key: node.siteUrl });
+    return [
+      ...this.bookmarks.listForSource(node.id),
+      ...memoryGroupChildren(this.memory, { kind: "source", key: node.id }),
+    ];
+  }
+
+  private fileItem(source: FileSource): vscode.TreeItem {
+    const item = new vscode.TreeItem(source.label, vscode.TreeItemCollapsibleState.None);
+    item.id = `file:${source.id}`;
+    const where = source.location.kind === "local" ? "local file" : "OneDrive/SharePoint";
+    item.description = `${describeKind(source.kind)} · ${where}`;
+    const tabular = source.kind === "csv" || source.kind === "tsv" || source.kind === "xlsx" || source.kind === "xls";
+    item.iconPath = new vscode.ThemeIcon(tabular ? "table" : "file");
+    item.contextValue = "context-file";
+    const loc = source.location.kind === "local" ? source.location.path : (source.location.webUrl ?? "OneDrive/SharePoint item");
+    const cell = (s: string) => s.replace(/\|/g, "\\|");
+    item.tooltip = new vscode.MarkdownString(
+      [
+        `**${cell(source.label)}** _(read-only file context)_`,
+        "",
+        `| | |`,
+        `|---|---|`,
+        `| Kind | ${describeKind(source.kind)} |`,
+        `| Location | ${cell(loc)} |`,
+        `| Added | ${source.addedAt} |`,
+        "",
+        `_Click to read · @sharepoint reads it with \`#spReadFile\`._`,
+      ].join("\n"),
+    );
+    item.command = { command: "aiSharePoint.readFileSource", title: "Read", arguments: [source] };
+    return item;
   }
 
   private sourceItem(source: ContextSource): vscode.TreeItem {
     const bookmarkCount = this.bookmarks.listForSource(source.id).length;
+    const expandable = bookmarkCount > 0 || hasMemory(this.memory, { kind: "source", key: source.id });
     const item = new vscode.TreeItem(
       source.displayName,
-      bookmarkCount > 0
+      expandable
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None,
     );
@@ -82,7 +151,6 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
       jira: "issues",
       github: "github",
       ldap: "organization",
-      vertexai: "search",
       powerbi: "graph",
       servicenow: "tools",
       splunk: "pulse",
@@ -127,7 +195,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
           ? [`| Resolution | DNS SRV on every connection (durable — survives DC changes) |`]
           : []),
         ...(source.baseDn ? [`| Base DN | ${source.baseDn} |`] : []),
-        `| Auth | ${source.authMethod === "pat" ? (source.type === "vertexai" ? "OAuth access token" : source.type === "grafana" ? "Service account token" : "Personal access token") : source.authMethod === "github-oauth" ? "GitHub sign-in (OAuth)" : source.authMethod === "github-app" ? "GitHub App installation token" : source.authMethod === "sfx-token" ? "Access token (X-SF-TOKEN)" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : source.authMethod === "ntlm" ? "Windows Authentication (NTLM)" : source.authMethod === "gcloud-sso" ? "Google SSO (live token from the gcloud CLI — never stored)" : source.authMethod === "aad-sso" ? "Microsoft 365 SSO (shared with your site sign-in)" : "Basic (username + token/password)"} |`,
+        `| Auth | ${source.authMethod === "pat" ? (source.type === "grafana" ? "Service account token" : "Personal access token") : source.authMethod === "github-oauth" ? "GitHub sign-in (OAuth)" : source.authMethod === "github-app" ? "GitHub App installation token" : source.authMethod === "sfx-token" ? "Access token (X-SF-TOKEN)" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : source.authMethod === "ntlm" ? "Windows Authentication (NTLM)" : source.authMethod === "aad-sso" ? "Microsoft 365 SSO (shared with your site sign-in)" : "Basic (username + token/password)"} |`,
         `| Account | ${source.account ?? "_not verified_"} |`,
         `| Verified | ${source.lastVerifiedAt ?? "_never_"} |`,
         ...(bookmarkCount > 0 ? [`| Bookmarks | ${bookmarkCount} |`] : []),

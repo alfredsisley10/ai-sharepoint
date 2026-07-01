@@ -17,7 +17,7 @@ import { wireEnabled, emitWire, safeJson, safeUrl } from "../../core/wireLog";
  *    authorized for the Power BI service, so NO per-app admin approval is
  *    involved — the recommended path when the tenant gates the shared
  *    sign-in app ("Graph Command Line Tools needs admin approval", pilot).
- *    Nothing is stored; every call asks the CLI (gcloud-SSO precedent).
+ *    Nothing is stored; every call asks the CLI for a live token.
  *  - "aad-sso": the SAME Microsoft 365 sign-in used for SharePoint — an AAD
  *    token for the Power BI audience through the existing MSAL provider.
  *  - "pat": a pasted access token (~1 h lifetime).
@@ -51,9 +51,9 @@ export const POWERBI_SCOPES = [
 export type PowerBiTokenGetter = (interactive: boolean) => Promise<string>;
 
 /** How to invoke the Azure CLI. On Windows az is `az.cmd` — Node's
- *  batch-file hardening (CVE-2024-27980) requires shell:true for .cmd shims
- *  (same fix as gcloud in vertexSearch). Only fixed, hard-coded argument
- *  lists are ever passed, so the shell never sees untrusted input. */
+ *  batch-file hardening (CVE-2024-27980) requires shell:true for .cmd shims.
+ *  Only fixed, hard-coded argument lists are ever passed, so the shell never
+ *  sees untrusted input. */
 export function azInvocation(platform: NodeJS.Platform): { bin: string; shell: boolean } {
   return platform === "win32" ? { bin: "az.cmd", shell: true } : { bin: "az", shell: false };
 }

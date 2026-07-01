@@ -12,6 +12,7 @@ import {
 } from "../src/branding/releaseProfile";
 import { setProvisioningManifest } from "../src/branding/rebrand";
 import { applyProvisioning, ProvisioningEffects } from "../src/branding/provisioning";
+import { obfuscateSecret, deobfuscateSecret } from "../src/diagnostics/secretObfuscation";
 
 const PROFILE: ReleaseProfile = {
   version: 1,
@@ -51,11 +52,31 @@ test("stripProfileSecrets drops obfuscated tokens but keeps endpoints/flags", ()
 });
 
 test("buildProvisioningManifest carries telemetry when configured", () => {
-  const m = buildProvisioningManifest({ telemetry: { enabled: true, splunkHecUrl: "https://h", splunkHecTokenObfuscated: "v1.x" } }, "b1");
+  const m = buildProvisioningManifest({ telemetry: { enabled: true, splunkHecUrl: "https://h", splunkHecTokenObfuscated: "v1.aaa.bbb.ccc.ddd" } }, "b1");
   assert.equal(m.telemetry?.splunkHecUrl, "https://h");
-  assert.equal(m.telemetry?.splunkHecTokenObfuscated, "v1.x");
+  assert.equal(m.telemetry?.splunkHecTokenObfuscated, "v1.aaa.bbb.ccc.ddd");
   // empty telemetry omitted
   assert.ok(!("telemetry" in buildProvisioningManifest({ telemetry: {} }, "b2")));
+});
+
+test("buildProvisioningManifest REFUSES to bake a plaintext Splunk Attribution Identifier", () => {
+  // A non-obfuscated value in the obfuscated field is rejected (defense in depth).
+  assert.throws(
+    () => buildProvisioningManifest({ telemetry: { enabled: true, splunkHecUrl: "https://h", splunkHecTokenObfuscated: "plaintext-token" } }, "b"),
+    /not obfuscated/,
+  );
+  // A stray plaintext secret field name is rejected even alongside an endpoint.
+  assert.throws(
+    () => buildProvisioningManifest({ telemetry: { enabled: true, splunkHecUrl: "https://h", splunkHecToken: "plaintext" } as never }, "b"),
+    /plaintext secret field/,
+  );
+  // A real obfuscated blob is accepted; round-trips through obfuscate/deobfuscate.
+  const blob = obfuscateSecret("real-hec-token");
+  const m = buildProvisioningManifest({ telemetry: { enabled: true, splunkHecUrl: "https://h", splunkHecTokenObfuscated: blob } }, "ok");
+  assert.equal(m.telemetry?.splunkHecTokenObfuscated, blob);
+  assert.equal(deobfuscateSecret(blob), "real-hec-token");
+  // The plaintext never appears in the baked manifest JSON.
+  assert.equal(JSON.stringify(m).includes("real-hec-token"), false);
 });
 
 test("buildProvisioningManifest stamps id and omits empty sections", () => {

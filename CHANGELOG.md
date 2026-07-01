@@ -1,5 +1,427 @@
 # Changelog
 
+## 0.109.0 — 2026-06-30
+
+### Added — exact-space confirmation for instance-scoped Confluence writes + one-click defang
+- **Instance-scoped Confluence connectors now name the destination space before a page write.** A
+  connector bound to a single space already showed (and enforced) that space on the approval card. A
+  connector scoped to the **entire instance** couldn't — the approval card is synchronous and can't
+  look up where a page lives — so a page-targeted change (update, archive, move, remove-from-search,
+  add/remove label) now performs a quick read to resolve the page's **actual space** and shows a
+  **second confirmation naming it** before mutating. Declining cancels the write. A failed lookup
+  doesn't block — the write proceeds and surfaces the server's own error. Space/page-bound connectors
+  are unchanged (no extra prompt).
+- **One-click “Enable defang” when a content proxy is suspected.** When an @sharepoint turn fails at
+  the network layer and a corporate content proxy looks like the cause (repeated network failures, or
+  an avoid-list word present in your message), the failed turn now shows a **🛡️ Enable defang** button
+  that flips `aiSharePoint.proxy.mode` to `defang` in one click — future messages auto-obfuscate
+  avoid-list words (an invisible zero-width character the proxy can't match; the AI still reads the
+  original). The button is hidden once defang is already on. Also available as a command,
+  **Enable Proxy Defang**.
+
+## 0.108.0 — 2026-06-30
+
+### Added — anonymized resilience counters (opt-in telemetry)
+- The durability features added in recent releases now emit **categorical-only** usage counters so the
+  field rate of each failure mode is measurable without any content leaving the machine:
+  `chat.sendFailure` (`kind` = overflow / blocked / transient / other), `chat.autoRetry`
+  (`mode` = overflow / transient), `chat.proxySuspected` (`hint` = reword / heuristic),
+  `context.probe` (`outcome` = completed / cancelled), and `network.check`
+  (`result` = clean / blocked, plus the worst diagnosis `kind` when blocked).
+- These follow the existing privacy model exactly: stored locally, gated by `diagnostics.usageCapture`,
+  and forwarded off-machine **only** if you opt into external telemetry — where the anonymizer drops any
+  non-categorical value (no prompts, hosts, or error messages can be sent). A guard test asserts every
+  emitted token survives anonymization, so a future rename can't silently create a reporting blind spot.
+
+## 0.107.0 — 2026-06-30
+
+### Added — proxy / TLS-inspection detection now covers sign-in, databases, and LDAP, plus a connectivity test
+- **A new “Test Network / Proxy Connectivity” command** (Support & Diagnostics view, or the Command
+  Palette) proactively checks whether a corporate proxy, SSL-inspection appliance, or web content
+  filter is in the path. It sends two **unauthenticated** requests — to the Microsoft sign-in authority
+  and to Microsoft Graph — and reports, per endpoint, whether it's reachable or blocked, naming the
+  appliance and giving the exact fix (trust the root CA, set `http.proxy`, allowlist the host). Any HTTP
+  reply (even a 401 from Graph) counts as reachable; a re-signed TLS cert, a 407, a block page, or a DNS
+  failure is flagged with targeted guidance. No credentials are used.
+- **Microsoft sign-in failures are now diagnosed the same way.** Both the system-browser and device-code
+  flows previously surfaced MSAL's opaque “fetch failed”. They now detect a proxy / TLS-inspection /
+  content-filter cause behind the sign-in call (the real TLS errno hides in the error's `cause`) and
+  show the same actionable remediation instead.
+- **Database and LDAP TLS handshakes recognize an SSL-inspecting appliance.** When a re-signed,
+  untrusted certificate breaks a database (SQL Server / PostgreSQL / MySQL / MongoDB) or LDAPS
+  connection, the error now names the appliance when recognized (Zscaler, Netskope, Palo Alto, etc.)
+  while keeping the database/LDAP-specific certificate-trust remedy (OS trust store, the shared
+  `aiSharePoint.ldap.caCertificatesFile` bundle, or `?trustServerCertificate=true` for SQL Server).
+
+## 0.106.0 — 2026-06-30
+
+### Hardened — file parsing, request restart, and the test gate
+- **Legacy/unsupported files now get tailored guidance instead of a generic rejection.** Trying to add
+  a `.doc`, `.ppt`/`.pptx`, `.rtf`, `.key`, `.pages`, or `.numbers` file now names the format and says
+  exactly what to do (e.g. “open it in Word and *Save As* .docx, then re-add”), rather than failing as a
+  binary file with no next step.
+- **The `.xls` reader fails cleanly.** Corrupt or unsupported legacy workbooks now surface a clear
+  “open it in Excel and *Save As* .xlsx” message instead of leaking a low-level parser error; already
+  actionable messages (no Workbook stream, not a valid .xls) are preserved as-is.
+- **“Restart last request” is more robust across VS Code versions.** The command now tries multiple
+  `workbench.action.chat.open` argument shapes and falls back to copying the request to the clipboard
+  with instructions, so reopening Copilot Chat prefilled works on more builds.
+- **The test gate no longer reports false greens from stale artifacts.** `npm test`/`npm run coverage`
+  now wipe `out-test/` before recompiling, so a deleted test can never keep running from an orphaned
+  compiled `.test.js`.
+
+## 0.105.0 — 2026-06-30
+
+### Added — optional first-use context-limit calibration
+- New opt-in setting **`aiSharePoint.context.autoProbeOnFirstUse`** (default off). When enabled, the
+  first time each model is used in chat, @sharepoint sends **one** short calibration request near the
+  model's advertised limit — in the background, after your turn — to learn the **real** context
+  ceiling your organization grants (Copilot can cap it lower than advertised) before a genuinely large
+  turn relies on it. Off by default because it uses a little Copilot allowance; the full
+  *Probe Model Context Limit* command remains the on-demand option. Either way, prompts are budgeted
+  to the learned ceiling. Single-shot, fire-and-forget (never delays your turn), deduped per model.
+
+## 0.104.0 — 2026-06-30
+
+### Added — durable, restartable AI interactions (context limits + proxy resilience)
+- **The model's real context limit is now actively measurable.** GitHub Copilot can deliver less
+  than a model's advertised `maxInputTokens`, and the cap varies by organization. A new command,
+  **“Probe Model Context Limit”**, binary-searches the accept/reject boundary with filler prompts and
+  records the true ceiling; **“Show Learned Model Context Limits”** displays advertised vs. learned
+  vs. known-good. (Prompts were already budgeted to the learned ceiling and trimmed lowest-value
+  sections first — that continues, now informed by the probe.)
+- **Turns survive failures instead of being lost.** When a send hits the context limit, @sharepoint
+  now **auto-retries under a tighter budget** (instead of just failing); when the connection drops
+  before any reply, it **retries once**. The learned ceiling is recorded either way, so future turns
+  budget down automatically.
+- **Intelligent restart.** Each turn is checkpointed to a small **local cache** (the request + which
+  context sections it carried; workspace-scoped, never exported). If a turn is interrupted, a
+  **“↻ Restart this request”** button reopens the chat prefilled with it.
+- **Reword suggestions when a content proxy is suspected.** On a network failure, if your message
+  contains avoid-list words, @sharepoint now names them and suggests rephrasing — or enabling defang.
+
+## 0.103.0 — 2026-06-30
+
+### Added — proxy defang is now transparent: click to see what was changed
+- When `aiSharePoint.proxy.mode` is **defang**, the extension rewrites outgoing chat messages to slip
+  past content-blocking corporate proxies (it inserts an invisible zero-width character inside each
+  avoid-list word so the proxy can't match it, while the AI model still reads the original text).
+  Previously you only saw a count; now a **🛡️ See what was changed** button appears under the
+  message and opens a read-only report listing **each term, how many times it occurred, and the first
+  occurrence in context** — so the rewriting is fully auditable. Nothing is removed and no meaning is
+  changed. The report is session-scoped (it can quote your prompt, so it isn't persisted).
+
+## 0.102.0 — 2026-06-30
+
+### Added — connection failures now auto-diagnose corporate proxy / TLS-inspection / content filters
+- When a network request fails, the extension now recognizes the tell-tale signs of a corporate
+  **proxy, TLS-inspection appliance, or web content filter** and responds with targeted, actionable
+  guidance instead of a bare "fetch failed":
+  - **TLS interception** (an untrusted, re-signed certificate — the #1 cause). The TLS error code
+    hides in the error's `cause`, which generic handling misses; we now unwrap it and explain how to
+    **trust the proxy's root CA** (`NODE_EXTRA_CA_CERTS` / OS trust store / `aiSharePoint.ldap.caCertificatesFile`)
+    — never by disabling certificate validation.
+  - **Proxy authentication required (HTTP 407)** → how to set `http.proxy` credentials / `http.proxyAuthorization`.
+  - **Content-filter block pages** → names the appliance when its fingerprint is present (Zscaler,
+    Netskope, Forcepoint, Blue Coat/Symantec, Palo Alto, Fortinet, Cisco Umbrella, Squid, and more)
+    and tells you which host to ask IT to allowlist.
+  - **DNS failures** (filter vs. offline/VPN) and an **unreachable proxy** each get their own hint.
+- Detection is conservative — it only fires on a real fingerprint (a 407, an untrusted cert, a named
+  appliance, a block page, a proxy-unreachable error, a DNS failure), so an ordinary API 403/500 is
+  never misread as a proxy problem. Wired into the shared HTTP layer and the Microsoft Graph client,
+  so it covers sign-in, SharePoint/Teams/Outlook, and every reference connector.
+
+## 0.101.0 — 2026-06-30
+
+### Changed — Confluence writes now confirm the space and instance URL before changing anything
+- Every Confluence **mutating** action — create/update a page, archive, move/re-parent, remove
+  from search, and add/remove labels — now shows the target **Confluence instance URL** and the
+  connector's **write scope** (the **space key** when the connector is space-bound, the page when
+  page-bound, or an explicit "ENTIRE instance" warning otherwise) in its approval prompt, on top
+  of the specific action. You verify *where* the change lands — which space and which site — before
+  approving. Reads are unaffected; only writes are gated.
+
+## 0.100.0 — 2026-06-30
+
+### Added — file reference sources: more formats, all sheets, and they're now visible
+- **Registered files now appear in the Reference Sources tree.** Previously a file added for
+  context was invisible — there was no way to see what was available. Each file is now a tree item
+  (with its kind and location) alongside connectors and sites; click to open a read-only preview,
+  with inline **Read** / **Remove** actions (Remove only unregisters it — the file is untouched).
+- **More file types.** Beyond Excel `.xlsx` and CSV/TSV, you can now add **legacy Excel `.xls`**,
+  **Word `.docx`**, **PDF**, and **plain text** (`.txt`, `.md`, `.log`, `.json`, `.xml`, and other
+  text-based files). The local picker gained an *All files* filter; binary files that can't be read
+  as text are rejected with a clear message. OneDrive/SharePoint shared files support the same set.
+- **All worksheets, not just the first.** `.xlsx` and `.xls` workbooks now read **every sheet**,
+  each rendered under its sheet name (previously only the first worksheet was read).
+- All parsers are **dependency-free** (no new bundled libraries): `.xlsx`/`.docx` use the existing
+  pure-JS zip support; `.xls` is read via a built-in OLE2/BIFF8 reader; PDF text is extracted from
+  content streams. `.xls` and PDF extraction are **best-effort** for common files — a scanned/
+  image-only PDF has no text and says so, and a legacy file that won't parse suggests saving as
+  `.xlsx`/`.docx`. The menu entry is retitled accordingly ("Add Local File for Context…").
+
+## 0.99.0 — 2026-06-30
+
+### Removed — Google Vertex AI Search connector
+- The **Vertex AI Search** reference-source connector has been **removed**. In practice it could
+  not be made to work for normal end users: the Google sign-in/setup paths (gcloud SSO, pasted
+  OAuth token, project/engine discovery) were too fragile — particularly under Entra / Azure AD
+  federation, where accounts often hold no Google Cloud project role at all.
+- Gone: the **Vertex AI Search** option in *Add Context Source*, the `vertex_answer`
+  (`#spVertexAnswer`) grounded-answer tool, and all Vertex search/verify routing. The
+  now-orphaned **Google SSO (gcloud)** credential method was removed with it; no other connector
+  used it. Existing connectors (Confluence, Jira, GitHub, LDAP/AD, databases, Power BI,
+  Microsoft 365 Copilot, ServiceNow, Splunk, Splunk Observability, Grafana) are unaffected.
+- Any previously-saved Vertex source no longer loads and can be deleted from Reference Sources.
+  See ADR-0026 (now marked *Reverted*) for the rationale.
+
+## 0.98.0 — 2026-06-30
+
+### Fixed — Microsoft 365 Copilot reconnect asked for an "Atlassian account email"
+- Reconnecting an **imported Microsoft 365 Copilot** source (the **plug** icon → *Test Context
+  Source*) prompted for an **"Atlassian account email"** instead of reusing your **Microsoft Entra /
+  Microsoft 365** sign-in. The add wizard special-cased the connector but the reconnect path didn't,
+  so it fell through to the generic prompt's Atlassian Cloud default. Both paths now route through a
+  single credential router, and Copilot connects/reconnects with the same Microsoft 365 (shared with
+  SharePoint) or pasted-Graph-token sign-in everywhere — the divergence that caused the cross-wiring
+  can't recur. (Power BI, the other Entra source, is routed the same way.)
+
+### Fixed — white-label build: chat-participant rename and CRLF package.json
+- The white-label export no longer leaves the rebranded build's **chat participant** named after the
+  origin handle: the rename now keys off the regenerated single-source-of-truth identity rather than a
+  literal, so a re-branded engine renames its participant correctly (this is the `rebrandVsix` test a
+  maintainer saw fail on a Windows white-label build).
+- The `release` (time-limited build control) and `provisioning` (first-run seed) manifests are now
+  inserted correctly into a **CRLF `package.json`** — e.g. a Windows `autocrlf` checkout or a
+  Windows-built VSIX. The insert anchors previously matched only `\n` and silently dropped both blocks
+  on CRLF; they now accept `\r?\n`. Added regression tests for both.
+
+## 0.97.0 — 2026-06-30
+
+### Added — read-only, scoped Teams messages
+- @sharepoint can now **read Teams messages** with the same Microsoft 365 sign-in — strictly
+  **read-only** and **scoped** to what you choose. *Teams: Add Readable Scope* registers a specific
+  **chat** (1:1 or group) or a **team channel**; the assistant reads **only** the scopes you add,
+  never all of Teams. Read them via *Teams: Read Messages* (Markdown digest, newest first) or the
+  new **`aisharepoint_read_teams`** tool (`#spReadTeams`, `count` 1–50). *Teams: Remove a Readable
+  Scope* unregisters one.
+- **Least-privilege, incremental consent:** chats use the delegated **Chat.Read** (no admin
+  consent); a channel scope additionally needs **Channel.ReadBasic.All** + **ChannelMessage.Read.All**
+  (may require admin consent — channel reading just isn't offered if it isn't granted). The read
+  path never posts, edits, or deletes; system/deleted messages are filtered and bodies are bounded.
+- Mirrors the read-only Outlook workspace: pure, unit-tested core (`teamsScope.ts` — scope keys,
+  Graph paths, chat-label derivation, HTML→text, digest render) + a Memento-backed scope store;
+  the store holds only ids/labels, never message content. Documented in the User & Admin guides.
+
+## 0.96.0 — 2026-06-30
+
+### Reviewed + polished — white-label build is cross-platform (macOS & Windows)
+- Audited the whole white-label path end-to-end for macOS/Windows compatibility and confirmed it's
+  sound: the in-app wizard writes output via VS Code URI APIs and splits archive keys on `/`; the
+  source bundler emits forward-slash zip entries even on a Windows dev build; `repackageCommand`
+  already avoids `&&` on PowerShell 5.1; and `rebrand-package.js` / `preflight-deps.js` run each step
+  as a single `shell:true` command (resolving `npm.cmd` on Windows) with OS-trust-store TLS. The
+  generated guides (BUILD.md, MAINTAINING.md) and README/REBRANDING already document bash, PowerShell,
+  **and** cmd.exe — verified accurate.
+- **Fixes from the review:** the maintainer-facing `preflight-deps.js` CLI now prints **ASCII-only**
+  (no `…`/`—`) so it renders cleanly in legacy Windows code pages, matching the build driver. And the
+  wizard's "quick build" line now reuses the unit-tested `repackageCommand` (with a new `verbose`
+  option) instead of a parallel inline copy, so the command shown can't drift from the tested logic.
+
+## 0.95.0 — 2026-06-30
+
+### Changed — "Splunk HEC token" is now the "Splunk Attribution Identifier"
+- Every user-facing reference to the Splunk HEC **token** — the telemetry management UI, the
+  white-label wizard prompt, and the User Guide / REBRANDING docs — now reads **Splunk Attribution
+  Identifier**. (The Splunk HEC **URL/endpoint** keeps its name; only the credential is renamed.)
+  Internal field names, the persisted keychain entry, and the Splunk wire-protocol token are
+  unchanged, so existing installs and the HEC integration keep working.
+
+### Hardened — a baked Attribution Identifier is always obfuscated, never plaintext
+- The white-label packager now **refuses to bake** a Splunk Attribution Identifier (or OTLP auth
+  value) unless it is in obfuscated form: `buildProvisioningManifest` throws if a secret field is
+  present but not an obfuscated blob, or if a plaintext-named secret field is present at all. This
+  is defense-in-depth on top of the existing flow (the wizard obfuscates with AES-256-GCM, the
+  committed release profile strips secrets, and first-run moves the value into the OS keychain) —
+  so a readable credential can never reach `package.json`, even via a hand-edited profile. Covered
+  by tests.
+
+## 0.94.0 — 2026-06-30
+
+### Added — rich email composition (HTML / Rich Text / plain text + attachments)
+- New *Compose Rich Email* command drafts straight into your **Outlook Drafts** folder in any format
+  Outlook supports: **HTML** (paste/enter markup), **Rich Text** (type text, sent as formatted HTML
+  with newlines preserved), or **Plain text** — plus **file attachments** (pick one or more local
+  files; bounded to the ~3 MB inline limit with a clear message if exceeded). Finish and send from
+  Outlook, as always — nothing is sent from here.
+- The assistant's `aisharepoint_draft_communication` tool gained a **`format`** option, so
+  @sharepoint can draft **HTML** email (rich formatting), not just plain text.
+- `createMailDraft` now builds the Graph `body` by content type and emits `fileAttachment`s; plain
+  text under HTML format is escaped + line-broken so it never renders as raw markup. Pure compose
+  core (`normalizeMailFormat`, `buildMessageBody`, MIME detection, size guard, attachment payload)
+  is unit-tested. Completes Phase 7.
+
+## 0.93.0 — 2026-06-30
+
+### Added — OneDrive & shared SharePoint files as context
+- *Add OneDrive/SharePoint File for Context* registers a file shared with you — either **pick from
+  "files shared with me"** or **paste a sharing link**. It resolves to a stable drive-item reference
+  via Microsoft Graph, reusing the **same Microsoft 365 sign-in** as mail/sites (read-only,
+  `Files.Read.All`).
+- Registered remote files read exactly like local ones: @sharepoint pulls them in with
+  `#spReadFile`, and *Read a Context File* renders them to a table. Content downloads on demand via
+  Graph using the sign-in the file was registered under; we store only the drive/item reference +
+  label, never the file content.
+- Pure Graph helpers (`encodeSharingUrl`, `driveItemToRef` — handling both the `/shares` and
+  `sharedWithMe` shapes) are unit-tested. Completes Phase 6 (local **and** cloud file context).
+
+## 0.92.0 — 2026-06-30
+
+### Added — local file context (Excel & CSV)
+- Register a local **.xlsx**, **.csv**, or **.tsv** file as read-only context: *Add File for Context*
+  (Reference Sources title bar or palette). @sharepoint can then read it into a chat as a bounded
+  table via the new **`aisharepoint_read_file`** tool (reference it as `#spReadFile`).
+- **No native dependencies**: CSV parsing is a small RFC-4180 parser (quotes, embedded
+  commas/newlines, delimiter sniffing for `,`/`;`/tab); `.xlsx` is read with a dependency-free
+  reader — a minimal ZIP central-directory reader over Node's built-in `zlib`, plus pure scanners
+  for `sharedStrings.xml` and the first worksheet (shared/inline strings, numbers, booleans;
+  column gaps preserved). Tables are bounded (rows/cols/cell length) with a truncation note.
+- **Safe by construction**: only files you explicitly register are read (never an arbitrary path);
+  the store keeps the path + label + kind, never the content; the read tool is release-expiry gated.
+  *Read a Context File* renders one to a Markdown preview; *Remove a Context File* unregisters it
+  (the file itself is untouched).
+- Pure cores (`csv`, `xlsx` XML scanners, `tabular` render, file-source list ops) are unit-tested,
+  including an end-to-end `.xlsx` read against a ZIP built in the test.
+
+_Next: the same context from OneDrive and shared SharePoint files (Graph), reusing your sign-in._
+
+## 0.91.0 — 2026-06-30
+
+### Added — @sharepoint can read Outlook itself (read-only tool)
+- New language-model tool **`aisharepoint_read_outlook`**: the assistant can pull mail/calendar
+  context into a chat on its own — `kind: "mail"` reads recent messages within the workspace's
+  access scope, `kind: "calendar"` reads the next N days (1–31, default 7). Reference it as
+  `#spReadOutlook`.
+- **Read-only and bounded**: never sends, moves, or deletes; reads only a workspace the user has
+  configured, honoring the folder-only vs whole-mailbox scope. With no workspace set up it tells the
+  assistant to ask the user to configure one rather than guessing mailbox contents. Release-expiry
+  gated like every other tool. Completes Phase 5.
+
+## 0.90.0 — 2026-06-30
+
+### Added — read-only Outlook workspace (mail + calendar)
+- @sharepoint can now **read** your Outlook mail and calendar using the **same Microsoft 365
+  sign-in** that sends drafts — no separate connector or credentials. Reads are strictly
+  least-privilege (`Mail.Read` / `Calendars.Read`); the only writes are creating the workspace
+  folder and (on request) a move-replies rule, both explicit.
+- **Workspace folder workflow** — *Outlook: Configure Read-Only Workspace*: pick or create an
+  Outlook folder as your "workspace," then choose the **access scope**:
+  - **Just this folder** (recommended) — @sharepoint reads only the workspace folder.
+  - **Whole mailbox** — @sharepoint may read any mail in the account.
+- **Move replies to the workspace** — *Outlook: Move Replies to Workspace (by subject)*: creates an
+  Outlook rule (after a modal confirm) that moves messages whose subject matches into the workspace
+  folder, so a conversation collects in one place. Reversible from Outlook.
+- **Read commands** (with a read-only digest rendered to a Markdown preview): *Outlook: Read Mail*
+  (within the active scope, newest first) and *Outlook: Read Calendar* (next 7 days). Available from
+  the Communications view title bar.
+- Pure, unit-tested core (scope→Graph path, calendar window, subject normalization, rule payload,
+  digests). Workspace config stores only ids/names/scope — never mail content or tokens.
+
+_Next: an assistant-facing read-only tool so @sharepoint can pull this context into a chat itself._
+
+## 0.89.0 — 2026-06-30
+
+### Added — intelligent merge on import (memory + prompts)
+- Sharing customizations no longer forces all-or-nothing. When an imported memory note or prompt
+  has the **same scope + title** as one you already have but **different content**, it's now a
+  **merge**, not a silent skip. On import you pick once how to combine all such conflicts:
+  - **Smart merge (default, rule-based)** — unions tags and combines the text losslessly (identical
+    or superset → keeps the richer; otherwise joins with a blank line). No model calls, instant.
+  - **Let @sharepoint merge (AI)** — runs the combined text through your Copilot subscription to
+    de-duplicate the prose while keeping every distinct fact; falls back to the rule-based merge for
+    any item the model can't handle (and tells you how many).
+  - **Keep my versions** — leaves your copies untouched and skips the incoming ones.
+- **True duplicates** (same scope, title, *and* content) are still skipped silently. Within a single
+  import, multiple same-titled entries also fold together before being written.
+- Pure, unit-tested core (`mergeText`/`mergeTags`/`mergeMemory`/`mergePrompt`, and the `toMerge`
+  classification in `planMemoryImport`/`planPromptImport`). Completes Phase 4.
+
+## 0.88.0 — 2026-06-30
+
+### Added — prompts in the combined export/import (with review + dedup)
+- The combined **Export Sites, Sources, Projects, Memory & Prompts** command now offers a **Prompt
+  Library** group — one row per scope that has prompts (**Global** + each site/source/project) — so
+  you choose which prompts travel.
+- **Import** lists each incoming prompt individually under **Prompt Library (review / decline)** so
+  you keep or drop them one by one, then attaches each to the right local scope. Prompts are
+  **portably keyed**: global prompts carry no reference; site prompts by URL; source prompts by the
+  source's display name; project prompts by the project's name (machine-local ids never travel).
+- **Dedup on import**: a prompt whose scope + title already exists is skipped (reported in the
+  summary); prompts whose site/source/project isn't present are listed as skipped rather than
+  orphaned. (Rule-based half of the planned merge; AI-assisted merge lands next.)
+- Still **secret-free**: prompts carry only title/body/tags. `planPromptImport` is pure and
+  unit-tested. This completes the Prompt Library (Phase 3): tab, scoping, copy-to-use, and sharing.
+
+## 0.87.0 — 2026-06-30
+
+### Added — Prompt Library (a new tab for reusable prompts)
+- A new **Prompt Library** view holds reusable prompt snippets, grouped by where they live —
+  **Global** (available everywhere) first, then per managed site, reference source, and project.
+  Click a prompt to **copy it to the clipboard**, then paste it into chat. (Prompts are reuse-on-
+  demand; they are *not* injected into the assistant's context — that's what memory is for.)
+- **Create from anywhere it's relevant**: the view's **"+"**, the palette (*Add Prompt to
+  Library…*), or right-click a site, source, or project to save a prompt **scoped to it**. Manage
+  (add/edit/copy/delete) from the group/item context menu or *Manage Prompts…*.
+- Each prompt has a short title, the prompt body, and optional tags; titles fold for dedup so the
+  upcoming export/import can merge prompts teammates share.
+- **No orphans**: removing a site, source, or project now also drops its scoped prompts **and** its
+  memory notes (previously memory lingered after entity removal), so nothing dangles.
+
+_Next: nesting a "Prompts" group under each site/source/project (like Memory), then prompt
+export/import in the combined flow with review + intelligent merge._
+
+## 0.86.0 — 2026-06-30
+
+### Added — memory in the combined export/import (with review + dedup)
+- The **Export Sites, Sources, Projects & Memory** command now offers a **Memory notes**
+  group — one row per site/source that has notes — so you choose whose memory travels. The
+  JSON preview + modal confirm are the review-before-export surface.
+- **Import** lists each incoming note individually under **Memory notes (review / decline)** so
+  you can keep or drop them one by one, then attaches them to the right local entity. Notes are
+  **portably keyed**: site notes by URL, source notes by the source's display name (machine-local
+  ids never travel), and source notes export even when their source descriptor isn't included —
+  the recipient matches them to a same-named source they already have.
+- **Dedup on import**: a note whose scope + title already exists is skipped (reported in the
+  summary), and notes whose site/source isn't present are listed as skipped rather than orphaned.
+  (This is the rule-based half of the planned merge; AI-assisted merge lands with the broader
+  intelligent-merge work.)
+- All still **secret-free**: memory carries only the user/AI note text, no credentials.
+
+### Fixed — exporting a managed/reference site no longer trips the safety scan
+- The export safety scan treated a real `*.sharepoint.com` site URL as a `raw-tenant-host` leak
+  and **blocked the whole export** ("Nothing was written") — which broke sharing any real
+  SharePoint site. The gate now allows the site/source URLs that ARE the payload of a
+  user-initiated, peer-to-peer config share, while still blocking genuine secrets (tokens, PEM
+  blocks, bearer creds, emails, auth codes in URLs). The tenant-host rule still applies to the
+  separate telemetry path, where it belongs. Covered by a regression test.
+
+## 0.85.0 — 2026-06-30
+
+### Added — inline "Memory" group under each site/source in the tree
+- Memory now appears **where the entity lives**: a managed site, reference site, reference source, or
+  managed source that has notes shows a collapsible **`Memory (N)`** folder as a child. Expanding it
+  lists the notes — user notes with a 📝 icon, assistant-proposed ones with a ✨ "AI-proposed" badge
+  and tooltip. This is the expandable, nested structure requested for browsing context at a glance,
+  consistent across the **Managed Sites** and **Reference Sources** views.
+- **Manage Memory** is now one right-click away from the thing it describes: the command is on site
+  nodes, context-source nodes, managed-source nodes, the `Memory` folder itself, and individual notes
+  — and pre-selects that exact entity's scope, so you skip the picker. (It's still available from the
+  palette, where it shows the picker.) The folder also carries an inline action for quick access.
+- No new data or schema — this is purely the tree surface over the existing 0.83/0.84 memory store,
+  so it composes with the upcoming memory export/import + intelligent merge unchanged.
+
+_Next: the Prompt Library tab, then memory/prompt export/import with intelligent merge._
+
 ## 0.84.0 — 2026-06-29
 
 ### Added — assistant-proposed memory (the `ai` origin)

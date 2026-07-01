@@ -47,23 +47,78 @@ export function scanForTerms(text: string, terms: string[]): string[] {
   return normalizeTerms(terms).filter((term) => termRegex(term).test(text));
 }
 
+/** One avoid-term that was rewritten, for the "what was changed" report. */
+export interface DefangChange {
+  /** The configured avoid-term (original casing). */
+  term: string;
+  /** How many occurrences were rewritten in the original text. */
+  count: number;
+  /** A short snippet of the FIRST occurrence in the ORIGINAL text, with the
+   *  matched word wrapped in «guillemets» so the user sees exactly where it was. */
+  context: string;
+}
+
+/** A short surrounding snippet of `text` around [idx, idx+len), whitespace
+ *  collapsed, with the matched span wrapped in «». */
+function snippet(text: string, idx: number, len: number): string {
+  const PAD = 32;
+  const start = Math.max(0, idx - PAD);
+  const end = Math.min(text.length, idx + len + PAD);
+  const before = text.slice(start, idx).replace(/\s+/g, " ");
+  const word = text.slice(idx, idx + len);
+  const after = text.slice(idx + len, end).replace(/\s+/g, " ");
+  return `${start > 0 ? "…" : ""}${before}«${word}»${after}${end < text.length ? "…" : ""}`;
+}
+
 /**
  * Insert a zero-width space inside each occurrence of every term so a proxy's
  * literal/regex content match fails, while the text stays human- and
- * model-readable. Returns the rewritten text and which terms were hit.
+ * model-readable. Returns the rewritten text plus a per-term change report
+ * (count + an in-context sample) so the user can SEE exactly what was altered.
+ * Counts/contexts are taken from the ORIGINAL text; the rewrite is applied
+ * separately so earlier insertions can't skew later offsets.
+ */
+export function defangDetails(text: string, terms: string[]): { text: string; changes: DefangChange[] } {
+  let out = text;
+  const changes: DefangChange[] = [];
+  for (const term of normalizeTerms(terms)) {
+    const occurrences = text.match(termRegex(term));
+    const count = occurrences ? occurrences.length : 0;
+    if (count > 0) {
+      const first = termRegex(term).exec(text);
+      changes.push({ term, count, context: first ? snippet(text, first.index, first[0].length) : "" });
+    }
+    out = out.replace(termRegex(term), (m) =>
+      m.length <= 1 ? `${m}${ZERO_WIDTH}` : `${m[0]}${ZERO_WIDTH}${m.slice(1)}`,
+    );
+  }
+  return { text: out, changes };
+}
+
+/**
+ * Defang the text. Thin back-compat wrapper over `defangDetails` returning the
+ * rewritten text and the list of terms that were hit (in term order).
  */
 export function defang(text: string, terms: string[]): { text: string; hit: string[] } {
-  let out = text;
-  const hit: string[] = [];
-  for (const term of normalizeTerms(terms)) {
-    let matched = false;
-    out = out.replace(termRegex(term), (m) => {
-      matched = true;
-      return m.length <= 1 ? `${m}${ZERO_WIDTH}` : `${m[0]}${ZERO_WIDTH}${m.slice(1)}`;
-    });
-    if (matched) hit.push(term);
-  }
-  return { text: out, hit };
+  const r = defangDetails(text, terms);
+  return { text: r.text, hit: r.changes.map((c) => c.term) };
+}
+
+/** Render the "what was changed" report as Markdown for a read-only preview. */
+export function renderDefangReport(changes: DefangChange[]): string {
+  if (changes.length === 0) return "# Proxy avoidance\n\nNothing was changed in this request.";
+  const total = changes.reduce((n, c) => n + c.count, 0);
+  return [
+    "# Proxy avoidance — what was changed in this request",
+    "",
+    "Your `aiSharePoint.proxy.mode` is set to **defang**. Before this request was sent, an invisible zero-width character was inserted inside each avoid-list word below, so a corporate content filter / DLP proxy can't match the word — while the AI model still reads the original text. **Nothing was removed, and no meaning was changed.**",
+    "",
+    "| Avoid-term | Occurrences | First occurrence (in context) |",
+    "|---|---|---|",
+    ...changes.map((c) => `| \`${c.term}\` | ${c.count} | ${c.context.replace(/\|/g, "\\|")} |`),
+    "",
+    `_${total} occurrence(s) across ${changes.length} term(s). The «guillemets» mark where each term appeared in your original text. Edit the list via “AI SharePoint: Manage Proxy Avoid-List”._`,
+  ].join("\n");
 }
 
 /**

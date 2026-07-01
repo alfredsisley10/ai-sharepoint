@@ -7,6 +7,7 @@ import {
   summarizeBrand,
   identityChanged,
   extensionId,
+  repackageCommand,
 } from "./rebrand";
 import {
   rebrandVsix,
@@ -485,11 +486,8 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     }
     log.info(`Exported ${what} (${Object.keys(files).length} files) to ${target.fsPath} ("${after.displayName}")`);
     // Shell-appropriate quick command (PowerShell rejects && as a separator).
-    const sh = (vscode.env.shell ?? "").toLowerCase();
-    const isPwsh = sh.includes("powershell") || sh.includes("pwsh");
-    const quickBuild = isPwsh
-      ? "npm install --verbose; if ($LASTEXITCODE -eq 0) { npm run package }"
-      : "npm install --verbose && npm run package";
+    // Single source of truth: the unit-tested repackageCommand helper.
+    const quickBuild = repackageCommand(vscode.env.shell, { verbose: true });
     // BUILD.md is the focused build guide for the minimal handoff; MAINTAINING.md for full source.
     const guideFile = content.id === "components" ? "BUILD.md" : "MAINTAINING.md";
     const openLabel = `Open ${guideFile}`;
@@ -767,7 +765,7 @@ async function gatherProvisioning(
     if (splunkUrl === undefined) return undefined;
     if (splunkUrl.trim()) {
       tel.splunkHecUrl = splunkUrl.trim();
-      const token = await askSecret("Splunk HEC token to bake in (write-only — obfuscated in the build; blank to skip)");
+      const token = await askSecret("Splunk Attribution Identifier to bake in (write-only — obfuscated in the build; blank to skip)");
       if (token === undefined) return undefined;
       if (token.trim()) tel.splunkHecTokenObfuscated = obfuscateSecret(token.trim());
     }

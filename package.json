@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.84.0",
+  "version": "0.109.0",
   "release": {
     "channel": "standard"
   },
@@ -310,6 +310,96 @@
         "icon": "$(note)"
       },
       {
+        "command": "aiSharePoint.addPrompt",
+        "title": "%aiSharePoint.addPrompt.title%",
+        "category": "%category%",
+        "icon": "$(add)"
+      },
+      {
+        "command": "aiSharePoint.managePrompt",
+        "title": "%aiSharePoint.managePrompt.title%",
+        "category": "%category%",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "aiSharePoint.usePrompt",
+        "title": "%aiSharePoint.usePrompt.title%",
+        "category": "%category%",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "aiSharePoint.configureOutlookWorkspace",
+        "title": "%aiSharePoint.configureOutlookWorkspace.title%",
+        "category": "%category%",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "aiSharePoint.readOutlookMail",
+        "title": "%aiSharePoint.readOutlookMail.title%",
+        "category": "%category%",
+        "icon": "$(mail)"
+      },
+      {
+        "command": "aiSharePoint.readOutlookCalendar",
+        "title": "%aiSharePoint.readOutlookCalendar.title%",
+        "category": "%category%",
+        "icon": "$(calendar)"
+      },
+      {
+        "command": "aiSharePoint.trackRepliesToWorkspace",
+        "title": "%aiSharePoint.trackRepliesToWorkspace.title%",
+        "category": "%category%",
+        "icon": "$(inbox)"
+      },
+      {
+        "command": "aiSharePoint.addTeamsScope",
+        "title": "%aiSharePoint.addTeamsScope.title%",
+        "category": "%category%",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "aiSharePoint.readTeamsMessages",
+        "title": "%aiSharePoint.readTeamsMessages.title%",
+        "category": "%category%",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "aiSharePoint.removeTeamsScope",
+        "title": "%aiSharePoint.removeTeamsScope.title%",
+        "category": "%category%",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "aiSharePoint.addLocalFile",
+        "title": "%aiSharePoint.addLocalFile.title%",
+        "category": "%category%",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "aiSharePoint.addSharedFile",
+        "title": "%aiSharePoint.addSharedFile.title%",
+        "category": "%category%",
+        "icon": "$(cloud)"
+      },
+      {
+        "command": "aiSharePoint.composeRichOutlookEmail",
+        "title": "%aiSharePoint.composeRichOutlookEmail.title%",
+        "category": "%category%",
+        "icon": "$(mail)"
+      },
+      {
+        "command": "aiSharePoint.readFileSource",
+        "title": "%aiSharePoint.readFileSource.title%",
+        "category": "%category%",
+        "icon": "$(table)"
+      },
+      {
+        "command": "aiSharePoint.removeFileSource",
+        "title": "%aiSharePoint.removeFileSource.title%",
+        "category": "%category%",
+        "icon": "$(trash)"
+      },
+      {
         "command": "aiSharePoint.browseSource",
         "title": "%aiSharePoint.browseSource.title%",
         "category": "%category%",
@@ -390,10 +480,40 @@
         "icon": "$(shield)"
       },
       {
+        "command": "aiSharePoint.showProxyDefangDetails",
+        "title": "%aiSharePoint.showProxyDefangDetails.title%",
+        "category": "%category%",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "aiSharePoint.enableProxyDefang",
+        "title": "%aiSharePoint.enableProxyDefang.title%",
+        "category": "%category%",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "aiSharePoint.restartLastInteraction",
+        "title": "%aiSharePoint.restartLastInteraction.title%",
+        "category": "%category%",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aiSharePoint.probeModelContextLimit",
+        "title": "%aiSharePoint.probeModelContextLimit.title%",
+        "category": "%category%",
+        "icon": "$(dashboard)"
+      },
+      {
         "command": "aiSharePoint.showModelLimits",
         "title": "%aiSharePoint.showModelLimits.title%",
         "category": "%category%",
         "icon": "$(dashboard)"
+      },
+      {
+        "command": "aiSharePoint.testNetworkConnectivity",
+        "title": "%aiSharePoint.testNetworkConnectivity.title%",
+        "category": "%category%",
+        "icon": "$(plug)"
       },
       {
         "command": "aiSharePoint.manageProjectMemory",
@@ -548,6 +668,12 @@
           "contextualTitle": "Projects (scopes & AI context)"
         },
         {
+          "id": "aiSharePoint.promptsView",
+          "name": "%view.aiSharePoint.promptsView.name%",
+          "icon": "media/activity-icon.svg",
+          "contextualTitle": "Prompt Library (reusable prompts)"
+        },
+        {
           "id": "aiSharePoint.usageView",
           "name": "%view.aiSharePoint.usageView.name%",
           "icon": "media/activity-icon.svg",
@@ -585,15 +711,19 @@
       },
       {
         "view": "aiSharePoint.sourcesView",
-        "contents": "No reference sources yet. This view holds all read-only context the assistant can search — read-only SharePoint sites plus Confluence, Jira, databases, and more.\n[Add Context Source](command:aiSharePoint.addContextSource)\nRead-only SharePoint sites you connect appear here too. Credentials stay in your OS keychain; every source is strictly read-only with account-lockout protection."
+        "contents": "No reference sources yet. This view holds all read-only context the assistant can search — read-only SharePoint sites plus Confluence, Jira, databases, and more.\n[Add Context Source](command:aiSharePoint.addContextSource)\nYou can also add a local **Excel or CSV** file for the assistant to read as context.\n[Add File for Context](command:aiSharePoint.addLocalFile)\nRead-only SharePoint sites you connect appear here too. Credentials stay in your OS keychain; every source is strictly read-only with account-lockout protection."
       },
       {
         "view": "aiSharePoint.commsView",
-        "contents": "No Teams drafts pending. Prepare a message yourself or ask @sharepoint to draft one.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\n**Teams** drafts wait **here** in this outbox until YOU approve sending them. **Outlook** emails are saved straight to your **Outlook Drafts folder** — review and send them from Outlook (this view won't list them). Nothing is ever sent without your approval (ADR-0025)."
+        "contents": "No Teams drafts pending. Prepare a message yourself or ask @sharepoint to draft one.\n[Draft Teams Message](command:aiSharePoint.draftTeamsMessage)\n[Draft Outlook Email](command:aiSharePoint.draftOutlookEmail)\n**Teams** drafts wait **here** in this outbox until YOU approve sending them. **Outlook** emails are saved straight to your **Outlook Drafts folder** — review and send them from Outlook (this view won't list them). Nothing is ever sent without your approval (ADR-0025).\nWant @sharepoint to **read** mail/calendar too? Set up a read-only **Outlook workspace** (one folder, scoped access).\n[Configure Outlook Workspace](command:aiSharePoint.configureOutlookWorkspace)\nFor **Teams**, register a specific chat or channel as a read-only scope — @sharepoint reads only what you pick.\n[Add Teams Scope](command:aiSharePoint.addTeamsScope)"
       },
       {
         "view": "aiSharePoint.projectsView",
         "contents": "Projects group reference sources & bookmarks, define **goals** and **instructions** for @sharepoint, and keep a separate **AI-managed context** the assistant learns over time.\n[Create Project](command:aiSharePoint.createProject)\nActivate a project to scope chat and the Reference Sources view to it."
+      },
+      {
+        "view": "aiSharePoint.promptsView",
+        "contents": "No saved prompts yet. The Prompt Library keeps reusable prompt snippets — **Global** (available everywhere) or attached to a specific managed site, reference source, or project.\n[Add Prompt](command:aiSharePoint.addPrompt)\nClick a prompt to copy it to the clipboard, then paste it into chat. You can also right-click a site, source, or project to save a prompt scoped to it."
       }
     ],
     "chatParticipants": [
@@ -753,7 +883,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "List the user's configured read-only reference sources (Confluence, Jira, GitHub (github.com or Enterprise Server), LDAP/Active Directory, SQL Server/PostgreSQL/MySQL/MongoDB databases, Vertex AI Search, Power BI, ServiceNow, Splunk, Splunk Observability Cloud, Grafana) with their chat alias (the short handle users say, e.g. \"CMDB\"), description of contents, type, deployment, and verification state. Use before searching to discover what is available and map a name the user mentioned to a source.",
+        "modelDescription": "List the user's configured read-only reference sources (Confluence, Jira, GitHub (github.com or Enterprise Server), LDAP/Active Directory, SQL Server/PostgreSQL/MySQL/MongoDB databases, Power BI, ServiceNow, Splunk, Splunk Observability Cloud, Grafana) with their chat alias (the short handle users say, e.g. \"CMDB\"), description of contents, type, deployment, and verification state. Use before searching to discover what is available and map a name the user mentioned to a source.",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -1156,7 +1286,7 @@
           "sharepoint",
           "context"
         ],
-        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. GitHub (github.com or Enterprise Server): plain text searches issues & pull requests; prefix 'code:', 'repos:', or 'commits:' to search those corpora instead; or JSON {\"type\": \"code|issues|repositories|commits\", \"q\": \"...\", \"limit\": n} (q accepts GitHub's own qualifiers like repo:owner/name, org:, is:open, language:, author:). LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved). Vertex AI Search sources: plain-text queries return enterprise search hits (use the vertex_answer tool for synthesized answers). Power BI sources: JSON {\"dataset\": \"<id or name>\", \"dax\": \"EVALUATE …\"} runs a read-only DAX query (use db_schema-style starter EVALUATE INFO.TABLES() to discover tables). ServiceNow sources: plain text (text-index search of the default table), a native encoded query (\"active=true^priority=1\"), or JSON {\"table\": \"cmdb_ci_appl\", \"query\": \"...\", \"fields\": [...], \"limit\": n}. Splunk sources: plain keywords (default index, last 24h), raw SPL (\"search index=web error | stats count by host\", \"| tstats ...\"), or JSON {\"spl\": \"...\", \"earliest\": \"-7d\", \"latest\": \"now\", \"limit\": n} — write/exfil commands (delete/collect/outputlookup/sendemail/script) are blocked. Splunk Observability Cloud sources: plain text searches the configured default object type, or JSON {\"type\": \"metric|dimension|detector|dashboard|incident\", \"query\": \"cpu\", \"limit\": n} (incidents = alerts firing now). Grafana sources: plain text searches dashboards, or JSON {\"type\": \"dashboard|folder|alert|annotation|datasource|panel\", \"query\": \"...\", \"limit\": n, \"folderUid\": \"...\"} — alert returns unified-alerting rule STATE (firing/pending/inactive); panel returns LIVE PANEL DATA by running a dashboard panel's own queries via /api/ds/query and summarizing each series (last/min/max), via {\"type\":\"panel\",\"query\":\"<dashboard uid or title>\",\"panel\":\"<panel id or title>\",\"from\":\"now-6h\"} — so the Grafana connector reads real metric/series values, not only dashboard metadata. SQL Server statements are COST-GATED: table sizes and leading index columns are read from catalog stats first (instant), and a statement estimated to scan a big table runs against a bounded TOP-sample instead — the first result then says so and lists per-table row counts (use those instead of COUNT(*) to size tables). To run the original statement in full, set allowExpensive=true ONLY after the user explicitly accepts a potentially slow scan. Results are capped for chat — when the user wants the dataset itself, use aisharepoint_export_context_results instead (writes up to 50k rows to a workspace file without loading them into context).",
+        "modelDescription": "Search a configured read-only reference source. Confluence: raw CQL or plain text. Jira: raw JQL or plain text. GitHub (github.com or Enterprise Server): plain text searches issues & pull requests; prefix 'code:', 'repos:', or 'commits:' to search those corpora instead; or JSON {\"type\": \"code|issues|repositories|commits\", \"q\": \"...\", \"limit\": n} (q accepts GitHub's own qualifiers like repo:owner/name, org:, is:open, language:, author:). LDAP/Active Directory: raw LDAP filter or plain text (AD ANR). Databases (SQL Server/PostgreSQL/MySQL): a single read-only SELECT statement (write keywords are blocked). MongoDB: JSON {\"collection\",\"filter\",\"projection\",\"limit\"}. Returns capped, cached results. Pass the source name when several are configured. If a query proves useful for recurring work, propose saving it with the suggest-bookmark tool (user-approved). Power BI sources: JSON {\"dataset\": \"<id or name>\", \"dax\": \"EVALUATE …\"} runs a read-only DAX query (use db_schema-style starter EVALUATE INFO.TABLES() to discover tables). ServiceNow sources: plain text (text-index search of the default table), a native encoded query (\"active=true^priority=1\"), or JSON {\"table\": \"cmdb_ci_appl\", \"query\": \"...\", \"fields\": [...], \"limit\": n}. Splunk sources: plain keywords (default index, last 24h), raw SPL (\"search index=web error | stats count by host\", \"| tstats ...\"), or JSON {\"spl\": \"...\", \"earliest\": \"-7d\", \"latest\": \"now\", \"limit\": n} — write/exfil commands (delete/collect/outputlookup/sendemail/script) are blocked. Splunk Observability Cloud sources: plain text searches the configured default object type, or JSON {\"type\": \"metric|dimension|detector|dashboard|incident\", \"query\": \"cpu\", \"limit\": n} (incidents = alerts firing now). Grafana sources: plain text searches dashboards, or JSON {\"type\": \"dashboard|folder|alert|annotation|datasource|panel\", \"query\": \"...\", \"limit\": n, \"folderUid\": \"...\"} — alert returns unified-alerting rule STATE (firing/pending/inactive); panel returns LIVE PANEL DATA by running a dashboard panel's own queries via /api/ds/query and summarizing each series (last/min/max), via {\"type\":\"panel\",\"query\":\"<dashboard uid or title>\",\"panel\":\"<panel id or title>\",\"from\":\"now-6h\"} — so the Grafana connector reads real metric/series values, not only dashboard metadata. SQL Server statements are COST-GATED: table sizes and leading index columns are read from catalog stats first (instant), and a statement estimated to scan a big table runs against a bounded TOP-sample instead — the first result then says so and lists per-table row counts (use those instead of COUNT(*) to size tables). To run the original statement in full, set allowExpensive=true ONLY after the user explicitly accepts a potentially slow scan. Results are capped for chat — when the user wants the dataset itself, use aisharepoint_export_context_results instead (writes up to 50k rows to a workspace file without loading them into context).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1349,34 +1479,6 @@
         }
       },
       {
-        "name": "aisharepoint_vertex_answer",
-        "displayName": "Vertex AI Search Answer",
-        "toolReferenceName": "spVertexAnswer",
-        "canBeReferencedInPrompt": true,
-        "icon": "$(search)",
-        "tags": [
-          "sharepoint",
-          "context"
-        ],
-        "modelDescription": "Ask a configured Vertex AI Search source (Google enterprise search) for a Gemini-grounded ANSWER with citations over its indexed corpus — use for analytical questions ('summarize our policy on X') where synthesized analysis beats raw hits. For raw result lists use the regular search tool against the same source. Read-only.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "source": {
-              "type": "string",
-              "description": "Vertex AI Search source alias, display name, or type. Optional when exactly one source exists."
-            },
-            "query": {
-              "type": "string",
-              "description": "The question to answer over the enterprise corpus."
-            }
-          },
-          "required": [
-            "query"
-          ]
-        }
-      },
-      {
         "name": "aisharepoint_draft_communication",
         "displayName": "Draft Communication (Teams/Outlook)",
         "toolReferenceName": "spDraftComm",
@@ -1408,7 +1510,15 @@
             },
             "body": {
               "type": "string",
-              "description": "Plain-text message body."
+              "description": "Message body. Plain text by default; if 'format' is 'html', provide HTML markup (Outlook email only)."
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "html",
+                "text"
+              ],
+              "description": "Outlook email body format. 'html' for rich formatting (provide HTML in 'body'); 'text' (default) for plain text. Ignored for teams."
             },
             "reason": {
               "type": "string",
@@ -1885,6 +1995,84 @@
         }
       },
       {
+        "name": "aisharepoint_read_outlook",
+        "displayName": "Read Outlook (mail & calendar)",
+        "toolReferenceName": "spReadOutlook",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(mail)",
+        "tags": [
+          "sharepoint",
+          "outlook",
+          "context"
+        ],
+        "modelDescription": "Read the user's Outlook mail or calendar (READ-ONLY) for context, using the read-only Outlook workspace they configured. 'kind'='mail' returns recent messages within the workspace's access scope (just the workspace folder, or the whole mailbox — the user chose); 'kind'='calendar' returns events for the next 'days' days (default 7). This never sends, moves, or deletes anything. If no workspace is configured the tool will say so — then ask the user to run 'Outlook: Configure Read-Only Workspace'; do NOT guess or fabricate mailbox/calendar contents. Summarize results for the user; do not expose anyone's private mail beyond what's needed to answer.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["mail", "calendar"],
+              "description": "'mail' for recent messages in scope, 'calendar' for upcoming events."
+            },
+            "days": {
+              "type": "number",
+              "description": "For 'calendar': how many days ahead to read (1–31, default 7). Ignored for 'mail'."
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_read_teams",
+        "displayName": "Read scoped Teams messages",
+        "toolReferenceName": "spReadTeams",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(comment-discussion)",
+        "tags": [
+          "sharepoint",
+          "teams",
+          "context"
+        ],
+        "modelDescription": "Read recent messages (READ-ONLY) from a Teams chat or channel the user registered as a scope. Pass 'scope' = the scope's label (or a distinctive part of it); if omitted and exactly one scope is registered, that one is used, otherwise the tool lists the registered labels — pick one and call again. 'count' caps how many recent messages to read (1–50, default 20). This reads ONLY scopes the user explicitly registered — never all of Teams — and never posts, edits, or deletes. If none are registered the tool says so; then ask the user to run 'Teams: Add Readable Scope', and do NOT guess or fabricate conversation contents. Summarize for the user; don't expose private messages beyond what's needed to answer.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "description": "Label (or distinctive substring) of the registered Teams chat/channel to read."
+            },
+            "count": {
+              "type": "number",
+              "description": "How many recent messages to read (1–50, default 20)."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_read_file",
+        "displayName": "Read a Context File (Excel/CSV)",
+        "toolReferenceName": "spReadFile",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(table)",
+        "tags": [
+          "sharepoint",
+          "context",
+          "files"
+        ],
+        "modelDescription": "Read a file the user registered for context (a local Excel .xlsx or CSV/TSV; OneDrive/SharePoint files later) and return it as a bounded Markdown table for analysis. Pass 'name' = the file's label (or a distinctive part of it). If 'name' is omitted and exactly one file is registered, that one is used; otherwise the tool lists the available labels — pick one and call again. Reads ONLY files the user explicitly registered (never an arbitrary path). Large sheets are truncated; tell the user if you needed more rows/columns than shown.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The label of the registered file to read (or a distinctive substring)."
+            }
+          }
+        }
+      },
+      {
         "name": "aisharepoint_capture_lesson",
         "displayName": "Capture Lesson Learned",
         "toolReferenceName": "spCaptureLesson",
@@ -1971,14 +2159,49 @@
           "group": "navigation@2"
         },
         {
+          "command": "aiSharePoint.composeRichOutlookEmail",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aiSharePoint.readOutlookMail",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "aiSharePoint.readOutlookCalendar",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "aiSharePoint.readTeamsMessages",
+          "when": "view == aiSharePoint.commsView",
+          "group": "navigation@5"
+        },
+        {
           "command": "aiSharePoint.configureTeamsWebhook",
           "when": "view == aiSharePoint.commsView",
           "group": "1_config@1"
         },
         {
+          "command": "aiSharePoint.addTeamsScope",
+          "when": "view == aiSharePoint.commsView",
+          "group": "1_config@5"
+        },
+        {
           "command": "aiSharePoint.testCommsMethod",
           "when": "view == aiSharePoint.commsView",
           "group": "1_config@2"
+        },
+        {
+          "command": "aiSharePoint.configureOutlookWorkspace",
+          "when": "view == aiSharePoint.commsView",
+          "group": "1_config@3"
+        },
+        {
+          "command": "aiSharePoint.trackRepliesToWorkspace",
+          "when": "view == aiSharePoint.commsView",
+          "group": "1_config@4"
         },
         {
           "command": "aiSharePoint.addContextSource",
@@ -1994,6 +2217,21 @@
           "command": "aiSharePoint.discoverActiveDirectory",
           "when": "view == aiSharePoint.sourcesView",
           "group": "navigation@3"
+        },
+        {
+          "command": "aiSharePoint.addLocalFile",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "2_files@1"
+        },
+        {
+          "command": "aiSharePoint.addSharedFile",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "2_files@2"
+        },
+        {
+          "command": "aiSharePoint.readFileSource",
+          "when": "view == aiSharePoint.sourcesView",
+          "group": "2_files@3"
         },
         {
           "command": "aiSharePoint.exportReferenceConfig",
@@ -2019,9 +2257,69 @@
           "command": "aiSharePoint.switchProject",
           "when": "view == aiSharePoint.projectsView",
           "group": "navigation@2"
+        },
+        {
+          "command": "aiSharePoint.addPrompt",
+          "when": "view == aiSharePoint.promptsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aiSharePoint.exportReferenceConfig",
+          "when": "view == aiSharePoint.promptsView",
+          "group": "1_share@1"
+        },
+        {
+          "command": "aiSharePoint.importReferenceConfig",
+          "when": "view == aiSharePoint.promptsView",
+          "group": "1_share@2"
         }
       ],
       "view/item/context": [
+        {
+          "command": "aiSharePoint.readFileSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-file",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.removeFileSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-file",
+          "group": "inline@2"
+        },
+        {
+          "command": "aiSharePoint.readFileSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-file",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.removeFileSource",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-file",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "aiSharePoint.usePrompt",
+          "when": "view == aiSharePoint.promptsView && viewItem == prompt-item",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.usePrompt",
+          "when": "view == aiSharePoint.promptsView && viewItem == prompt-item",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.managePrompt",
+          "when": "view == aiSharePoint.promptsView && viewItem == prompt-item",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "aiSharePoint.addPrompt",
+          "when": "view == aiSharePoint.promptsView && viewItem == prompt-group",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.managePrompt",
+          "when": "view == aiSharePoint.promptsView && viewItem == prompt-group",
+          "group": "1_actions@1"
+        },
         {
           "command": "aiSharePoint.testConnection",
           "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem =~ /^site-/",
@@ -2073,6 +2371,16 @@
           "group": "3_manage@3"
         },
         {
+          "command": "aiSharePoint.manageMemory",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem =~ /^site-/",
+          "group": "4_memory@1"
+        },
+        {
+          "command": "aiSharePoint.addPrompt",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem =~ /^site-/",
+          "group": "4_memory@2"
+        },
+        {
           "command": "aiSharePoint.testContextSource",
           "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
           "group": "inline@1"
@@ -2091,6 +2399,16 @@
           "command": "aiSharePoint.removeContextSource",
           "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
           "group": "2_manage@1"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "2_manage@2"
+        },
+        {
+          "command": "aiSharePoint.addPrompt",
+          "when": "view == aiSharePoint.sourcesView && viewItem =~ /^context-source/",
+          "group": "2_manage@3"
         },
         {
           "command": "aiSharePoint.addBookmark",
@@ -2151,6 +2469,31 @@
           "command": "aiSharePoint.removeContextSource",
           "when": "view == aiSharePoint.sitesView && viewItem =~ /^managed-source/",
           "group": "2_manage@2"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^managed-source/",
+          "group": "2_manage@3"
+        },
+        {
+          "command": "aiSharePoint.addPrompt",
+          "when": "view == aiSharePoint.sitesView && viewItem =~ /^managed-source/",
+          "group": "2_manage@4"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem == memory-group",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem == memory-group",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.manageMemory",
+          "when": "(view == aiSharePoint.sitesView || view == aiSharePoint.sourcesView) && viewItem == memory-item",
+          "group": "1_actions@1"
         },
         {
           "command": "aiSharePoint.applyRepoToSharePoint",
@@ -2261,11 +2604,20 @@
           "command": "aiSharePoint.removeProject",
           "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
           "group": "2_manage@1"
+        },
+        {
+          "command": "aiSharePoint.addPrompt",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "group": "1_actions@3"
         }
       ],
       "commandPalette": [
         {
           "command": "aiSharePoint.refreshSites",
+          "when": "false"
+        },
+        {
+          "command": "aiSharePoint.showProxyDefangDetails",
           "when": "false"
         },
         {
@@ -2621,6 +2973,13 @@
           "order": 13,
           "markdownDescription": "%config.aiSharePoint.context.maxInputTokens.markdownDescription%"
         },
+        "aiSharePoint.context.autoProbeOnFirstUse": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "order": 14,
+          "markdownDescription": "%config.aiSharePoint.context.autoProbeOnFirstUse.markdownDescription%"
+        },
         "aiSharePoint.proxy.mode": {
           "type": "string",
           "enum": [
@@ -2728,8 +3087,8 @@
     "lint": "eslint \"src/**/*.ts\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "tsc -p tsconfig.test.json && node scripts/run-tests.js",
-    "coverage": "tsc -p tsconfig.test.json && node scripts/run-tests.js --coverage",
+    "test": "node scripts/clean-out-test.js && tsc -p tsconfig.test.json && node scripts/run-tests.js",
+    "coverage": "node scripts/clean-out-test.js && tsc -p tsconfig.test.json && node scripts/run-tests.js --coverage",
     "test:integration": "node test-integration/runTest.js",
     "check:native": "node scripts/check-native-deps.js",
     "check:vsix": "node esbuild.js && node scripts/check-vsix.js",

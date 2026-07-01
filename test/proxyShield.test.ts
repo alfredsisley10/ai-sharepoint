@@ -4,6 +4,8 @@ import {
   normalizeTerms,
   scanForTerms,
   defang,
+  defangDetails,
+  renderDefangReport,
   buildProxyNudge,
   proxyBlockAdvice,
   ZERO_WIDTH,
@@ -54,4 +56,34 @@ test("proxyBlockAdvice escalates with the network-failure count", () => {
   const strong = proxyBlockAdvice(4) ?? "";
   assert.match(strong, /#4/);
   assert.match(strong, /defang/);
+});
+
+test("defangDetails reports per-term count + an in-context sample, and rewrites text", () => {
+  const text = "Please share the SSN and the ssn again, plus the API key.";
+  const r = defangDetails(text, ["SSN", "API key"]);
+  assert.ok(r.text.includes(`S${ZERO_WIDTH}SN`));
+  assert.ok(r.text.includes(`A${ZERO_WIDTH}PI key`));
+  const ssn = r.changes.find((c) => c.term === "SSN")!;
+  assert.equal(ssn.count, 2); // "SSN" + "ssn" (case-insensitive)
+  assert.match(ssn.context, /«SSN»/); // first occurrence wrapped, original casing
+  assert.equal(r.changes.find((c) => c.term === "API key")!.count, 1);
+});
+
+test("defangDetails context comes from the ORIGINAL text (offsets don't drift across terms)", () => {
+  const r = defangDetails("alpha then bravo", ["alpha", "bravo"]);
+  assert.match(r.changes.find((c) => c.term === "bravo")!.context, /«bravo»/);
+});
+
+test("defang stays a thin wrapper over defangDetails (text + hit terms)", () => {
+  const r = defang("the SSN", ["ssn"]);
+  assert.deepEqual(r.hit, ["ssn"]);
+  assert.ok(r.text.includes(ZERO_WIDTH));
+});
+
+test("renderDefangReport makes a readable table; empty changes is a clear no-op", () => {
+  const md = renderDefangReport([{ term: "SSN", count: 2, context: "…the «SSN» of…" }]);
+  assert.match(md, /what was changed/i);
+  assert.match(md, /\| `SSN` \| 2 \|/);
+  assert.match(md, /zero-width/i);
+  assert.match(renderDefangReport([]), /Nothing was changed/);
 });

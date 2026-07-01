@@ -113,7 +113,7 @@ Connection** (also wipes tokens unless another connection uses the same tenant).
 
 ### Reference Sources
 Your read-only context: Confluence, Jira, GitHub (github.com or Enterprise Server), LDAP/AD,
-databases, Vertex AI Search, Power BI,
+databases, Power BI,
 Microsoft 365 Copilot, ServiceNow, Splunk. Add (+), test, browse & bookmark, schema tools, and the ER diagram all live
 here — see [Reference sources](#reference-sources-confluence--jira). When a project is active,
 the view header shows it and the list is scoped to that project's sources.
@@ -134,6 +134,17 @@ billing/plan page is the authoritative source.
 Teams/Outlook drafts waiting for **your** approval — nothing sends without it (the badge counts
 pending drafts). Draft yourself or ask @sharepoint to prepare one.
 
+**Read-only context (opt-in).** Beyond drafts, you can let @sharepoint **read** Microsoft 365
+context with the same sign-in — always scoped and read-only:
+
+- **Outlook** — *Outlook: Configure Read-Only Workspace* picks a folder (or the whole mailbox) it
+  may read; *Read Mail / Read Calendar* render a digest. (`#spReadOutlook`)
+- **Teams** — *Teams: Add Readable Scope* registers a specific **chat** or **team channel**;
+  @sharepoint reads **only** the scopes you add — never all of Teams — via *Teams: Read Messages*
+  or the `#spReadTeams` tool. Chats use the delegated **Chat.Read** permission (no admin consent);
+  reading a **channel** also needs **Channel.ReadBasic.All** + **ChannelMessage.Read.All**, which
+  may require an administrator to consent in your tenant. Reads never post, edit, or delete.
+
 ### Support & Diagnostics
 Everything operational: **Export Diagnostics Bundle**, **Error Reports** (the view badge shows
 the count; **right-click → Delete Error Reports** to clear them, with confirmation), extension
@@ -151,7 +162,7 @@ Click **Verbose Wire Logging** in the Support view (or run *Toggle Verbose Wire 
 the AI SharePoint log shows every integration's traffic as `[wire:…]` lines — request (`→`),
 response (`←`), failure (`✗`) — with method/target, status, timing, and capped payload detail:
 Graph (SharePoint/Teams/Outlook), Confluence/Jira, MSAL sign-in, LDAP binds & searches, the
-exact SQL sent to databases (with the server's error frames), MongoDB specs, Vertex AI Search,
+exact SQL sent to databases (with the server's error frames), MongoDB specs,
 Power BI, Copilot prompts/responses, and each chat tool call. **Secrets never appear**: auth
 headers are masked to their scheme, sign-in/token bodies are withheld entirely, passwords are
 structurally never logged, secret-shaped fields are scrubbed, and database/directory **result
@@ -163,8 +174,8 @@ bundles, and intentionally noisy — turn it off after debugging.
 Click **Usage Telemetry** in the Support view (or run *Manage Usage Telemetry (Splunk / OTEL)*)
 to optionally forward **anonymized** usage counters to a **Splunk HEC** endpoint and/or an
 **OTEL (OTLP/HTTP) metrics** platform. It's **off by default**. The guided menu lets you
-enable/disable it, set the Splunk HEC URL + token and the OTLP endpoint + auth header, send a
-**test event**, or clear everything.
+enable/disable it, set the Splunk HEC URL + **Splunk Attribution Identifier** and the OTLP
+endpoint + auth header, send a **test event**, or clear everything.
 
 - **What is sent:** only short categorical values — event names, enum dimensions (source type,
   error **code**, tool name), counts, and environment (extension/VS Code version, OS type/version,
@@ -172,9 +183,9 @@ enable/disable it, set the Splunk HEC URL + token and the OTLP endpoint + auth h
   content, credentials, PII, or error messages. Sending is **opportunistic** — a down or slow
   endpoint never blocks or breaks the extension. It also honors your `usageCapture` / VS Code
   telemetry stance.
-- **Where secrets live:** the connection details — including the HEC token and OTLP auth header —
-  are stored in your **OS keychain**, never in `settings.json` and never in a diagnostics export.
-  Saved tokens are **write-only**: the UI shows only *set / not set*, never the value.
+- **Where secrets live:** the connection details — including the **Splunk Attribution Identifier**
+  and OTLP auth header — are stored in your **OS keychain**, never in `settings.json` and never in a
+  diagnostics export. Saved secrets are **write-only**: the UI shows only *set / not set*, never the value.
 
 ## Chatting with @sharepoint
 
@@ -306,6 +317,14 @@ Jira, Cloud or Data Center (more source types are roadmap).
   account from org lockout policies. *Test Context Source* re-prompts for a fresh credential;
   *Reset Source Auth Lockout* (context menu) reopens a locked source — check with your admin
   first.
+- **Confluence governance writes are confirmation-gated**: a *managed* Confluence connector can
+  also make changes (create/update a page, archive, move, remove-from-search, labels). Every such
+  change shows an approval prompt naming the target **space** and the **instance URL** (plus the
+  action) so you verify *where* it lands before it happens. For a connector scoped to the **entire
+  instance** (not bound to one space), a page-targeted change adds a **second confirmation that names
+  the exact space the page actually lives in** — resolved live, since the first card can't look it up
+  — so an instance-wide write never lands in a space you didn't expect. Reference (read-only)
+  connectors have no write path at all.
 
 ### Aliases & descriptions: name sources the way you talk about them
 
@@ -463,37 +482,6 @@ reasons — ADR-0022):
   shown), so known-but-messy joins stay on the map.
 - **TLS** trusts the OS store and the shared pinned CA bundle setting
   (`aiSharePoint.ldap.caCertificatesFile` — applies to all non-HTTP sources).
-
-### Vertex AI Search (Google enterprise search)
-
-Connect your organization's **Vertex AI Search** app (the enterprise Gemini search portal):
-
-- **Add** (Reference Sources → `+` → *Vertex AI Search*): pick **"Find my search app via
-  Google SSO"** and the wizard lists your projects and apps (probing global/us/eu) — no IDs to
-  know. Or choose manual entry and **paste any URL you have** — including the **corporate
-  search page you open via SSO**
-  (`https://vertexaisearch.cloud.google/<region>/home/cid/<app id>?csesidx=…` — the region and
-  app id are read from it; the `csesidx` session id is ignored), a Cloud Console link, or the
-  serving config. It pre-fills whatever the URL carries; the corporate page doesn't name the
-  hosting project, so the wizard offers **"Find the project for me"** — it scans the projects
-  your Google sign-in can see and probes which one hosts the app (no IDs to know). Manual entry
-  remains for accounts that use the app without any project role (`gcloud projects list` —
-  locally or at shell.cloud.google.com — or ask whoever shared the page).
-- **SSO via the gcloud CLI (recommended)**: each call uses a **live token from your existing
-  `gcloud auth login` session** — your corporate Google SSO — and nothing is ever stored.
-  No CLI? Paste an OAuth access token instead (kept in your OS keychain; ~1 h lifetime, the
-  error message tells you when to refresh it).
-- **No GCP access at all?** (Common when the search page is reached via **Entra ID / Azure AD
-  SSO** federation.) Everything you need is in the **search page's own network traffic**: press
-  `F12` → **Network** on the page, run a search, click the request named `search`/`answer`/
-  `servingConfigs` — its **URL embeds `projects/<number>/locations/…/engines/…`** (paste it
-  into the wizard's project step; a project *number* works like an ID), and its **Request
-  Headers carry `Authorization: Bearer …`** — copy the token value (without the word `Bearer`)
-  as the pasted-token sign-in. The token is your own session's (~1 h); re-paste via *Test
-  Context Source* when it expires.
-- **Search and analysis in chat**: plain searches return enterprise hits; ask for analysis and
-  the `#spVertexAnswer` tool returns a **Gemini-grounded answer with citations** from your
-  corpus (*"@sharepoint ask Vertex what our data-retention policy says"*).
 
 ### GitHub
 
@@ -674,6 +662,26 @@ Dashboards, alert-rule state, annotations, and **live panel data** (ADR-0033/003
 - **Browse & Bookmark** lists your folders (each a scoped dashboard search) plus standing
   *Alert rules — current state* and *Recent annotations* candidates. Datasource listings may
   need admin permission — the error says so; everything else reads with Viewer.
+
+### Files (Excel, CSV, Word, PDF, text) — local or OneDrive/SharePoint
+
+Register individual files as read-only context — no server or connector needed:
+
+- **Add** from the **Reference Sources** panel's **`…` overflow menu** (top-right of the panel):
+  - **Add Local File for Context** — pick a file from disk. Supported: **Excel** (`.xlsx` and
+    legacy `.xls`), **CSV/TSV**, **Word** (`.docx`), **PDF**, and **plain text** (`.txt`, `.md`,
+    `.log`, `.json`, `.xml`, …). The picker also has an *All files* filter so you can add any
+    text-based file; binary files you can't read as text are rejected with a clear message.
+  - **Add OneDrive/SharePoint File for Context** — pick from files shared with you, or paste a
+    sharing link. Reuses your Microsoft 365 sign-in (connect a SharePoint site first).
+- **See what's registered:** every added file now appears **as an item in the Reference Sources
+  tree** (with its kind and location), alongside your connectors and sites. Click a file to open
+  a read-only preview; use the inline **Read** / **Remove** actions on the item (removing only
+  unregisters it — the file itself is never touched).
+- **In chat:** `@sharepoint` reads a registered file with the **`#spReadFile`** tool. Spreadsheets
+  render as Markdown tables — **every worksheet** of a workbook, each under its sheet name (large
+  sheets are row/column-bounded); Word/PDF/text render as bounded text. PDF extraction is
+  best-effort — a **scanned/image-only PDF has no text** and will say so.
 
 ### Export search results to a workspace file (ADR-0031)
 
@@ -859,7 +867,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Apply Repository to SharePoint (write-back)… | Write repo changes to the live site — previewed, freshness-checked, snapshot-guarded |
 | Revert Site to Commit… | Make the live site match an earlier snapshot commit (ADR-0005) |
 | Export / Import Reference Config | Share sources + bookmarks with the team, secret-free (ADR-0013) |
-| Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases/Vertex AI Search) |
+| Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases/Power BI/ServiceNow) |
 | Load/Refresh / Index / View Database Schema · Pre-cache Source Catalog | Schema understanding (ADR-0024) and catalog pre-cache per source |
 | Draft Teams Message / Draft Outlook Email · Review & Send / Edit / Discard Communication Draft | Approval-gated communications (ADR-0025) |
 | Configure Teams Webhook (no admin consent)… | Add/remove channel Incoming Webhooks so Teams drafts can post without `Chat.ReadWrite` |
@@ -893,6 +901,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | `aiSharePoint.context.catalogTtlHours` | `24` | Pre-cached catalog freshness window |
 | `aiSharePoint.context.catalogCheckpointSeconds` | `15` | "Keep loading?" interval during catalog pre-cache |
 | `aiSharePoint.context.allowSchemaIndexing` | `true` | **Machine-scoped** — allow Copilot schema indexing (names only) |
+| `aiSharePoint.context.autoProbeOnFirstUse` | `false` | **Machine-scoped** — on first use of a model, send one short calibration request to learn its real context limit (uses a little Copilot quota) |
 | `aiSharePoint.ldap.dnsServers` | `[]` | **Machine-scoped** — internal DNS IPs for AD SRV lookups (fixes VPN split-DNS) |
 | `aiSharePoint.logging.verboseWire` | `false` | Full redacted request/response detail from every integration in the log |
 
@@ -909,6 +918,9 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | 403 / “access denied” on a site | Your account lacks permission, or the tenant hasn't consented `Sites.Read.All` for the app → Admin Guide. |
 | Pages list shows “unavailable” | Some tenants restrict the Graph Pages API → lists still work; this is expected. |
 | 429 / throttled | Microsoft Graph throttling → the extension retries once automatically; wait a moment. |
+| Chat message fails to send (network error) | A corporate content proxy / DLP may be blocking a word in the message. When this is suspected, the failed turn now shows a one-click **🛡️ Enable defang** button — it sets `aiSharePoint.proxy.mode` to `defang` so future messages auto-obfuscate avoid-list words (an invisible zero-width character is inserted so the proxy can't match — the AI still reads the original). You can also open **Manage Proxy Avoid-List** to add specific trigger words. When defang rewrites a message, a **🛡️ See what was changed** button shows exactly which words were altered. |
+| Connection fails behind a proxy / TLS-inspection | The extension auto-diagnoses this and shows the fix inline (trust the proxy root CA via `NODE_EXTRA_CA_CERTS` / OS trust store, set `http.proxy` for a 407, or ask IT to allowlist the host). This detection now also covers **database** and **LDAP/Active Directory** TLS handshakes (a re-signing appliance is named when recognized) and **Microsoft sign-in** itself. To check proactively, run **Test Network / Proxy Connectivity** (Support & Diagnostics, or the Command Palette): it probes the sign-in and Graph endpoints and reports any proxy/filter interference with the exact remedy. Admin Guide §3. |
+| Large chats fail or silently drop context | The model's real context limit (which your org can cap below the advertised size) was hit → @sharepoint auto-retries under a tighter budget and trims lowest-value context first. Run **Probe Model Context Limit** to measure the true ceiling, or **Show Learned Model Context Limits** to see it. An interrupted turn shows a **↻ Restart this request** button. |
 | 403 “unauthorized: not authorized to use this Copilot feature” | GitHub refuses a Copilot feature for your account: lapsed subscription/seat, or an **organization policy** disables it (org admin: GitHub → Copilot → Policies). When this surfaces through our requests, the extension **pauses Copilot calls ~5 min** (failing fast locally with the explanation, and indexing runs stop) so the refusal isn't hammered — fix the entitlement, then run **Check Copilot Status** to retry immediately. If the error only appears in the *GitHub Copilot Chat* output as `[CopilotCliSession] Failed to fetch models`, that's Copilot Chat's own **CLI-sessions integration** being blocked — pilot-confirmed to occur when *Copilot CLI* is disabled by org policy. It is benign for this extension (our features use the editor Language Model API, not the CLI), and the repeated logging is an acknowledged upstream bug ([microsoft/vscode#315405](https://github.com/microsoft/vscode/issues/315405), open — no workaround setting documented yet); options are to have the admin enable the Copilot CLI policy, disable any "agent sessions" / Copilot CLI integration toggle your VS Code version exposes in Settings, or ignore the log line. |
 | SQL Server "authentication rejected" but the login works in SSMS | Re-add the source with the guided wizard (it prompts for server, instance, port, database, certificate, and sign-in method separately — answer exactly as in SSMS) and read the appended **“server said: …”** detail: it is SQL Server's own message distinguishing a bad login, an inaccessible database, or a wrong instance. |
 | "Could not initialize a Git repository" / repo not detected | Folder outside the workspace, Restricted Mode, or git missing → accept the wizard's "Add to Workspace" offer (or File → Add Folder to Workspace…), trust the window, and check `git --version`. |
