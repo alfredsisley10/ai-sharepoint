@@ -3103,7 +3103,7 @@
     "ldapts": "^8.0.0",
     "mongodb": "^7.4.0",
     "mysql2": "^3.0.0",
-    "pg": "^8.0.0",
+    "pg": "^8.22.0",
     "tedious": "^19.0.0"
   },
   "devDependencies": {
