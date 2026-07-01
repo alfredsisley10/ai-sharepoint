@@ -41,3 +41,26 @@
 - Aggregate/Stats APIs, attachments, and write operations are out of
   scope (read-only posture); the semantic schema indexing of ADR-0024
   could later extend to ServiceNow table dictionaries if asked for.
+
+## Amendment (2026-07-01): SSO-friendly auth for standard users
+
+The pilot needed users **without a service account or OAuth client** to connect
+via their existing SSO. Beyond Basic and an OAuth bearer token, the connector now
+also offers (see `docs/research/servicenow-sso-simplification.md` for the full
+inbound-auth catalog and rationale):
+
+- **`snow-oauth`** — OAuth authorization-code + PKCE over a loopback redirect;
+  `oauth_auth.do` delegates login to the org SSO. Needs a one-time admin OAuth
+  client (Application Registry, redirect `http://localhost:51725/callback`).
+- **`snow-session`** — replay the user's signed-in browser session cookies
+  (+ optional `g_ck`/`X-UserToken`). Zero admin, but session-fragile.
+- **`snow-apikey`** — Inbound REST API Key in the `x-sn-apikey` header; the key
+  is tied to a ServiceNow user, so that user's ACLs apply. No OAuth client,
+  password, or expiry.
+- **`snow-oidc`** — a third-party OIDC/JWT ID token from the org IdP (Entra/Okta)
+  sent as a Bearer token; the instance validates it against a registered OIDC
+  provider and maps a claim to a user. The strategic SSO path (no ServiceNow
+  credential); `exp` is decoded to fail fast on an expired paste.
+
+All four ride the shared `fetchJson`, so lockout protection, caps/caching, and
+secret-masked wire logging apply unchanged; secrets live only in the OS keychain.

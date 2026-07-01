@@ -45,7 +45,12 @@ export function contextCredentialUi(type: ContextSourceType): ContextCredentialU
  *  az-sso = live token from the Azure CLI's `az login` session (a
  *  marker-only pattern — the no-admin-consent Power BI path);
  *  aad-sso = Microsoft 365 sign-in reused from a connected site (the
- *  keychain entry stores only the provider/cache handles, no secret). */
+ *  keychain entry stores only the provider/cache handles, no secret);
+ *  snow-apikey = ServiceNow Inbound REST API Key (the `x-sn-apikey` header,
+ *  Washington+ — tied to a user so ACLs apply, no OAuth client or password);
+ *  snow-oidc = a third-party OIDC/JWT ID token (Entra/Okta/…) sent as a
+ *  Bearer token to ServiceNow's third-party-token inbound auth (no service
+ *  account; the instance validates it against a registered OIDC provider). */
 export type ContextAuthMethod =
   | "basic"
   | "pat"
@@ -58,6 +63,8 @@ export type ContextAuthMethod =
   | "snow-oauth"
   | "splunk-session"
   | "snow-session"
+  | "snow-apikey"
+  | "snow-oidc"
   | "sfx-token";
 
 export interface ContextSource {

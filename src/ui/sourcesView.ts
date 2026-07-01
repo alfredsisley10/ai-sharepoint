@@ -22,10 +22,25 @@ import {
   memoryItemTreeItem,
   hasMemory,
 } from "./memoryTree";
+import {
+  SourceGroupNode,
+  isSourceGroup,
+  ICON_BY_TYPE,
+  groupSourcesByType,
+  groupFiles,
+  groupReferenceSites,
+} from "./sourceGrouping";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
-type Node = ContextSource | ContextBookmark | SiteConnection | MemoryGroupNode | MemoryItem | FileSource;
+type Node =
+  | ContextSource
+  | ContextBookmark
+  | SiteConnection
+  | MemoryGroupNode
+  | MemoryItem
+  | FileSource
+  | SourceGroupNode;
 
 function isBookmark(node: Node): node is ContextBookmark {
   return (node as ContextBookmark).locator !== undefined && (node as MemoryItem).origin === undefined;
@@ -75,6 +90,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
+    if (isSourceGroup(node)) return this.groupItem(node);
     if (isMemoryGroup(node)) return memoryGroupTreeItem(node, this.memory);
     if (isMemoryItem(node)) return memoryItemTreeItem(node);
     if (isFileSource(node)) return this.fileItem(node);
@@ -97,8 +113,15 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
       const referenceSources = this.scope(this.sources.list().filter((s) => s.role !== "managed"));
       // Registered files (local + OneDrive/SharePoint) are read-only context too,
       // so they belong in this list — otherwise the user can't see what's added.
-      return [...referenceSites, ...referenceSources, ...this.files.list()];
+      // Same-type sources, multiple files, and multiple sites each fold into a
+      // group; singletons stay at the top level (see sourceGrouping).
+      return [
+        ...groupReferenceSites(referenceSites),
+        ...groupSourcesByType(referenceSources),
+        ...groupFiles(this.files.list()),
+      ];
     }
+    if (isSourceGroup(node)) return node.children;
     if (isMemoryGroup(node)) return this.memory.listForScope(node.memoryScope);
     if (isMemoryItem(node) || isBookmark(node) || isFileSource(node)) return [];
     if (isSiteConnection(node)) return memoryGroupChildren(this.memory, { kind: "site", key: node.siteUrl });
@@ -106,6 +129,18 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
       ...this.bookmarks.listForSource(node.id),
       ...memoryGroupChildren(this.memory, { kind: "source", key: node.id }),
     ];
+  }
+
+  /** A group header (same-type sources, the Files folder, or the sites folder):
+   *  collapsible and expanded by default so the folding organizes without hiding
+   *  anything on first view. Expanding it reveals nested children, which is what
+   *  makes VS Code draw the vertical indent guide down to them. */
+  private groupItem(node: SourceGroupNode): vscode.TreeItem {
+    const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
+    item.id = node.id;
+    item.iconPath = new vscode.ThemeIcon(node.icon);
+    item.contextValue = "context-source-group";
+    return item;
   }
 
   private fileItem(source: FileSource): vscode.TreeItem {
@@ -147,21 +182,6 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     item.id = source.id;
     const locked = this.sources.isLockedOut(source.id);
     item.description = `${source.alias ? `“${source.alias}” · ` : ""}${source.type} · ${source.deployment}${locked ? " · locked" : ""}`;
-    const ICON_BY_TYPE: Record<string, string> = {
-      jira: "issues",
-      github: "github",
-      ldap: "organization",
-      powerbi: "graph",
-      servicenow: "tools",
-      splunk: "pulse",
-      splunkobs: "dashboard",
-      grafana: "graph-line",
-      m365copilot: "sparkle",
-      mssql: "database",
-      postgres: "database",
-      mysql: "database",
-      mongodb: "database",
-    };
     const icon = ICON_BY_TYPE[source.type] ?? "book"; // confluence (and any future type) → book
     item.iconPath = new vscode.ThemeIcon(
       icon,
@@ -195,7 +215,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
           ? [`| Resolution | DNS SRV on every connection (durable — survives DC changes) |`]
           : []),
         ...(source.baseDn ? [`| Base DN | ${source.baseDn} |`] : []),
-        `| Auth | ${source.authMethod === "pat" ? (source.type === "grafana" ? "Service account token" : "Personal access token") : source.authMethod === "github-oauth" ? "GitHub sign-in (OAuth)" : source.authMethod === "github-app" ? "GitHub App installation token" : source.authMethod === "sfx-token" ? "Access token (X-SF-TOKEN)" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : source.authMethod === "ntlm" ? "Windows Authentication (NTLM)" : source.authMethod === "aad-sso" ? "Microsoft 365 SSO (shared with your site sign-in)" : "Basic (username + token/password)"} |`,
+        `| Auth | ${source.authMethod === "pat" ? (source.type === "grafana" ? "Service account token" : "Personal access token") : source.authMethod === "github-oauth" ? "GitHub sign-in (OAuth)" : source.authMethod === "github-app" ? "GitHub App installation token" : source.authMethod === "sfx-token" ? "Access token (X-SF-TOKEN)" : source.authMethod === "ldap-simple" ? "LDAP simple bind (UPN/DN + password)" : source.authMethod === "ntlm" ? "Windows Authentication (NTLM)" : source.authMethod === "aad-sso" ? "Microsoft 365 SSO (shared with your site sign-in)" : source.authMethod === "snow-oauth" ? "ServiceNow OAuth (browser SSO, PKCE)" : source.authMethod === "snow-session" ? "ServiceNow browser session (SSO cookies)" : source.authMethod === "snow-oidc" ? "Third-party OIDC/SSO token (Bearer)" : source.authMethod === "snow-apikey" ? "Inbound REST API key (x-sn-apikey)" : "Basic (username + token/password)"} |`,
         `| Account | ${source.account ?? "_not verified_"} |`,
         `| Verified | ${source.lastVerifiedAt ?? "_never_"} |`,
         ...(bookmarkCount > 0 ? [`| Bookmarks | ${bookmarkCount} |`] : []),

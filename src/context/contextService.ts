@@ -122,6 +122,7 @@ import {
   snowTokensFromSecret,
   snowTokenExpired,
   refreshSnowTokens,
+  jwtExpiryMs,
 } from "./adapters/servicenowAuth";
 import { SchemaCatalog, TableDef } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
@@ -198,6 +199,20 @@ export class ContextService {
     source: ContextSource,
     credential: ContextCredential,
   ): Promise<ContextCredential> {
+    // A third-party OIDC/JWT token can't be refreshed (we don't hold the IdP
+    // client) — fail fast with a clear message when it has already expired,
+    // rather than surfacing an opaque 401 from the instance.
+    if (credential.method === "snow-oidc") {
+      const exp = jwtExpiryMs(credential.secret);
+      if (exp !== undefined && Date.now() >= exp) {
+        throw new AppError(
+          "The ServiceNow OIDC/SSO token has expired.",
+          "auth.failed",
+          "Get a fresh ID/access token from your identity provider (Entra ID, Okta, …) and re-paste it via Test Context Source.",
+        );
+      }
+      return credential;
+    }
     if (credential.method !== "snow-oauth") return credential;
     let tokens = snowTokensFromSecret(credential.secret);
     if (snowTokenExpired(tokens, Date.now())) {

@@ -5,8 +5,40 @@ import {
   parseSnowTokenResponse,
   snowTokensFromSecret,
   snowTokenExpired,
+  snowApiKeyIssue,
+  snowOidcTokenIssue,
+  jwtExpiryMs,
   SNOW_REDIRECT_URI,
 } from "../src/context/adapters/servicenowAuth";
+
+// A minimal unsigned JWT with a controllable exp claim (seconds).
+function jwt(expSeconds?: number): string {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${b64({ alg: "RS256", kid: "x" })}.${b64(expSeconds ? { sub: "u", exp: expSeconds } : { sub: "u" })}.sig`;
+}
+const NOW = 1_700_000_000_000; // fixed "now" in ms
+
+test("snowApiKeyIssue: flags empty, spaced, and too-short keys; accepts a real one", () => {
+  assert.ok(snowApiKeyIssue(""));
+  assert.ok(snowApiKeyIssue("has space in it here"));
+  assert.ok(snowApiKeyIssue("short"));
+  assert.equal(snowApiKeyIssue("a1b2c3d4e5f6g7h8i9j0"), undefined);
+});
+
+test("jwtExpiryMs: decodes exp (→ ms); undefined for non-JWT or missing exp", () => {
+  assert.equal(jwtExpiryMs(jwt(1_700_000_600)), 1_700_000_600_000);
+  assert.equal(jwtExpiryMs(jwt()), undefined); // no exp claim
+  assert.equal(jwtExpiryMs("not.a.jwt-ish"), undefined);
+  assert.equal(jwtExpiryMs("only-one-segment"), undefined);
+});
+
+test("snowOidcTokenIssue: requires a JWT shape and a non-expired token", () => {
+  assert.ok(snowOidcTokenIssue("", NOW)); // empty
+  assert.ok(snowOidcTokenIssue("abc123", NOW)); // not a JWT
+  assert.ok(snowOidcTokenIssue(jwt(NOW / 1000 - 60), NOW)); // expired 60s ago
+  assert.equal(snowOidcTokenIssue(jwt(NOW / 1000 + 3600), NOW), undefined); // valid, unexpired
+  assert.equal(snowOidcTokenIssue(jwt(), NOW), undefined); // JWT with no exp is accepted (can't prove expiry)
+});
 
 test("buildSnowAuthUrl targets oauth_auth.do with PKCE and the loopback redirect", () => {
   const url = new URL(
