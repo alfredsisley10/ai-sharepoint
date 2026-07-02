@@ -1285,6 +1285,10 @@
             "pageId": {
               "type": "string",
               "description": "The page whose owners to resolve (required)."
+            },
+            "refresh": {
+              "type": "boolean",
+              "description": "Recompute instead of using the cached ownership result (default false)."
             }
           },
           "required": [

@@ -21,6 +21,8 @@ import { verifyLdap, searchLdap, searchLdapRaw, getLdapEntry, LdapTlsOptions } f
 import { ldapUserDirectory, activeFromDirectory, contactOf, UserDirectory } from "./userDirectory";
 import { cachedUserDirectory } from "./directoryCache";
 import { DirectoryCacheStore } from "./directoryCacheStore";
+import { OwnershipCacheStore } from "./ownershipCacheStore";
+import { CachedOwnership } from "./ownershipCache";
 import { listConfluenceSpaces, listAllConfluenceSpaces } from "./adapters/confluence";
 import {
   listJiraProjects,
@@ -61,7 +63,6 @@ import {
   getConfluencePageContributorsWeighted,
   getConfluenceSpaceContributorsWeighted,
   resolveOwners,
-  OwnerResolution,
 } from "./adapters/confluenceOwnership";
 import {
   archiveConfluencePage as archiveConfluencePageAdapter,
@@ -153,6 +154,7 @@ export class ContextService {
     private readonly cache: TtlCache,
     private readonly aadBroker?: AadTokenBroker,
     private readonly directoryCache?: DirectoryCacheStore,
+    private readonly ownershipCache?: OwnershipCacheStore,
   ) {}
 
   /** Build a cached user directory (ADR-0041) from a configured LDAP source, if
@@ -986,19 +988,18 @@ export class ContextService {
   async resolveConfluenceOwners(
     source: ContextSource,
     pageId: string,
-  ): Promise<{
-    resolution: OwnerResolution;
-    labels: string[];
-    directoryWired: boolean;
-    directoryLabel?: string;
-    ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
-  }> {
+    refresh = false,
+  ): Promise<CachedOwnership & { cached?: boolean }> {
     if (source.type !== "confluence") throw new AppError("Ownership targets a Confluence source.", "config");
+    if (!refresh) {
+      const hit = this.ownershipCache?.getFresh(source.id, pageId);
+      if (hit) return { ...hit, cached: true };
+    }
     const caps = this.caps();
     const credential = await this.storedCredential(source);
     const directory = this.userDirectory();
     const nowMs = Date.now();
-    return this.tracked(source, false, async () => {
+    const result = await this.tracked(source, false, async () => {
       const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
       const [labels, pageContributors] = await Promise.all([
         getConfluencePageLabels(source, credential, pageId, caps.timeoutMs),
@@ -1034,6 +1035,8 @@ export class ContextService {
         ...(ownerContacts ? { ownerContacts } : {}),
       };
     });
+    await this.ownershipCache?.put(source.id, pageId, result);
+    return { ...result, cached: false };
   }
 
   /** Review whether the signed-in user can read+write every page in a space,

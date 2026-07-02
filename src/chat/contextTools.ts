@@ -98,9 +98,10 @@ function renderOwners(r: {
   directoryWired: boolean;
   directoryLabel?: string;
   ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
+  cached?: boolean;
 }): string {
   const { resolution } = r;
-  const lines = ["# Page owner(s)"];
+  const lines = [`# Page owner(s)${r.cached ? " (cached — pass refresh:true to recompute)" : ""}`];
   const contactBy = new Map((r.ownerContacts ?? []).map((c) => [c.sam.toLowerCase(), c]));
   const renderOwner = (sam: string): string => {
     const c = contactBy.get(sam.toLowerCase());
@@ -608,13 +609,13 @@ export function registerContextTools(
       },
     }),
     // Governance — resolve page OWNER(S) (read).
-    vscode.lm.registerTool<{ source?: string; pageId?: string }>(
+    vscode.lm.registerTool<{ source?: string; pageId?: string; refresh?: boolean }>(
       "aisharepoint_resolve_page_owners",
       guarded("aisharepoint_resolve_page_owners", "Resolving Confluence page owner(s)", async (i) => {
         const source = resolveOrExplain(i.source);
         if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — ownership targets Confluence.`;
         if (!i.pageId?.trim()) return "A pageId is required (search the source first to find it).";
-        return renderOwners(await service.resolveConfluenceOwners(source, i.pageId.trim()));
+        return renderOwners(await service.resolveConfluenceOwners(source, i.pageId.trim(), i.refresh ?? false));
       }),
     ),
     // Governance — review SPACE MANAGEABILITY / entitlements (read).
