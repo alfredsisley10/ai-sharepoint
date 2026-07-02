@@ -952,6 +952,7 @@ export function activate(context: vscode.ExtensionContext): void {
         telemetry,
         errors,
         nowIso,
+        () => contextService.emailUserDirectory(),
       ),
     ),
     ...tryRegister("sharepoint session tools", () =>

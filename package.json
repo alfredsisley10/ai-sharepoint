@@ -856,6 +856,25 @@
         }
       },
       {
+        "name": "aisharepoint_resolve_sharepoint_page_owner",
+        "displayName": "Resolve SharePoint Page Owner",
+        "toolReferenceName": "spSharePointOwner",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(person)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Determine who OWNS a modern SharePoint page: the most RECENTLY-active editor from its version history who is a current active employee (parity with Confluence ownership). When an LDAP reference source is configured, editors (by email/UPN) are validated as active and the owner's contact + AD account are returned; otherwise ranked by recency-weighted edits. Read-only. Use to find who to notify for cleanup. Args: site (URL or title; optional if one), pageId (from list_pages), or itemId (the Site Pages list-item id, if the pageId doesn't resolve version history).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site": { "type": "string", "description": "Site URL or display name (optional when only one connection)." },
+            "pageId": { "type": "string", "description": "The page id (from list_pages)." },
+            "itemId": { "type": "string", "description": "The Site Pages list-item id (use if pageId doesn't resolve version history)." }
+          }
+        }
+      },
+      {
         "name": "aisharepoint_list_pages",
         "displayName": "List SharePoint Pages",
         "toolReferenceName": "spPages",

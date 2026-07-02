@@ -7,6 +7,8 @@ import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { describeColumn, summarizeCanvas, summarizePageContent, PageContentSummary } from "./siteInspect";
+import { resolveSharePointOwners } from "../auth/sharePointOwnership";
+import { UserDirectory, activeFromDirectory, contactOf } from "../context/userDirectory";
 
 /**
  * Language Model Tools (ADR-0017 surface 1): read-only capabilities Copilot
@@ -48,6 +50,9 @@ export function registerLanguageModelTools(
   telemetry: TelemetryService,
   errors: ErrorReportStore,
   now: () => string,
+  /** Email-keyed user directory (from a configured LDAP source), so SharePoint
+   *  page owners can be validated as current active employees. */
+  emailDirectory?: () => { dir: UserDirectory; label: string } | undefined,
 ): vscode.Disposable[] {
   const guarded = <T>(
     name: string,
@@ -163,6 +168,52 @@ export function registerLanguageModelTools(
           2,
         );
       }),
+    ),
+
+    // Ownership — resolve a modern page's effective owner from its version
+    // history (most recently-active editor who is a current active employee).
+    vscode.lm.registerTool(
+      "aisharepoint_resolve_sharepoint_page_owner",
+      guarded<{ site?: string; pageId?: string; itemId?: string }>(
+        "aisharepoint_resolve_sharepoint_page_owner",
+        "Resolving SharePoint page owner",
+        async (input) => {
+          const conn = resolveOrExplain(input.site);
+          if (!input.pageId?.trim() && !input.itemId?.trim()) {
+            return "A pageId (or the Site Pages list itemId) is required — list pages first.";
+          }
+          const client = access.clientFor(conn, { silent: true });
+          const site = await client.getSite(conn.siteUrl);
+          const editors = await client.getPageEditors(site.id, input.pageId?.trim() ?? input.itemId!.trim(), input.itemId?.trim());
+          if (!editors.length) {
+            return "Couldn't read this page's version history (the Site Pages library or the versions endpoint may be restricted, or the id isn't a Site Pages list-item id — try passing the numeric itemId). No owner resolved.";
+          }
+          const directory = emailDirectory?.();
+          const resolution = await resolveSharePointOwners(
+            editors,
+            directory ? activeFromDirectory(directory.dir) : async () => true,
+            { nowMs: Date.parse(now()) },
+          );
+          const lines = ["# SharePoint page owner"];
+          if (resolution.owners.length && directory) {
+            const rec = await directory.dir(resolution.owners[0]);
+            lines.push(`- Owner: ${rec?.displayName ?? resolution.owners[0]}${contactOf(rec) ? ` <${contactOf(rec)}>` : ` <${resolution.owners[0]}>`}${rec?.sam ? ` (${rec.sam})` : ""}`);
+          } else {
+            lines.push(`- Owner: ${resolution.owners[0] ?? "(none determined)"}`);
+          }
+          lines.push(`- Basis: ${resolution.basis}${resolution.note ? ` — ${resolution.note}` : ""}`);
+          if (resolution.considered?.length) {
+            lines.push(`- Top recent editors: ${resolution.considered.slice(0, 5).map((c) => `${c.sam} (${c.count}×)`).join(", ")}`);
+          }
+          lines.push(
+            "",
+            directory
+              ? `Active-employee validation: ON via ${directory.label} (email-keyed; ranked by recency-weighted edits).`
+              : "No LDAP directory configured — ranked by recency-weighted edits, not filtered by who is still active.",
+          );
+          return lines.join("\n");
+        },
+      ),
     ),
 
     // Pilot: an authoritative component-by-page breakdown must work for

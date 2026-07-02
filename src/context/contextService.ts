@@ -18,7 +18,7 @@ import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
 import { verifyGithub, searchGithub, getGithubItem, githubApiBase } from "./adapters/github";
 import { parseGithubAppSecret, mintInstallationToken, InstallationToken } from "./adapters/githubAuth";
 import { verifyLdap, searchLdap, searchLdapRaw, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
-import { ldapUserDirectory, activeFromDirectory, contactOf, UserDirectory } from "./userDirectory";
+import { ldapUserDirectory, ldapUserDirectoryByEmail, activeFromDirectory, contactOf, UserDirectory } from "./userDirectory";
 import { cachedUserDirectory } from "./directoryCache";
 import { DirectoryCacheStore } from "./directoryCacheStore";
 import { OwnershipCacheStore } from "./ownershipCacheStore";
@@ -173,6 +173,27 @@ export class ContextService {
     const ldap = this.store.list().find((s) => s.type === "ldap");
     if (!ldap) return undefined;
     const live: UserDirectory = ldapUserDirectory(async (filter, attrs) => {
+      const cred = await this.storedCredential(ldap);
+      return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
+    });
+    const dir = this.directoryCache
+      ? cachedUserDirectory(
+          live,
+          { get: (s) => this.directoryCache!.get(s), put: (e) => this.directoryCache!.put(e) },
+          { now: () => Date.now() },
+        )
+      : live;
+    return { dir, label: `LDAP (${ldap.displayName})` };
+  }
+
+  /** An EMAIL/UPN-keyed directory (SharePoint/ServiceNow contributors are
+   *  identified by email, not sAMAccountName). Same LDAP source + cache as
+   *  `userDirectory`; undefined when no LDAP source is configured. Public so the
+   *  SharePoint tools can validate active employees for page ownership. */
+  emailUserDirectory(): { dir: UserDirectory; label: string } | undefined {
+    const ldap = this.store.list().find((s) => s.type === "ldap");
+    if (!ldap) return undefined;
+    const live: UserDirectory = ldapUserDirectoryByEmail(async (filter, attrs) => {
       const cred = await this.storedCredential(ldap);
       return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
     });

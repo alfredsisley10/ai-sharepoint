@@ -2,6 +2,7 @@ import { SharePointAuthProvider } from "./types";
 import { AppError } from "../core/errors";
 import { detectProxyInterference, detectProxyFromError, hostOf } from "../core/networkDiagnostics";
 import { wireEnabled, emitWire, capDetail, safeJson, safeUrl } from "../core/wireLog";
+import { SpEditor, fetchSharePointPageEditors } from "./sharePointOwnership";
 
 /** Microsoft Graph delegated scope to read sites. */
 const SITES_READ_SCOPE = "https://graph.microsoft.com/Sites.Read.All";
@@ -170,6 +171,30 @@ export class SharePointClient {
       webUrl: p.webUrl,
       lastModified: p.lastModifiedDateTime,
     }));
+  }
+
+  /** The "Site Pages" library list id (modern pages live here). Best-effort:
+   *  match the sitePagePublishing template, else the display name. */
+  async getSitePagesListId(siteId: string): Promise<string | undefined> {
+    const lists = await this.getLists(siteId);
+    const hit =
+      lists.find((l) => l.template === "sitePagePublishing") ??
+      lists.find((l) => /^site\s*pages$/i.test(l.displayName));
+    return hit?.id;
+  }
+
+  /**
+   * A modern page's editors from its list-item version history (for ownership).
+   * Best-effort and non-fatal: returns [] when the Site Pages list can't be
+   * found or the versions endpoint is restricted, so ownership degrades to
+   * "no owner" rather than failing. `itemId` defaults to the page id (the
+   * Site Pages list-item id for Graph sitePages); pass an explicit numeric
+   * list-item id if the page id doesn't resolve.
+   */
+  async getPageEditors(siteId: string, pageId: string, itemId?: string): Promise<SpEditor[]> {
+    const listId = await this.getSitePagesListId(siteId).catch(() => undefined);
+    if (!listId) return [];
+    return fetchSharePointPageEditors((path) => this.get(path), siteId, listId, itemId ?? pageId);
   }
 
   /** Visible columns of a list (all pages; lists can exceed 100 columns).
