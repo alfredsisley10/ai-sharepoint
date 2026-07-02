@@ -18,7 +18,30 @@ cache are implemented but unwired, SharePoint and ServiceNow have no ownership c
 there is no remediation-work inventory, and exports are CSV/JSON only. The connectors are *capable*
 but not *configured* for this workflow yet.
 
-## Requirement-by-requirement assessment
+## Implementation status (2026-07-02)
+
+The gaps below have since been built out (ADR-0045 + the ownership/authority wiring):
+
+- **✅ Effective-owner correctness** — the LDAP/M365 user directory is wired into ownership *and*
+  currency (active-employee check real, inactive contributors skipped, owner contact returned);
+  contributor ranking is now **recency-weighted** ("most active of recent history"); a configured
+  **space-owner** last-resort basis was added.
+- **✅ Caching, exportable** — a persistent **directory cache** (multi-day TTL) and **ownership-result
+  cache** (per page, `refresh` to recompute), both export/import for backup + team sharing.
+- **✅ Remediation work inventory** — event-sourced backlog (every step/communication/follow-up/
+  resolution tracked), `work-items/v1` export/import (restore = replace, multi-user = event-union
+  merge), four chat tools + Export/Back Up/Restore commands.
+- **✅ Oversight export** — a dependency-light **XLSX writer** + Summary/Work Items/History workbook
+  (and CSV), wired to a command + tool.
+- **✅ Authoritative sweep** — `mark_authority` / `gather_authority` / `find_conflicts` chat tools
+  wire the previously-unused ADR-0040 construct into the loop.
+- **✅ ServiceNow owner fields** — `sys_updated_by`/`sys_created_by`/`opened_by` now surfaced.
+- **◑ SharePoint ownership** — the reusable core is built + tested (email-keyed directory,
+  recency-weighted version-editor resolution, graceful version fetch); the live Graph list/item-id
+  mapping + tool wiring remain for on-tenant validation.
+- **▫ Content-cache wiring** (ADR-0042) remains an internal optimization, still deferred.
+
+## Requirement-by-requirement assessment (original gap analysis)
 
 | # | Workflow requirement | Today | Status |
 |---|---|---|---|
