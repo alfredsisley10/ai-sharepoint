@@ -90,18 +90,42 @@ function renderValidation(v: RenderedValidation): string {
 }
 
 const UNVERIFIED_OWNER_NOTE =
-  "Note: active-user verification needs an LDAP/M365 directory (not wired) — owners are ranked by contribution volume, not filtered by who is still active.";
+  "Note: no LDAP/M365 directory is configured, so active-user verification is off — owners are ranked by recency-weighted contribution, not filtered by who is still active. Add an LDAP reference source to validate active employees.";
 
-function renderOwners(r: { resolution: OwnerResolution; labels: string[] }): string {
+function renderOwners(r: {
+  resolution: OwnerResolution;
+  labels: string[];
+  directoryWired: boolean;
+  directoryLabel?: string;
+  ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
+  cached?: boolean;
+}): string {
   const { resolution } = r;
-  const lines = ["# Page owner(s)"];
-  lines.push(`- Owner(s): ${resolution.owners.length ? resolution.owners.join(", ") : "(none determined)"}`);
+  const lines = [`# Page owner(s)${r.cached ? " (cached — pass refresh:true to recompute)" : ""}`];
+  const contactBy = new Map((r.ownerContacts ?? []).map((c) => [c.sam.toLowerCase(), c]));
+  const renderOwner = (sam: string): string => {
+    const c = contactBy.get(sam.toLowerCase());
+    if (!c) return sam;
+    const who = c.displayName ? `${c.displayName} (${sam})` : sam;
+    return `${who}${c.contact ? ` <${c.contact}>` : ""}${c.active === false ? " — ⚠️ inactive" : ""}`;
+  };
+  lines.push(`- Owner(s): ${resolution.owners.length ? resolution.owners.map(renderOwner).join(", ") : "(none determined)"}`);
   lines.push(`- Basis: ${resolution.basis}${resolution.note ? ` — ${resolution.note}` : ""}`);
   if (r.labels.length) lines.push(`- Labels: ${r.labels.join(", ")}`);
   if (resolution.considered?.length) {
-    lines.push(`- Top contributors: ${resolution.considered.slice(0, 5).map((c) => `${c.sam} (${c.count})`).join(", ")}`);
+    lines.push(
+      `- Top recent contributors: ${resolution.considered
+        .slice(0, 5)
+        .map((c) => `${c.sam} (${c.count}×${c.score !== undefined ? `, score ${c.score.toFixed(2)}` : ""})`)
+        .join(", ")}`,
+    );
   }
-  lines.push("", UNVERIFIED_OWNER_NOTE);
+  lines.push(
+    "",
+    r.directoryWired
+      ? `Active-employee validation: ON via ${r.directoryLabel ?? "the configured directory"} (ranked by recency-weighted contribution; inactive contributors skipped).`
+      : UNVERIFIED_OWNER_NOTE,
+  );
   return lines.join("\n");
 }
 
@@ -585,13 +609,13 @@ export function registerContextTools(
       },
     }),
     // Governance — resolve page OWNER(S) (read).
-    vscode.lm.registerTool<{ source?: string; pageId?: string }>(
+    vscode.lm.registerTool<{ source?: string; pageId?: string; refresh?: boolean }>(
       "aisharepoint_resolve_page_owners",
       guarded("aisharepoint_resolve_page_owners", "Resolving Confluence page owner(s)", async (i) => {
         const source = resolveOrExplain(i.source);
         if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — ownership targets Confluence.`;
         if (!i.pageId?.trim()) return "A pageId is required (search the source first to find it).";
-        return renderOwners(await service.resolveConfluenceOwners(source, i.pageId.trim()));
+        return renderOwners(await service.resolveConfluenceOwners(source, i.pageId.trim(), i.refresh ?? false));
       }),
     ),
     // Governance — review SPACE MANAGEABILITY / entitlements (read).
@@ -611,6 +635,59 @@ export function registerContextTools(
         if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — this targets Confluence.`;
         if (!i.pageId?.trim()) return "A pageId is required.";
         return renderCurrency(await service.reviewConfluenceCurrency(source, i.pageId.trim()));
+      }),
+    ),
+    // Authority — mark authoritative content for a topic (WRITE: a label).
+    vscode.lm.registerTool<{ source?: string; pageId?: string; topic?: string }>(
+      "aisharepoint_mark_authority",
+      guarded("aisharepoint_mark_authority", "Marking authoritative content", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — authority targets Confluence.`;
+        if (!i.pageId?.trim()) return "A pageId is required (the authoritative page).";
+        if (!i.topic?.trim()) return "A topic is required (what this page is the authority ON).";
+        const r = await service.markConfluenceAuthority(source, i.pageId.trim(), i.topic.trim());
+        return `Marked page ${i.pageId.trim()} as authoritative — label "${r.label}". Page labels: ${r.labels.join(", ")}.`;
+      }),
+    ),
+    // Authority — gather the authoritative content (the "truth") for a scope (READ).
+    vscode.lm.registerTool<{ source?: string; topic?: string; kind?: "space" | "page" | "subtree"; spaceKey?: string; pageId?: string }>(
+      "aisharepoint_gather_authority",
+      guarded("aisharepoint_gather_authority", "Gathering authoritative content", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — authority targets Confluence.`;
+        const kind = i.kind ?? (i.pageId ? "page" : "space");
+        if (kind !== "page" && !i.spaceKey?.trim()) return "A spaceKey is required for a space/subtree scope.";
+        if ((kind === "page" || kind === "subtree") && !i.pageId?.trim()) return "A pageId is required for a page/subtree scope.";
+        const pages = await service.gatherConfluenceAuthority(source, {
+          topic: i.topic?.trim() ?? "",
+          kind,
+          ...(i.spaceKey ? { spaceKey: i.spaceKey.trim() } : {}),
+          ...(i.pageId ? { pageId: i.pageId.trim() } : {}),
+        });
+        if (!pages.length) return "No authoritative pages found for that scope.";
+        const lines = [`# Authoritative content (${pages.length} page(s))`];
+        for (const p of pages.slice(0, 40)) lines.push(`\n## ${p.title} (${p.id})\n${p.url}\n\n${p.text.slice(0, 1500)}`);
+        return lines.join("\n");
+      }),
+    ),
+    // Authority — sweep the rest of Confluence for conflicting pages (READ).
+    vscode.lm.registerTool<{ source?: string; topic?: string; excludeSpaceKey?: string; excludePageIds?: string[] }>(
+      "aisharepoint_find_conflicts",
+      guarded("aisharepoint_find_conflicts", "Finding potentially conflicting pages", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — authority targets Confluence.`;
+        if (!i.topic?.trim()) return "A topic is required (what to sweep for).";
+        const candidates = await service.findConfluenceConflicts(source, i.topic.trim(), {
+          ...(i.excludeSpaceKey ? { spaceKey: i.excludeSpaceKey.trim() } : {}),
+          ...(i.excludePageIds?.length ? { pageIds: i.excludePageIds } : {}),
+        });
+        if (!candidates.length) return `No other pages found discussing "${i.topic.trim()}".`;
+        const lines = [
+          `# Candidate pages discussing "${i.topic.trim()}" (${candidates.length})`,
+          "Compare each against the authoritative content (gather_authority) and flag conflicts/inaccuracies; then resolve_page_owners + track_work_item + draft_communication to action them.",
+        ];
+        for (const c of candidates) lines.push(`- **${c.title}** (${c.id})${c.space ? ` · space ${c.space}` : ""} — ${c.url}${c.excerpt ? `\n  ${c.excerpt}` : ""}`);
+        return lines.join("\n");
       }),
     ),
     // Hierarchy & relationships — enumerate a page's parent/ancestors, immediate

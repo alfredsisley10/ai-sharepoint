@@ -106,7 +106,19 @@ function recordUrl(base: string, table: string, r: SnowRecord): string {
   return `${base}/nav_to.do?uri=${enc(`${table}.do?sys_id=${str(r.sys_id)}`)}`;
 }
 
-const META_FIELDS = ["state", "priority", "assigned_to", "category", "sys_updated_on"] as const;
+// Ownership-relevant fields: assigned_to/opened_by (accountable users) and the
+// audit who/when (sys_updated_by/sys_created_by are the effective last-editor
+// identity used to resolve a ServiceNow record's owner).
+const META_FIELDS = [
+  "state",
+  "priority",
+  "assigned_to",
+  "opened_by",
+  "sys_updated_by",
+  "sys_created_by",
+  "category",
+  "sys_updated_on",
+] as const;
 
 function recordMeta(table: string, r: SnowRecord): Record<string, string> {
   const meta: Record<string, string> = { table, ...(str(r.sys_id) ? { sys_id: str(r.sys_id) } : {}) };
@@ -192,7 +204,12 @@ export async function getServiceNowItem(
   const lines: string[] = [];
   for (const [k, v] of Object.entries(r)) {
     const value = str(v);
-    if (!value || k.startsWith("sys_") && !["sys_id", "sys_updated_on", "sys_created_on"].includes(k)) continue;
+    if (
+      !value ||
+      (k.startsWith("sys_") &&
+        !["sys_id", "sys_updated_on", "sys_created_on", "sys_updated_by", "sys_created_by"].includes(k))
+    )
+      continue;
     lines.push(`${k}: ${value}`);
     if (lines.join("\n").length > caps.maxBodyChars) break;
   }

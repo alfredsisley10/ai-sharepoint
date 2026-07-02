@@ -17,7 +17,12 @@ import { verifyConfluence, searchConfluence, getConfluencePage } from "./adapter
 import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
 import { verifyGithub, searchGithub, getGithubItem, githubApiBase } from "./adapters/github";
 import { parseGithubAppSecret, mintInstallationToken, InstallationToken } from "./adapters/githubAuth";
-import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
+import { verifyLdap, searchLdap, searchLdapRaw, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
+import { ldapUserDirectory, ldapUserDirectoryByEmail, activeFromDirectory, contactOf, UserDirectory } from "./userDirectory";
+import { cachedUserDirectory } from "./directoryCache";
+import { DirectoryCacheStore } from "./directoryCacheStore";
+import { OwnershipCacheStore } from "./ownershipCacheStore";
+import { CachedOwnership } from "./ownershipCache";
 import { listConfluenceSpaces, listAllConfluenceSpaces } from "./adapters/confluence";
 import {
   listJiraProjects,
@@ -55,11 +60,18 @@ import {
 } from "./adapters/confluenceWrite";
 import {
   getConfluencePageLabels,
-  getConfluencePageContributors,
-  getConfluenceSpaceContributors,
+  getConfluencePageContributorsWeighted,
+  getConfluenceSpaceContributorsWeighted,
   resolveOwners,
-  OwnerResolution,
 } from "./adapters/confluenceOwnership";
+import {
+  gatherAuthorityPages,
+  findConflictCandidates,
+  buildAuthorityLabel,
+  AuthorityScope,
+  ScopePage,
+  ConflictCandidate,
+} from "./adapters/confluenceAuthority";
 import {
   archiveConfluencePage as archiveConfluencePageAdapter,
   removeConfluencePageFromSearch as removeConfluencePageFromSearchAdapter,
@@ -123,6 +135,9 @@ import {
   snowTokenExpired,
   refreshSnowTokens,
   jwtExpiryMs,
+  parseSnowSessionSecret,
+  buildSnowSessionSecret,
+  fetchSnowUserToken,
 } from "./adapters/servicenowAuth";
 import { SchemaCatalog, TableDef } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
@@ -146,7 +161,51 @@ export class ContextService {
     private readonly store: ContextSourcesStore,
     private readonly cache: TtlCache,
     private readonly aadBroker?: AadTokenBroker,
+    private readonly directoryCache?: DirectoryCacheStore,
+    private readonly ownershipCache?: OwnershipCacheStore,
   ) {}
+
+  /** Build a cached user directory (ADR-0041) from a configured LDAP source, if
+   *  one exists — the "active employee" backing for ownership + currency. When
+   *  no directory source is configured the caller falls back to treating every
+   *  contributor as active (documented in the tool output). */
+  private userDirectory(): { dir: UserDirectory; label: string } | undefined {
+    const ldap = this.store.list().find((s) => s.type === "ldap");
+    if (!ldap) return undefined;
+    const live: UserDirectory = ldapUserDirectory(async (filter, attrs) => {
+      const cred = await this.storedCredential(ldap);
+      return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
+    });
+    const dir = this.directoryCache
+      ? cachedUserDirectory(
+          live,
+          { get: (s) => this.directoryCache!.get(s), put: (e) => this.directoryCache!.put(e) },
+          { now: () => Date.now() },
+        )
+      : live;
+    return { dir, label: `LDAP (${ldap.displayName})` };
+  }
+
+  /** An EMAIL/UPN-keyed directory (SharePoint/ServiceNow contributors are
+   *  identified by email, not sAMAccountName). Same LDAP source + cache as
+   *  `userDirectory`; undefined when no LDAP source is configured. Public so the
+   *  SharePoint tools can validate active employees for page ownership. */
+  emailUserDirectory(): { dir: UserDirectory; label: string } | undefined {
+    const ldap = this.store.list().find((s) => s.type === "ldap");
+    if (!ldap) return undefined;
+    const live: UserDirectory = ldapUserDirectoryByEmail(async (filter, attrs) => {
+      const cred = await this.storedCredential(ldap);
+      return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
+    });
+    const dir = this.directoryCache
+      ? cachedUserDirectory(
+          live,
+          { get: (s) => this.directoryCache!.get(s), put: (e) => this.directoryCache!.put(e) },
+          { now: () => Date.now() },
+        )
+      : live;
+    return { dir, label: `LDAP (${ldap.displayName})` };
+  }
 
   private powerBiTokens(credential: ContextCredential): PowerBiTokenGetter {
     // az-sso: live token from the user's `az login` session — the
@@ -213,6 +272,17 @@ export class ContextService {
       }
       return credential;
     }
+    // snow-session (zero-admin browser SSO): the request needs the page CSRF
+    // token (X-UserToken = g_ck) on many instances. Rather than make the user
+    // read `window.g_ck` from a console and paste it, fetch it ourselves using
+    // the captured cookies (a GET needs no token), cached briefly since it is
+    // stable within a session. Any pasted token is the fallback.
+    if (credential.method === "snow-session") {
+      const session = parseSnowSessionSecret(credential.secret);
+      const token = (await this.snowUserToken(source.id, source.baseUrl, session.cookies)) ?? session.userToken;
+      if (!token) return credential; // no token available — send cookies only
+      return { method: "snow-session", secret: buildSnowSessionSecret(session.cookies, token) };
+    }
     if (credential.method !== "snow-oauth") return credential;
     let tokens = snowTokensFromSecret(credential.secret);
     if (snowTokenExpired(tokens, Date.now())) {
@@ -223,6 +293,47 @@ export class ContextService {
       });
     }
     return { method: "pat", secret: tokens.accessToken };
+  }
+
+  /** Per-source g_ck cache for snow-session sources. g_ck is stable within a
+   *  session, so we fetch it at most once every few minutes rather than on
+   *  every read. */
+  private readonly snowUserTokens = new Map<string, { token: string; at: number }>();
+  private static readonly SNOW_GCK_TTL_MS = 10 * 60_000;
+
+  private async snowUserToken(
+    sourceId: string,
+    baseUrl: string,
+    cookies: string,
+  ): Promise<string | undefined> {
+    const cached = this.snowUserTokens.get(sourceId);
+    if (cached && Date.now() - cached.at < ContextService.SNOW_GCK_TTL_MS) return cached.token;
+    const token = await fetchSnowUserToken(baseUrl, cookies, this.caps().timeoutMs).catch(() => undefined);
+    if (token) this.snowUserTokens.set(sourceId, { token, at: Date.now() });
+    return token;
+  }
+
+  /**
+   * Keep-alive for zero-admin browser-session (`snow-session`) sources: the GUI
+   * session times out after ~30 min of inactivity, so a lightweight
+   * authenticated read every cycle resets the idle timer and holds the session
+   * open while the user works. Best-effort — failures are swallowed (a real read
+   * will surface an expired session with proper diagnosis), and this bypasses
+   * the ADR-0009 lockout tracker (it calls the adapter directly), so a keep-alive
+   * blip never locks out a good session.
+   */
+  async keepAliveSnowSessions(): Promise<void> {
+    for (const source of this.store.list()) {
+      if (source.authMethod !== "snow-session") continue;
+      const credential = await this.store.getCredential(source.id).catch(() => undefined);
+      if (!credential || credential.method !== "snow-session") continue;
+      try {
+        const c = await this.snowCredential(source, credential);
+        await verifyServiceNow(source, c, this.caps());
+      } catch {
+        // expired/unreachable — leave it; the next real use reports it properly.
+      }
+    }
   }
 
   /** Cached GitHub App installation tokens (per source) — they live ~1h, so we
@@ -898,33 +1009,98 @@ export class ContextService {
   }
 
   /** Resolve a page's owner(s): the owner label if present, else the most
-   *  prolific contributor on the page, else in the space. A global READ.
-   *  Active-user filtering needs an LDAP/M365 directory (not wired here), so
-   *  this treats contributors as candidates by activity volume. */
+   *  RECENTLY-active prolific contributor on the page, else in the space,
+   *  validated against the user directory ("current & active employee"). A
+   *  global READ. When an LDAP directory is configured, inactive contributors
+   *  are skipped and the resolved owners' contact (email/UPN) is returned;
+   *  otherwise everyone is treated as active (reported via directoryWired). */
   async resolveConfluenceOwners(
     source: ContextSource,
     pageId: string,
-  ): Promise<{ resolution: OwnerResolution; labels: string[]; directoryWired: false }> {
+    refresh = false,
+  ): Promise<CachedOwnership & { cached?: boolean }> {
     if (source.type !== "confluence") throw new AppError("Ownership targets a Confluence source.", "config");
+    if (!refresh) {
+      const hit = this.ownershipCache?.getFresh(source.id, pageId);
+      if (hit) return { ...hit, cached: true };
+    }
     const caps = this.caps();
     const credential = await this.storedCredential(source);
-    return this.tracked(source, false, async () => {
+    const directory = this.userDirectory();
+    const nowMs = Date.now();
+    const result = await this.tracked(source, false, async () => {
       const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
       const [labels, pageContributors] = await Promise.all([
         getConfluencePageLabels(source, credential, pageId, caps.timeoutMs),
-        getConfluencePageContributors(source, credential, pageId, caps.timeoutMs),
+        getConfluencePageContributorsWeighted(source, credential, pageId, caps.timeoutMs, nowMs),
       ]);
       const resolution = await resolveOwners({
         pageLabels: labels,
         pageContributors,
         spaceContributors: () =>
           meta.spaceKey
-            ? getConfluenceSpaceContributors(source, credential, meta.spaceKey, caps.timeoutMs)
+            ? getConfluenceSpaceContributorsWeighted(source, credential, meta.spaceKey, caps.timeoutMs, nowMs)
             : Promise.resolve([]),
-        isActive: async () => true,
+        isActive: directory ? activeFromDirectory(directory.dir) : async () => true,
       });
-      return { resolution, labels, directoryWired: false as const };
+      const ownerContacts = directory
+        ? await Promise.all(
+            resolution.owners.map(async (sam) => {
+              const rec = await directory.dir(sam);
+              return {
+                sam,
+                ...(rec?.displayName ? { displayName: rec.displayName } : {}),
+                ...(contactOf(rec) ? { contact: contactOf(rec) } : {}),
+                active: rec?.active ?? false,
+              };
+            }),
+          )
+        : undefined;
+      return {
+        resolution,
+        labels,
+        directoryWired: Boolean(directory),
+        ...(directory ? { directoryLabel: directory.label } : {}),
+        ...(ownerContacts ? { ownerContacts } : {}),
+      };
     });
+    await this.ownershipCache?.put(source.id, pageId, result);
+    return { ...result, cached: false };
+  }
+
+  /** Mark a page as the authoritative source for a topic (adds the
+   *  `authoritative|<slug>` label — a scope-checked label write). */
+  async markConfluenceAuthority(
+    source: ContextSource,
+    pageId: string,
+    topic: string,
+  ): Promise<{ label: string; labels: string[] }> {
+    const label = buildAuthorityLabel(topic);
+    const res = await this.manageConfluenceLabels(source, { action: "add", pageId, labels: [label] });
+    return { label, labels: res.labels };
+  }
+
+  /** Gather the authoritative content for a scope (space/page/subtree) as
+   *  bounded plain text — the "truth" to compare other pages against. READ. */
+  async gatherConfluenceAuthority(source: ContextSource, scope: AuthorityScope): Promise<ScopePage[]> {
+    if (source.type !== "confluence") throw new AppError("Authority targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () => gatherAuthorityPages(source, credential, scope, caps));
+  }
+
+  /** Find candidate pages elsewhere in Confluence discussing a topic that may
+   *  conflict with the authoritative scope (excludes the authority space + page
+   *  ids). The assistant compares each against the gathered authority. READ. */
+  async findConfluenceConflicts(
+    source: ContextSource,
+    topic: string,
+    exclude: { spaceKey?: string; pageIds?: string[] },
+  ): Promise<ConflictCandidate[]> {
+    if (source.type !== "confluence") throw new AppError("Authority targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () => findConflictCandidates(source, credential, topic, exclude, caps));
   }
 
   /** Review whether the signed-in user can read+write every page in a space,
@@ -947,14 +1123,15 @@ export class ContextService {
   }
 
   /** Review a page's currency: broken links, owner tag, and age. Global READ.
-   *  Owner-activity verification needs an LDAP/M365 directory (not wired here);
-   *  owners are reported, activity left unverified. */
+   *  Owner-activity is verified against the configured LDAP directory when one
+   *  exists (else owners are reported without an active check). */
   async reviewConfluenceCurrency(source: ContextSource, pageId: string): Promise<CurrencyReport> {
     if (source.type !== "confluence") throw new AppError("Currency review targets a Confluence source.", "config");
     const caps = this.caps();
     const credential = await this.storedCredential(source);
+    const directory = this.userDirectory();
     return this.tracked(source, false, () =>
-      reviewPageCurrency(source, credential, pageId, async () => undefined, caps),
+      reviewPageCurrency(source, credential, pageId, directory ? directory.dir : async () => undefined, caps),
     );
   }
 

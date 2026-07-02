@@ -122,5 +122,27 @@ export function ldapUserDirectory(
   };
 }
 
+/** LDAP filter to find a user by EMAIL / UPN — SharePoint and ServiceNow
+ *  identify contributors by email, not sAMAccountName, so cross-source
+ *  ownership resolves the active-employee check by mail/upn/proxyAddress. */
+export function ldapUserFilterByEmail(email: string): string {
+  const esc = email.replace(/[\\*()\x00]/g, (c) => "\\" + c.charCodeAt(0).toString(16).padStart(2, "0"));
+  return `(&(objectClass=user)(|(mail=${esc})(userPrincipalName=${esc})(proxyAddresses=smtp:${esc})))`;
+}
+
+/** A directory keyed by EMAIL/UPN (for SharePoint/ServiceNow contributors). The
+ *  returned record still carries the sam, so a resolved SharePoint owner can be
+ *  cross-referenced to AD. */
+export function ldapUserDirectoryByEmail(
+  search: (filter: string, attrs: string[]) => Promise<Array<Record<string, unknown>>>,
+): UserDirectory {
+  return async (email: string) => {
+    if (!email.includes("@")) return undefined;
+    const entries = await search(ldapUserFilterByEmail(email), USER_DIRECTORY_ATTRS);
+    const entry = entries[0];
+    return entry ? parseLdapUser(entry) : undefined;
+  };
+}
+
 // Keep the ContextSource import meaningful for callers wiring real sources.
 export type DirectorySource = Pick<ContextSource, "id" | "type" | "baseUrl">;
