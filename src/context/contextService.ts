@@ -17,7 +17,10 @@ import { verifyConfluence, searchConfluence, getConfluencePage } from "./adapter
 import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
 import { verifyGithub, searchGithub, getGithubItem, githubApiBase } from "./adapters/github";
 import { parseGithubAppSecret, mintInstallationToken, InstallationToken } from "./adapters/githubAuth";
-import { verifyLdap, searchLdap, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
+import { verifyLdap, searchLdap, searchLdapRaw, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
+import { ldapUserDirectory, activeFromDirectory, contactOf, UserDirectory } from "./userDirectory";
+import { cachedUserDirectory } from "./directoryCache";
+import { DirectoryCacheStore } from "./directoryCacheStore";
 import { listConfluenceSpaces, listAllConfluenceSpaces } from "./adapters/confluence";
 import {
   listJiraProjects,
@@ -55,8 +58,8 @@ import {
 } from "./adapters/confluenceWrite";
 import {
   getConfluencePageLabels,
-  getConfluencePageContributors,
-  getConfluenceSpaceContributors,
+  getConfluencePageContributorsWeighted,
+  getConfluenceSpaceContributorsWeighted,
   resolveOwners,
   OwnerResolution,
 } from "./adapters/confluenceOwnership";
@@ -149,7 +152,29 @@ export class ContextService {
     private readonly store: ContextSourcesStore,
     private readonly cache: TtlCache,
     private readonly aadBroker?: AadTokenBroker,
+    private readonly directoryCache?: DirectoryCacheStore,
   ) {}
+
+  /** Build a cached user directory (ADR-0041) from a configured LDAP source, if
+   *  one exists — the "active employee" backing for ownership + currency. When
+   *  no directory source is configured the caller falls back to treating every
+   *  contributor as active (documented in the tool output). */
+  private userDirectory(): { dir: UserDirectory; label: string } | undefined {
+    const ldap = this.store.list().find((s) => s.type === "ldap");
+    if (!ldap) return undefined;
+    const live: UserDirectory = ldapUserDirectory(async (filter, attrs) => {
+      const cred = await this.storedCredential(ldap);
+      return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
+    });
+    const dir = this.directoryCache
+      ? cachedUserDirectory(
+          live,
+          { get: (s) => this.directoryCache!.get(s), put: (e) => this.directoryCache!.put(e) },
+          { now: () => Date.now() },
+        )
+      : live;
+    return { dir, label: `LDAP (${ldap.displayName})` };
+  }
 
   private powerBiTokens(credential: ContextCredential): PowerBiTokenGetter {
     // az-sso: live token from the user's `az login` session — the
@@ -953,32 +978,61 @@ export class ContextService {
   }
 
   /** Resolve a page's owner(s): the owner label if present, else the most
-   *  prolific contributor on the page, else in the space. A global READ.
-   *  Active-user filtering needs an LDAP/M365 directory (not wired here), so
-   *  this treats contributors as candidates by activity volume. */
+   *  RECENTLY-active prolific contributor on the page, else in the space,
+   *  validated against the user directory ("current & active employee"). A
+   *  global READ. When an LDAP directory is configured, inactive contributors
+   *  are skipped and the resolved owners' contact (email/UPN) is returned;
+   *  otherwise everyone is treated as active (reported via directoryWired). */
   async resolveConfluenceOwners(
     source: ContextSource,
     pageId: string,
-  ): Promise<{ resolution: OwnerResolution; labels: string[]; directoryWired: false }> {
+  ): Promise<{
+    resolution: OwnerResolution;
+    labels: string[];
+    directoryWired: boolean;
+    directoryLabel?: string;
+    ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
+  }> {
     if (source.type !== "confluence") throw new AppError("Ownership targets a Confluence source.", "config");
     const caps = this.caps();
     const credential = await this.storedCredential(source);
+    const directory = this.userDirectory();
+    const nowMs = Date.now();
     return this.tracked(source, false, async () => {
       const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
       const [labels, pageContributors] = await Promise.all([
         getConfluencePageLabels(source, credential, pageId, caps.timeoutMs),
-        getConfluencePageContributors(source, credential, pageId, caps.timeoutMs),
+        getConfluencePageContributorsWeighted(source, credential, pageId, caps.timeoutMs, nowMs),
       ]);
       const resolution = await resolveOwners({
         pageLabels: labels,
         pageContributors,
         spaceContributors: () =>
           meta.spaceKey
-            ? getConfluenceSpaceContributors(source, credential, meta.spaceKey, caps.timeoutMs)
+            ? getConfluenceSpaceContributorsWeighted(source, credential, meta.spaceKey, caps.timeoutMs, nowMs)
             : Promise.resolve([]),
-        isActive: async () => true,
+        isActive: directory ? activeFromDirectory(directory.dir) : async () => true,
       });
-      return { resolution, labels, directoryWired: false as const };
+      const ownerContacts = directory
+        ? await Promise.all(
+            resolution.owners.map(async (sam) => {
+              const rec = await directory.dir(sam);
+              return {
+                sam,
+                ...(rec?.displayName ? { displayName: rec.displayName } : {}),
+                ...(contactOf(rec) ? { contact: contactOf(rec) } : {}),
+                active: rec?.active ?? false,
+              };
+            }),
+          )
+        : undefined;
+      return {
+        resolution,
+        labels,
+        directoryWired: Boolean(directory),
+        ...(directory ? { directoryLabel: directory.label } : {}),
+        ...(ownerContacts ? { ownerContacts } : {}),
+      };
     });
   }
 
@@ -1002,14 +1056,15 @@ export class ContextService {
   }
 
   /** Review a page's currency: broken links, owner tag, and age. Global READ.
-   *  Owner-activity verification needs an LDAP/M365 directory (not wired here);
-   *  owners are reported, activity left unverified. */
+   *  Owner-activity is verified against the configured LDAP directory when one
+   *  exists (else owners are reported without an active check). */
   async reviewConfluenceCurrency(source: ContextSource, pageId: string): Promise<CurrencyReport> {
     if (source.type !== "confluence") throw new AppError("Currency review targets a Confluence source.", "config");
     const caps = this.caps();
     const credential = await this.storedCredential(source);
+    const directory = this.userDirectory();
     return this.tracked(source, false, () =>
-      reviewPageCurrency(source, credential, pageId, async () => undefined, caps),
+      reviewPageCurrency(source, credential, pageId, directory ? directory.dir : async () => undefined, caps),
     );
   }
 

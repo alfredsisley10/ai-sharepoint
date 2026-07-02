@@ -5,6 +5,7 @@ import {
   parseOwnerLabel,
   findOwnerLabel,
   tallyContributors,
+  tallyContributorsWeighted,
   resolveOwners,
   getConfluencePageLabels,
   getConfluencePageContributors,
@@ -156,4 +157,53 @@ test("setConfluencePageOwners removes the old owner label and POSTs the new one"
   assert.ok(post, "new owner label added");
   assert.equal(JSON.parse(String((post!.init as { body?: string }).body))[0].name, "owners|jdoe|asmith");
   assert.equal(result, "owners|jdoe|asmith");
+});
+
+const DAY = 86_400_000;
+
+test("tallyContributorsWeighted: recent activity outranks a long-departed prolific editor", () => {
+  const now = Date.UTC(2026, 6, 1);
+  const authors = [
+    // 'oldpro' edited 10× two years ago; 'recent' edited 3× this month.
+    ...Array.from({ length: 10 }, () => ({ sam: "oldpro", whenMs: now - 730 * DAY })),
+    ...Array.from({ length: 3 }, () => ({ sam: "recent", whenMs: now - 5 * DAY })),
+  ];
+  const out = tallyContributorsWeighted(authors, { nowMs: now, halfLifeDays: 180 });
+  assert.equal(out[0].sam, "recent"); // recency beats raw volume
+  assert.equal(out.find((r) => r.sam === "oldpro")?.count, 10); // raw count still exposed
+  assert.ok((out[0].score ?? 0) > (out[1].score ?? 0));
+});
+
+test("tallyContributorsWeighted: undated contributions rank below any dated one", () => {
+  const now = Date.UTC(2026, 6, 1);
+  const out = tallyContributorsWeighted(
+    [{ sam: "dated", whenMs: now - 1000 * DAY }, { sam: "undated" }],
+    { nowMs: now },
+  );
+  assert.equal(out[0].sam, "dated");
+});
+
+test("resolveOwners: falls back to configured space owners (basis space-owner) when contributors are inactive", async () => {
+  const res = await resolveOwners({
+    pageLabels: [],
+    pageContributors: [{ sam: "ghost", count: 5 }],
+    spaceContributors: async () => [{ sam: "alsoghost", count: 3 }],
+    spaceOwners: async () => ["SpaceAdmin"],
+    isActive: async (sam) => sam === "spaceadmin", // only the configured owner is active
+  });
+  assert.equal(res.basis, "space-owner");
+  assert.deepEqual(res.owners, ["spaceadmin"]);
+  assert.match(res.note ?? "", /administratively assigned|may not be the effective/i);
+});
+
+test("resolveOwners: prefers an active recent page contributor over the space-owner fallback", async () => {
+  const res = await resolveOwners({
+    pageLabels: [],
+    pageContributors: [{ sam: "jdoe", count: 2, score: 1.5 }],
+    spaceContributors: async () => [],
+    spaceOwners: async () => ["spaceadmin"],
+    isActive: async () => true,
+  });
+  assert.equal(res.basis, "page-contributor");
+  assert.deepEqual(res.owners, ["jdoe"]);
 });

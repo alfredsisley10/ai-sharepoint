@@ -90,18 +90,41 @@ function renderValidation(v: RenderedValidation): string {
 }
 
 const UNVERIFIED_OWNER_NOTE =
-  "Note: active-user verification needs an LDAP/M365 directory (not wired) — owners are ranked by contribution volume, not filtered by who is still active.";
+  "Note: no LDAP/M365 directory is configured, so active-user verification is off — owners are ranked by recency-weighted contribution, not filtered by who is still active. Add an LDAP reference source to validate active employees.";
 
-function renderOwners(r: { resolution: OwnerResolution; labels: string[] }): string {
+function renderOwners(r: {
+  resolution: OwnerResolution;
+  labels: string[];
+  directoryWired: boolean;
+  directoryLabel?: string;
+  ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
+}): string {
   const { resolution } = r;
   const lines = ["# Page owner(s)"];
-  lines.push(`- Owner(s): ${resolution.owners.length ? resolution.owners.join(", ") : "(none determined)"}`);
+  const contactBy = new Map((r.ownerContacts ?? []).map((c) => [c.sam.toLowerCase(), c]));
+  const renderOwner = (sam: string): string => {
+    const c = contactBy.get(sam.toLowerCase());
+    if (!c) return sam;
+    const who = c.displayName ? `${c.displayName} (${sam})` : sam;
+    return `${who}${c.contact ? ` <${c.contact}>` : ""}${c.active === false ? " — ⚠️ inactive" : ""}`;
+  };
+  lines.push(`- Owner(s): ${resolution.owners.length ? resolution.owners.map(renderOwner).join(", ") : "(none determined)"}`);
   lines.push(`- Basis: ${resolution.basis}${resolution.note ? ` — ${resolution.note}` : ""}`);
   if (r.labels.length) lines.push(`- Labels: ${r.labels.join(", ")}`);
   if (resolution.considered?.length) {
-    lines.push(`- Top contributors: ${resolution.considered.slice(0, 5).map((c) => `${c.sam} (${c.count})`).join(", ")}`);
+    lines.push(
+      `- Top recent contributors: ${resolution.considered
+        .slice(0, 5)
+        .map((c) => `${c.sam} (${c.count}×${c.score !== undefined ? `, score ${c.score.toFixed(2)}` : ""})`)
+        .join(", ")}`,
+    );
   }
-  lines.push("", UNVERIFIED_OWNER_NOTE);
+  lines.push(
+    "",
+    r.directoryWired
+      ? `Active-employee validation: ON via ${r.directoryLabel ?? "the configured directory"} (ranked by recency-weighted contribution; inactive contributors skipped).`
+      : UNVERIFIED_OWNER_NOTE,
+  );
   return lines.join("\n");
 }
 

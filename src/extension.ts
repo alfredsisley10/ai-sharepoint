@@ -61,6 +61,7 @@ import { serializeSite } from "./sync/serializer";
 import { SharePointWriteClient, WritePermissionMode } from "./auth/sharePointWriteClient";
 import { ContextSourcesStore } from "./context/sourcesStore";
 import { ContextService } from "./context/contextService";
+import { DirectoryCacheStore } from "./context/directoryCacheStore";
 import { TtlCache } from "./context/cache";
 import {
   ContextSource,
@@ -440,7 +441,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     return (await provider.acquireToken(scopes)).token;
   };
-  const contextService = new ContextService(contextSources, contextCache, aadBroker);
+  const directoryCache = new DirectoryCacheStore(context.globalState);
+  void directoryCache.prune(); // drop entries past their multi-day TTL on start
+  const contextService = new ContextService(contextSources, contextCache, aadBroker, directoryCache);
   // Keep zero-admin ServiceNow browser sessions warm: the GUI session times out
   // after ~30 min idle, so ping every 14 min (well inside the window). The call
   // no-ops when there are no snow-session sources and never throws.

@@ -342,6 +342,35 @@ export async function searchLdap(
   });
 }
 
+/** Directory lookup (ADR-0041): raw attribute records for an explicit,
+ *  pre-escaped filter + attribute list, sub-scoped under the base DN. Unlike
+ *  `searchLdap` this returns the raw entries (so callers can read
+ *  `userAccountControl`, `mail`, … for the active-check / contact resolution)
+ *  rather than search hits. Bounded to a couple of matches. */
+export async function searchLdapRaw(
+  source: ContextSource,
+  credential: ContextCredential,
+  filter: string,
+  attributes: string[],
+  tls: LdapTlsOptions,
+  caps: ReadCaps,
+): Promise<Array<Record<string, unknown>>> {
+  if (!source.baseDn) {
+    throw new AppError("This LDAP source has no base DN configured.", "config");
+  }
+  return withClient(source, credential, tls, caps, async (client) => {
+    const res = await client.search(source.baseDn!, {
+      scope: "sub",
+      filter,
+      attributes,
+      sizeLimit: Math.min(caps.maxResults, 5),
+      timeLimit: Math.ceil(caps.timeoutMs / 1000),
+      paged: false,
+    });
+    return (res.searchEntries as unknown as Array<Record<string, unknown>>) ?? [];
+  });
+}
+
 /** Fetch one entry by DN (base scope). */
 export async function getLdapEntry(
   source: ContextSource,
