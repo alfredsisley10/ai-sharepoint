@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.110.0 — 2026-07-02
+
+### Added — information-sprawl reconciliation suite
+- **Effective-owner resolution, corrected.** Confluence page ownership now validates contributors as
+  **current active employees** against a configured LDAP directory (inactive editors skipped, the
+  owner's email/UPN returned), ranks by **recency-weighted** contribution ("most active of recent
+  history" rather than all-time volume), and falls back page → space contributor → configured
+  space-owner. Page currency review flags genuinely inactive owner tags the same way. A persistent,
+  exportable **directory cache** (multi-day TTL) and **ownership-result cache** (`refresh` to
+  recompute) keep repeated passes cheap. ServiceNow now surfaces `sys_updated_by`/`opened_by` for
+  owner resolution, and a **SharePoint page-owner** tool resolves the most recently-active active
+  editor from version history (email-keyed directory check).
+- **Remediation work inventory.** An **event-sourced** cleanup backlog where every step — creation,
+  owner resolution, each communication (linked to the comms-outbox draft), each follow-up scheduled
+  and sent, and resolution — is recorded; status/owner/follow-up are derived from the log. Chat tools
+  (`track_work_item` / `update_work_item` / `list_work_items` / `export_work_inventory`) plus
+  **Export / Back Up / Restore Remediation Inventory** commands, with `work-items/v1` export that
+  restores exactly or merges two people's backlogs by unioning event logs.
+- **Authoritative-source sweep.** `mark_authority`, `gather_authority`, and `find_conflicts` wire the
+  authoritative-source construct into chat: declare a page/space/subtree the truth for a topic, then
+  sweep the rest of Confluence for conflicting content to action.
+- **Oversight export.** A dependency-light **XLSX writer** and a Summary + Work Items + History
+  workbook (and CSV) give a single-file view of the backlog and its full history.
+
+### Added — Confluence content cache + drift detection (ADR-0042)
+- `cache_confluence_scope` snapshots a space/page/subtree into a disk-backed local cache so repeated
+  review passes over an authoritative space don't re-fetch every page, and `confluence_drift` reports
+  which cached pages changed underneath us since the snapshot (the "don't act on stale content"
+  signal).
+
+### Added — ServiceNow SSO hardening (no-IT browser session)
+- The zero-admin ServiceNow browser-session path now **fetches the page CSRF token (`g_ck`)
+  automatically** from the captured cookies (no more manual `X-UserToken` paste) and runs a
+  **14-minute keep-alive** read to hold the ~30-minute GUI session open — both best-effort and
+  lockout-safe. See `docs/research/servicenow-sso-simplification.md` for the full no-IT SSO analysis.
+
+### Fixed
+- **CI build** (`vsce package`) no longer fails on `@types/vscode` exceeding `engines.vscode`: the type
+  stubs are pinned to the supported engine (1.95.0), a break introduced by an earlier dependency bump.
+
 ## 0.109.0 — 2026-06-30
 
 ### Added — exact-space confirmation for instance-scoped Confluence writes + one-click defang

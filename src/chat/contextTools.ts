@@ -690,6 +690,45 @@ export function registerContextTools(
         return lines.join("\n");
       }),
     ),
+    // Content cache — snapshot a scope for fast repeated review passes (READ).
+    vscode.lm.registerTool<{ source?: string; kind?: "space" | "page" | "subtree"; spaceKey?: string; pageId?: string }>(
+      "aisharepoint_cache_confluence_scope",
+      guarded("aisharepoint_cache_confluence_scope", "Caching Confluence content", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — the content cache targets Confluence.`;
+        const kind = i.kind ?? (i.pageId ? "page" : "space");
+        if (kind !== "page" && !i.spaceKey?.trim()) return "A spaceKey is required for a space/subtree scope.";
+        if ((kind === "page" || kind === "subtree") && !i.pageId?.trim()) return "A pageId is required for a page/subtree scope.";
+        const r = await service.cacheConfluenceScope(source, {
+          topic: "",
+          kind,
+          ...(i.spaceKey ? { spaceKey: i.spaceKey.trim() } : {}),
+          ...(i.pageId ? { pageId: i.pageId.trim() } : {}),
+        });
+        return `Cached ${r.cached} page(s) from ${source.displayName} (${r.total} total in the cache). Repeated reviews of this scope are now fast, and confluence_drift can flag pages that change underneath us.`;
+      }),
+    ),
+    // Content cache — which cached pages drifted (changed) since the snapshot (READ).
+    vscode.lm.registerTool<{ source?: string; kind?: "space" | "page" | "subtree"; spaceKey?: string; pageId?: string }>(
+      "aisharepoint_confluence_drift",
+      guarded("aisharepoint_confluence_drift", "Checking Confluence content drift", async (i) => {
+        const source = resolveOrExplain(i.source);
+        if (source.type !== "confluence") return `"${source.displayName}" is a ${source.type} source — the content cache targets Confluence.`;
+        const kind = i.kind ?? (i.pageId ? "page" : "space");
+        if (kind !== "page" && !i.spaceKey?.trim()) return "A spaceKey is required for a space/subtree scope.";
+        const drift = await service.confluenceScopeDrift(source, {
+          topic: "",
+          kind,
+          ...(i.spaceKey ? { spaceKey: i.spaceKey.trim() } : {}),
+          ...(i.pageId ? { pageId: i.pageId.trim() } : {}),
+        });
+        if (!drift.length) return "No drift — every cached page in this scope is still at its snapshotted version (or nothing is cached yet; run cache_confluence_scope first).";
+        return [
+          `# Drift: ${drift.length} cached page(s) changed since the snapshot`,
+          ...drift.map((d) => `- ${d.title} (${d.id}) — cached v${d.cachedVersion} → live v${d.liveVersion}`),
+        ].join("\n");
+      }),
+    ),
     // Hierarchy & relationships — enumerate a page's parent/ancestors, immediate
     // children, full subtree, or a space's root pages (all fully paginated).
     vscode.lm.registerTool<{ source?: string; pageId?: string; spaceKey?: string; view?: "context" | "ancestors" | "children" | "subtree" }>(

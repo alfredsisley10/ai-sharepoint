@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.109.0",
+  "version": "0.110.0",
   "release": {
     "channel": "standard"
   },
@@ -868,9 +868,18 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "site": { "type": "string", "description": "Site URL or display name (optional when only one connection)." },
-            "pageId": { "type": "string", "description": "The page id (from list_pages)." },
-            "itemId": { "type": "string", "description": "The Site Pages list-item id (use if pageId doesn't resolve version history)." }
+            "site": {
+              "type": "string",
+              "description": "Site URL or display name (optional when only one connection)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The page id (from list_pages)."
+            },
+            "itemId": {
+              "type": "string",
+              "description": "The Site Pages list-item id (use if pageId doesn't resolve version history)."
+            }
           }
         }
       },
@@ -1208,20 +1217,70 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "title": { "type": "string", "description": "Short label of the finding." },
-            "finding": { "type": "string", "description": "What is wrong / needs correcting." },
-            "source": { "type": "string", "description": "The source name/alias the content lives in." },
-            "targetKind": { "type": "string", "enum": ["confluence", "sharepoint", "servicenow", "file", "other"], "description": "Kind of target." },
-            "ref": { "type": "string", "description": "Page id / sys_id / server-relative path." },
-            "url": { "type": "string", "description": "Direct URL to the content." },
-            "authorityTopic": { "type": "string", "description": "The authoritative topic this conflicts with, if any." },
-            "evidence": { "type": "string", "description": "The offending / conflicting snippet." },
-            "ownerSam": { "type": "string", "description": "Resolved owner sAMAccountName, if known." },
-            "ownerContact": { "type": "string", "description": "Resolved owner email/UPN." },
-            "ownerBasis": { "type": "string", "description": "How ownership was determined (label/page-contributor/…)." },
-            "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags." }
+            "title": {
+              "type": "string",
+              "description": "Short label of the finding."
+            },
+            "finding": {
+              "type": "string",
+              "description": "What is wrong / needs correcting."
+            },
+            "source": {
+              "type": "string",
+              "description": "The source name/alias the content lives in."
+            },
+            "targetKind": {
+              "type": "string",
+              "enum": [
+                "confluence",
+                "sharepoint",
+                "servicenow",
+                "file",
+                "other"
+              ],
+              "description": "Kind of target."
+            },
+            "ref": {
+              "type": "string",
+              "description": "Page id / sys_id / server-relative path."
+            },
+            "url": {
+              "type": "string",
+              "description": "Direct URL to the content."
+            },
+            "authorityTopic": {
+              "type": "string",
+              "description": "The authoritative topic this conflicts with, if any."
+            },
+            "evidence": {
+              "type": "string",
+              "description": "The offending / conflicting snippet."
+            },
+            "ownerSam": {
+              "type": "string",
+              "description": "Resolved owner sAMAccountName, if known."
+            },
+            "ownerContact": {
+              "type": "string",
+              "description": "Resolved owner email/UPN."
+            },
+            "ownerBasis": {
+              "type": "string",
+              "description": "How ownership was determined (label/page-contributor/…)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional tags."
+            }
           },
-          "required": ["title", "finding", "source"]
+          "required": [
+            "title",
+            "finding",
+            "source"
+          ]
         }
       },
       {
@@ -1230,25 +1289,82 @@
         "toolReferenceName": "spUpdateWork",
         "canBeReferencedInPrompt": true,
         "icon": "$(edit)",
-        "tags": ["sharepoint", "confluence", "servicenow"],
+        "tags": [
+          "sharepoint",
+          "confluence",
+          "servicenow"
+        ],
         "modelDescription": "Advance a tracked work item by appending an event (the item's history is the source of truth; status/owner/follow-up are derived). action=note (free-text), owner (record resolved owner: ownerSam/ownerDisplayName/ownerContact/ownerBasis), communication (log an owner message you prepared: channel outlook|teams, recipient, draftId from the comms outbox — advances an untouched item to 'notified'), schedule_followup (dueAt ISO date), followup_sent, status (status: open|notified|in_progress), resolve, reopen. Args: id (from list_work_items), action, plus the action's fields; optional detail.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "id": { "type": "string", "description": "The work item id." },
-            "action": { "type": "string", "enum": ["note", "owner", "communication", "schedule_followup", "followup_sent", "status", "resolve", "reopen"], "description": "The step to record." },
-            "detail": { "type": "string", "description": "Human-readable detail for the event." },
-            "ownerSam": { "type": "string" },
-            "ownerDisplayName": { "type": "string" },
-            "ownerContact": { "type": "string" },
-            "ownerBasis": { "type": "string" },
-            "channel": { "type": "string", "enum": ["outlook", "teams"] },
-            "recipient": { "type": "string" },
-            "draftId": { "type": "string", "description": "Linked comms-outbox draft id." },
-            "dueAt": { "type": "string", "description": "ISO date for schedule_followup." },
-            "status": { "type": "string", "enum": ["open", "notified", "in_progress", "resolved", "wont_fix"] }
+            "id": {
+              "type": "string",
+              "description": "The work item id."
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "note",
+                "owner",
+                "communication",
+                "schedule_followup",
+                "followup_sent",
+                "status",
+                "resolve",
+                "reopen"
+              ],
+              "description": "The step to record."
+            },
+            "detail": {
+              "type": "string",
+              "description": "Human-readable detail for the event."
+            },
+            "ownerSam": {
+              "type": "string"
+            },
+            "ownerDisplayName": {
+              "type": "string"
+            },
+            "ownerContact": {
+              "type": "string"
+            },
+            "ownerBasis": {
+              "type": "string"
+            },
+            "channel": {
+              "type": "string",
+              "enum": [
+                "outlook",
+                "teams"
+              ]
+            },
+            "recipient": {
+              "type": "string"
+            },
+            "draftId": {
+              "type": "string",
+              "description": "Linked comms-outbox draft id."
+            },
+            "dueAt": {
+              "type": "string",
+              "description": "ISO date for schedule_followup."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "notified",
+                "in_progress",
+                "resolved",
+                "wont_fix"
+              ]
+            }
           },
-          "required": ["id", "action"]
+          "required": [
+            "id",
+            "action"
+          ]
         }
       },
       {
@@ -1257,13 +1373,35 @@
         "toolReferenceName": "spListWork",
         "canBeReferencedInPrompt": true,
         "icon": "$(list-unordered)",
-        "tags": ["sharepoint", "confluence", "servicenow"],
+        "tags": [
+          "sharepoint",
+          "confluence",
+          "servicenow"
+        ],
         "modelDescription": "List the remediation backlog with each item's status, owner and pending follow-up. filter=all (default), open (unresolved), or due (follow-ups past due — use to find who needs a reminder). Optional status filter. Read-only.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "filter": { "type": "string", "enum": ["all", "open", "due"], "description": "Which items to list." },
-            "status": { "type": "string", "enum": ["open", "notified", "in_progress", "resolved", "wont_fix"], "description": "Optional status filter." }
+            "filter": {
+              "type": "string",
+              "enum": [
+                "all",
+                "open",
+                "due"
+              ],
+              "description": "Which items to list."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "notified",
+                "in_progress",
+                "resolved",
+                "wont_fix"
+              ],
+              "description": "Optional status filter."
+            }
           }
         }
       },
@@ -1273,13 +1411,102 @@
         "toolReferenceName": "spExportWork",
         "canBeReferencedInPrompt": true,
         "icon": "$(table)",
-        "tags": ["sharepoint", "confluence", "servicenow"],
+        "tags": [
+          "sharepoint",
+          "confluence",
+          "servicenow"
+        ],
         "modelDescription": "Export the remediation backlog to files for oversight and backup: an XLSX oversight workbook (Summary + Work Items + full History), a CSV, and/or a JSON backup that can be restored later. format=xlsx (default), csv, or both; backup=true (default) also writes the JSON backup. Writes into the workspace's ai-sharepoint-exports/ folder. Returns the file paths.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "format": { "type": "string", "enum": ["xlsx", "csv", "both"], "description": "Output format(s)." },
-            "backup": { "type": "boolean", "description": "Also write a JSON backup (default true)." }
+            "format": {
+              "type": "string",
+              "enum": [
+                "xlsx",
+                "csv",
+                "both"
+              ],
+              "description": "Output format(s)."
+            },
+            "backup": {
+              "type": "boolean",
+              "description": "Also write a JSON backup (default true)."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_cache_confluence_scope",
+        "displayName": "Cache Confluence Content",
+        "toolReferenceName": "spCacheScope",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(archive)",
+        "tags": [
+          "confluence"
+        ],
+        "modelDescription": "Snapshot a Confluence scope (space/page/subtree) into the local content cache so repeated review passes (consistency, accuracy, quality) over the authoritative space don't re-fetch every page, and each page's version is recorded as a drift baseline. Read-only. Scope kind = space (needs spaceKey), subtree (page + descendants, needs pageId), or page (needs pageId). Run before a big review, then use confluence_drift to catch pages that changed. Args: source (optional if one), kind, spaceKey, pageId.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias."
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "space",
+                "page",
+                "subtree"
+              ],
+              "description": "Scope kind."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Space key (space/subtree)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "Page id (page/subtree)."
+            }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_confluence_drift",
+        "displayName": "Check Confluence Content Drift",
+        "toolReferenceName": "spDrift",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(diff)",
+        "tags": [
+          "confluence"
+        ],
+        "modelDescription": "Report which cached pages in a scope CHANGED (version drifted) since they were snapshotted with cache_confluence_scope — the pre-deploy / re-review signal ('don't act on stale content'). Read-only. Args: source (optional if one), kind (space/page/subtree), spaceKey, pageId.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias."
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "space",
+                "page",
+                "subtree"
+              ],
+              "description": "Scope kind."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Space key (space/subtree)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "Page id (page/subtree)."
+            }
           }
         }
       },
@@ -1289,16 +1516,30 @@
         "toolReferenceName": "spMarkAuthority",
         "canBeReferencedInPrompt": true,
         "icon": "$(verified-filled)",
-        "tags": ["confluence"],
+        "tags": [
+          "confluence"
+        ],
         "modelDescription": "Declare a Confluence page the AUTHORITATIVE source of truth for a topic — adds an `authoritative|<topic>` label (a scope-checked write). Use before sweeping the rest of Confluence for content that conflicts with it. Args: source (optional if one), pageId (the authoritative page), topic (what it's the authority on).",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "source": { "type": "string", "description": "Confluence source name/alias (optional when only one)." },
-            "pageId": { "type": "string", "description": "The authoritative page id." },
-            "topic": { "type": "string", "description": "The topic this page is authoritative on." }
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias (optional when only one)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The authoritative page id."
+            },
+            "topic": {
+              "type": "string",
+              "description": "The topic this page is authoritative on."
+            }
           },
-          "required": ["pageId", "topic"]
+          "required": [
+            "pageId",
+            "topic"
+          ]
         }
       },
       {
@@ -1307,16 +1548,38 @@
         "toolReferenceName": "spGatherAuthority",
         "canBeReferencedInPrompt": true,
         "icon": "$(book)",
-        "tags": ["confluence"],
+        "tags": [
+          "confluence"
+        ],
         "modelDescription": "Read the authoritative content (the 'truth') for a topic scope as bounded plain text, so you can compare other pages against it. Scope kind = page (needs pageId), subtree (page + descendants, needs pageId), or space (needs spaceKey). Read-only. Use with find_conflicts to run the authoritative-source cleanup sweep. Args: source (optional if one), kind, spaceKey, pageId, topic.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "source": { "type": "string", "description": "Confluence source name/alias." },
-            "kind": { "type": "string", "enum": ["space", "page", "subtree"], "description": "Authority scope kind." },
-            "spaceKey": { "type": "string", "description": "Space key (space/subtree scope)." },
-            "pageId": { "type": "string", "description": "Page id (page/subtree scope)." },
-            "topic": { "type": "string", "description": "The topic label (optional, informational)." }
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias."
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "space",
+                "page",
+                "subtree"
+              ],
+              "description": "Authority scope kind."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Space key (space/subtree scope)."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "Page id (page/subtree scope)."
+            },
+            "topic": {
+              "type": "string",
+              "description": "The topic label (optional, informational)."
+            }
           }
         }
       },
@@ -1326,17 +1589,36 @@
         "toolReferenceName": "spFindConflicts",
         "canBeReferencedInPrompt": true,
         "icon": "$(search-fuzzy)",
-        "tags": ["confluence"],
+        "tags": [
+          "confluence"
+        ],
         "modelDescription": "Sweep the REST of Confluence for pages discussing a topic that may conflict with your authoritative source — the core of the info-sprawl cleanup. Excludes the authoritative space and page ids. Returns candidate pages; compare each against the authoritative content (gather_authority), then use resolve_page_owners + track_work_item + draft_communication to action inaccuracies. Read-only. Args: source (optional if one), topic, excludeSpaceKey (the authoritative space), excludePageIds.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "source": { "type": "string", "description": "Confluence source name/alias." },
-            "topic": { "type": "string", "description": "The topic to sweep for." },
-            "excludeSpaceKey": { "type": "string", "description": "The authoritative space to exclude." },
-            "excludePageIds": { "type": "array", "items": { "type": "string" }, "description": "Authoritative page ids to exclude." }
+            "source": {
+              "type": "string",
+              "description": "Confluence source name/alias."
+            },
+            "topic": {
+              "type": "string",
+              "description": "The topic to sweep for."
+            },
+            "excludeSpaceKey": {
+              "type": "string",
+              "description": "The authoritative space to exclude."
+            },
+            "excludePageIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Authoritative page ids to exclude."
+            }
           },
-          "required": ["topic"]
+          "required": [
+            "topic"
+          ]
         }
       },
       {
@@ -2198,7 +2480,10 @@
           "properties": {
             "kind": {
               "type": "string",
-              "enum": ["mail", "calendar"],
+              "enum": [
+                "mail",
+                "calendar"
+              ],
               "description": "'mail' for recent messages in scope, 'calendar' for upcoming events."
             },
             "days": {
@@ -3297,7 +3582,7 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.0",
     "@types/pg": "^8.0.0",
-    "@types/vscode": "^1.125.0",
+    "@types/vscode": "1.95.0",
     "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.28.0",
