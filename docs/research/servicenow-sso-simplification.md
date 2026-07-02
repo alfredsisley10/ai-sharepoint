@@ -210,6 +210,106 @@ secret-masked wire logging apply unchanged; the key/token lives only in the OS k
 - **Auto-capture `g_ck`** in the cookie path, and **the turnkey PKCE admin recipe** (from the
   original increment list) remain open.
 
+## Update (2026-07-02): the strict "no IT involvement" review
+
+Re-scoped to the hardest bar the pilot actually cares about: **an individual user connects using
+ONLY their existing SSO login, with ZERO IT/admin involvement** — nobody holding `admin` /
+`security_admin` / `oauth_admin` touches the instance, ever. Every candidate below was researched and
+then **adversarially checked** (tried to refute the "no-IT" claim). The result is blunt.
+
+### Bottom line
+
+**There is exactly one zero-IT path: replaying the user's own signed-in browser session (cookies +
+the `g_ck` CSRF token).** Every *token-minting* mechanism on ServiceNow — OAuth clients, the
+"personal OAuth token", API keys, third-party OIDC — requires an **admin to create a registration
+first**, so none of them clear the bar. ServiceNow has **no GitHub-style self-service personal access
+token** a user can mint alone, and **no reusable default/mobile `client_id`** an external desktop tool
+can borrow. So the engineering question isn't "which new auth method?" — it's "how do we make the
+one zero-IT path painless and durable?"
+
+### Every option, ranked against the bar
+
+| Option | IT involvement | Works with existing SSO | User can do it alone | Verdict |
+|---|---|---|---|---|
+| **Browser-session replay** (`snow-session`: cookies + `g_ck`) | **none** | ✅ (SSO is how they got the session) | ✅ | ✅ **only zero-IT path** |
+| OAuth auth-code + PKCE (`snow-oauth`) | one-time admin (create OAuth client, `oauth_admin`) | ✅ delegates to SSO | ❌ | ❌ needs IT |
+| Third-party OIDC / Entra token (`snow-oidc`) | one-time admin (register OIDC provider) | ✅ | ❌ | ❌ needs IT |
+| Inbound REST API Key (`snow-apikey`) | one-time admin (create key + auth profile) | ❌ (key, not SSO) | ❌ | ❌ needs IT |
+| "Get OAuth Token" / **personal OAuth token** | one-time admin (needs an OAuth entity to exist) | ✅ | ❌ | ❌ needs IT — *not* a real self-service PAT |
+| Reuse a **mobile/default `client_id`** for PKCE | (n/a) | ✅ | ❌ in practice | ❌ refuted — no reusable client + custom redirect + ToS |
+| Basic (`basic`) / OAuth ROPC | (varies) | ❌ needs password, bypasses SSO | — | ❌ not an SSO path |
+
+### Why the token paths all fail the bar (so we don't re-litigate them)
+
+- **Creating any credential registration is admin-gated.** The OAuth Application Registry module
+  requires `oauth_admin` (and `security_admin` to manage the integration); REST API Keys and Inbound
+  Authentication Profiles live under System Web Services → API Access Policies (admin); OIDC provider
+  entities are `sys_oauth_entity` records (admin). A standard user cannot create any of them, and even
+  *retrieving* a token from the OAuth Credentials table is blocked for non-admins (KB0783632).
+  — [OAuth grant-type / role guidance](https://www.servicenow.com/community/platform-privacy-security-blog/choose-the-right-oauth-grant-type-for-servicenow-integration/ba-p/3385352),
+  [set up instance as OAuth client KB0778194](https://support.servicenow.com/kb?id=kb_article_view&sysparm_article=KB0778194),
+  [non-admin cannot retrieve OAuth token KB0783632](https://support.servicenow.com/kb?id=kb_article_view&sysparm_article=KB0783632)
+- **The "personal OAuth token" / "Get OAuth Token" is not a self-service PAT.** It is a UI action that
+  fetches a token *for an existing OAuth entity* — the entity still has to be admin-registered first;
+  it is not a "generate a token from your profile" feature.
+  — [Get OAuth Token (personal-oauth-token)](https://www.servicenow.com/docs/r/platform-security/authentication/personal-oauth-token.html),
+  [Token-based authentication (Yokohama)](https://www.servicenow.com/docs/r/yokohama/platform-security/authentication/token-based-auth-api.html)
+- **No reusable default / mobile `client_id`.** The Now/Agent mobile apps authenticate via OAuth +
+  Multi-Provider SSO, but there is no documented universal `client_id` present on every instance that a
+  third party may reuse, and the mobile redirect is `oauth_redirect.do` / a custom scheme — not a
+  loopback we could receive a code on. Reusing a ServiceNow-owned mobile client would also be
+  ToS-dubious. Refuted as impractical.
+  — [ServiceNow mobile authentication options](https://www.servicenow.com/community/architect-articles/servicenow-mobile-app-based-authentication-options/ta-p/3053645)
+
+### The one zero-IT path, in detail — and its hard technical limit
+
+The user signs into ServiceNow in their browser via the org SSO; the extension replays that session's
+**cookies** (`JSESSIONID`, `glide_*`, load-balancer `BIGipServer*`) plus the **`X-UserToken` = `g_ck`**
+CSRF token to call `/api/now/*`. Verified facts that shape the design:
+
+- **`JSESSIONID` is `HttpOnly; Secure`.** This is the crux: **JavaScript cannot read it** — not from a
+  page console, not from a VS Code Webview's `document.cookie`. The only ways to obtain it are the
+  **Network tab's `Cookie` request header** or the DevTools **Application → Cookies** table. So any
+  "just run this console snippet" capture is impossible for the session cookie; the user must copy the
+  Cookie header. `g_ck`, by contrast, **is** reachable (`window.g_ck` in the console).
+  — [ServiceNow Cookies KB0693221](https://support.servicenow.com/kb?id=kb_article_view&sysparm_article=KB0693221),
+  [What is g_ck](https://jace.pro/post/2018-05-12-g_ck/)
+- **Session lifetime ≈ 30 min idle** (default), so a lightweight **keep-alive** (a periodic 1-row read)
+  can hold the window open; there is no refresh token, so a hard expiry still means re-capture.
+  — [Session activity timeout](https://www.servicenow.com/docs/bundle/washingtondc-platform-security/page/administer/security/reference/session-activity-timeout.html)
+- **SSO/WAF gateways, MFA and conditional access** can still reject a replayed session (fresh cookies
+  fail when the gateway's own cookies are missing or it only accepts browser traffic) — already
+  diagnosed by `describeSnowRejection`, and why we send a browser-compatible User-Agent.
+
+### Recommended engineering increment (maximize the zero-IT SSO experience)
+
+1. **Auto-capture `g_ck` and always send `X-UserToken`.** It's the single most common "fresh cookies
+   still rejected" cause and, unlike the session cookie, it *is* script-readable. Ship a one-line
+   console snippet (`copy(g_ck)`) or read it during an assisted capture. (Was already the top open item;
+   confirm it's the highest-leverage no-admin fix.)
+2. **Session keep-alive + honest expiry.** Periodic tiny read to extend the ~30-min window; on hard
+   expiry, prompt a re-capture rather than failing opaquely.
+3. **Assisted capture that respects the `HttpOnly` wall.** A Webview/console cannot read `JSESSIONID`,
+   so the realistic "no manual paste" design is a **local browser-automation capture**: drive a real
+   browser (e.g. bundled Chromium via Playwright/CDP) to the instance, let the user complete SSO, then
+   read cookies **including HttpOnly** from the browser context (`context.cookies()` / `storageState`)
+   and evaluate `window.g_ck`. This is the only way to fully delete the paste — gated on a browser
+   being available at runtime, so ship it as an *optional* enhanced capture with the Network-tab paste
+   as the always-available fallback. Do **not** promise a pure-Webview auto-capture; the `HttpOnly`
+   cookie makes it impossible.
+4. **Keep the one-time-IT token methods (`snow-oauth`/`snow-oidc`/`snow-apikey`) clearly labeled as
+   "needs a one-time admin step"** so users aren't sent down them expecting zero IT.
+
+### Honest caveats
+
+- ServiceNow docs on `servicenow.com` were not directly fetchable from this environment (proxy 403);
+  the above leans on search-result snippets, community posts, and third-party integration docs, and is
+  marked medium-high confidence. The two load-bearing claims — *credential registration is admin-gated*
+  and *`JSESSIONID` is `HttpOnly`* — are each corroborated by multiple independent sources.
+- If the pilot's org is willing to do a **single** admin action, `snow-oidc` (reusing the extension's
+  Entra token) remains the strategically best experience; but that is explicitly *outside* the "no IT"
+  bar this section was scoped to.
+
 ## Open questions for the pilot org
 
 - Is ServiceNow's SSO IdP **Entra ID** (lets us reuse the extension's existing token) or SAML/Okta?
