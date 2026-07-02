@@ -1284,6 +1284,42 @@
         }
       },
       {
+        "name": "aisharepoint_cache_confluence_scope",
+        "displayName": "Cache Confluence Content",
+        "toolReferenceName": "spCacheScope",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(archive)",
+        "tags": ["confluence"],
+        "modelDescription": "Snapshot a Confluence scope (space/page/subtree) into the local content cache so repeated review passes (consistency, accuracy, quality) over the authoritative space don't re-fetch every page, and each page's version is recorded as a drift baseline. Read-only. Scope kind = space (needs spaceKey), subtree (page + descendants, needs pageId), or page (needs pageId). Run before a big review, then use confluence_drift to catch pages that changed. Args: source (optional if one), kind, spaceKey, pageId.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "description": "Confluence source name/alias." },
+            "kind": { "type": "string", "enum": ["space", "page", "subtree"], "description": "Scope kind." },
+            "spaceKey": { "type": "string", "description": "Space key (space/subtree)." },
+            "pageId": { "type": "string", "description": "Page id (page/subtree)." }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_confluence_drift",
+        "displayName": "Check Confluence Content Drift",
+        "toolReferenceName": "spDrift",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(diff)",
+        "tags": ["confluence"],
+        "modelDescription": "Report which cached pages in a scope CHANGED (version drifted) since they were snapshotted with cache_confluence_scope — the pre-deploy / re-review signal ('don't act on stale content'). Read-only. Args: source (optional if one), kind (space/page/subtree), spaceKey, pageId.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "description": "Confluence source name/alias." },
+            "kind": { "type": "string", "enum": ["space", "page", "subtree"], "description": "Scope kind." },
+            "spaceKey": { "type": "string", "description": "Space key (space/subtree)." },
+            "pageId": { "type": "string", "description": "Page id (page/subtree)." }
+          }
+        }
+      },
+      {
         "name": "aisharepoint_mark_authority",
         "displayName": "Mark Authoritative Content",
         "toolReferenceName": "spMarkAuthority",
