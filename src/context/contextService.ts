@@ -65,6 +65,14 @@ import {
   resolveOwners,
 } from "./adapters/confluenceOwnership";
 import {
+  gatherAuthorityPages,
+  findConflictCandidates,
+  buildAuthorityLabel,
+  AuthorityScope,
+  ScopePage,
+  ConflictCandidate,
+} from "./adapters/confluenceAuthority";
+import {
   archiveConfluencePage as archiveConfluencePageAdapter,
   removeConfluencePageFromSearch as removeConfluencePageFromSearchAdapter,
   moveConfluencePage as moveConfluencePageAdapter,
@@ -1037,6 +1045,41 @@ export class ContextService {
     });
     await this.ownershipCache?.put(source.id, pageId, result);
     return { ...result, cached: false };
+  }
+
+  /** Mark a page as the authoritative source for a topic (adds the
+   *  `authoritative|<slug>` label — a scope-checked label write). */
+  async markConfluenceAuthority(
+    source: ContextSource,
+    pageId: string,
+    topic: string,
+  ): Promise<{ label: string; labels: string[] }> {
+    const label = buildAuthorityLabel(topic);
+    const res = await this.manageConfluenceLabels(source, { action: "add", pageId, labels: [label] });
+    return { label, labels: res.labels };
+  }
+
+  /** Gather the authoritative content for a scope (space/page/subtree) as
+   *  bounded plain text — the "truth" to compare other pages against. READ. */
+  async gatherConfluenceAuthority(source: ContextSource, scope: AuthorityScope): Promise<ScopePage[]> {
+    if (source.type !== "confluence") throw new AppError("Authority targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () => gatherAuthorityPages(source, credential, scope, caps));
+  }
+
+  /** Find candidate pages elsewhere in Confluence discussing a topic that may
+   *  conflict with the authoritative scope (excludes the authority space + page
+   *  ids). The assistant compares each against the gathered authority. READ. */
+  async findConfluenceConflicts(
+    source: ContextSource,
+    topic: string,
+    exclude: { spaceKey?: string; pageIds?: string[] },
+  ): Promise<ConflictCandidate[]> {
+    if (source.type !== "confluence") throw new AppError("Authority targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () => findConflictCandidates(source, credential, topic, exclude, caps));
   }
 
   /** Review whether the signed-in user can read+write every page in a space,

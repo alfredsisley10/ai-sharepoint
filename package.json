@@ -1265,6 +1265,62 @@
         }
       },
       {
+        "name": "aisharepoint_mark_authority",
+        "displayName": "Mark Authoritative Content",
+        "toolReferenceName": "spMarkAuthority",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(verified-filled)",
+        "tags": ["confluence"],
+        "modelDescription": "Declare a Confluence page the AUTHORITATIVE source of truth for a topic — adds an `authoritative|<topic>` label (a scope-checked write). Use before sweeping the rest of Confluence for content that conflicts with it. Args: source (optional if one), pageId (the authoritative page), topic (what it's the authority on).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "description": "Confluence source name/alias (optional when only one)." },
+            "pageId": { "type": "string", "description": "The authoritative page id." },
+            "topic": { "type": "string", "description": "The topic this page is authoritative on." }
+          },
+          "required": ["pageId", "topic"]
+        }
+      },
+      {
+        "name": "aisharepoint_gather_authority",
+        "displayName": "Gather Authoritative Content",
+        "toolReferenceName": "spGatherAuthority",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(book)",
+        "tags": ["confluence"],
+        "modelDescription": "Read the authoritative content (the 'truth') for a topic scope as bounded plain text, so you can compare other pages against it. Scope kind = page (needs pageId), subtree (page + descendants, needs pageId), or space (needs spaceKey). Read-only. Use with find_conflicts to run the authoritative-source cleanup sweep. Args: source (optional if one), kind, spaceKey, pageId, topic.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "description": "Confluence source name/alias." },
+            "kind": { "type": "string", "enum": ["space", "page", "subtree"], "description": "Authority scope kind." },
+            "spaceKey": { "type": "string", "description": "Space key (space/subtree scope)." },
+            "pageId": { "type": "string", "description": "Page id (page/subtree scope)." },
+            "topic": { "type": "string", "description": "The topic label (optional, informational)." }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_find_conflicts",
+        "displayName": "Find Conflicting Pages",
+        "toolReferenceName": "spFindConflicts",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(search-fuzzy)",
+        "tags": ["confluence"],
+        "modelDescription": "Sweep the REST of Confluence for pages discussing a topic that may conflict with your authoritative source — the core of the info-sprawl cleanup. Excludes the authoritative space and page ids. Returns candidate pages; compare each against the authoritative content (gather_authority), then use resolve_page_owners + track_work_item + draft_communication to action inaccuracies. Read-only. Args: source (optional if one), topic, excludeSpaceKey (the authoritative space), excludePageIds.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "description": "Confluence source name/alias." },
+            "topic": { "type": "string", "description": "The topic to sweep for." },
+            "excludeSpaceKey": { "type": "string", "description": "The authoritative space to exclude." },
+            "excludePageIds": { "type": "array", "items": { "type": "string" }, "description": "Authoritative page ids to exclude." }
+          },
+          "required": ["topic"]
+        }
+      },
+      {
         "name": "aisharepoint_resolve_page_owners",
         "displayName": "Resolve Confluence Page Owners",
         "toolReferenceName": "spPageOwners",
