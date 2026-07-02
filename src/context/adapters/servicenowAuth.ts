@@ -394,6 +394,59 @@ export function userTokenIssue(raw: string): string | undefined {
 export const SNOW_SESSION_USER_AGENT =
   "Mozilla/5.0 (compatible; AI-SharePoint-VSCode; ServiceNow session replay)";
 
+/** Extract the page CSRF token (g_ck) from an authenticated ServiceNow response.
+ *  It is emitted into the bootstrap of any signed-in HTML page as
+ *  `var g_ck = "…"` / `window.g_ck = '…'`, and appears as `"ck":"…"` in some
+ *  JSON responses. Pure — used to fetch g_ck for the user so they never have to
+ *  read `window.g_ck` from a console and paste it. */
+export function extractUserToken(body: string): string | undefined {
+  const m =
+    body.match(/g_ck\s*[=:]\s*["']([A-Za-z0-9._+/=-]{16,})["']/) ??
+    body.match(/["']ck["']\s*:\s*["']([A-Za-z0-9._+/=-]{16,})["']/);
+  return m?.[1];
+}
+
+/**
+ * Fetch the session's g_ck (X-UserToken) using only the captured cookies — a
+ * GET of an authenticated page needs no token, so this closes the loop for the
+ * zero-admin browser-session path: the extension obtains the CSRF token itself
+ * instead of asking the user to copy `window.g_ck`. Tries a couple of
+ * lightweight authenticated endpoints and returns the first token found (or
+ * undefined, in which case the caller falls back to any pasted token / cookies
+ * only). Never throws. Token material is not wire-logged.
+ */
+export async function fetchSnowUserToken(
+  instanceUrl: string,
+  cookies: string,
+  timeoutMs = 15_000,
+): Promise<string | undefined> {
+  let origin: string;
+  try {
+    origin = new URL(instanceUrl).origin;
+  } catch {
+    return undefined;
+  }
+  const headers = {
+    Cookie: cleanCookieString(cookies),
+    "User-Agent": SNOW_SESSION_USER_AGENT,
+    Accept: "text/html,application/json",
+  };
+  for (const path of ["/api/now/ui/user/current_user", "/navpage.do", "/"]) {
+    const url = `${origin}${path}`;
+    emitWire("servicenow", "→", `GET ${safeUrl(url)} (g_ck lookup)`);
+    try {
+      const res = await fetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
+      emitWire("servicenow", "←", `GET ${safeUrl(url)} ${res.status}`);
+      if (!res.ok) continue;
+      const token = extractUserToken(await res.text());
+      if (token) return token;
+    } catch (err) {
+      emitWire("servicenow", "✗", `GET ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return undefined;
+}
+
 export interface SnowRejection {
   message: string;
   summary: string;

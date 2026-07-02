@@ -52,8 +52,11 @@ inbound-auth catalog and rationale):
 - **`snow-oauth`** — OAuth authorization-code + PKCE over a loopback redirect;
   `oauth_auth.do` delegates login to the org SSO. Needs a one-time admin OAuth
   client (Application Registry, redirect `http://localhost:51725/callback`).
-- **`snow-session`** — replay the user's signed-in browser session cookies
-  (+ optional `g_ck`/`X-UserToken`). Zero admin, but session-fragile.
+- **`snow-session`** — replay the user's signed-in browser session cookies. The
+  zero-admin SSO path. The page CSRF token (`g_ck`/`X-UserToken`) is now
+  fetched automatically from the cookies (`fetchSnowUserToken`, cached), so the
+  user no longer pastes it, and a 14-min keep-alive read holds the ~30-min GUI
+  session open while they work (best-effort, lockout-safe).
 - **`snow-apikey`** — Inbound REST API Key in the `x-sn-apikey` header; the key
   is tied to a ServiceNow user, so that user's ACLs apply. No OAuth client,
   password, or expiry.

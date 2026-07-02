@@ -8,6 +8,8 @@ import {
   snowApiKeyIssue,
   snowOidcTokenIssue,
   jwtExpiryMs,
+  extractUserToken,
+  fetchSnowUserToken,
   SNOW_REDIRECT_URI,
 } from "../src/context/adapters/servicenowAuth";
 
@@ -17,6 +19,50 @@ function jwt(expSeconds?: number): string {
   return `${b64({ alg: "RS256", kid: "x" })}.${b64(expSeconds ? { sub: "u", exp: expSeconds } : { sub: "u" })}.sig`;
 }
 const NOW = 1_700_000_000_000; // fixed "now" in ms
+
+test("extractUserToken: pulls g_ck from page HTML and the ck field from JSON; undefined otherwise", () => {
+  assert.equal(
+    extractUserToken('<script>var g_ck = "abcdef0123456789ABCDEF";</script>'),
+    "abcdef0123456789ABCDEF",
+  );
+  assert.equal(extractUserToken("window.g_ck = 'tok_9f8e7d6c5b4a3210';"), "tok_9f8e7d6c5b4a3210");
+  assert.equal(extractUserToken('{"user":"x","ck":"JSONck0123456789abcd"}'), "JSONck0123456789abcd");
+  assert.equal(extractUserToken("<html>no token here</html>"), undefined);
+  assert.equal(extractUserToken('var g_ck = "short";'), undefined); // too short to be a real token
+});
+
+test("fetchSnowUserToken: fetches g_ck with the cookies; skips a non-OK endpoint to the next", async () => {
+  const original = globalThis.fetch;
+  const seen: string[] = [];
+  globalThis.fetch = (async (url: string, init?: { headers?: Record<string, string> }) => {
+    seen.push(String(url));
+    // First endpoint 404s; the second returns a page carrying g_ck.
+    if (String(url).endsWith("/api/now/ui/user/current_user")) {
+      return new Response("nope", { status: 404 });
+    }
+    assert.match(init?.headers?.Cookie ?? "", /JSESSIONID=abc/);
+    return new Response('<script>var g_ck = "GCK_abcdef0123456789";</script>', { status: 200 });
+  }) as typeof fetch;
+  try {
+    const tok = await fetchSnowUserToken("https://corp.service-now.com/?table=incident", "JSESSIONID=abc; glide=1");
+    assert.equal(tok, "GCK_abcdef0123456789");
+    assert.equal(seen[0], "https://corp.service-now.com/api/now/ui/user/current_user"); // origin-only, first path
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("fetchSnowUserToken: returns undefined (never throws) when every endpoint fails", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("network down");
+  }) as typeof fetch;
+  try {
+    assert.equal(await fetchSnowUserToken("https://corp.service-now.com", "JSESSIONID=abc"), undefined);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 
 test("snowApiKeyIssue: flags empty, spaced, and too-short keys; accepts a real one", () => {
   assert.ok(snowApiKeyIssue(""));

@@ -441,6 +441,11 @@ export function activate(context: vscode.ExtensionContext): void {
     return (await provider.acquireToken(scopes)).token;
   };
   const contextService = new ContextService(contextSources, contextCache, aadBroker);
+  // Keep zero-admin ServiceNow browser sessions warm: the GUI session times out
+  // after ~30 min idle, so ping every 14 min (well inside the window). The call
+  // no-ops when there are no snow-session sources and never throws.
+  const snowKeepAlive = setInterval(() => void contextService.keepAliveSnowSessions(), 14 * 60_000);
+  context.subscriptions.push({ dispose: () => clearInterval(snowKeepAlive) });
   const bookmarks = new BookmarksStore(context.globalState);
   const schemas = new SchemaStore(context.globalStorageUri);
   const schemaIndexer = new SchemaIndexer(copilot, schemas, telemetry, log, nowIso);
@@ -7608,16 +7613,17 @@ async function promptContextCredential(
       void vscode.window.showInformationMessage(
         `Captured ${names.length} session cookie(s): ${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}${names.some((n) => n.toUpperCase() === "JSESSIONID") ? "" : " — note: no JSESSIONID found; if verification fails, copy the Cookie header from the Network tab instead"}.`,
       );
-      // Optional page CSRF token: some instances refuse cookie-authenticated
-      // /api/now calls without X-UserToken — no cookie capture can fix that
-      // (pilot: complete fresh cookies from two browsers still rejected).
+      // Page CSRF token (X-UserToken = g_ck): the extension now fetches this
+      // itself from your session cookies (a GET needs no token), so it is almost
+      // never needed here — kept only as a manual override for instances where
+      // the automatic lookup can't reach a page that carries g_ck.
       const userToken = await vscode.window.showInputBox({
         ignoreFocusOut: true,
         password: true,
-        title: "Optional — X-UserToken (g_ck), if your instance requires it (Enter to skip)",
-        placeHolder: "Enter to skip — needed only when complete cookies still get “User Not Authenticated”",
+        title: "Optional — X-UserToken (g_ck) override (Enter to skip; auto-detected)",
+        placeHolder: "Enter to skip — the extension fetches g_ck automatically from your session",
         prompt:
-          "Some instances require the page CSRF token for API calls even with valid session cookies. In the SAME signed-in tab: DevTools → **Console** → type `g_ck` → Enter → copy the printed value (no quotes). It rotates with the session and is re-captured the same way.",
+          "Usually leave this blank: the extension retrieves the page CSRF token (g_ck) automatically using your captured cookies. Provide one only if verification still reports “User Not Authenticated”. To get it manually: in the SAME signed-in tab, DevTools → **Console** → type `g_ck` → Enter → copy the value (no quotes).",
         validateInput: (v) => userTokenIssue(v),
       });
       if (userToken === undefined) return undefined;

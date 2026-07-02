@@ -283,12 +283,15 @@ CSRF token to call `/api/now/*`. Verified facts that shape the design:
 
 ### Recommended engineering increment (maximize the zero-IT SSO experience)
 
-1. **Auto-capture `g_ck` and always send `X-UserToken`.** It's the single most common "fresh cookies
-   still rejected" cause and, unlike the session cookie, it *is* script-readable. Ship a one-line
-   console snippet (`copy(g_ck)`) or read it during an assisted capture. (Was already the top open item;
-   confirm it's the highest-leverage no-admin fix.)
-2. **Session keep-alive + honest expiry.** Periodic tiny read to extend the ~30-min window; on hard
-   expiry, prompt a re-capture rather than failing opaquely.
+1. **Auto-fetch `g_ck` from the captured cookies. — SHIPPED.** Instead of asking the user to read
+   `window.g_ck` from a console, the extension now GETs an authenticated page with the session cookies
+   (a GET needs no token) and extracts `g_ck` itself (`fetchSnowUserToken` / `extractUserToken`, cached
+   ~10 min), injecting it as `X-UserToken` on every read. Any pasted token remains a manual override.
+   This removes the single most common "fresh cookies still rejected" failure with zero admin action.
+2. **Session keep-alive. — SHIPPED.** A 14-minute background 1-row read (`keepAliveSnowSessions`, well
+   inside the ~30-min idle timeout) holds the session open while the user works; it is best-effort and
+   bypasses the ADR-0009 lockout tracker, so a keep-alive blip never locks out a good session. On hard
+   expiry the next real read still surfaces a proper re-capture prompt.
 3. **Assisted capture that respects the `HttpOnly` wall.** A Webview/console cannot read `JSESSIONID`,
    so the realistic "no manual paste" design is a **local browser-automation capture**: drive a real
    browser (e.g. bundled Chromium via Playwright/CDP) to the instance, let the user complete SSO, then

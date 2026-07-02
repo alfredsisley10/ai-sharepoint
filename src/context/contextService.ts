@@ -123,6 +123,9 @@ import {
   snowTokenExpired,
   refreshSnowTokens,
   jwtExpiryMs,
+  parseSnowSessionSecret,
+  buildSnowSessionSecret,
+  fetchSnowUserToken,
 } from "./adapters/servicenowAuth";
 import { SchemaCatalog, TableDef } from "./db/schemaIndex";
 import { AppError, classifyError } from "../core/errors";
@@ -213,6 +216,17 @@ export class ContextService {
       }
       return credential;
     }
+    // snow-session (zero-admin browser SSO): the request needs the page CSRF
+    // token (X-UserToken = g_ck) on many instances. Rather than make the user
+    // read `window.g_ck` from a console and paste it, fetch it ourselves using
+    // the captured cookies (a GET needs no token), cached briefly since it is
+    // stable within a session. Any pasted token is the fallback.
+    if (credential.method === "snow-session") {
+      const session = parseSnowSessionSecret(credential.secret);
+      const token = (await this.snowUserToken(source.id, source.baseUrl, session.cookies)) ?? session.userToken;
+      if (!token) return credential; // no token available — send cookies only
+      return { method: "snow-session", secret: buildSnowSessionSecret(session.cookies, token) };
+    }
     if (credential.method !== "snow-oauth") return credential;
     let tokens = snowTokensFromSecret(credential.secret);
     if (snowTokenExpired(tokens, Date.now())) {
@@ -223,6 +237,47 @@ export class ContextService {
       });
     }
     return { method: "pat", secret: tokens.accessToken };
+  }
+
+  /** Per-source g_ck cache for snow-session sources. g_ck is stable within a
+   *  session, so we fetch it at most once every few minutes rather than on
+   *  every read. */
+  private readonly snowUserTokens = new Map<string, { token: string; at: number }>();
+  private static readonly SNOW_GCK_TTL_MS = 10 * 60_000;
+
+  private async snowUserToken(
+    sourceId: string,
+    baseUrl: string,
+    cookies: string,
+  ): Promise<string | undefined> {
+    const cached = this.snowUserTokens.get(sourceId);
+    if (cached && Date.now() - cached.at < ContextService.SNOW_GCK_TTL_MS) return cached.token;
+    const token = await fetchSnowUserToken(baseUrl, cookies, this.caps().timeoutMs).catch(() => undefined);
+    if (token) this.snowUserTokens.set(sourceId, { token, at: Date.now() });
+    return token;
+  }
+
+  /**
+   * Keep-alive for zero-admin browser-session (`snow-session`) sources: the GUI
+   * session times out after ~30 min of inactivity, so a lightweight
+   * authenticated read every cycle resets the idle timer and holds the session
+   * open while the user works. Best-effort — failures are swallowed (a real read
+   * will surface an expired session with proper diagnosis), and this bypasses
+   * the ADR-0009 lockout tracker (it calls the adapter directly), so a keep-alive
+   * blip never locks out a good session.
+   */
+  async keepAliveSnowSessions(): Promise<void> {
+    for (const source of this.store.list()) {
+      if (source.authMethod !== "snow-session") continue;
+      const credential = await this.store.getCredential(source.id).catch(() => undefined);
+      if (!credential || credential.method !== "snow-session") continue;
+      try {
+        const c = await this.snowCredential(source, credential);
+        await verifyServiceNow(source, c, this.caps());
+      } catch {
+        // expired/unreachable — leave it; the next real use reports it properly.
+      }
+    }
   }
 
   /** Cached GitHub App installation tokens (per source) — they live ~1h, so we
