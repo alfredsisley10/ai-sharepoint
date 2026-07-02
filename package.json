@@ -304,6 +304,24 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "aiSharePoint.exportWorkInventory",
+        "title": "Export Remediation Inventory (XLSX + CSV + backup)",
+        "category": "%category%",
+        "icon": "$(table)"
+      },
+      {
+        "command": "aiSharePoint.backupWorkInventory",
+        "title": "Back Up Remediation Inventory…",
+        "category": "%category%",
+        "icon": "$(save)"
+      },
+      {
+        "command": "aiSharePoint.restoreWorkInventory",
+        "title": "Restore Remediation Inventory…",
+        "category": "%category%",
+        "icon": "$(history)"
+      },
+      {
         "command": "aiSharePoint.manageMemory",
         "title": "%aiSharePoint.manageMemory.title%",
         "category": "%category%",
@@ -1157,6 +1175,96 @@
         }
       },
       {
+        "name": "aisharepoint_track_work_item",
+        "displayName": "Track Remediation Work Item",
+        "toolReferenceName": "spTrackWork",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(checklist)",
+        "tags": [
+          "sharepoint",
+          "confluence",
+          "servicenow"
+        ],
+        "modelDescription": "Record a content-cleanup finding in the local remediation inventory (a durable, exportable backlog). Use when you identify an inaccurate/inconsistent/stale page that needs correcting. Captures what's wrong and where, plus the resolved owner if known. Everything is event-logged so each later step (owner, communications, follow-ups, resolution) is tracked. Args: title (short label), finding (what's wrong), source (the source name it lives in), optional targetKind (confluence|sharepoint|servicenow|file|other), ref (page id / sys_id / path), url, authorityTopic (the authoritative topic it conflicts with), evidence (offending snippet), ownerSam/ownerContact/ownerBasis, tags.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string", "description": "Short label of the finding." },
+            "finding": { "type": "string", "description": "What is wrong / needs correcting." },
+            "source": { "type": "string", "description": "The source name/alias the content lives in." },
+            "targetKind": { "type": "string", "enum": ["confluence", "sharepoint", "servicenow", "file", "other"], "description": "Kind of target." },
+            "ref": { "type": "string", "description": "Page id / sys_id / server-relative path." },
+            "url": { "type": "string", "description": "Direct URL to the content." },
+            "authorityTopic": { "type": "string", "description": "The authoritative topic this conflicts with, if any." },
+            "evidence": { "type": "string", "description": "The offending / conflicting snippet." },
+            "ownerSam": { "type": "string", "description": "Resolved owner sAMAccountName, if known." },
+            "ownerContact": { "type": "string", "description": "Resolved owner email/UPN." },
+            "ownerBasis": { "type": "string", "description": "How ownership was determined (label/page-contributor/…)." },
+            "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags." }
+          },
+          "required": ["title", "finding", "source"]
+        }
+      },
+      {
+        "name": "aisharepoint_update_work_item",
+        "displayName": "Update Remediation Work Item",
+        "toolReferenceName": "spUpdateWork",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "tags": ["sharepoint", "confluence", "servicenow"],
+        "modelDescription": "Advance a tracked work item by appending an event (the item's history is the source of truth; status/owner/follow-up are derived). action=note (free-text), owner (record resolved owner: ownerSam/ownerDisplayName/ownerContact/ownerBasis), communication (log an owner message you prepared: channel outlook|teams, recipient, draftId from the comms outbox — advances an untouched item to 'notified'), schedule_followup (dueAt ISO date), followup_sent, status (status: open|notified|in_progress), resolve, reopen. Args: id (from list_work_items), action, plus the action's fields; optional detail.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "description": "The work item id." },
+            "action": { "type": "string", "enum": ["note", "owner", "communication", "schedule_followup", "followup_sent", "status", "resolve", "reopen"], "description": "The step to record." },
+            "detail": { "type": "string", "description": "Human-readable detail for the event." },
+            "ownerSam": { "type": "string" },
+            "ownerDisplayName": { "type": "string" },
+            "ownerContact": { "type": "string" },
+            "ownerBasis": { "type": "string" },
+            "channel": { "type": "string", "enum": ["outlook", "teams"] },
+            "recipient": { "type": "string" },
+            "draftId": { "type": "string", "description": "Linked comms-outbox draft id." },
+            "dueAt": { "type": "string", "description": "ISO date for schedule_followup." },
+            "status": { "type": "string", "enum": ["open", "notified", "in_progress", "resolved", "wont_fix"] }
+          },
+          "required": ["id", "action"]
+        }
+      },
+      {
+        "name": "aisharepoint_list_work_items",
+        "displayName": "List Remediation Work Items",
+        "toolReferenceName": "spListWork",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(list-unordered)",
+        "tags": ["sharepoint", "confluence", "servicenow"],
+        "modelDescription": "List the remediation backlog with each item's status, owner and pending follow-up. filter=all (default), open (unresolved), or due (follow-ups past due — use to find who needs a reminder). Optional status filter. Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filter": { "type": "string", "enum": ["all", "open", "due"], "description": "Which items to list." },
+            "status": { "type": "string", "enum": ["open", "notified", "in_progress", "resolved", "wont_fix"], "description": "Optional status filter." }
+          }
+        }
+      },
+      {
+        "name": "aisharepoint_export_work_inventory",
+        "displayName": "Export Remediation Inventory",
+        "toolReferenceName": "spExportWork",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(table)",
+        "tags": ["sharepoint", "confluence", "servicenow"],
+        "modelDescription": "Export the remediation backlog to files for oversight and backup: an XLSX oversight workbook (Summary + Work Items + full History), a CSV, and/or a JSON backup that can be restored later. format=xlsx (default), csv, or both; backup=true (default) also writes the JSON backup. Writes into the workspace's ai-sharepoint-exports/ folder. Returns the file paths.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "format": { "type": "string", "enum": ["xlsx", "csv", "both"], "description": "Output format(s)." },
+            "backup": { "type": "boolean", "description": "Also write a JSON backup (default true)." }
+          }
+        }
+      },
+      {
         "name": "aisharepoint_resolve_page_owners",
         "displayName": "Resolve Confluence Page Owners",
         "toolReferenceName": "spPageOwners",
@@ -1166,7 +1274,7 @@
           "sharepoint",
           "confluence"
         ],
-        "modelDescription": "Determine who OWNS a Confluence page: the owner label if one is set, otherwise the most prolific contributor on the page, otherwise in the space. Read-only. Use to find who to notify about a page (e.g. for cleanup of inaccurate content). NOTE: active-user filtering needs an LDAP/M365 directory which isn't wired, so owners are ranked by contribution volume, not filtered by who is still employed/active. Args: source (optional if one), pageId.",
+        "modelDescription": "Determine who OWNS a Confluence page: the owner label if one is set, otherwise the most RECENTLY-active prolific contributor on the page, otherwise in the space, otherwise the configured space owners. Read-only. Use to find who to notify about a page (e.g. for cleanup of inaccurate content). When an LDAP reference source is configured, contributors are validated as CURRENT ACTIVE employees (inactive ones skipped) and the resolved owner's email/UPN is returned; otherwise ranking is by recency-weighted contribution only. Args: source (optional if one), pageId.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1219,7 +1327,7 @@
           "sharepoint",
           "confluence"
         ],
-        "modelDescription": "Review a Confluence page's currency: check its outbound links for dead/broken ones (HEAD/GET, bounded), report the owner tag, and the page's age (flagging >365 days stale). Read-only. Use when asked to check if a page is still up to date. NOTE: owner-ACTIVITY verification needs an LDAP/M365 directory (not wired) — owner names are reported as-is. Args: source (optional if one), pageId.",
+        "modelDescription": "Review a Confluence page's currency: check its outbound links for dead/broken ones (HEAD/GET, bounded), report the owner tag, and the page's age (flagging >365 days stale). Read-only. Use when asked to check if a page is still up to date. When an LDAP reference source is configured, each owner tag is verified against the directory and inactive owners are flagged (a trigger to re-derive ownership). Args: source (optional if one), pageId.",
         "inputSchema": {
           "type": "object",
           "properties": {

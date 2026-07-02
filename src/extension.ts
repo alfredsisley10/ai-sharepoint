@@ -62,6 +62,10 @@ import { SharePointWriteClient, WritePermissionMode } from "./auth/sharePointWri
 import { ContextSourcesStore } from "./context/sourcesStore";
 import { ContextService } from "./context/contextService";
 import { DirectoryCacheStore } from "./context/directoryCacheStore";
+import { WorkItemsStore } from "./context/workItemsStore";
+import { registerWorkItemsTools } from "./chat/workItemsTools";
+import { buildXlsx } from "./context/files/xlsxWrite";
+import { oversightSheets, workItemRecords } from "./context/oversightReport";
 import { TtlCache } from "./context/cache";
 import {
   ContextSource,
@@ -457,6 +461,47 @@ export function activate(context: vscode.ExtensionContext): void {
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
   const memory = new MemoryStore(context.globalState);
+  const workItems = new WorkItemsStore(context.globalState);
+  // Write the remediation inventory to files (oversight XLSX + Work Items CSV +
+  // a JSON backup for restore). Workspace → ai-sharepoint-exports/; otherwise a
+  // save dialog per file. Returns the written paths.
+  const writeExportFiles = async (files: Array<{ name: string; bytes: Uint8Array }>): Promise<string[]> => {
+    const ws = vscode.workspace.workspaceFolders?.[0];
+    const paths: string[] = [];
+    if (ws) {
+      const dir = vscode.Uri.joinPath(ws.uri, EXPORT_DIR);
+      await vscode.workspace.fs.createDirectory(dir);
+      for (const f of files) {
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, f.name), f.bytes);
+        paths.push(`${EXPORT_DIR}/${f.name}`);
+      }
+    } else {
+      for (const f of files) {
+        const picked = await vscode.window.showSaveDialog({ saveLabel: "Export", defaultUri: vscode.Uri.file(f.name) });
+        if (picked) {
+          await vscode.workspace.fs.writeFile(picked, f.bytes);
+          paths.push(picked.fsPath);
+        }
+      }
+    }
+    return paths;
+  };
+  const exportInventory = async (format: "xlsx" | "csv" | "both", backup: boolean): Promise<string[]> => {
+    const items = workItems.list();
+    const now = nowIso();
+    const stamp = now.replace(/[:.]/g, "-").slice(0, 19);
+    const files: Array<{ name: string; bytes: Uint8Array }> = [];
+    if (format === "xlsx" || format === "both") {
+      files.push({ name: `remediation-oversight-${stamp}.xlsx`, bytes: buildXlsx(oversightSheets(items, now)) });
+    }
+    if (format === "csv" || format === "both") {
+      files.push({ name: `remediation-workitems-${stamp}.csv`, bytes: Buffer.from(rowsToCsv(workItemRecords(items)), "utf8") });
+    }
+    if (backup) {
+      files.push({ name: `remediation-backup-${stamp}.json`, bytes: Buffer.from(workItems.export(), "utf8") });
+    }
+    return writeExportFiles(files);
+  };
   const prompts = new PromptStore(context.globalState);
   const outlookWorkspaces = new OutlookWorkspaceStore(context.globalState);
   context.subscriptions.push(outlookWorkspaces);
@@ -923,6 +968,9 @@ export function activate(context: vscode.ExtensionContext): void {
         () => projects.scope(contextSources.list()),
       ),
     ),
+    ...tryRegister("work-items tools", () =>
+      registerWorkItemsTools(workItems, exportInventory, telemetry, errors),
+    ),
     schemas,
     catalogs,
     projects,
@@ -968,6 +1016,55 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   // --- Copilot commands ---------------------------------------------------
+  register("aiSharePoint.exportWorkInventory", async () => {
+    if (!workItems.list().length) {
+      void vscode.window.showInformationMessage("The remediation inventory is empty — nothing to export.");
+      return;
+    }
+    const paths = await exportInventory("both", true);
+    if (paths.length) {
+      void vscode.window.showInformationMessage(`Exported the remediation inventory (${paths.length} file(s)): ${paths.join(", ")}`);
+    }
+  });
+
+  register("aiSharePoint.backupWorkInventory", async () => {
+    const stamp = nowIso().replace(/[:.]/g, "-").slice(0, 19);
+    const picked = await vscode.window.showSaveDialog({
+      saveLabel: "Back up",
+      filters: { JSON: ["json"] },
+      defaultUri: vscode.Uri.file(`remediation-backup-${stamp}.json`),
+    });
+    if (!picked) return;
+    await vscode.workspace.fs.writeFile(picked, Buffer.from(workItems.export(), "utf8"));
+    void vscode.window.showInformationMessage(`Backed up ${workItems.list().length} work item(s) to ${picked.fsPath}.`);
+  });
+
+  register("aiSharePoint.restoreWorkInventory", async () => {
+    const picked = await vscode.window.showOpenDialog({
+      openLabel: "Restore",
+      canSelectMany: false,
+      filters: { JSON: ["json"] },
+    });
+    if (!picked?.[0]) return;
+    const mode = await vscode.window.showQuickPick(
+      [
+        { label: "$(git-merge) Merge", description: "combine with the current backlog (union event history per item)", value: "merge" as const },
+        { label: "$(history) Replace", description: "restore this backup exactly, discarding the current backlog", value: "replace" as const },
+      ],
+      { title: "Restore remediation inventory", placeHolder: "How should the backup be applied?" },
+    );
+    if (!mode) return;
+    try {
+      const raw = Buffer.from(await vscode.workspace.fs.readFile(picked[0])).toString("utf8");
+      const result = await workItems.import(raw, mode.value);
+      void vscode.window.showInformationMessage(
+        `Restored: ${result.added} added, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""}. Backlog now has ${workItems.list().length} item(s).`,
+      );
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Restore failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
   register("aiSharePoint.installCopilotChat", async () => {
     // Open the extension's details page (reliable across VS Code versions);
     // fall back to the marketplace search the page is found under.
