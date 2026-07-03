@@ -165,3 +165,41 @@ export async function cacheConfluenceScope(
   }
   return n;
 }
+
+/** Fetch the CURRENT version number of each page in a scope (lightweight —
+ *  `expand=version` only), as a Map<id, version>. Feeds `ConfluenceContentCache
+ *  .stale()` for the drift check ("which cached pages changed underneath us"). */
+export async function fetchScopeVersions(
+  source: ContextSource,
+  credential: ContextCredential,
+  scope: AuthorityScope,
+  caps: ReadCaps,
+  maxPages = 200,
+): Promise<Map<string, number>> {
+  const base = baseOf(source);
+  const out = new Map<string, number>();
+  const add = (c?: ContentItem) => {
+    if (c?.id) out.set(String(c.id), c.version?.number ?? 1);
+  };
+  if (scope.kind === "page" && scope.pageId) {
+    add(await fetchJson<ContentItem>(`${base}/rest/api/content/${enc(scope.pageId)}?expand=version`, credential, caps.timeoutMs));
+    return out;
+  }
+  if (scope.kind === "subtree" && scope.pageId) {
+    add(await fetchJson<ContentItem>(`${base}/rest/api/content/${enc(scope.pageId)}?expand=version`, credential, caps.timeoutMs).catch(() => undefined));
+    const res = await fetchJson<{ results?: ContentItem[] }>(
+      `${base}/rest/api/content/${enc(scope.pageId)}/descendant/page?expand=version&limit=${maxPages}`,
+      credential,
+      caps.timeoutMs,
+    );
+    for (const c of res.results ?? []) add(c);
+    return out;
+  }
+  const res = await fetchJson<{ results?: ContentItem[] }>(
+    `${base}/rest/api/content?spaceKey=${enc(scope.spaceKey ?? "")}&type=page&expand=version&limit=${maxPages}`,
+    credential,
+    caps.timeoutMs,
+  );
+  for (const c of res.results ?? []) add(c);
+  return out;
+}

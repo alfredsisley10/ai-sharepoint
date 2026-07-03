@@ -23,6 +23,8 @@ import { cachedUserDirectory } from "./directoryCache";
 import { DirectoryCacheStore } from "./directoryCacheStore";
 import { OwnershipCacheStore } from "./ownershipCacheStore";
 import { CachedOwnership } from "./ownershipCache";
+import { ConfluenceCacheStore } from "./confluenceCacheStore";
+import { cacheConfluenceScope, fetchScopeVersions, StaleEntry } from "./adapters/confluenceCache";
 import { listConfluenceSpaces, listAllConfluenceSpaces } from "./adapters/confluence";
 import {
   listJiraProjects,
@@ -163,6 +165,7 @@ export class ContextService {
     private readonly aadBroker?: AadTokenBroker,
     private readonly directoryCache?: DirectoryCacheStore,
     private readonly ownershipCache?: OwnershipCacheStore,
+    private readonly confluenceCache?: ConfluenceCacheStore,
   ) {}
 
   /** Build a cached user directory (ADR-0041) from a configured LDAP source, if
@@ -1101,6 +1104,37 @@ export class ContextService {
     const caps = this.caps();
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () => findConflictCandidates(source, credential, topic, exclude, caps));
+  }
+
+  /** Snapshot a scope (space/page/subtree) into the local content cache
+   *  (ADR-0042) for fast repeated review passes + a drift baseline. READ. */
+  async cacheConfluenceScope(
+    source: ContextSource,
+    scope: AuthorityScope,
+  ): Promise<{ cached: number; total: number }> {
+    if (source.type !== "confluence") throw new AppError("Content cache targets a Confluence source.", "config");
+    if (!this.confluenceCache) throw new AppError("Content cache is unavailable in this context.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const cache = this.confluenceCache.getCache(source.id);
+    const cached = await this.tracked(source, false, () =>
+      cacheConfluenceScope(source, credential, scope, caps, cache, () => new Date().toISOString()),
+    );
+    await this.confluenceCache.saveCache(source.id, cache);
+    return { cached, total: cache.size() };
+  }
+
+  /** Which cached pages in a scope changed underneath us since the snapshot
+   *  (version drift) — the pre-deploy / re-review signal. READ. */
+  async confluenceScopeDrift(source: ContextSource, scope: AuthorityScope): Promise<StaleEntry[]> {
+    if (source.type !== "confluence") throw new AppError("Content cache targets a Confluence source.", "config");
+    if (!this.confluenceCache) throw new AppError("Content cache is unavailable in this context.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const cache = this.confluenceCache.getCache(source.id);
+    if (cache.size() === 0) return [];
+    const live = await this.tracked(source, false, () => fetchScopeVersions(source, credential, scope, caps));
+    return cache.stale(live);
   }
 
   /** Review whether the signed-in user can read+write every page in a space,

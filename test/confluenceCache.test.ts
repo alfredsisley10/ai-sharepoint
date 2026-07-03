@@ -4,6 +4,7 @@ import {
   buildCacheEntry,
   ConfluenceContentCache,
   cacheConfluenceScope,
+  fetchScopeVersions,
   ConfluencePageCacheEntry,
 } from "../src/context/adapters/confluenceCache";
 import { ContextSource, ContextCredential, DEFAULT_CAPS } from "../src/context/types";
@@ -114,4 +115,28 @@ test("cacheConfluenceScope (space) fetches pages and populates the cache", async
   assert.equal(cache.size(), 2);
   assert.equal(cache.get("1")?.bodyText, "a");
   assert.deepEqual(cache.get("1")?.labels, ["owners|jdoe"]);
+});
+
+test("fetchScopeVersions: space scope → Map<id, version> (lightweight expand=version)", async () => {
+  const { result, calls } = await withFetch(
+    (url) => {
+      assert.match(url, /spaceKey=ENG.*expand=version/);
+      return { body: { results: [{ id: "10", version: { number: 2 } }, { id: "11", version: { number: 7 } }] } };
+    },
+    () => fetchScopeVersions(SRC, CRED, { topic: "", kind: "space", spaceKey: "ENG" }, DEFAULT_CAPS),
+  );
+  assert.equal(result.get("10"), 2);
+  assert.equal(result.get("11"), 7);
+  assert.equal(calls.length, 1);
+});
+
+test("fetchScopeVersions: page scope → single id→version", async () => {
+  const { result } = await withFetch(
+    (url) => {
+      assert.match(url, /\/content\/99\?expand=version/);
+      return { body: { id: "99", version: { number: 4 } } };
+    },
+    () => fetchScopeVersions(SRC, CRED, { topic: "", kind: "page", pageId: "99" }, DEFAULT_CAPS),
+  );
+  assert.deepEqual([...result.entries()], [["99", 4]]);
 });

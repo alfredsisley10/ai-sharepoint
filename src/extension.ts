@@ -63,6 +63,7 @@ import { ContextSourcesStore } from "./context/sourcesStore";
 import { ContextService } from "./context/contextService";
 import { DirectoryCacheStore } from "./context/directoryCacheStore";
 import { OwnershipCacheStore } from "./context/ownershipCacheStore";
+import { ConfluenceCacheStore } from "./context/confluenceCacheStore";
 import { WorkItemsStore } from "./context/workItemsStore";
 import { registerWorkItemsTools } from "./chat/workItemsTools";
 import { buildXlsx } from "./context/files/xlsxWrite";
@@ -450,7 +451,9 @@ export function activate(context: vscode.ExtensionContext): void {
   void directoryCache.prune(); // drop entries past their multi-day TTL on start
   const ownershipCache = new OwnershipCacheStore(context.globalState);
   void ownershipCache.prune();
-  const contextService = new ContextService(contextSources, contextCache, aadBroker, directoryCache, ownershipCache);
+  const confluenceCacheStore = new ConfluenceCacheStore(context.globalStorageUri);
+  void confluenceCacheStore.preload();
+  const contextService = new ContextService(contextSources, contextCache, aadBroker, directoryCache, ownershipCache, confluenceCacheStore);
   // Keep zero-admin ServiceNow browser sessions warm: the GUI session times out
   // after ~30 min idle, so ping every 14 min (well inside the window). The call
   // no-ops when there are no snow-session sources and never throws.
