@@ -3576,7 +3576,7 @@
     "mongodb": "^7.4.0",
     "mysql2": "^3.0.0",
     "pg": "^8.22.0",
-    "tedious": "^19.0.0"
+    "tedious": "^20.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
