@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.112.0",
+  "version": "0.113.0",
   "release": {
     "channel": "standard"
   },
@@ -796,6 +796,51 @@
       }
     ],
     "languageModelTools": [
+      {
+        "name": "aisharepoint_recommend_page_revision",
+        "displayName": "Recommend Page Revision",
+        "toolReferenceName": "spRecommendRevision",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(git-pull-request)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Save a RECOMMENDED revision for a flagged Confluence page into the active project's chat workspace, so it can be shown to the page owner during outreach. Use after reviewing a stale/inaccurate page to propose concrete updated content (or a clear summary of the specific changes). Writes space/<spaceKey>/pages/<pageId>/recommended.md next to the cached current content, and it is linked from the per-owner outreach draft. Requires an active project. Args: spaceKey, pageId, title, url, recommendation (proposed revised content or change summary, markdown), optional current (current page text for side-by-side).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "spaceKey": {
+              "type": "string",
+              "description": "Confluence space key the page is in."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The Confluence page id."
+            },
+            "title": {
+              "type": "string",
+              "description": "The page title."
+            },
+            "url": {
+              "type": "string",
+              "description": "The page URL."
+            },
+            "recommendation": {
+              "type": "string",
+              "description": "The proposed revised content, or a clear summary of the specific changes to make (markdown)."
+            },
+            "current": {
+              "type": "string",
+              "description": "Optional: the current page text, to store alongside for side-by-side comparison."
+            }
+          },
+          "required": [
+            "pageId",
+            "recommendation"
+          ]
+        }
+      },
       {
         "name": "aisharepoint_list_connections",
         "displayName": "List SharePoint Connections",

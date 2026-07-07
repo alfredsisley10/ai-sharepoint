@@ -140,6 +140,7 @@ import {
 import { ProjectsTreeProvider } from "./ui/projectsView";
 import { ChatWorkspaceStore } from "./context/chatWorkspaceStore";
 import { summarizeDossier, dossierWorkItemSeeds } from "./context/spaceDossier";
+import { registerPageRevisionTool } from "./chat/pageRevisionTool";
 import { registerProjectTools } from "./chat/projectTools";
 import {
   enumeratePowerBiDatasets,
@@ -992,6 +993,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ...tryRegister("work-items tools", () =>
       registerWorkItemsTools(workItems, exportInventory, telemetry, errors),
     ),
+    ...tryRegister("page-revision tool", () => [
+      registerPageRevisionTool(projects, chatWorkspace, telemetry, errors),
+    ]),
     schemas,
     catalogs,
     projects,

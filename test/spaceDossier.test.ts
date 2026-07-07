@@ -13,6 +13,8 @@ import {
   dossierSheets,
   dossierWorkItemSeeds,
   renderOutreachDraft,
+  renderCurrentContent,
+  renderRecommendedScaffold,
   STALE_DAYS,
 } from "../src/context/spaceDossier";
 
@@ -141,4 +143,32 @@ test("renderOutreachDraft addresses the owner and lists their flagged pages", ()
   assert.match(md, /To: j@c\.com/);
   assert.match(md, /Hi jdoe/);
   assert.match(md, /not updated in 400 days/);
+});
+
+test("renderOutreachDraft links the recommended revision when content was cached", () => {
+  const withContent = groupByOwner(
+    dossier([page({ id: "42", title: "Old", staleDays: 400, content: "current body", owners: [{ sam: "jdoe", active: true }] })]),
+  )[0]!;
+  assert.match(renderOutreachDraft(withContent, "ENG", "t"), /\(\.\.\/pages\/42\/recommended\.md\)/);
+  const noContent = groupByOwner(
+    dossier([page({ id: "42", title: "Old", staleDays: 400, owners: [{ sam: "jdoe", active: true }] })]),
+  )[0]!;
+  assert.doesNotMatch(renderOutreachDraft(noContent, "ENG", "t"), /recommended\.md/);
+});
+
+test("renderCurrentContent shows the header and body", () => {
+  const md = renderCurrentContent(page({ title: "Guide", version: 7, content: "The body text." }));
+  assert.match(md, /# Guide/);
+  assert.match(md, /v7/);
+  assert.match(md, /The body text\./);
+});
+
+test("renderRecommendedScaffold lists why-flagged, a revision slot, and quoted current", () => {
+  const md = renderRecommendedScaffold(page({ title: "Guide", staleDays: 400, brokenLinks: 2, content: "old content" }));
+  assert.match(md, /# Recommended revision — Guide/);
+  assert.match(md, /## Why this page was flagged/);
+  assert.match(md, /not updated in 400 days/);
+  assert.match(md, /2 broken link\(s\)/);
+  assert.match(md, /## Recommended revision/);
+  assert.match(md, /> old content/); // current content quoted for reference
 });

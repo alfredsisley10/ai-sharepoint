@@ -30,6 +30,11 @@ export interface DossierPage {
   brokenLinks: number;
   /** Currency/data-quality issues surfaced by the currency review. */
   issues: string[];
+  /** Current page body as plain text — cached for flagged pages so we can show
+   *  the current state and seed a recommended revision. Absent when not fetched. */
+  content?: string;
+  /** Page version number at capture time (for the current-content header). */
+  version?: number;
 }
 
 export interface SpaceDossier {
@@ -269,7 +274,9 @@ export function dossierWorkItemSeeds(d: SpaceDossier, sourceLabel: string): NewW
 }
 
 /** A per-owner outreach draft (markdown) listing their flagged pages — the
- *  starting point for coordinating communications + follow-ups. */
+ *  starting point for coordinating communications + follow-ups. Links to each
+ *  page's cached recommended revision (relative to the `outreach/` folder) so the
+ *  owner can be shown exactly what changes are proposed. */
 export function renderOutreachDraft(group: OwnerGroup, spaceKey: string, generatedAt: string): string {
   const flagged = group.pages.filter((p) => flagsFor(p).flagged);
   const to = "contact" in group.owner && group.owner.contact ? group.owner.contact : group.owner.sam;
@@ -289,14 +296,61 @@ export function renderOutreachDraft(group: OwnerGroup, spaceKey: string, generat
       p.brokenLinks > 0 ? `${p.brokenLinks} broken link(s)` : "",
       ...p.issues,
     ].filter(Boolean);
-    lines.push(`- [${escapePipe(p.title)}](${p.url}) — ${why.join("; ") || "needs review"}`);
+    const rec = p.content !== undefined ? ` · recommended revision: [\`recommended.md\`](../pages/${p.id}/recommended.md)` : "";
+    lines.push(`- [${escapePipe(p.title)}](${p.url}) — ${why.join("; ") || "needs review"}${rec}`);
   }
   lines.push(
     "",
-    "Could you review these and either update them, confirm they're still accurate, or let me know if ownership should move? I'll follow up in a week.",
+    "Could you review these and either update them, confirm they're still accurate, or let me know if ownership should move? Where noted, a recommended revision is attached for your review. I'll follow up in a week.",
     "",
     "Thanks!",
     "",
   );
   return lines.join("\n");
+}
+
+/** The cached CURRENT state of a page (header + body text), written for flagged
+ *  pages so a reviewer/owner can see exactly what exists today. */
+export function renderCurrentContent(p: DossierPage): string {
+  return [
+    `# ${p.title}`,
+    "",
+    `_${p.url}${p.version !== undefined ? ` · v${p.version}` : ""}${p.lastUpdated ? ` · updated ${p.lastUpdated.slice(0, 10)}` : ""} · captured for content review_`,
+    "",
+    "---",
+    "",
+    (p.content ?? "").trim() || "_(no textual content captured)_",
+    "",
+  ].join("\n");
+}
+
+/** A recommended-revision SCAFFOLD, written once per flagged page (never
+ *  overwritten on re-run) so the current content, the issues to fix, and a
+ *  place for the proposed revision travel together and can be shown to owners. */
+export function renderRecommendedScaffold(p: DossierPage): string {
+  const f = flagsFor(p);
+  const reasons = [
+    f.stale ? `Stale — not updated in ${p.staleDays} days.` : "",
+    f.ownerless ? "No current (active) owner resolved." : "",
+    p.brokenLinks > 0 ? `${p.brokenLinks} broken link(s).` : "",
+    ...p.issues.map((i) => `Issue: ${i}`),
+  ].filter(Boolean);
+  return [
+    `# Recommended revision — ${p.title}`,
+    "",
+    `_${p.url} · draft for owner review. Edit the “Recommended revision” section below; this file is preserved across dossier refreshes._`,
+    "",
+    "## Why this page was flagged",
+    "",
+    ...(reasons.length ? reasons.map((r) => `- ${r}`) : ["- (flagged for review)"]),
+    "",
+    "## Recommended revision",
+    "",
+    "_Replace this with the proposed updated content (or a summary of the specific changes to make)._",
+    "",
+    "## Current content (for reference)",
+    "",
+    "> " + ((p.content ?? "").trim() || "(no textual content captured)").replace(/\n/g, "\n> "),
+    "",
+  ].join("\n");
 }

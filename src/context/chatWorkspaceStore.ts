@@ -13,11 +13,14 @@ import {
 } from "./chatWorkspace";
 import {
   SpaceDossier,
+  DossierPage,
   groupByOwner,
   renderInventoryJson,
   renderInventoryMarkdown,
   renderOwnersMarkdown,
   renderOutreachDraft,
+  renderCurrentContent,
+  renderRecommendedScaffold,
   dossierSheets,
   flagsFor,
 } from "./spaceDossier";
@@ -95,6 +98,15 @@ export class ChatWorkspaceStore {
 
   private async writeText(uri: vscode.Uri, text: string): Promise<void> {
     await vscode.workspace.fs.writeFile(uri, enc.encode(text));
+  }
+
+  private async exists(uri: vscode.Uri): Promise<boolean> {
+    try {
+      await vscode.workspace.fs.stat(uri);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async loadManifest(project: Project): Promise<WorkspaceManifest> {
@@ -191,6 +203,21 @@ export class ChatWorkspaceStore {
       await this.writeText(vscode.Uri.joinPath(dir, "inventory.json"), renderInventoryJson(dossier));
       await this.writeText(vscode.Uri.joinPath(dir, "owners.md"), renderOwnersMarkdown(dossier));
       await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, "dossier.xlsx"), buildXlsx(dossierSheets(dossier)));
+
+      // Per-page tracking for pages whose current content was cached: refresh
+      // current.md every run, but write the recommended-revision scaffold only
+      // once so an owner/assistant's edits survive a re-run.
+      for (const p of dossier.pages) {
+        if (p.content === undefined) continue;
+        const pageDir = vscode.Uri.joinPath(dir, "pages", p.id.replace(/[^A-Za-z0-9._-]/g, "-") || "page");
+        await vscode.workspace.fs.createDirectory(pageDir);
+        await this.writeText(vscode.Uri.joinPath(pageDir, "current.md"), renderCurrentContent(p));
+        const recUri = vscode.Uri.joinPath(pageDir, "recommended.md");
+        if (!(await this.exists(recUri))) {
+          await this.writeText(recUri, renderRecommendedScaffold(p));
+        }
+      }
+
       if (opts.outreach) {
         const outreachDir = vscode.Uri.joinPath(dir, "outreach");
         await vscode.workspace.fs.createDirectory(outreachDir);
@@ -206,6 +233,59 @@ export class ChatWorkspaceStore {
       }
       this.emitter.fire();
       return dir;
+    });
+  }
+
+  /** The recommended-revision file for a page within a space dossier. */
+  recommendedRevisionUri(project: Project, spaceKey: string, pageId: string): vscode.Uri {
+    const safeId = pageId.replace(/[^A-Za-z0-9._-]/g, "-") || "page";
+    return vscode.Uri.joinPath(this.dossierUri(project, spaceKey), "pages", safeId, "recommended.md");
+  }
+
+  /**
+   * Save a recommended revision for a page (e.g. one the assistant proposed
+   * during a chat), so it can be shown to the owner during outreach. Writes both
+   * `current.md` (if content is supplied) and `recommended.md`, creating the page
+   * folder as needed. Overwrites the recommended file — this is a deliberate save.
+   */
+  async saveRecommendedRevision(
+    project: Project,
+    spaceKey: string,
+    page: { id: string; title: string; url: string; current?: string; recommendation: string },
+  ): Promise<vscode.Uri> {
+    return this.queue(project.id, async () => {
+      if (!this.enabled(project.id)) await this.setEnabled(project.id, true);
+      const safeId = page.id.replace(/[^A-Za-z0-9._-]/g, "-") || "page";
+      const pageDir = vscode.Uri.joinPath(this.dossierUri(project, spaceKey), "pages", safeId);
+      await vscode.workspace.fs.createDirectory(pageDir);
+      await this.ensureGitignored();
+      const dp: DossierPage = {
+        id: page.id,
+        title: page.title,
+        url: page.url,
+        owners: [],
+        hasOwnerLabel: false,
+        brokenLinks: 0,
+        issues: [],
+        ...(page.current !== undefined ? { content: page.current } : {}),
+      };
+      if (page.current !== undefined) {
+        await this.writeText(vscode.Uri.joinPath(pageDir, "current.md"), renderCurrentContent(dp));
+      }
+      const body = [
+        `# Recommended revision — ${page.title}`,
+        "",
+        `_${page.url} · draft for owner review._`,
+        "",
+        "## Recommended revision",
+        "",
+        page.recommendation.trim(),
+        "",
+      ].join("\n");
+      const recUri = vscode.Uri.joinPath(pageDir, "recommended.md");
+      await this.writeText(recUri, body);
+      this.emitter.fire();
+      return recUri;
     });
   }
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.113.0 — 2026-07-07
+
+### Added — cached page content + recommended revisions in the dossier
+- **The space dossier now caches each flagged page's current content and seeds a recommended
+  revision.** For every flagged page, the current body text is written to
+  `space/<KEY>/pages/<id>/current.md`, alongside a `recommended.md` scaffold that lists why the page
+  was flagged, quotes the current content for reference, and leaves a slot for the proposed revision.
+  The scaffold is written **once and preserved** across dossier refreshes, so an owner's or the
+  assistant's edits are never clobbered.
+- **Recommended revisions flow into owner outreach.** Each per-owner outreach draft now links the
+  relevant `recommended.md`, so you can show owners exactly what changes are proposed when you reach
+  out.
+- **New chat tool `aisharepoint_recommend_page_revision`.** During a chat, the assistant can propose a
+  concrete revision for a page and save it straight into the active project's workspace (current +
+  recommended), ready to include in outreach. Local operational state — not approval-gated.
+
 ## 0.112.0 — 2026-07-07
 
 ### Added — Confluence space dossier in the project workspace

@@ -98,7 +98,7 @@ import {
   HierarchyResult,
 } from "./adapters/confluenceHierarchy";
 import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
-import { SpaceDossier, DossierPage } from "./spaceDossier";
+import { SpaceDossier, DossierPage, flagsFor } from "./spaceDossier";
 import {
   probeConfluenceWriteAccess,
   probeConfluenceFunctionality,
@@ -1179,7 +1179,14 @@ export class ContextService {
   async buildConfluenceSpaceDossier(
     source: ContextSource,
     spaceKey: string,
-    opts: { maxPages?: number; concurrency?: number; onProgress?: (done: number, total: number) => void } = {},
+    opts: {
+      maxPages?: number;
+      concurrency?: number;
+      /** Cache the current body text of FLAGGED pages (default true) so the
+       *  workspace can show current state + seed recommended revisions. */
+      includeContent?: boolean;
+      onProgress?: (done: number, total: number) => void;
+    } = {},
   ): Promise<SpaceDossier> {
     if (source.type !== "confluence") throw new AppError("Space dossier targets a Confluence source.", "config");
     const caps = this.caps();
@@ -1188,6 +1195,7 @@ export class ContextService {
     const dirFn = directory ? directory.dir : async () => undefined;
     const maxPages = Math.max(1, opts.maxPages ?? 200);
     const concurrency = Math.max(1, Math.min(8, opts.concurrency ?? 5));
+    const includeContent = opts.includeContent ?? true;
 
     return this.tracked(source, false, async () => {
       // Enumerate the space: root pages + each root's subtree, deduped by id.
@@ -1239,6 +1247,27 @@ export class ContextService {
         done += batch.length;
         opts.onProgress?.(done, targets.length);
       }
+
+      // Cache current body text for FLAGGED pages only (bounds cost) so the
+      // workspace can show current state and seed recommended revisions.
+      if (includeContent) {
+        const flagged = pages.filter((p) => flagsFor(p).flagged);
+        for (let i = 0; i < flagged.length; i += concurrency) {
+          const batch = flagged.slice(i, i + concurrency);
+          const items = await Promise.all(
+            batch.map((p) => getConfluencePage(source, credential, p.id, caps).catch(() => undefined)),
+          );
+          for (let k = 0; k < batch.length; k++) {
+            const item = items[k];
+            if (item) {
+              batch[k]!.content = item.body;
+              const v = Number(item.meta?.version);
+              if (Number.isFinite(v)) batch[k]!.version = v;
+            }
+          }
+        }
+      }
+
       return { spaceKey, generatedAt: new Date().toISOString(), pages, totalPages, truncated: totalPages > targets.length };
     });
   }

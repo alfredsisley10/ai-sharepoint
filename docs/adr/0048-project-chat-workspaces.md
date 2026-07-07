@@ -63,6 +63,11 @@ project so interleaved turns cannot clobber the summary.
   `space/<KEY>/` (`inventory.md/.json`, `owners.md`, `dossier.xlsx`), open a
   de-duplicated work item per flagged page (ADR-0045), and draft per-owner
   outreach under `space/<KEY>/outreach/`. Reuses the ownership/currency suite.
+- **Delivered (0.113.0) — cached page content + recommended revisions.** The
+  dossier caches each flagged page's current body (`pages/<id>/current.md`) and
+  writes a preserved `recommended.md` scaffold; the `aisharepoint_recommend_page_revision`
+  chat tool saves assistant-proposed revisions there, and owner outreach links
+  them.
 - Cache the connected-context blocks and tool results per turn into the
   workspace so later chats reuse them instead of re-fetching (efficiency).
 - "Resume in new chat" that seeds a fresh chat directly from the summary +
