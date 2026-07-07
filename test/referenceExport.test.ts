@@ -471,3 +471,48 @@ test("import skips malformed entries with warnings, keeps valid ones", () => {
   assert.equal(parsed.bookmarks.length, 1);
   assert.equal(parsed.warnings.length, 4); // ldap w/o baseDn, bad type, missing source, bad kind
 });
+
+test("round-trip: probed model limits + pricing travel and re-parse", () => {
+  const doc = buildReferenceExport(
+    sources(),
+    bookmarks(),
+    T0,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    [
+      { key: "gpt-4o", advertised: 128000, knownGood: 90000, measuredAtAdvertised: 128000, updatedAt: T0 },
+      { key: "bad", advertised: -1 }, // no useful data → dropped on import
+    ],
+    { pricePerPremiumRequest: 0.04, tokenCostInputPerMillion: 3, currencySymbol: "$" },
+  );
+  assert.ok(Array.isArray(doc.modelLimits) && doc.modelLimits.length === 2);
+  assert.equal(doc.pricing?.pricePerPremiumRequest, 0.04);
+
+  let n = 0;
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => `id-${n++}`);
+  // The malformed limit (no advertised/knownGood/effectiveCap) is dropped.
+  assert.equal(parsed.modelLimits.length, 1);
+  assert.equal(parsed.modelLimits[0]!.key, "gpt-4o");
+  assert.equal(parsed.modelLimits[0]!.knownGood, 90000);
+  assert.equal(parsed.pricing?.pricePerPremiumRequest, 0.04);
+  assert.equal(parsed.pricing?.tokenCostInputPerMillion, 3);
+  assert.equal(parsed.pricing?.currencySymbol, "$");
+});
+
+test("model limits + pricing are secret-free (pass the leak scan)", () => {
+  const doc = buildReferenceExport(
+    sources(),
+    bookmarks(),
+    T0,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+    [{ key: "gpt-4o", advertised: 128000, knownGood: 90000 }],
+    { pricePerPremiumRequest: 0.04, currencySymbol: "$" },
+  );
+  const blocking = scanForLeaks(JSON.stringify(doc)).filter((f) => f.severity === "block" && f.pattern !== "raw-tenant-host");
+  assert.equal(blocking.length, 0);
+});

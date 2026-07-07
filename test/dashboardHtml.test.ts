@@ -67,3 +67,80 @@ test("empty activity renders friendly empty states", () => {
   const html = renderDashboardHtml(data({ byModel: [], byLabel: [] }), "n");
   assert.ok(html.includes("No requests yet"));
 });
+
+test("model context limits render reported/tested/budget when present", () => {
+  const none = renderDashboardHtml(data(), "n");
+  assert.ok(!none.includes("Model context limits"));
+  const withLimits = renderDashboardHtml(
+    data({
+      modelLimits: [
+        { key: "gpt-a", reported: 128000, tested: 90000, cap: 90000, drifted: false },
+        { key: "gpt-b", reported: 200000, tested: undefined, cap: 200000, drifted: true },
+      ],
+    }),
+    "n",
+  );
+  assert.ok(withLimits.includes("Model context limits"));
+  assert.ok(withLimits.includes("128,000"));
+  assert.ok(withLimits.includes("90,000"));
+  assert.ok(withLimits.includes("not tested"));
+  assert.ok(withLimits.includes("gpt-b ⚠")); // drift marker
+});
+
+test("failed filter switches the chart + tables to failures and offers a way back", () => {
+  const all = renderDashboardHtml(data(), "n");
+  assert.ok(!all.includes("Showing"), "no filter banner in the default view");
+  assert.ok(all.includes('data-filter="failed"'), "failed card is clickable");
+
+  const failed = renderDashboardHtml(
+    data({
+      filter: "failed",
+      byModel: [
+        { key: "gpt-a", requests: 60, failures: 3, inputTokens: 5000, outputTokens: 9000 },
+        { key: "gpt-b", requests: 40, failures: 0, inputTokens: 1000, outputTokens: 1000 },
+      ],
+      byLabel: [
+        { key: "chat", requests: 60, failures: 2 },
+        { key: "tool:x", requests: 20, failures: 0 },
+      ],
+    }),
+    "n",
+  );
+  assert.ok(failed.includes("Showing"), "shows the failed-only banner");
+  assert.ok(failed.includes("failures per day"), "chart heading reflects failures");
+  assert.ok(failed.includes("<th>Failed</th>"), "tables switch to a Failed column");
+  assert.ok(failed.includes("btn-clear-filter"), "offers a show-all control");
+  // Only rows with failures survive the filter.
+  assert.ok(failed.includes("gpt-a"));
+  assert.ok(!failed.includes("gpt-b"), "zero-failure model row is dropped");
+  assert.ok(!failed.includes("tool:x"), "zero-failure task row is dropped");
+});
+
+test("cost is hidden by default and shown only when a rate produces monthCost", () => {
+  const noCost = renderDashboardHtml(data(), "n");
+  assert.ok(!noCost.includes("est. cost this month"));
+  assert.ok(!noCost.includes("Est. cost"));
+
+  const withCost = renderDashboardHtml(
+    data({
+      monthCost: "$3.00",
+      byModel: [{ key: "gpt-test", requests: 60, inputTokens: 5000, outputTokens: 9000, cost: "$1.20" }],
+    }),
+    "n",
+  );
+  assert.ok(withCost.includes("$3.00"));
+  assert.ok(withCost.includes("est. token cost this month"));
+  assert.ok(withCost.includes("<th>Est. cost</th>"));
+  assert.ok(withCost.includes("$1.20"));
+  // Framed as the user's own estimate, never as a GitHub bill.
+  assert.ok(/rate you set/i.test(withCost));
+});
+
+test("premium-request cost card renders when present, framed as an estimate", () => {
+  const none = renderDashboardHtml(data(), "n");
+  assert.ok(!none.includes("premium requests @"));
+  const withPremium = renderDashboardHtml(data({ premiumCost: "$4.80" }), "n");
+  assert.ok(withPremium.includes("$4.80"));
+  assert.ok(withPremium.includes("premium requests @ $0.04"));
+  assert.ok(/allowance may make the real charge lower/i.test(withPremium));
+});

@@ -98,6 +98,7 @@ import {
   HierarchyResult,
 } from "./adapters/confluenceHierarchy";
 import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
+import { SpaceDossier, DossierPage, flagsFor } from "./spaceDossier";
 import {
   probeConfluenceWriteAccess,
   probeConfluenceFunctionality,
@@ -1167,6 +1168,108 @@ export class ContextService {
     return this.tracked(source, false, () =>
       reviewPageCurrency(source, credential, pageId, directory ? directory.dir : async () => undefined, caps),
     );
+  }
+
+  /**
+   * Aggregate a whole Confluence space into a content-management dossier: every
+   * page with its owner (recency-weighted, LDAP active-checked), staleness, and
+   * data-quality flags. Enumerates the space via the resilient hierarchy walk
+   * (roots + descendants), then runs the currency review per page with bounded
+   * concurrency. Capped at `maxPages` (reports `truncated`). Global READ. */
+  async buildConfluenceSpaceDossier(
+    source: ContextSource,
+    spaceKey: string,
+    opts: {
+      maxPages?: number;
+      concurrency?: number;
+      /** Cache the current body text of FLAGGED pages (default true) so the
+       *  workspace can show current state + seed recommended revisions. */
+      includeContent?: boolean;
+      onProgress?: (done: number, total: number) => void;
+    } = {},
+  ): Promise<SpaceDossier> {
+    if (source.type !== "confluence") throw new AppError("Space dossier targets a Confluence source.", "config");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const directory = this.userDirectory();
+    const dirFn = directory ? directory.dir : async () => undefined;
+    const maxPages = Math.max(1, opts.maxPages ?? 200);
+    const concurrency = Math.max(1, Math.min(8, opts.concurrency ?? 5));
+    const includeContent = opts.includeContent ?? true;
+
+    return this.tracked(source, false, async () => {
+      // Enumerate the space: root pages + each root's subtree, deduped by id.
+      const roots = await getSpaceRootPages(source, credential, spaceKey, caps);
+      const byId = new Map<string, { id: string; title: string; url: string }>();
+      for (const r of roots) if (r.id) byId.set(r.id, r);
+      for (const r of roots) {
+        if (byId.size >= maxPages * 3) break; // generous discovery ceiling
+        try {
+          for (const d of await getDescendantPages(source, credential, r.id, caps)) {
+            if (d.id) byId.set(d.id, d);
+          }
+        } catch {
+          // A single unreadable subtree shouldn't sink the whole dossier.
+        }
+      }
+      const all = [...byId.values()];
+      const totalPages = all.length;
+      const targets = all.slice(0, maxPages);
+
+      const pages: DossierPage[] = [];
+      let done = 0;
+      for (let i = 0; i < targets.length; i += concurrency) {
+        const batch = targets.slice(i, i + concurrency);
+        const reports = await Promise.all(
+          batch.map((t) =>
+            reviewPageCurrency(source, credential, t.id, dirFn, caps).catch(() => undefined),
+          ),
+        );
+        for (let k = 0; k < batch.length; k++) {
+          const rep = reports[k];
+          const t = batch[k]!;
+          if (rep) {
+            pages.push({
+              id: rep.pageId || t.id,
+              title: rep.title || t.title,
+              url: rep.url || t.url,
+              owners: rep.owners,
+              hasOwnerLabel: rep.hasOwnerLabel,
+              ...(rep.lastUpdated ? { lastUpdated: rep.lastUpdated } : {}),
+              ...(rep.staleDays !== undefined ? { staleDays: rep.staleDays } : {}),
+              brokenLinks: rep.brokenLinks.length,
+              issues: rep.issues,
+            });
+          } else {
+            pages.push({ id: t.id, title: t.title, url: t.url, owners: [], hasOwnerLabel: false, brokenLinks: 0, issues: ["could not review"] });
+          }
+        }
+        done += batch.length;
+        opts.onProgress?.(done, targets.length);
+      }
+
+      // Cache current body text for FLAGGED pages only (bounds cost) so the
+      // workspace can show current state and seed recommended revisions.
+      if (includeContent) {
+        const flagged = pages.filter((p) => flagsFor(p).flagged);
+        for (let i = 0; i < flagged.length; i += concurrency) {
+          const batch = flagged.slice(i, i + concurrency);
+          const items = await Promise.all(
+            batch.map((p) => getConfluencePage(source, credential, p.id, caps).catch(() => undefined)),
+          );
+          for (let k = 0; k < batch.length; k++) {
+            const item = items[k];
+            if (item) {
+              batch[k]!.content = item.body;
+              const v = Number(item.meta?.version);
+              if (Number.isFinite(v) && v > 0) batch[k]!.version = v;
+            }
+          }
+        }
+      }
+
+      return { spaceKey, generatedAt: new Date().toISOString(), pages, totalPages, truncated: totalPages > targets.length };
+    });
   }
 
   /** Non-destructive CONTENT FUNCTIONALITY test: author a throwaway page of

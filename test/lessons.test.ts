@@ -7,6 +7,7 @@ import {
   mergeLesson,
   buildLessonsExport,
   lessonsToMarkdown,
+  lessonsContextBlock,
   Lesson,
 } from "../src/diagnostics/lessons";
 
@@ -144,4 +145,41 @@ test("lessonsToMarkdown renders a row per lesson, and an empty state", () => {
   });
   assert.match(lessonsToMarkdown(ex), /scope to personal/);
   assert.match(lessonsToMarkdown(ex), /\| # \| Category \|/);
+});
+
+// --- lessonsContextBlock: the RECALL half of the loop ----------------------
+
+const lesson = (over: Partial<Lesson> = {}): Lesson => ({
+  id: over.id ?? "1",
+  category: over.category ?? "scoping",
+  trigger: over.trigger ?? "the user says 'my space'",
+  lesson: over.lesson ?? "scope to their personal space, not global",
+  count: over.count ?? 1,
+  firstAt: over.firstAt ?? "2026-07-01T00:00:00Z",
+  lastAt: over.lastAt ?? "2026-07-01T00:00:00Z",
+  version: over.version ?? "0.120.0",
+  ...(over.tags ? { tags: over.tags } : {}),
+});
+
+test("lessonsContextBlock is empty when there is nothing to recall", () => {
+  assert.equal(lessonsContextBlock([]), "");
+});
+
+test("lessonsContextBlock renders heuristics and caps the count", () => {
+  const many = Array.from({ length: 40 }, (_, i) => lesson({ id: String(i), trigger: `t${i}`, count: i }));
+  const block = lessonsContextBlock(many, { limit: 10 });
+  assert.match(block, /## Learned heuristics/);
+  assert.equal((block.match(/^- \[/gm) ?? []).length, 10);
+  // Most-observed first (t39 has the highest count).
+  assert.match(block, /When t39 →/);
+});
+
+test("lessonsContextBlock floats context-relevant (tag-matching) lessons to the top", () => {
+  const items = [
+    lesson({ id: "generic", trigger: "generic", count: 100 }),
+    lesson({ id: "conf", trigger: "confluence-specific", count: 1, tags: ["confluence"] }),
+  ];
+  const block = lessonsContextBlock(items, { relevantTags: ["confluence"], limit: 5 });
+  // The tag match outranks the higher count of the generic lesson.
+  assert.ok(block.indexOf("confluence-specific") < block.indexOf("generic"));
 });

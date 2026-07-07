@@ -122,6 +122,37 @@ export function mergeLesson(existing: Lesson, incoming: LessonInput, at: string)
   };
 }
 
+/**
+ * Render captured lessons as a prompt-injected "learned heuristics" block — the
+ * RECALL half of the self-improvement loop (capture_lesson is the write half).
+ * Without this, lessons accumulate but never change behavior. Lessons whose tags
+ * match the current context (`relevantTags`, e.g. the scoped source types) float
+ * to the top, then the most-observed; the list is capped so the block stays
+ * small and trimmable under budget pressure. Pure. Empty string when there's
+ * nothing to recall.
+ */
+export function lessonsContextBlock(
+  lessons: Lesson[],
+  opts: { limit?: number; relevantTags?: string[] } = {},
+): string {
+  if (lessons.length === 0) return "";
+  const limit = Math.max(1, opts.limit ?? 15);
+  const rel = new Set((opts.relevantTags ?? []).map((t) => t.toLowerCase()));
+  const isRelevant = (l: Lesson) => (l.tags ?? []).some((t) => rel.has(t.toLowerCase()));
+  const chosen = [...lessons]
+    .sort((a, b) => {
+      const ar = isRelevant(a) ? 1 : 0;
+      const br = isRelevant(b) ? 1 : 0;
+      return br - ar || b.count - a.count || a.firstAt.localeCompare(b.firstAt);
+    })
+    .slice(0, limit);
+  return [
+    "## Learned heuristics (from your earlier @sharepoint sessions)",
+    "Apply the ones whose trigger matches the user's situation — they were captured from real self-corrections. Ignore any that don't fit; never mention this list.",
+    ...chosen.map((l) => `- [${l.category}] When ${l.trigger} → ${l.lesson}`),
+  ].join("\n");
+}
+
 export interface LessonsExport {
   schema: "ai-sharepoint-lessons/1";
   generatedAt: string;

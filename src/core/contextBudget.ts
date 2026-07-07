@@ -106,6 +106,11 @@ export interface ModelLimit {
   effectiveCap?: number;
   /** Largest input that has actually succeeded. */
   knownGood?: number;
+  /** The advertised value in force when we last LEARNED an effective figure
+   *  (a success or overflow). Lets us notice the provider moved the ceiling —
+   *  advertised drifting away from this means the cached measurement is stale
+   *  and a re-probe is worth offering. */
+  measuredAtAdvertised?: number;
   updatedAt?: string;
 }
 
@@ -122,6 +127,58 @@ export function resolveLimit(
   return eff;
 }
 
+export interface ModelLimitDisplay {
+  key: string;
+  /** Reported/advertised maxInputTokens. */
+  advertised?: number;
+  /** Largest input that has actually succeeded (tested). */
+  knownGood?: number;
+  /** Learned ceiling from an overflow (tested). */
+  effectiveCap?: number;
+  /** The budgeting cap actually used (advertised clamped by what we learned). */
+  cap?: number;
+  /** Advertised moved since we last measured — the cached test is stale. */
+  drifted: boolean;
+  /** Any tested (measured) data exists. */
+  measured: boolean;
+}
+
+/** Merge an imported model-limit record into a local one, conservatively: the
+ *  higher proven known-good, the lower (tighter) learned cap, and the incoming
+ *  advertised/baseline when present. Used when importing shared probe results so
+ *  a teammate's measurements never loosen a limit you've already proven tighter. */
+export function mergeModelLimit(existing: ModelLimit | undefined, incoming: ModelLimit, now: string): ModelLimit {
+  const knownGood = Math.max(existing?.knownGood ?? 0, incoming.knownGood ?? 0) || undefined;
+  const caps = [existing?.effectiveCap, incoming.effectiveCap].filter((x): x is number => x !== undefined);
+  const effectiveCap = caps.length ? Math.min(...caps) : undefined;
+  const advertised = incoming.advertised ?? existing?.advertised;
+  const measuredAtAdvertised = incoming.measuredAtAdvertised ?? existing?.measuredAtAdvertised;
+  return {
+    ...(advertised !== undefined ? { advertised } : {}),
+    ...(effectiveCap !== undefined ? { effectiveCap } : {}),
+    ...(knownGood !== undefined ? { knownGood } : {}),
+    ...(measuredAtAdvertised !== undefined ? { measuredAtAdvertised } : {}),
+    updatedAt: now,
+  };
+}
+
+/** Shape a stored ModelLimit for display in the Copilot Activity surfaces:
+ *  the reported limit, what testing has proven, and the resulting budget cap. */
+export function describeModelLimit(row: { key: string } & ModelLimit): ModelLimitDisplay {
+  return {
+    key: row.key,
+    advertised: row.advertised,
+    knownGood: row.knownGood,
+    effectiveCap: row.effectiveCap,
+    cap: resolveLimit(row, row.advertised),
+    drifted:
+      row.measuredAtAdvertised !== undefined &&
+      row.advertised !== undefined &&
+      row.measuredAtAdvertised !== row.advertised,
+    measured: row.effectiveCap !== undefined || row.knownGood !== undefined,
+  };
+}
+
 /** Fold a successful send into the record (raise the known-good high-water mark). */
 export function onSuccess(
   rec: ModelLimit | undefined,
@@ -130,10 +187,46 @@ export function onSuccess(
   now: string,
 ): ModelLimit {
   const next: ModelLimit = { ...rec };
-  if (advertised && advertised > 0) next.advertised = advertised;
+  if (advertised && advertised > 0) {
+    next.advertised = advertised;
+    next.measuredAtAdvertised = advertised; // we just measured under this ceiling
+  }
   if (inputTokens > 0) next.knownGood = Math.max(next.knownGood ?? 0, inputTokens);
   next.updatedAt = now;
   return next;
+}
+
+/**
+ * Fold a fresh advertised limit into the record WITHOUT any measurement — the
+ * free, no-cost path used at startup/model-discovery so we always know each
+ * model's published ceiling (and budget against it instead of the 8192 fallback)
+ * before any turn runs. Touches only `advertised`; never invents a known-good or
+ * effective cap. Returns the next record and whether the advertised value moved.
+ */
+export function onAdvertised(
+  rec: ModelLimit | undefined,
+  advertised: number | undefined,
+  now: string,
+): { next: ModelLimit; changed: boolean } {
+  if (!advertised || advertised <= 0) return { next: { ...rec }, changed: false };
+  const changed = rec?.advertised !== advertised;
+  return { next: { ...rec, advertised, ...(changed ? { updatedAt: now } : {}) }, changed };
+}
+
+/**
+ * Should we OFFER to measure this model's real (effective) context limit? True
+ * when the advertised ceiling is known but either (a) we've never learned an
+ * effective figure for it, or (b) the advertised ceiling has drifted from the
+ * one in force when we last measured (so the cached figure is stale). False once
+ * a current measurement exists — that's the cache that stops us re-probing every
+ * launch. Pure; the caller layers on the opt-in setting and per-session dedup.
+ */
+export function needsEffectiveProbe(rec: ModelLimit | undefined, advertised: number | undefined): boolean {
+  if (!advertised || advertised <= 0) return false;
+  if (!rec) return true;
+  const measured = rec.effectiveCap !== undefined || rec.knownGood !== undefined;
+  if (!measured) return true;
+  return rec.measuredAtAdvertised !== undefined && rec.measuredAtAdvertised !== advertised;
 }
 
 /**
@@ -153,6 +246,9 @@ export function onOverflow(
   const cap = attemptedTokens - 1;
   if (rec?.effectiveCap && rec.effectiveCap <= cap) return undefined;
   const next: ModelLimit = { ...rec, effectiveCap: cap, updatedAt: now };
-  if (advertised && advertised > 0) next.advertised = advertised;
+  if (advertised && advertised > 0) {
+    next.advertised = advertised;
+    next.measuredAtAdvertised = advertised; // this overflow was learned under this ceiling
+  }
   return next;
 }

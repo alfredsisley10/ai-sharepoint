@@ -1,12 +1,19 @@
 import * as vscode from "vscode";
 import { UsageMeter } from "../copilot/meter";
+import { costEnabled, estimateCost, formatCost } from "../copilot/tokenCost";
+import { readTokenRates } from "../copilot/tokenRates";
+import { premiumCostEnabled, estimatePremiumCost } from "../copilot/premiumCost";
+import { readPremiumPricing } from "../copilot/premiumPricing";
+import { ModelCostTable } from "../copilot/modelCosts";
+import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
+import { describeModelLimit } from "../core/contextBudget";
 
 interface UsageNode {
   id: string;
   label: string;
   description?: string;
   icon?: vscode.ThemeIcon;
-  tooltip?: string;
+  tooltip?: string | vscode.MarkdownString;
   children?: UsageNode[];
   command?: vscode.Command;
 }
@@ -21,18 +28,60 @@ interface UsageNode {
 export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private readonly costs = new ModelCostTable();
 
   constructor(
     private readonly meter: UsageMeter,
     private readonly now: () => string,
     /** False until Copilot Chat is installed AND signed in (models exist). */
     private readonly copilotAvailable: () => boolean = () => true,
+    private readonly modelLimits?: ModelLimitsStore,
   ) {
     meter.onDidChange(() => this.emitter.fire());
   }
 
   refresh(): void {
     this.emitter.fire();
+  }
+
+  /** A "Model context limits" branch: per-model reported (advertised) vs. tested
+   *  (measured) input-context limits and the budgeting cap. Empty until the
+   *  advertised limits are captured (on startup) or a probe has run. */
+  private contextLimitNodes(): UsageNode[] {
+    const rows = (this.modelLimits?.list() ?? []).map(describeModelLimit).sort((a, b) => a.key.localeCompare(b.key));
+    if (rows.length === 0) return [];
+    const n = (v?: number) => (v === undefined ? "?" : v.toLocaleString());
+    return [
+      {
+        id: "limits",
+        label: "Model context limits",
+        icon: new vscode.ThemeIcon("dashboard"),
+        tooltip:
+          "Reported = the model's advertised maxInputTokens. Tested = the largest input actually proven to work (or the learned ceiling). Budget = the cap chats are actually held to. Run “Probe Model Context Limit” to measure a model's real limit.",
+        children: rows.map((r) => {
+          const tested = r.measured ? n(r.knownGood ?? r.effectiveCap) : "not tested";
+          return {
+            id: `limit:${r.key}`,
+            label: r.key,
+            description: `reported ${n(r.advertised)} · tested ${tested}${r.cap !== undefined ? ` · budget ${n(r.cap)}` : ""}${r.drifted ? " · ⚠ advertised changed" : ""}`,
+            icon: new vscode.ThemeIcon(r.drifted ? "warning" : "circuit-board"),
+            tooltip: new vscode.MarkdownString(
+              [
+                `**${r.key}**`,
+                "",
+                `- Reported (advertised): ${n(r.advertised)}`,
+                `- Tested — largest that worked: ${n(r.knownGood)}`,
+                ...(r.effectiveCap !== undefined ? [`- Tested — learned ceiling (overflow): ${n(r.effectiveCap)}`] : []),
+                `- Budgeting cap in use: ${n(r.cap)}`,
+                ...(r.drifted ? ["", "⚠ The advertised limit changed since it was last measured — consider re-probing."] : []),
+                ...(r.measured ? [] : ["", "Not yet measured — run “Probe Model Context Limit”."]),
+              ].join("\n"),
+            ),
+            command: { command: "aiSharePoint.probeModelContextLimit", title: "Probe Model Context Limit" },
+          };
+        }),
+      },
+    ];
   }
 
   getTreeItem(node: UsageNode): vscode.TreeItem {
@@ -64,6 +113,20 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
     const monthFailures = this.meter.failuresThisMonth(nowIso);
     const byModel = this.meter.byModelThisMonth(nowIso);
     const byLabel = this.meter.byLabelThisMonth(nowIso);
+    const rates = readTokenRates();
+    const showCost = costEnabled(rates);
+    const monthCost = showCost
+      ? formatCost(
+          byModel.reduce((sum, m) => sum + estimateCost(m.inputTokens, m.outputTokens, rates), 0),
+          rates.currency,
+        )
+      : undefined;
+    // Copilot's own pricing model: premium requests × multiplier × price. On by
+    // default (published $0.04/request), so dollars show without configuration.
+    const premium = readPremiumPricing();
+    const premiumCost = premiumCostEnabled(premium)
+      ? formatCost(estimatePremiumCost(byModel, (k) => this.costs.multiplierFor(k), premium), premium.currency)
+      : undefined;
 
     return [
       {
@@ -80,6 +143,31 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         label: `Today: ${this.meter.requestsToday(nowIso)} request(s)`,
         icon: new vscode.ThemeIcon("calendar"),
       },
+      ...(premiumCost !== undefined
+        ? [
+            {
+              id: "premiumCost",
+              label: `Est. cost this month: ${premiumCost}`,
+              icon: new vscode.ThemeIcon("credit-card"),
+              tooltip: new vscode.MarkdownString(
+                "Estimate at GitHub's published **$0.04 / premium request** overage rate × each model's premium-request multiplier × your local request counts.\n\nYour plan includes a monthly premium-request allowance, so the real charge may be lower — **GitHub billing is authoritative**. Click to change the rate in Settings.",
+              ),
+              command: { command: "workbench.action.openSettings", title: "Edit premium-request price", arguments: ["aiSharePoint.usage.pricePerPremiumRequest"] },
+            } as UsageNode,
+          ]
+        : []),
+      ...(monthCost !== undefined
+        ? [
+            {
+              id: "cost",
+              label: `Est. token cost this month: ${monthCost}`,
+              icon: new vscode.ThemeIcon("symbol-number"),
+              tooltip:
+                "Estimate = your configured per-token rate × the tokens this extension measured locally. It reflects a rate you set in Settings (AI SharePoint › Usage), not your GitHub bill.",
+              command: { command: "workbench.action.openSettings", title: "Edit token rate", arguments: ["aiSharePoint.usage.tokenCost"] },
+            } as UsageNode,
+          ]
+        : []),
       {
         id: "byModel",
         label: "By model (this month)",
@@ -88,11 +176,14 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         children: byModel.map((m) => ({
           id: `model:${m.key}`,
           label: m.key,
-          description: `${m.requests} req · ${m.inputTokens.toLocaleString()} in / ${m.outputTokens.toLocaleString()} out`,
+          description: `${m.requests} req · ${m.inputTokens.toLocaleString()} in / ${m.outputTokens.toLocaleString()} out${
+            showCost ? ` · ${formatCost(estimateCost(m.inputTokens, m.outputTokens, rates), rates.currency)}` : ""
+          }`,
           icon: new vscode.ThemeIcon("symbol-misc"),
           tooltip: m.failures ? `${m.failures} failed` : undefined,
         })),
       },
+      ...this.contextLimitNodes(),
       {
         id: "byLabel",
         label: "By task (this month)",

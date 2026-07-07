@@ -140,6 +140,53 @@ test("getDescendantPages carries each node's immediate parent (last ancestor)", 
   assert.equal(result.find((p) => p.id === "3")?.parentId, "2");
 });
 
+test("getDescendantPages falls back to a child-page walk when descendant/page 500s", async () => {
+  // The whole-subtree endpoint dies (the reported 500); the resilient walk
+  // rebuilds the SAME tree from cheap single-level child/page listings.
+  //   1 ─┬─ 2 ── 4
+  //      └─ 3
+  const childrenOf: Record<string, Array<{ id: string; title: string }>> = {
+    "1": [{ id: "2", title: "A" }, { id: "3", title: "B" }],
+    "2": [{ id: "4", title: "A1" }],
+  };
+  const { result, calls } = await withFetch(
+    (url) => {
+      if (/\/descendant\/page/.test(url)) return { status: 500, body: { message: "Internal Server Error" } };
+      const m = url.match(/\/content\/(\d+)\/child\/page/);
+      const kids = (m && childrenOf[m[1]!]) || [];
+      return { body: { results: kids.map((k) => ({ id: k.id, title: k.title, _links: { webui: `/${k.id}` } })) } };
+    },
+    () => getDescendantPages(SRC, CRED, "1", DEFAULT_CAPS),
+  );
+  assert.deepEqual(
+    result.map((p) => [p.id, p.parentId]).sort(),
+    [["2", "1"], ["3", "1"], ["4", "2"]],
+    "same flattened parent-linked subtree as the fast path",
+  );
+  assert.ok(calls.some((c) => /\/descendant\/page/.test(c)), "tried the fast path first");
+  assert.ok(calls.some((c) => /\/content\/1\/child\/page/.test(c)), "walked children on fallback");
+  // Fallback stops descending where there are no children (leaves 3 and 4 are
+  // still queried once, then the frontier empties).
+  assert.ok(!calls.some((c) => /\/content\/999\//.test(c)));
+});
+
+test("getDescendantPages does NOT child-walk a terminal auth failure — it rethrows", async () => {
+  let childCalls = 0;
+  await assert.rejects(
+    () =>
+      withFetch(
+        (url) => {
+          if (/\/descendant\/page/.test(url)) return { status: 401, body: { message: "no" } };
+          if (/\/child\/page/.test(url)) childCalls += 1;
+          return { body: { results: [] } };
+        },
+        () => getDescendantPages(SRC, CRED, "1", DEFAULT_CAPS),
+      ),
+    /401|Authentication/,
+  );
+  assert.equal(childCalls, 0, "a bad credential must not trigger the child-walk fallback");
+});
+
 test("getSpaceRootPages hits the depth=root listing", async () => {
   const { result, calls } = await withFetch(
     () => ({ body: { results: [{ id: "1", title: "Home", _links: { webui: "/home" } }] } }),

@@ -1,5 +1,6 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson } from "../http";
+import { classifyError } from "../../core/errors";
 
 /**
  * Confluence page HIERARCHY & RELATIONSHIPS (ADR-0044). The connector could
@@ -123,7 +124,18 @@ export async function getChildPages(
 }
 
 /** The whole SUBTREE under a page, flattened — each node carries its immediate
- *  parent id (last ancestor) so buildPageTree can nest them. */
+ *  parent id (last ancestor) so buildPageTree can nest them.
+ *
+ *  Reliability (the reported "500 when viewing subtree views"): Confluence's
+ *  `descendant/page` endpoint materializes the ENTIRE subtree server-side in one
+ *  shot — and `expand=ancestors` re-expands the breadcrumb for every node — so on
+ *  large or deeply-nested trees (and on Data Center in particular) it routinely
+ *  answers **500**. So it's a FAST PATH only: when it errors with a server/network
+ *  failure we fall back to a bounded, breadth-first walk over the cheap, stable
+ *  single-level `child/page` endpoint, which never 500s the way the whole-subtree
+ *  materialization does, needs no `expand`, and degrades per-branch (one
+ *  unreadable node is skipped, not fatal). Auth / permission / not-found errors
+ *  are NOT retried this way — a different endpoint won't fix them. */
 export async function getDescendantPages(
   source: ContextSource,
   credential: ContextCredential,
@@ -131,20 +143,76 @@ export async function getDescendantPages(
   caps: ReadCaps,
   hardCap = 2000,
 ): Promise<Array<PageRef & { parentId?: string }>> {
-  const results = await fetchAllPages(
-    credential,
-    (start, limit) =>
-      `${baseOf(source)}/rest/api/content/${enc(pageId)}/descendant/page?expand=ancestors&start=${start}&limit=${limit}`,
-    caps,
-    hardCap,
-  );
-  return results
-    .map((c) => {
-      const anc = c.ancestors ?? [];
-      const parentId = anc.length ? String(anc[anc.length - 1].id ?? "") : undefined;
-      return { ...toRef(source, c), ...(parentId ? { parentId } : {}) };
-    })
-    .filter((p) => p.id);
+  try {
+    const results = await fetchAllPages(
+      credential,
+      (start, limit) =>
+        `${baseOf(source)}/rest/api/content/${enc(pageId)}/descendant/page?expand=ancestors&start=${start}&limit=${limit}`,
+      caps,
+      hardCap,
+    );
+    return results
+      .map((c) => {
+        const anc = c.ancestors ?? [];
+        const parentId = anc.length ? String(anc[anc.length - 1].id ?? "") : undefined;
+        return { ...toRef(source, c), ...(parentId ? { parentId } : {}) };
+      })
+      .filter((p) => p.id);
+  } catch (err) {
+    // A server/upstream error (500/502/504, timeout, non-JSON block page →
+    // classified network/unknown) is exactly the case the child-walk recovers.
+    // Anything terminal (bad credential, forbidden, not-found) is rethrown.
+    const code = classifyError(err);
+    if (code !== "network" && code !== "unknown") throw err;
+    return walkDescendantsByChildren(source, credential, pageId, caps, hardCap);
+  }
+}
+
+/**
+ * Enumerate a subtree by walking `child/page` breadth-first from the root — the
+ * resilient fallback for `getDescendantPages` when the whole-subtree
+ * `descendant/page` endpoint 500s. Each discovered page carries its immediate
+ * `parentId` (the node we found it under), so `buildPageTree` nests it exactly
+ * as the fast path would. Bounded by `hardCap` (total pages) and `maxDepth`
+ * (levels), and a `seen` set guards against cycles/re-parenting. A single branch
+ * that fails to list (a restricted or transiently-erroring node) is skipped so
+ * one bad page can't sink the whole tree; a session-wide auth failure still
+ * aborts.
+ */
+export async function walkDescendantsByChildren(
+  source: ContextSource,
+  credential: ContextCredential,
+  rootId: string,
+  caps: ReadCaps,
+  hardCap = 2000,
+  maxDepth = 15,
+): Promise<Array<PageRef & { parentId?: string }>> {
+  const out: Array<PageRef & { parentId: string }> = [];
+  const seen = new Set<string>([rootId]);
+  let frontier = [rootId];
+  for (let depth = 0; depth < maxDepth && frontier.length && out.length < hardCap; depth += 1) {
+    const next: string[] = [];
+    for (const parentId of frontier) {
+      if (out.length >= hardCap) break;
+      let children: PageRef[];
+      try {
+        children = await getChildPages(source, credential, parentId, caps, Math.min(1000, hardCap));
+      } catch (err) {
+        // A bad credential invalidates the whole walk; any other single-node
+        // failure (a restricted page, a transient 500 on one node) is skipped.
+        if (classifyError(err) === "auth.failed") throw err;
+        continue;
+      }
+      for (const child of children) {
+        if (!child.id || seen.has(child.id) || out.length >= hardCap) continue;
+        seen.add(child.id);
+        out.push({ ...child, parentId });
+        next.push(child.id);
+      }
+    }
+    frontier = next;
+  }
+  return out.slice(0, hardCap);
 }
 
 /** A space's ROOT pages (the top of its tree), fully paginated. */

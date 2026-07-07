@@ -8,6 +8,10 @@ import { EXTENSION_VERSION } from "./core/version";
 import { redactError } from "./core/redaction";
 import { UsageMeter } from "./copilot/meter";
 import { CopilotService } from "./copilot/copilotService";
+import { ModelCostTable } from "./copilot/modelCosts";
+import { estimateProbeCost } from "./copilot/premiumCost";
+import { readPremiumPricing } from "./copilot/premiumPricing";
+import { formatCost } from "./copilot/tokenCost";
 import { AuthProviderRegistry, AUTH_PROVIDERS } from "./auth/providerRegistry";
 import { tenantCacheHandle } from "./auth/msalCache";
 import { isSupportedSiteUrl } from "./auth/sharePointClient";
@@ -27,15 +31,9 @@ import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
 import { getDefangReport } from "./chat/proxyDefangLog";
 import { InteractionCache } from "./chat/interactionCache";
-import { looksLikeOverflow } from "./core/contextBudget";
-import {
-  initialProbeWindow,
-  nextProbeSize,
-  probeConverged,
-  probeFiller,
-  PROBE_TOLERANCE,
-  PROBE_MAX_STEPS,
-} from "./core/contextProbe";
+import { PROBE_MAX_STEPS } from "./core/contextProbe";
+import { runContextLimitProbe } from "./chat/contextLimitProbe";
+import { discoverAdvertisedLimits, maybeOfferContextProbe } from "./chat/modelLimitDiscovery";
 import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
 import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
@@ -144,6 +142,9 @@ import {
   AI_CONTEXT_MAX_CHARS,
 } from "./context/projectsStore";
 import { ProjectsTreeProvider } from "./ui/projectsView";
+import { ChatWorkspaceStore } from "./context/chatWorkspaceStore";
+import { registerDossierTools, buildDossierInto } from "./chat/dossierTools";
+import { registerPageRevisionTool } from "./chat/pageRevisionTool";
 import { registerProjectTools } from "./chat/projectTools";
 import {
   enumeratePowerBiDatasets,
@@ -351,6 +352,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const interactions = new InteractionCache(context.workspaceState, nowIso);
   const meter = new UsageMeter(context.globalState);
   const copilot = new CopilotService(meter);
+  const modelCosts = new ModelCostTable();
   const sites = new SitesStore(context.globalState, context.workspaceState);
   const spSessions = new SharePointSessionStore(context.secrets, context.globalState);
   const registry = new AuthProviderRegistry(secrets, (info) => {
@@ -367,7 +369,7 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
     nowIso,
   );
-  const dashboard = new UsageDashboard(meter, nowIso);
+  const dashboard = new UsageDashboard(meter, nowIso, modelLimits);
   const statusBar = new UsageStatusBar(meter, nowIso);
   const version = String(context.extension.packageJSON.version ?? "0.0.0");
 
@@ -466,6 +468,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const catalogs = new CatalogStore(context.globalStorageUri);
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
+  const chatWorkspace = new ChatWorkspaceStore(context.globalState, context.globalStorageUri, nowIso);
   const memory = new MemoryStore(context.globalState);
   const workItems = new WorkItemsStore(context.globalState);
   // Write the remediation inventory to files (oversight XLSX + Work Items CSV +
@@ -639,6 +642,7 @@ export function activate(context: vscode.ExtensionContext): void {
     meter,
     nowIso,
     () => copilotState.signedIn,
+    modelLimits,
   );
   const verboseWireOn = () =>
     vscode.workspace.getConfiguration("aiSharePoint").get<boolean>("logging.verboseWire", false);
@@ -828,7 +832,7 @@ export function activate(context: vscode.ExtensionContext): void {
     blockedTerms,
     lessons,
   );
-  const projectsProvider = new ProjectsTreeProvider(projects, contextSources);
+  const projectsProvider = new ProjectsTreeProvider(projects, contextSources, chatWorkspace);
   const projectsView = tryCreateTreeView("aiSharePoint.projectsView", projectsProvider);
   if (projectsView) context.subscriptions.push(projectsView, projectsProvider);
   const promptsProvider = new PromptsTreeProvider(prompts, sites, contextSources, projects);
@@ -918,9 +922,25 @@ export function activate(context: vscode.ExtensionContext): void {
     usageProvider.refresh();
   };
   void refreshCopilotState();
+
+  // Capture each Copilot model's advertised context ceiling (free — no LLM
+  // calls) at startup and whenever the model set changes, so we budget prompts
+  // against real published limits instead of the conservative fallback. Then, if
+  // any model is new or its advertised limit drifted, OFFER (never silently run)
+  // a one-time effective-limit probe; results are cached so it asks only once.
+  const captureModelLimits = async () => {
+    const { candidates } = await discoverAdvertisedLimits(modelLimits).catch(() => ({ recorded: 0, candidates: [] }));
+    usageProvider.refresh();
+    await maybeOfferContextProbe(candidates, modelLimits, telemetry).catch(() => undefined);
+  };
+  void captureModelLimits();
+
   context.subscriptions.push(
     vscode.extensions.onDidChange(() => void refreshCopilotState()),
-    vscode.lm.onDidChangeChatModels(() => void refreshCopilotState()),
+    vscode.lm.onDidChangeChatModels(() => {
+      void refreshCopilotState();
+      void captureModelLimits();
+    }),
   );
 
   // --- Chat + tools ------------------------------------------------------
@@ -943,6 +963,7 @@ export function activate(context: vscode.ExtensionContext): void {
         proxyTerms: blockedTerms,
         modelLimits,
         interactions,
+        chatWorkspace,
         log,
         now: nowIso,
       }),
@@ -977,6 +998,12 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     ...tryRegister("work-items tools", () =>
       registerWorkItemsTools(workItems, exportInventory, telemetry, errors),
+    ),
+    ...tryRegister("page-revision tool", () => [
+      registerPageRevisionTool(projects, chatWorkspace, telemetry, errors),
+    ]),
+    ...tryRegister("dossier tools", () =>
+      registerDossierTools(projects, contextSources, contextService, chatWorkspace, workItems, telemetry, errors),
     ),
     schemas,
     catalogs,
@@ -4632,7 +4659,20 @@ export function activate(context: vscode.ExtensionContext): void {
         return schema ? [[s.id, schema] as const] : [];
       }),
     );
-    const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites, selMemory, allSourceNames, selPrompts, allProjectNames);
+    const pricingCfg = vscode.workspace.getConfiguration("aiSharePoint");
+    // Only export DELIBERATELY-set rates: a zero token rate means "not
+    // configured", so exporting it would let an import reset a recipient's real
+    // rates to zero. The premium-request price + currency always travel (they
+    // carry a real default the whole team should share).
+    const inMil = pricingCfg.get<number>("usage.tokenCostInputPerMillion", 0);
+    const outMil = pricingCfg.get<number>("usage.tokenCostOutputPerMillion", 0);
+    const pricingExport = {
+      pricePerPremiumRequest: pricingCfg.get<number>("usage.pricePerPremiumRequest", 0.04),
+      ...(inMil > 0 ? { tokenCostInputPerMillion: inMil } : {}),
+      ...(outMil > 0 ? { tokenCostOutputPerMillion: outMil } : {}),
+      currencySymbol: pricingCfg.get<string>("usage.currencySymbol", "$"),
+    };
+    const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites, selMemory, allSourceNames, selPrompts, allProjectNames, modelLimits.list(), pricingExport);
     const json = JSON.stringify(exportDoc, null, 2);
     // Defense in depth (ADR-0013): the builder is secret-free by construction;
     // exportLeakBlockers refuses to write if anything credential-shaped slipped
@@ -4692,10 +4732,43 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(`Could not import: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
+    // Shared, non-secret extras (probed model limits + cost/pricing settings):
+    // fold the limits into the store and offer to apply the pricing to settings.
+    const applySharedExtras = async (): Promise<string[]> => {
+      const notes: string[] = [];
+      const n = await modelLimits.importLimits(parsed.modelLimits).catch(() => 0);
+      if (n) {
+        usageProvider.refresh();
+        notes.push(`${n} model limit(s)`);
+      }
+      if (parsed.pricing) {
+        const p = parsed.pricing;
+        const applyP = await vscode.window.showInformationMessage(
+          `This config includes cost/pricing settings (premium request ${p.currencySymbol ?? "$"}${p.pricePerPremiumRequest ?? "—"}${p.tokenCostInputPerMillion ? `, tokens ${p.currencySymbol ?? "$"}${p.tokenCostInputPerMillion}/M in` : ""}). Apply them to your settings?`,
+          "Apply pricing",
+          "Skip",
+        );
+        if (applyP === "Apply pricing") {
+          const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+          if (p.pricePerPremiumRequest !== undefined) await cfg.update("usage.pricePerPremiumRequest", p.pricePerPremiumRequest, vscode.ConfigurationTarget.Global);
+          if (p.tokenCostInputPerMillion !== undefined) await cfg.update("usage.tokenCostInputPerMillion", p.tokenCostInputPerMillion, vscode.ConfigurationTarget.Global);
+          if (p.tokenCostOutputPerMillion !== undefined) await cfg.update("usage.tokenCostOutputPerMillion", p.tokenCostOutputPerMillion, vscode.ConfigurationTarget.Global);
+          if (p.currencySymbol) await cfg.update("usage.currencySymbol", p.currencySymbol, vscode.ConfigurationTarget.Global);
+          notes.push("pricing applied");
+        }
+      }
+      return notes;
+    };
+
     if (parsed.sites.length === 0 && parsed.sources.length === 0 && parsed.projects.length === 0 && parsed.memory.length === 0 && parsed.prompts.length === 0) {
-      void vscode.window.showWarningMessage(
-        `Nothing to import.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) were malformed.` : ""}`,
-      );
+      if (parsed.modelLimits.length || parsed.pricing) {
+        const notes = await applySharedExtras();
+        void vscode.window.showInformationMessage(notes.length ? `Imported ${notes.join(", ")}.` : "Nothing new to import.");
+      } else {
+        void vscode.window.showWarningMessage(
+          `Nothing to import.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) were malformed.` : ""}`,
+        );
+      }
       return;
     }
     // Let the user choose which items in the file to bring in.
@@ -4946,6 +5019,7 @@ export function activate(context: vscode.ExtensionContext): void {
       merged: mergesApplied,
       mergeMode,
     });
+    const extraNotes = await applySharedExtras();
     const done = [
       freshSites.length ? `${freshSites.length} site(s)` : "",
       fresh.length ? `${fresh.length} source(s)` : "",
@@ -4953,6 +5027,7 @@ export function activate(context: vscode.ExtensionContext): void {
       memPlan.toAdd.length ? `${memPlan.toAdd.length} memory note(s)` : "",
       promptPlan.toAdd.length ? `${promptPlan.toAdd.length} prompt(s)` : "",
       mergesApplied ? `${mergesApplied} merged` : "",
+      ...extraNotes,
     ].filter(Boolean).join(", ");
     void vscode.window.showInformationMessage(
       `Imported ${done || "the selected items"}.${parsed.warnings.length ? ` (${parsed.warnings.length} note(s): ${parsed.warnings.slice(0, 2).join(" ")}${parsed.warnings.length > 2 ? " …" : ""})` : ""} Sign in to each site/source to activate (lockout-safe single verify).`,
@@ -6575,8 +6650,13 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage("No GitHub Copilot model is available — sign in to Copilot and retry.");
       return;
     }
+    const est = estimateProbeCost(modelCosts.multiplierFor(model.family || model.id), PROBE_MAX_STEPS, readPremiumPricing().pricePerRequest);
+    const costPhrase =
+      est.cost > 0
+        ? ` Estimated cost up to ~${formatCost(est.cost, readPremiumPricing().currency)} (≤${est.premiumRequests} premium request(s) at your configured rate).`
+        : "";
     const proceed = await vscode.window.showWarningMessage(
-      `Probe the real context limit for “${model.name}”? This sends up to ${PROBE_MAX_STEPS} test prompts using your Copilot allowance to find the largest input it actually accepts (advertised: ${model.maxInputTokens?.toLocaleString() ?? "unknown"} tokens).`,
+      `Probe the real context limit for “${model.name}”? This sends up to ${PROBE_MAX_STEPS} test prompts using your Copilot allowance to find the largest input it actually accepts (advertised: ${model.maxInputTokens?.toLocaleString() ?? "unknown"} tokens).${costPhrase}`,
       { modal: true },
       "Probe",
     );
@@ -6586,46 +6666,15 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Measuring the real context limit for ${model.name}…`, cancellable: true },
       async (progress, ptoken) => {
-        let { low, high } = initialProbeWindow(advertised, modelLimits.get(key)?.knownGood);
-        let lastGood = low;
-        for (let step = 0; step < PROBE_MAX_STEPS && !probeConverged(low, high, PROBE_TOLERANCE) && !ptoken.isCancellationRequested; step++) {
-          const target = nextProbeSize(low, high, PROBE_TOLERANCE);
-          if (target === undefined) break;
-          progress.report({ message: `testing ~${target.toLocaleString()} tokens (step ${step + 1}/${PROBE_MAX_STEPS})…` });
-          const filler = probeFiller(target);
-          let measured = target;
-          try {
-            measured = await model.countTokens(filler);
-          } catch {
-            /* keep the requested target as the estimate */
-          }
-          try {
-            const resp = await model.sendRequest(
-              [vscode.LanguageModelChatMessage.User(`${filler}\n\nReply with exactly: OK`)],
-              { justification: "AI SharePoint context-limit probe" },
-              ptoken,
-            );
-            for await (const _part of resp.stream) {
-              /* drain — success is reaching the end without an overflow throw */
-            }
-            lastGood = Math.max(lastGood, measured);
-            low = Math.max(low, measured);
-            await modelLimits.recordSuccess(key, advertised, measured).catch(() => undefined);
-          } catch (err) {
-            if (looksLikeOverflow(redactError(err).message)) {
-              high = Math.min(high, measured);
-              await modelLimits.recordOverflow(key, advertised, measured).catch(() => undefined);
-            } else {
-              throw err; // network/entitlement — stop and surface it
-            }
-          }
-        }
-        const effective = modelLimits.effectiveLimit(key, advertised) ?? lastGood;
+        const result = await runContextLimitProbe(model, key, modelLimits, {
+          token: ptoken,
+          onStep: (message) => progress.report({ message }),
+        });
         // Anonymized counter (categorical only): a probe ran and whether it
         // finished or the user cancelled — never the prompt or the measured size.
-        telemetry.record("context.probe", { outcome: ptoken.isCancellationRequested ? "cancelled" : "completed" });
+        telemetry.record("context.probe", { outcome: result.cancelled ? "cancelled" : "completed" });
         void vscode.window.showInformationMessage(
-          `Context probe for ${model.name}: advertised ${advertised?.toLocaleString() ?? "unknown"}, measured usable ≈ ${lastGood.toLocaleString()} tokens (budgeting cap ${effective.toLocaleString()}). Saved — chats now budget to this.`,
+          `Context probe for ${model.name}: advertised ${advertised?.toLocaleString() ?? "unknown"}, measured usable ≈ ${result.lastGood.toLocaleString()} tokens (budgeting cap ${result.effective.toLocaleString()}). Saved — chats now budget to this.`,
         );
       },
     );
@@ -6676,6 +6725,165 @@ export function activate(context: vscode.ExtensionContext): void {
         const label = pick.label.length > 60 ? `${pick.label.slice(0, 60)}…` : pick.label;
         void vscode.window.showInformationMessage(`Removed "${label}" from project memory.`);
       }
+    }
+  });
+
+  // Project chat workspaces (ADR-0048): a browsable, on-disk mirror of the
+  // @sharepoint conversations held under a project, so a chat survives its small
+  // (often corporate-clamped) context window — follow along, reuse gathered
+  // context, and restart a starved conversation from the saved summary.
+  const resolveProjectArg = async (arg: unknown): Promise<Project | undefined> => {
+    if (arg && typeof arg === "object" && "id" in arg && "sourceIds" in arg) {
+      return projects.get((arg as Project).id) ?? (arg as Project);
+    }
+    const active = projects.active();
+    if (active) return active;
+    const all = projects.list();
+    if (all.length === 0) {
+      void vscode.window.showInformationMessage("No projects yet — create one in the Projects view first.");
+      return undefined;
+    }
+    const pick = await vscode.window.showQuickPick(
+      all.map((p) => ({ label: p.name, description: p.description, id: p.id })),
+      { title: "Select a project", ignoreFocusOut: true },
+    );
+    return pick ? projects.get(pick.id) : undefined;
+  };
+
+  register("aiSharePoint.startProjectWorkspace", async (arg) => {
+    const project = await resolveProjectArg(arg);
+    if (!project) return;
+    if (chatWorkspace.enabled(project.id)) {
+      const open = await vscode.window.showInformationMessage(
+        `"${project.name}" already has a chat workspace.`,
+        "Open Workspace",
+      );
+      if (open === "Open Workspace") await vscode.commands.executeCommand("aiSharePoint.openProjectWorkspace", project);
+      return;
+    }
+    const base = await chatWorkspace.create(project);
+    telemetry.record("project.workspace", { action: "start" });
+    const choice = await vscode.window.showInformationMessage(
+      `Started a chat workspace for "${project.name}". While this project is active, each @sharepoint turn is mirrored to ${base.fsPath} (transcript + rolling SUMMARY) so you can follow along and restart chats that run out of context. Chat content stays local and is git-ignored.`,
+      "Open SUMMARY",
+      "Reveal Folder",
+    );
+    if (choice === "Open SUMMARY") {
+      await vscode.commands.executeCommand("markdown.showPreview", chatWorkspace.summaryUri(project)).then(undefined, () => undefined);
+    } else if (choice === "Reveal Folder") {
+      await vscode.commands.executeCommand("revealInExplorer", base).then(undefined, () => undefined);
+    }
+  });
+
+  register("aiSharePoint.openProjectWorkspace", async (arg) => {
+    const project = await resolveProjectArg(arg);
+    if (!project) return;
+    if (!chatWorkspace.enabled(project.id)) {
+      const start = await vscode.window.showInformationMessage(
+        `"${project.name}" has no chat workspace yet.`,
+        "Start Workspace",
+      );
+      if (start === "Start Workspace") await vscode.commands.executeCommand("aiSharePoint.startProjectWorkspace", project);
+      return;
+    }
+    await vscode.commands
+      .executeCommand("markdown.showPreview", chatWorkspace.summaryUri(project))
+      .then(undefined, async () => {
+        const doc = await vscode.workspace.openTextDocument(chatWorkspace.summaryUri(project));
+        await vscode.window.showTextDocument(doc);
+      });
+  });
+
+  register("aiSharePoint.resumeFromWorkspace", async (arg) => {
+    const project = await resolveProjectArg(arg);
+    if (!project) return;
+    if (!chatWorkspace.enabled(project.id)) {
+      void vscode.window.showInformationMessage(
+        `"${project.name}" has no chat workspace to resume from. Start one with "Start Project Workspace".`,
+      );
+      return;
+    }
+    telemetry.record("project.workspace", { action: "resume" });
+    const resume = await chatWorkspace.writeResume(project);
+    // Make sure this project is the active scope so the resumed chat inherits it.
+    if (projects.activeId() !== project.id) await projects.setActive(project.id);
+    // Open the restart brief for the user to skim.
+    await vscode.commands
+      .executeCommand("markdown.showPreview", resume?.uri ?? chatWorkspace.summaryUri(project))
+      .then(undefined, () => undefined);
+    // Seed a fresh @sharepoint chat with a short brief; the full history stays in
+    // the workspace so the new chat needn't carry it all in its context window.
+    const seeded = await vscode.commands
+      .executeCommand("workbench.action.chat.open", { query: `@sharepoint ${resume?.seedPrompt ?? "Resume our prior conversation."}` })
+      .then(() => true, () => false);
+    if (!seeded && resume) {
+      await vscode.env.clipboard.writeText(resume.seedPrompt);
+      void vscode.window.showInformationMessage(
+        `Copied a resume prompt for "${project.name}" to the clipboard — paste it into @sharepoint. The full history is in the workspace (RESUME.md).`,
+      );
+    }
+  });
+
+  // Confluence content-management: aggregate a target space into the project
+  // workspace (inventory + owners + XLSX), open a remediation work item for every
+  // flagged page, and draft per-owner outreach — the durable, restartable home
+  // for a space cleanup (ADR-0048 follow-up; reuses the ownership/currency suite).
+  register("aiSharePoint.buildSpaceDossier", async (arg) => {
+    const project = await resolveProjectArg(arg);
+    if (!project) return;
+    // Pick a Confluence source — prefer the project's own members.
+    const confluenceSources = contextSources
+      .list()
+      .filter((s) => s.type === "confluence")
+      .filter((s) => (project.sourceIds.length ? project.sourceIds.includes(s.id) : true));
+    if (confluenceSources.length === 0) {
+      void vscode.window.showWarningMessage(
+        "No Confluence source is available for this project. Add one via 'Add Context Source' (and include it in the project).",
+      );
+      return;
+    }
+    const source =
+      confluenceSources.length === 1
+        ? confluenceSources[0]!
+        : await vscode.window
+            .showQuickPick(
+              confluenceSources.map((s) => ({ label: s.displayName, description: s.baseUrl, id: s.id })),
+              { title: "Confluence source for the dossier", ignoreFocusOut: true },
+            )
+            .then((p) => (p ? contextSources.get(p.id) : undefined));
+    if (!source) return;
+    const scopeSpace = source.writeScope?.kind === "space" ? source.writeScope.spaceKey : undefined;
+    const spaceKey = (
+      await vscode.window.showInputBox({
+        title: "Target Confluence space key",
+        value: scopeSpace ?? "",
+        placeHolder: "e.g. ENG",
+        prompt: "The space to aggregate (Space Settings → Space Details → Key).",
+        ignoreFocusOut: true,
+        validateInput: (v) => (v.trim() ? undefined : "A space key is required."),
+      })
+    )?.trim();
+    if (!spaceKey) return;
+
+    const r = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Building dossier for ${spaceKey}…`, cancellable: false },
+      (progress) =>
+        buildDossierInto(project, source, spaceKey, { contextService, chatWorkspace, workItems }, (done, total) =>
+          progress.report({ message: `reviewed ${done}/${total} page(s)…` }),
+        ),
+    );
+    const dir = r.dir;
+    telemetry.record("project.dossier", { space: "redacted" });
+
+    const choice = await vscode.window.showInformationMessage(
+      `Dossier for ${spaceKey}: ${r.captured}/${r.total} page(s) reviewed${r.truncated ? " (capped)" : ""} — ${r.flagged} flagged. Opened ${r.created} new work item(s). Saved to the "${project.name}" workspace.`,
+      "Open Inventory",
+      "Open Owners",
+    );
+    if (choice === "Open Inventory") {
+      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.joinPath(dir, "inventory.md")).then(undefined, () => undefined);
+    } else if (choice === "Open Owners") {
+      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.joinPath(dir, "owners.md")).then(undefined, () => undefined);
     }
   });
 

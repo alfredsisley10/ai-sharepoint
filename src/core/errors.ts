@@ -57,7 +57,16 @@ export function adviceFor(code: ErrorCode): string | undefined {
     case "auth.timeout":
       return "The sign-in window may have been blocked. Try again, or use the device-code sign-in method.";
     case "auth.failed":
-      return "Sign-in was rejected. Check with your administrator that this app is allowed in your tenant, or configure a custom client ID (see the admin guide).";
+      // Provider-neutral on purpose: this is the FALLBACK for an auth
+      // rejection whose thrower didn't attach its own summary, and it fires for
+      // EVERY connector — Jira/Confluence/DB/LDAP/Splunk/ServiceNow/Grafana as
+      // well as Microsoft sign-in. It must not presume Entra: a Jira basic-auth
+      // 401 is a wrong username/password, not a tenant/client-ID problem
+      // (pilot: after a password rotation, a rejected Jira credential surfaced
+      // "check that this app is allowed in your tenant", which is nonsense for
+      // basic auth). Lead with the universally-correct action; keep the Entra
+      // path as a clearly-scoped aside.
+      return "Sign-in was rejected. Re-enter the credential — the username, password, token, or session cookie may be wrong, expired, or revoked. (For a Microsoft/Entra sign-in only: also confirm this app is allowed in your tenant, or configure a custom client ID — see the admin guide.)";
     case "graph.forbidden":
       return "Your account lacks permission for this site or the required Graph scope was not consented.";
     case "graph.notFound":
@@ -72,8 +81,14 @@ export function adviceFor(code: ErrorCode): string | undefined {
     case "network":
       // Fallback only — a fingerprinted proxy/TLS-inspection/filter failure
       // carries its own targeted summary (see core/networkDiagnostics). This
-      // covers the un-fingerprinted case.
-      return "Network request failed. On a corporate network this is usually a proxy or TLS-inspection appliance: check VS Code's \"http.proxy\", trust the proxy's root CA (e.g. NODE_EXTRA_CA_CERTS / \"http.systemCertificates\"), and confirm login.microsoftonline.com / graph.microsoft.com are allowlisted — see Admin Guide §3.";
+      // covers the un-fingerprinted case, which is HOST-AGNOSTIC by definition:
+      // the failing host may be any connector (Jira, Postgres, LDAP, a Grafana
+      // instance…), NOT necessarily a Microsoft endpoint. Naming
+      // login.microsoftonline.com / graph.microsoft.com here was wrong — it told
+      // users of non-Microsoft connectors to allowlist Microsoft hosts (pilot: a
+      // Jira basic-auth refresh reported it "could not access Microsoft Graph").
+      // Keep the remediation about the connector's OWN host.
+      return "Network request failed — the service couldn't be reached. On a corporate network this is usually a proxy or TLS-inspection appliance: check VS Code's \"http.proxy\", trust the proxy's root CA (e.g. NODE_EXTRA_CA_CERTS / \"http.systemCertificates\"), and confirm this connector's host is allowlisted — see Admin Guide §3.";
     default:
       return undefined;
   }

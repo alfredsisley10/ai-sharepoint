@@ -1,5 +1,241 @@
 # Changelog
 
+## 0.121.0 — 2026-07-07
+
+### Added — learned heuristics now improve future answers (closed the self-improvement loop)
+- **Captured lessons are now recalled into the prompt, not just stored.** Previously the assistant
+  could *capture* a generalized heuristic when it self-corrected (opt-in `lessons.capture`) and you
+  could review/export/prune it — but nothing ever read those lessons back, so they never changed
+  behavior. Now a bounded, droppable **"Learned heuristics"** section injects the most relevant
+  captured lessons into each turn (relevance-ranked by your connected source types, most-observed
+  first), so past self-corrections continuously improve future answers. Controlled by
+  `aiSharePoint.lessons.applyLearned` (default on); review/prune them via **Review Lessons Learned**,
+  export via **Export Lessons Learned**. Trimmed first under context pressure, so it never crowds out
+  your request or connected data.
+
+## 0.120.0 — 2026-07-07
+
+### Changed — usability: the chat can now drive the cleanup flow it suggests
+- **The assistant can actually run the workspace + dossier flow, not just point at commands.** Three
+  new chat tools close the gap where the follow-ups and the "track this cleanup?" offer suggested
+  actions the chat couldn't perform: `aisharepoint_build_space_dossier` (aggregate a Confluence space
+  → inventory/owners/xlsx/outreach + a work item per flagged page, into the project workspace),
+  `aisharepoint_start_project_workspace` (begin tracking the conversation), and
+  `aisharepoint_workspace_summary` (read the SUMMARY to resume without re-fetching). The participant
+  instructions now describe the workspace→dossier→owners→revisions→outreach loop, so when you ask to
+  optimize a Confluence space the assistant drives it end-to-end. The command and tool share one
+  implementation (`buildDossierInto`).
+- **Onboarding refreshed.** A new "Track & clean up a Confluence space" walkthrough step introduces
+  the workspace + dossier flow, and the "See what the extension asked Copilot" step now mentions the
+  dollar-cost estimate and reported/tested context limits (its old "not estimated" copy was outdated).
+- **Discoverability.** The Projects view welcome text now describes chat workspaces and the dossier,
+  and a "Build Confluence Space Dossier" button sits on the Projects view title bar.
+
+## 0.119.1 — 2026-07-07
+
+### Fixed — review-pass correctness fixes
+- **Concurrent chats under one project no longer cross-contaminate transcripts.** Each turn now routes
+  to its own session by a conversation key (the chat's opening prompt) instead of always appending to
+  the most-recently-created session, so two @sharepoint chats open against the same project keep
+  separate transcripts, outlines, and resume briefs.
+- **Space dossier:** the outreach "recommended revision" link and the on-disk page folder now share a
+  single sanitization helper (`pageFolderName`), so a non-numeric page id can't produce a dangling
+  link; a page with no version no longer renders "· v0"; and a reference-config export no longer ships
+  unconfigured (zero) token rates that an import could apply over a recipient's real rates.
+
+## 0.119.0 — 2026-07-07
+
+### Added — probe cost estimates + exportable probed limits & pricing
+- **Context-limit probing now shows its estimated cost before running.** Both the manual **Probe Model
+  Context Limit** command and the automatic (opt-in) probe offer now include an upper-bound dollar
+  estimate — up to `PROBE_MAX_STEPS` test requests × the model's premium-request multiplier × your
+  configured per-request price — so you know the cost before proceeding. A re-probe (after an
+  advertised-limit drift) shows the same estimate.
+- **Probed model limits and pricing now travel with the configuration export.** The reference-config
+  export/import now carries the learned per-model context limits (non-secret token counts, merged
+  conservatively on import so a teammate's looser measurement never loosens a limit you've proven
+  tighter) and your cost/pricing settings (premium-request price, token rates, currency). A team can
+  share one exact enterprise pricing definition and skip re-probing on every machine. Both remain
+  secret-free (they pass the export leak scan); pricing is applied on import only with your consent.
+
+## 0.118.0 — 2026-07-07
+
+### Changed — chat follow-up suggestions are now context-aware
+- **The follow-up chips adapt to what you're connected to and doing.** Instead of the fixed "Explore my
+  site / Plan a site / Check Copilot activity", they now reflect your scoped sources and the task in
+  flight: a Confluence cleanup surfaces **Build space dossier → Find page owners → Draft owner
+  outreach**; Jira/ServiceNow/database sources get their own review prompts; SharePoint site prompts
+  appear only when a site is connected (and site planning references your project goals); a tracked
+  project offers **Resume from workspace**, an untracked one nudges goals/next-steps; and a
+  cost/activity option is always kept (now "Check Copilot cost & activity").
+
+## 0.117.0 — 2026-07-07
+
+### Added — chat offers to track a Confluence cleanup in a project workspace
+- **When you ask @sharepoint to optimize/clean up/audit a Confluence space, it now offers to track the
+  conversation in a project workspace.** A one-line tip plus a button appears (once per project per
+  session, so it never nags) — clicking it starts the workspace (or creates a project first), so the
+  cleanup gets a durable home for the space dossier (owners, stale/inaccurate pages, recommended
+  revisions) and is restartable if the chat runs out of context.
+
+## 0.116.0 — 2026-07-07
+
+### Added — dollar cost estimate in Copilot Activity, on by default
+- **The Copilot Activity view now shows an estimated dollar cost out of the box.** Using GitHub's own
+  public pricing model — premium requests × each model's published premium-request multiplier
+  (`model-costs.json`) × the **$0.04**/premium-request overage rate — the tree and dashboard show an
+  "est. cost this month" without any configuration. It's clearly labelled as an estimate at the
+  overage rate (your plan's monthly premium-request allowance may make the real charge lower; GitHub
+  billing is authoritative). Configurable via `aiSharePoint.usage.pricePerPremiumRequest` (set to `0`
+  to hide). The optional token-based cost (for those who price by the underlying token API) remains,
+  now labelled "est. token cost" to distinguish it.
+
+## 0.115.0 — 2026-07-07
+
+### Added — model context limits in the Copilot Activity view
+- **The Copilot Activity tab now shows each model's reported vs. tested context limit.** A new
+  **Model context limits** section (in both the Activity tree and the dashboard) lists, per model, the
+  **reported** advertised `maxInputTokens`, the **tested** figure (largest input actually proven to
+  work / the learned overflow ceiling), and the **budget** cap chats are actually held to — with a ⚠
+  marker when the advertised limit has drifted since it was last measured. Advertised limits populate
+  automatically on startup; clicking a model runs **Probe Model Context Limit** to measure the real
+  one.
+
+## 0.114.0 — 2026-07-07
+
+### Added — context cache + one-click chat resume in project workspaces
+- **Each turn's gathered data is now cached in the workspace.** When a project workspace is active, the
+  connected-context block and every tool result for a turn are appended to `context/<session>.md`
+  (redacted, bounded) — a browsable knowledge cache so a later chat, or a resume, can reuse what was
+  already gathered instead of re-fetching.
+- **"Resume Chat from Project Workspace" now seeds a fresh chat.** It writes a compact `RESUME.md`
+  restart brief (goals + the most recent conversation outline), opens it, activates the project, and
+  opens a new @sharepoint chat prefilled with a short resume prompt (falling back to copying the
+  prompt to the clipboard if the chat can't be opened programmatically). The full history stays in the
+  workspace, so the new chat doesn't have to carry it all in its context window — directly addressing
+  starved/failed chats in context-limited corporate environments. Completes the ADR-0048 follow-ups.
+
+## 0.113.0 — 2026-07-07
+
+### Added — cached page content + recommended revisions in the dossier
+- **The space dossier now caches each flagged page's current content and seeds a recommended
+  revision.** For every flagged page, the current body text is written to
+  `space/<KEY>/pages/<id>/current.md`, alongside a `recommended.md` scaffold that lists why the page
+  was flagged, quotes the current content for reference, and leaves a slot for the proposed revision.
+  The scaffold is written **once and preserved** across dossier refreshes, so an owner's or the
+  assistant's edits are never clobbered.
+- **Recommended revisions flow into owner outreach.** Each per-owner outreach draft now links the
+  relevant `recommended.md`, so you can show owners exactly what changes are proposed when you reach
+  out.
+- **New chat tool `aisharepoint_recommend_page_revision`.** During a chat, the assistant can propose a
+  concrete revision for a page and save it straight into the active project's workspace (current +
+  recommended), ready to include in outreach. Local operational state — not approval-gated.
+
+## 0.112.0 — 2026-07-07
+
+### Added — Confluence space dossier in the project workspace
+- **Point at a target Confluence space and aggregate it into the project workspace.** A new
+  **Build Confluence Space Dossier** command (Projects view item menu / command palette) walks the
+  whole space (via the resilient hierarchy walk), and for every page resolves the **owner**
+  (recency-weighted contributor, LDAP active-employee checked), **staleness**, and **data-quality**
+  flags (broken links, currency issues). It writes a durable, browsable dossier under the project
+  workspace — `space/<KEY>/inventory.md` + `inventory.json`, a by-**owners.md** view, and a
+  two-sheet **`dossier.xlsx`** (Pages + Owners) for export.
+- **Straight into the remediation backlog.** Every flagged page opens a work item (ADR-0045) carrying
+  the resolved owner and reason tags (`stale`/`ownerless`/`data-quality`), de-duplicated against
+  prior dossier runs for the space — so status, communications, and follow-ups are tracked and
+  restartable through the existing work-inventory tooling.
+- **Owner outreach drafts.** For each owner with flagged pages, a per-owner outreach draft
+  (`space/<KEY>/outreach/<owner>.md`) is generated listing exactly which of their pages need
+  attention — the starting point for coordinating communications and follow-ups. All pure rendering
+  is unit-tested; the aggregation reuses the existing ownership/currency/authority suite.
+
+## 0.111.0 — 2026-07-07
+
+### Added — project chat workspaces (follow along + restart starved chats)
+- **A project can now mirror its @sharepoint chats to a browsable workspace.** Because a Copilot
+  chat's own context window is small — and often hard-clamped in corporate tenants — the conversation
+  is now kept _outside_ the window: a rolling human-readable `SUMMARY.md`, a full per-session
+  transcript, and a `manifest.json` index, written to `.ai-sharepoint/projects/<project>/` (git-ignored
+  automatically; falls back to extension storage when no folder is open). This lets you follow a long
+  conversation, reuse what was already gathered, and **restart** a chat that ran out of context by
+  looking back at the workspace.
+- **Opt-in and safe.** Nothing is written until you run **Start Project Workspace** for a project
+  (Projects view item menu or command palette). After that, each turn under the active project is
+  mirrored automatically (redacted with the same rules as the diagnostics bundle). New commands:
+  **Open Project Workspace** and **Resume Chat from Project Workspace**; the Projects tree shows a
+  **Chat workspace: on/off** row per project.
+- Follow-ups (tracked): caching connected-context/tool results into the workspace for cross-chat reuse,
+  and seeding a fresh chat directly from the saved summary. See ADR-0048.
+
+## 0.110.4 — 2026-07-07
+
+### Added — interactive filtering in the Copilot Activity dashboard
+- **Click the "failed / cancelled" card to filter the whole dashboard to failures.** The daily chart
+  switches to failures-per-day (red), and the by-model and by-task tables switch to failure counts
+  with zero-failure rows dropped — so you can see exactly where the failures are concentrated. A
+  banner and a "show all activity" link (and the "requests this month" card) take you back. Cards are
+  keyboard-accessible; all filtering re-renders through the same locked-down, nonce'd webview (no new
+  scripts or network access).
+
+## 0.110.3 — 2026-07-07
+
+### Added — know the context limits up front
+- **Advertised context limits are now captured at startup (free).** On activation and whenever the
+  Copilot model set changes (e.g. you sign in later), the extension records each model's advertised
+  `maxInputTokens` — no LLM calls, no quota. So from the very first turn we budget prompts against
+  each model's real published ceiling instead of the conservative 8,192-token fallback.
+- **Opt-in, cached effective-limit probing.** Copilot often delivers less than the advertised limit,
+  so when a model is new — or its advertised limit changes — the extension now **offers** (never
+  silently runs) a one-time measurement of the real usable limit. It asks first because it spends a
+  little Copilot allowance, caches the result so each model is only asked about once, and re-offers
+  only if the advertised ceiling later drifts. Controlled by `aiSharePoint.context.offerProbeOnNewModels`
+  (on by default; "Don't ask again" turns it off). The manual **Probe Model Context Limit** command is
+  unchanged and now shares the same measurement path.
+
+### Added — see estimated cost in Copilot Activity
+- **Optional dollar amounts next to token counts.** Raw token totals are hard to relate to, so you can
+  now set your own token rate (`aiSharePoint.usage.tokenCostInputPerMillion`,
+  `…tokenCostOutputPerMillion`, `…currencySymbol`) and the Copilot Activity view + dashboard show an
+  estimated cost per model and for the month. It's strictly opt-in and clearly labelled as an estimate
+  from a rate **you** set — not a GitHub bill. Leave the rates at `0` and nothing changes.
+
+## 0.110.2 — 2026-07-07
+
+### Fixed — 500 errors when viewing a Confluence subtree
+- **The page-tree explorer now survives a Confluence 500 on large/deep subtrees.** Confluence's
+  `descendant/page` endpoint materializes the entire subtree server-side in one request (and, with
+  `expand=ancestors`, re-expands every node's breadcrumb), so on large or deeply-nested pages — and
+  on Data Center especially — it routinely answers **HTTP 500**. That endpoint is now a **fast path
+  only**: when it fails with a server/upstream error, the connector falls back to a bounded,
+  breadth-first walk over the cheap, stable single-level `child/page` endpoint, which never triggers
+  the whole-subtree blow-up, needs no expensive expand, and degrades per-branch (one restricted or
+  transiently-erroring page is skipped, not fatal). The rebuilt tree is identical to the fast path's.
+  A terminal error (bad credential, forbidden, not-found) is **not** retried this way — a different
+  endpoint won't fix it.
+- **Server errors surface a clear, actionable message instead of a bare "request failed".** A 500 /
+  502 / 504 from any REST connector now carries its own remediation ("the server, not your sign-in,
+  failed to handle this — retry, or narrow the scope to a smaller subtree/child page") rather than
+  falling through to the generic (network/credential) advice.
+
+## 0.110.1 — 2026-07-07
+
+### Fixed — misleading Microsoft-endpoint advice on non-Microsoft connectors
+- **A rejected or unreachable non-Microsoft connector no longer blames Microsoft.** The generic
+  fallback remediation for a `network` failure hardcoded "confirm login.microsoftonline.com /
+  graph.microsoft.com are allowlisted", and the `auth.failed` fallback assumed an Entra
+  tenant/client-ID problem. Both fire for **every** connector whose error carries no summary of its
+  own, so — for example — a Jira **basic username/password** connector that hit an un-fingerprinted
+  network failure while refreshing a rotated password reported that it "could not access Microsoft
+  Graph and login.microsoftonline.com", which is nonsense for basic auth. The un-fingerprinted
+  fallbacks are **host- and provider-agnostic by definition**, so they are now neutral: the network
+  advice points at "this connector's host", and the auth advice leads with re-entering the credential
+  and scopes the Entra guidance to Microsoft sign-in explicitly. Fingerprinted proxy/TLS-inspection
+  failures and Microsoft sign-in failures keep their own targeted guidance unchanged. A full audit
+  confirmed every connector's add-wizard method, refresh routing, and verify dispatch are correct and
+  that stored credentials are keyed per source (no cross-mapping) — the only defect was the advice
+  text.
+
 ## 0.110.0 — 2026-07-02
 
 ### Added — information-sprawl reconciliation suite

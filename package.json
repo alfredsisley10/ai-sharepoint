@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.110.0",
+  "version": "0.121.0",
   "release": {
     "channel": "standard"
   },
@@ -540,6 +540,30 @@
         "icon": "$(sparkle)"
       },
       {
+        "command": "aiSharePoint.startProjectWorkspace",
+        "title": "Start Project Workspace (mirror chats)",
+        "category": "%category%",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "aiSharePoint.openProjectWorkspace",
+        "title": "Open Project Workspace",
+        "category": "%category%",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "aiSharePoint.resumeFromWorkspace",
+        "title": "Resume Chat from Project Workspace",
+        "category": "%category%",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "aiSharePoint.buildSpaceDossier",
+        "title": "Build Confluence Space Dossier",
+        "category": "%category%",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "aiSharePoint.exportLessons",
         "title": "%aiSharePoint.exportLessons.title%",
         "category": "%category%",
@@ -737,7 +761,7 @@
       },
       {
         "view": "aiSharePoint.projectsView",
-        "contents": "Projects group reference sources & bookmarks, define **goals** and **instructions** for @sharepoint, and keep a separate **AI-managed context** the assistant learns over time.\n[Create Project](command:aiSharePoint.createProject)\nActivate a project to scope chat and the Reference Sources view to it."
+        "contents": "Projects group reference sources & bookmarks, define **goals** and **instructions** for @sharepoint, and keep a separate **AI-managed context** the assistant learns over time.\n[Create Project](command:aiSharePoint.createProject)\nActivate a project to scope chat and the Reference Sources view to it. Each project can also mirror its chats to a durable **workspace** (follow along, cache data, restart starved chats) and build a Confluence **space dossier** — owners, stale pages, and recommended revisions.\n[Build Confluence Space Dossier](command:aiSharePoint.buildSpaceDossier)"
       },
       {
         "view": "aiSharePoint.promptsView",
@@ -772,6 +796,109 @@
       }
     ],
     "languageModelTools": [
+      {
+        "name": "aisharepoint_build_space_dossier",
+        "displayName": "Build Confluence Space Dossier",
+        "toolReferenceName": "spBuildDossier",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(list-tree)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Aggregate a whole Confluence space into a durable dossier in the active project's workspace, for content cleanup. For every page it resolves the owner (recency-weighted contributor, LDAP active-employee checked), staleness, and data-quality flags (broken links, currency issues), then writes inventory.md/.json, owners.md, dossier.xlsx, per-owner outreach drafts, and per-page recommended-revision scaffolds, and opens a de-duplicated remediation work item for every flagged page. Requires an active project (the dossier is saved into its workspace). Use when the user asks to optimize/clean up/audit a Confluence space. It reads the whole space (can be many requests) but uses no Copilot premium requests. Args: spaceKey (required), optional source (the Confluence source alias/name if the project has more than one).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "spaceKey": {
+              "type": "string",
+              "description": "The Confluence space key to aggregate (Space Settings → Space Details → Key)."
+            },
+            "source": {
+              "type": "string",
+              "description": "Optional: the Confluence source alias or name, if the project has more than one."
+            }
+          },
+          "required": [
+            "spaceKey"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_start_project_workspace",
+        "displayName": "Start Project Workspace",
+        "toolReferenceName": "spStartWorkspace",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(new-folder)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Start a chat workspace for the active project so this conversation is mirrored to a durable, browsable folder (transcript + rolling SUMMARY + cached context) and survives the chat's context window (useful in context-limited corporate environments). Use when the user agrees to track/clean up a conversation. Requires an active project. No args.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "aisharepoint_workspace_summary",
+        "displayName": "Read Project Workspace Summary",
+        "toolReferenceName": "spWorkspaceSummary",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(book)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Read the active project's workspace SUMMARY (goals, session outline, and pointers to cached context) so you can RESUME a prior conversation without re-fetching everything. Use at the start of a resumed chat, or when the user asks where things stand. Requires an active project with a workspace. No args.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "aisharepoint_recommend_page_revision",
+        "displayName": "Recommend Page Revision",
+        "toolReferenceName": "spRecommendRevision",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(git-pull-request)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Save a RECOMMENDED revision for a flagged Confluence page into the active project's chat workspace, so it can be shown to the page owner during outreach. Use after reviewing a stale/inaccurate page to propose concrete updated content (or a clear summary of the specific changes). Writes space/<spaceKey>/pages/<pageId>/recommended.md next to the cached current content, and it is linked from the per-owner outreach draft. Requires an active project. Args: spaceKey, pageId, title, url, recommendation (proposed revised content or change summary, markdown), optional current (current page text for side-by-side).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "spaceKey": {
+              "type": "string",
+              "description": "Confluence space key the page is in."
+            },
+            "pageId": {
+              "type": "string",
+              "description": "The Confluence page id."
+            },
+            "title": {
+              "type": "string",
+              "description": "The page title."
+            },
+            "url": {
+              "type": "string",
+              "description": "The page URL."
+            },
+            "recommendation": {
+              "type": "string",
+              "description": "The proposed revised content, or a clear summary of the specific changes to make (markdown)."
+            },
+            "current": {
+              "type": "string",
+              "description": "Optional: the current page text, to store alongside for side-by-side comparison."
+            }
+          },
+          "required": [
+            "pageId",
+            "recommendation"
+          ]
+        }
+      },
       {
         "name": "aisharepoint_list_connections",
         "displayName": "List SharePoint Connections",
@@ -2731,6 +2858,11 @@
           "group": "navigation@2"
         },
         {
+          "command": "aiSharePoint.buildSpaceDossier",
+          "when": "view == aiSharePoint.projectsView",
+          "group": "navigation@3"
+        },
+        {
           "command": "aiSharePoint.addPrompt",
           "when": "view == aiSharePoint.promptsView",
           "group": "navigation@1"
@@ -2747,6 +2879,31 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "aiSharePoint.openProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.startProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "9_workspace@1"
+        },
+        {
+          "command": "aiSharePoint.openProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "9_workspace@2"
+        },
+        {
+          "command": "aiSharePoint.resumeFromWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "9_workspace@3"
+        },
+        {
+          "command": "aiSharePoint.buildSpaceDossier",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "9_workspace@4"
+        },
         {
           "command": "aiSharePoint.readFileSource",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-file",
@@ -3302,6 +3459,18 @@
             ]
           },
           {
+            "id": "cleanupSpace",
+            "title": "%walkthrough.aiSharePoint.gettingStarted.step.cleanupSpace.title%",
+            "description": "%walkthrough.aiSharePoint.gettingStarted.step.cleanupSpace.description%",
+            "media": {
+              "image": "media/walkthrough/projects.svg",
+              "altText": "Track and clean up a Confluence space in a project workspace"
+            },
+            "completionEvents": [
+              "onCommand:aiSharePoint.buildSpaceDossier"
+            ]
+          },
+          {
             "id": "activity",
             "title": "%walkthrough.aiSharePoint.gettingStarted.step.activity.title%",
             "description": "%walkthrough.aiSharePoint.gettingStarted.step.activity.description%",
@@ -3389,6 +3558,12 @@
           "order": 10.5,
           "markdownDescription": "%config.aiSharePoint.lessons.capture.markdownDescription%"
         },
+        "aiSharePoint.lessons.applyLearned": {
+          "type": "boolean",
+          "default": true,
+          "order": 10.6,
+          "markdownDescription": "Inject the **learned heuristics** you've captured (see `aiSharePoint.lessons.capture`) back into @sharepoint's prompt, so past self-corrections continuously improve future answers — relevance-ranked by your connected sources and trimmed first under context pressure. Review or prune them with **Review Lessons Learned**. Turn off to keep capturing without applying them."
+        },
         "aiSharePoint.sync.allowedRemoteHosts": {
           "type": "array",
           "items": {
@@ -3451,6 +3626,39 @@
           "scope": "machine",
           "order": 14,
           "markdownDescription": "%config.aiSharePoint.context.autoProbeOnFirstUse.markdownDescription%"
+        },
+        "aiSharePoint.context.offerProbeOnNewModels": {
+          "type": "boolean",
+          "default": true,
+          "order": 15,
+          "markdownDescription": "When a Copilot model first appears — or its **advertised** context limit changes — offer to measure the model's **real** usable limit (Copilot often delivers less than the published `maxInputTokens`). Measuring sends a few short test prompts and uses a little of your Copilot allowance; the result is cached, so each model is only ever asked about once. Advertised limits are always captured for free regardless of this setting. Turn off to never be prompted (you can still run **AI SharePoint: Probe Model Context Limit** manually)."
+        },
+        "aiSharePoint.usage.pricePerPremiumRequest": {
+          "type": "number",
+          "default": 0.04,
+          "minimum": 0,
+          "order": 29,
+          "markdownDescription": "Dollar cost of one **Copilot premium request**, used to estimate spend in the **Copilot Activity** view (requests × the model's published premium-request multiplier × this price). Defaults to GitHub's published **$0.04**/premium-request overage rate, so a dollar estimate shows out of the box. It is an **estimate** at the overage rate — your plan's monthly premium-request allowance means the real charge may be lower (GitHub billing is authoritative). Set to `0` to hide it."
+        },
+        "aiSharePoint.usage.tokenCostInputPerMillion": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "order": 30,
+          "markdownDescription": "Optional — your cost per **1,000,000 input tokens** (e.g. if you price by the underlying model's token API rather than Copilot premium requests). When this or the output rate is non-zero, the **Copilot Activity** view also shows a token-based cost next to the locally-measured token counts. An estimate from a rate **you** enter — not your GitHub bill. Leave at `0` to hide."
+        },
+        "aiSharePoint.usage.tokenCostOutputPerMillion": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "order": 31,
+          "markdownDescription": "Your cost per **1,000,000 output tokens**, in the currency set below. See `aiSharePoint.usage.tokenCostInputPerMillion`. Leave at `0` to hide cost."
+        },
+        "aiSharePoint.usage.currencySymbol": {
+          "type": "string",
+          "default": "$",
+          "order": 32,
+          "markdownDescription": "Currency symbol shown in front of estimated costs in the Copilot Activity view (e.g. `$`, `£`, `€`)."
         },
         "aiSharePoint.proxy.mode": {
           "type": "string",

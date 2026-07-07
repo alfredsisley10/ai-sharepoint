@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ModelLimit, onOverflow, onSuccess, resolveLimit } from "../core/contextBudget";
+import { ModelLimit, onAdvertised, onOverflow, onSuccess, resolveLimit, mergeModelLimit } from "../core/contextBudget";
 
 /**
  * The "memory" half of effective-context probing (#3): each model's learned
@@ -30,6 +30,18 @@ export class ModelLimitsStore {
     return resolveLimit(this.all()[key], advertised);
   }
 
+  /** Record a model's advertised context ceiling with no measurement (free, no
+   *  Copilot quota). Returns true if the advertised value changed from what we
+   *  had — the drift signal that makes a re-probe worth offering. */
+  async recordAdvertised(key: string, advertised: number | undefined): Promise<boolean> {
+    const all = this.all();
+    const { next, changed } = onAdvertised(all[key], advertised, this.now());
+    if (!changed && all[key]) return false; // nothing new to persist
+    all[key] = next;
+    await this.memento.update(KEY, all);
+    return changed;
+  }
+
   async recordSuccess(key: string, advertised: number | undefined, inputTokens: number): Promise<void> {
     const all = this.all();
     all[key] = onSuccess(all[key], advertised, inputTokens, this.now());
@@ -49,5 +61,17 @@ export class ModelLimitsStore {
 
   list(): Array<{ key: string } & ModelLimit> {
     return Object.entries(this.all()).map(([key, v]) => ({ key, ...v }));
+  }
+
+  /** Merge imported (shared) per-model limits into the store, conservatively.
+   *  Returns how many entries were folded in. */
+  async importLimits(entries: Array<{ key: string } & ModelLimit>): Promise<number> {
+    if (!entries.length) return 0;
+    const all = this.all();
+    for (const { key, ...rest } of entries) {
+      all[key] = mergeModelLimit(all[key], rest, this.now());
+    }
+    await this.memento.update(KEY, all);
+    return entries.length;
   }
 }

@@ -9,9 +9,13 @@ import { ContextSourcesStore } from "../context/sourcesStore";
 import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
+import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
+import { looksLikeConfluenceOptimization } from "./intent";
+import { computeFollowups } from "./followups";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { LessonsStore } from "../diagnostics/lessonsStore";
+import { lessonsContextBlock } from "../diagnostics/lessons";
 import { MemoryStore } from "../context/memoryStore";
 import { memoryContextBlock } from "../context/memory";
 import { BlockedTermsStore } from "../diagnostics/blockedTermsStore";
@@ -90,6 +94,15 @@ const INSTRUCTIONS = [
   "remove-from-search and move are approval-gated writes within the connector's scope;",
   "the review/owner tools are reads. Owner-ACTIVITY (is the person still active) needs an LDAP/M365",
   "directory that isn't wired yet — say so rather than asserting someone is inactive.",
+  "PROJECT WORKSPACE + SPACE DOSSIER (the durable, restartable home for a cleanup): when the user asks",
+  "to optimize / clean up / audit a whole Confluence SPACE, drive it through the workspace tools rather",
+  "than reviewing pages one-by-one. If no workspace is tracking the chat yet, offer start_project_workspace",
+  "(needs an active project). Then call build_space_dossier with the spaceKey — it aggregates the whole",
+  "space (owner + staleness + data-quality per page), writes inventory/owners/xlsx + per-owner outreach",
+  "drafts + per-page recommended-revision scaffolds into the workspace, and opens a work item per flagged",
+  "page. Follow up with list_work_items, recommend_page_revision (save a concrete proposed fix, shown to",
+  "the owner in outreach), and draft_communication. Because it's all persisted, the cleanup survives the",
+  "chat's context window — use workspace_summary to resume a starved/earlier conversation.",
   "For free-form DATABASE questions ('records owned by X'), call db_schema with a topic first:",
   "it returns the tables/columns whose semantic tags match (e.g. group_cio tagged ownership),",
   "then write a SELECT against exactly those columns and run it with search_context. db_schema",
@@ -187,6 +200,7 @@ interface ChatDeps {
   proxyTerms: BlockedTermsStore;
   modelLimits: ModelLimitsStore;
   interactions: InteractionCache;
+  chatWorkspace: ChatWorkspaceStore;
   log: Logger;
   now: () => string;
 }
@@ -205,6 +219,10 @@ const LESSONS_NUDGE = [
   "in it — write it in the abstract. Capture sparingly (durable insight, not per-turn detail); it",
   "records to a local, anonymized, user-reviewable ledger and sends nothing.",
 ].join(" ");
+
+/** Per-session dedup so the "track this cleanup?" workspace offer appears at most
+ *  once per project (keyed by project id, or "no-project"). */
+const offeredWorkspace = new Set<string>();
 
 export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
   const handler: vscode.ChatRequestHandler = async (
@@ -298,12 +316,20 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
     "icon.png",
   );
   participant.followupProvider = {
-    provideFollowups() {
-      return [
-        { prompt: "What lists and pages does my site have?", label: "Explore my site" },
-        { prompt: "Suggest a structure for a product-management site", label: "Plan a site" },
-        { prompt: "/usage", label: "Check Copilot activity" },
-      ];
+    provideFollowups(_result, context) {
+      const active = deps.projects.active();
+      const scoped = deps.projects.scope(deps.sources.list());
+      const lastPrompt = [...context.history]
+        .reverse()
+        .find((t): t is vscode.ChatRequestTurn => t instanceof vscode.ChatRequestTurn)?.prompt;
+      return computeFollowups({
+        ...(active
+          ? { project: { name: active.name, hasGoals: Boolean(active.goals), workspaceEnabled: deps.chatWorkspace.enabled(active.id) } }
+          : {}),
+        sourceTypes: scoped.map((s) => s.type),
+        hasSites: deps.sites.list().length > 0,
+        ...(lastPrompt ? { lastPrompt } : {}),
+      });
     },
   };
   return participant;
@@ -446,6 +472,15 @@ async function answerWithModel(
   const contextBlock = await buildSiteContext(deps, request, stream);
   const history = formatHistory(context);
   const activeProject = deps.projects.active();
+  // A project chat workspace mirrors each turn to disk (opt-in per project) so
+  // the conversation survives the chat's small context window. An empty history
+  // marks the first turn of a new conversation → a fresh session file. The
+  // conversation key (this chat's opening prompt) lets two chats open against the
+  // same project append to their OWN session instead of the most recent one.
+  const isFirstConversationTurn = context.history.length === 0;
+  const firstReqPrompt = context.history
+    .find((t): t is vscode.ChatRequestTurn => t instanceof vscode.ChatRequestTurn)?.prompt;
+  const conversationKey = (firstReqPrompt ?? request.prompt).slice(0, 200);
   // Project context: USER-DEFINED (goals + instructions) and AI-MANAGED
   // (learned across sessions) are presented as separate, clearly-labeled blocks
   // so the model never conflates them — and as separate budget sections (#2/#3)
@@ -470,6 +505,13 @@ async function answerWithModel(
     ? `${activeProject.goals || activeProject.instructions ? "" : `\n## Project: ${activeProject.name}`}\n### AI-managed memory — learnings you saved in earlier sessions (NOT user-authored; add via remember_project_context, correct/remove via forget_project_context, with the user's approval)\n${activeProject.aiContext}`
     : "";
   const lessonsOn = deps.lessons.enabled();
+  // RECALL the other half of the self-improvement loop: inject the learned
+  // heuristics captured in earlier sessions as a (droppable) prompt section so
+  // they actually change behavior — relevance-ranked by the scoped source types.
+  // On by default whenever lessons exist; the user can turn recall off.
+  const applyLearned = vscode.workspace.getConfiguration("aiSharePoint").get<boolean>("lessons.applyLearned", true);
+  const scopedTypes = deps.projects.scope(deps.sources.list()).map((s) => s.type);
+  const learnedBlock = applyLearned ? lessonsContextBlock(deps.lessons.list(), { relevantTags: scopedTypes }) : "";
   // Proxy-block avoidance (#4): a system note so the model avoids blocked words
   // in its REPLY, plus (below) defang/warn on the outgoing prompt itself.
   const proxyMode = deps.proxyTerms.mode();
@@ -489,6 +531,7 @@ async function answerWithModel(
     })(),
     ...(contextBlock ? [{ label: "connected context", text: `\n## Connected context\n${contextBlock}`, priority: 50 }] : []),
     ...(projectUserBlock ? [{ label: "project goals/instructions", text: projectUserBlock, priority: 40 }] : []),
+    ...(learnedBlock ? [{ label: "learned heuristics", text: `\n${learnedBlock}`, priority: 35 }] : []),
     ...(projectAiBlock ? [{ label: "project memory", text: projectAiBlock, priority: 30 }] : []),
     ...(history ? [{ label: "conversation history", text: `\n## Conversation so far\n${history}`, priority: 20 }] : []),
     { label: "user request", text: `\n## User request\n${request.prompt}`, priority: 100, required: true },
@@ -594,6 +637,8 @@ async function answerWithModel(
     .catch(() => undefined);
 
   let sawText = false;
+  let fullReply = ""; // accumulates the visible answer across tool rounds (workspace mirror)
+  const turnKnowledge: Array<{ name: string; detail: string }> = []; // tool results for the workspace cache
   let overflowRetries = 0;
   let transientRetries = 0;
   for (let round = 0; ; round++) {
@@ -620,6 +665,7 @@ async function answerWithModel(
       for await (const part of response.stream) {
         if (part instanceof vscode.LanguageModelTextPart) {
           text += part.value;
+          fullReply += part.value;
           sawText = true;
           stream.markdown(part.value);
         } else if (part instanceof vscode.LanguageModelToolCallPart) {
@@ -734,6 +780,7 @@ async function answerWithModel(
         // Completion status: what came back, not just what was attempted —
         // "Search of CMDB: 12 result(s) — continuing…" (pilot).
         stream.progress(describeToolResult(call.name, call.input, rendered));
+        if (rendered.trim()) turnKnowledge.push({ name: call.name, detail: rendered });
         resultParts.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
       } catch (err) {
         emitWire("tool", "✗", `${call.name} — ${redactError(err).message}`);
@@ -753,6 +800,44 @@ async function answerWithModel(
 
   if (!sawText) {
     stream.markdown("_(The model returned no text — try rephrasing.)_");
+  }
+  // Mirror the completed turn into the active project's chat workspace (a no-op
+  // unless one has been started for the project). Best-effort — a workspace
+  // write must never break or delay the chat reply.
+  if (activeProject && deps.chatWorkspace.enabled(activeProject.id)) {
+    await deps.chatWorkspace
+      .recordTurn(
+        activeProject,
+        {
+          at: deps.now(),
+          model: model.name,
+          prompt: request.prompt,
+          reply: fullReply,
+          ...(contextBlock?.trim() ? { context: contextBlock } : {}),
+          ...(turnKnowledge.length ? { toolResults: turnKnowledge } : {}),
+        },
+        isFirstConversationTurn,
+        conversationKey,
+      )
+      .catch(() => undefined);
+  }
+  // If the user is asking to optimize/clean up a Confluence space and this
+  // conversation isn't being tracked yet, offer a project workspace (durable,
+  // cached, restartable) — once per project per session so it never nags.
+  const tracked = activeProject ? deps.chatWorkspace.enabled(activeProject.id) : false;
+  if (!tracked && looksLikeConfluenceOptimization(request.prompt)) {
+    const key = activeProject?.id ?? "no-project";
+    if (!offeredWorkspace.has(key)) {
+      offeredWorkspace.add(key);
+      stream.markdown(
+        "\n\n---\n\n💡 **Track this cleanup?** I can capture this conversation in a project workspace — a durable folder that mirrors the chat, caches page data, and lets you build a Confluence **space dossier** (owners, stale/inaccurate pages, recommended revisions) and resume later if this chat runs out of context.",
+      );
+      stream.button(
+        activeProject
+          ? { command: "aiSharePoint.startProjectWorkspace", title: "📁 Track this in the project workspace", arguments: [activeProject] }
+          : { command: "aiSharePoint.createProject", title: "📁 Create a project to track this" },
+      );
+    }
   }
   // The turn completed — clear the interrupted-restart checkpoint.
   await deps.interactions.finish("completed").catch(() => undefined);
