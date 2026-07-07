@@ -9,6 +9,7 @@ import { ContextSourcesStore } from "../context/sourcesStore";
 import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
+import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { LessonsStore } from "../diagnostics/lessonsStore";
@@ -187,6 +188,7 @@ interface ChatDeps {
   proxyTerms: BlockedTermsStore;
   modelLimits: ModelLimitsStore;
   interactions: InteractionCache;
+  chatWorkspace: ChatWorkspaceStore;
   log: Logger;
   now: () => string;
 }
@@ -446,6 +448,10 @@ async function answerWithModel(
   const contextBlock = await buildSiteContext(deps, request, stream);
   const history = formatHistory(context);
   const activeProject = deps.projects.active();
+  // A project chat workspace mirrors each turn to disk (opt-in per project) so
+  // the conversation survives the chat's small context window. An empty history
+  // marks the first turn of a new conversation → a fresh session file.
+  const isFirstConversationTurn = context.history.length === 0;
   // Project context: USER-DEFINED (goals + instructions) and AI-MANAGED
   // (learned across sessions) are presented as separate, clearly-labeled blocks
   // so the model never conflates them — and as separate budget sections (#2/#3)
@@ -594,6 +600,7 @@ async function answerWithModel(
     .catch(() => undefined);
 
   let sawText = false;
+  let fullReply = ""; // accumulates the visible answer across tool rounds (workspace mirror)
   let overflowRetries = 0;
   let transientRetries = 0;
   for (let round = 0; ; round++) {
@@ -620,6 +627,7 @@ async function answerWithModel(
       for await (const part of response.stream) {
         if (part instanceof vscode.LanguageModelTextPart) {
           text += part.value;
+          fullReply += part.value;
           sawText = true;
           stream.markdown(part.value);
         } else if (part instanceof vscode.LanguageModelToolCallPart) {
@@ -753,6 +761,18 @@ async function answerWithModel(
 
   if (!sawText) {
     stream.markdown("_(The model returned no text — try rephrasing.)_");
+  }
+  // Mirror the completed turn into the active project's chat workspace (a no-op
+  // unless one has been started for the project). Best-effort — a workspace
+  // write must never break or delay the chat reply.
+  if (activeProject && deps.chatWorkspace.enabled(activeProject.id)) {
+    await deps.chatWorkspace
+      .recordTurn(
+        activeProject,
+        { at: deps.now(), model: model.name, prompt: request.prompt, reply: fullReply },
+        isFirstConversationTurn,
+      )
+      .catch(() => undefined);
   }
   // The turn completed — clear the interrupted-restart checkpoint.
   await deps.interactions.finish("completed").catch(() => undefined);

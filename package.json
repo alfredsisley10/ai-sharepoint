@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.110.4",
+  "version": "0.111.0",
   "release": {
     "channel": "standard"
   },
@@ -538,6 +538,24 @@
         "title": "%aiSharePoint.manageProjectMemory.title%",
         "category": "%category%",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "aiSharePoint.startProjectWorkspace",
+        "title": "Start Project Workspace (mirror chats)",
+        "category": "%category%",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "aiSharePoint.openProjectWorkspace",
+        "title": "Open Project Workspace",
+        "category": "%category%",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "aiSharePoint.resumeFromWorkspace",
+        "title": "Resume Chat from Project Workspace",
+        "category": "%category%",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "aiSharePoint.exportLessons",
@@ -2747,6 +2765,26 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "aiSharePoint.openProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.startProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "9_workspace@1"
+        },
+        {
+          "command": "aiSharePoint.openProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "9_workspace@2"
+        },
+        {
+          "command": "aiSharePoint.resumeFromWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
+          "group": "9_workspace@3"
+        },
         {
           "command": "aiSharePoint.readFileSource",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-file",

@@ -138,6 +138,7 @@ import {
   AI_CONTEXT_MAX_CHARS,
 } from "./context/projectsStore";
 import { ProjectsTreeProvider } from "./ui/projectsView";
+import { ChatWorkspaceStore } from "./context/chatWorkspaceStore";
 import { registerProjectTools } from "./chat/projectTools";
 import {
   enumeratePowerBiDatasets,
@@ -460,6 +461,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const catalogs = new CatalogStore(context.globalStorageUri);
   void catalogs.preload();
   const projects = new ProjectsStore(context.globalState);
+  const chatWorkspace = new ChatWorkspaceStore(context.globalState, context.globalStorageUri, nowIso);
   const memory = new MemoryStore(context.globalState);
   const workItems = new WorkItemsStore(context.globalState);
   // Write the remediation inventory to files (oversight XLSX + Work Items CSV +
@@ -822,7 +824,7 @@ export function activate(context: vscode.ExtensionContext): void {
     blockedTerms,
     lessons,
   );
-  const projectsProvider = new ProjectsTreeProvider(projects, contextSources);
+  const projectsProvider = new ProjectsTreeProvider(projects, contextSources, chatWorkspace);
   const projectsView = tryCreateTreeView("aiSharePoint.projectsView", projectsProvider);
   if (projectsView) context.subscriptions.push(projectsView, projectsProvider);
   const promptsProvider = new PromptsTreeProvider(prompts, sites, contextSources, projects);
@@ -953,6 +955,7 @@ export function activate(context: vscode.ExtensionContext): void {
         proxyTerms: blockedTerms,
         modelLimits,
         interactions,
+        chatWorkspace,
         log,
         now: nowIso,
       }),
@@ -6656,6 +6659,88 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showInformationMessage(`Removed "${label}" from project memory.`);
       }
     }
+  });
+
+  // Project chat workspaces (ADR-0048): a browsable, on-disk mirror of the
+  // @sharepoint conversations held under a project, so a chat survives its small
+  // (often corporate-clamped) context window — follow along, reuse gathered
+  // context, and restart a starved conversation from the saved summary.
+  const resolveProjectArg = async (arg: unknown): Promise<Project | undefined> => {
+    if (arg && typeof arg === "object" && "id" in arg && "sourceIds" in arg) {
+      return projects.get((arg as Project).id) ?? (arg as Project);
+    }
+    const active = projects.active();
+    if (active) return active;
+    const all = projects.list();
+    if (all.length === 0) {
+      void vscode.window.showInformationMessage("No projects yet — create one in the Projects view first.");
+      return undefined;
+    }
+    const pick = await vscode.window.showQuickPick(
+      all.map((p) => ({ label: p.name, description: p.description, id: p.id })),
+      { title: "Select a project", ignoreFocusOut: true },
+    );
+    return pick ? projects.get(pick.id) : undefined;
+  };
+
+  register("aiSharePoint.startProjectWorkspace", async (arg) => {
+    const project = await resolveProjectArg(arg);
+    if (!project) return;
+    if (chatWorkspace.enabled(project.id)) {
+      const open = await vscode.window.showInformationMessage(
+        `"${project.name}" already has a chat workspace.`,
+        "Open Workspace",
+      );
+      if (open === "Open Workspace") await vscode.commands.executeCommand("aiSharePoint.openProjectWorkspace", project);
+      return;
+    }
+    const base = await chatWorkspace.create(project);
+    telemetry.record("project.workspace", { action: "start" });
+    const choice = await vscode.window.showInformationMessage(
+      `Started a chat workspace for "${project.name}". While this project is active, each @sharepoint turn is mirrored to ${base.fsPath} (transcript + rolling SUMMARY) so you can follow along and restart chats that run out of context. Chat content stays local and is git-ignored.`,
+      "Open SUMMARY",
+      "Reveal Folder",
+    );
+    if (choice === "Open SUMMARY") {
+      await vscode.commands.executeCommand("markdown.showPreview", chatWorkspace.summaryUri(project)).then(undefined, () => undefined);
+    } else if (choice === "Reveal Folder") {
+      await vscode.commands.executeCommand("revealInExplorer", base).then(undefined, () => undefined);
+    }
+  });
+
+  register("aiSharePoint.openProjectWorkspace", async (arg) => {
+    const project = await resolveProjectArg(arg);
+    if (!project) return;
+    if (!chatWorkspace.enabled(project.id)) {
+      const start = await vscode.window.showInformationMessage(
+        `"${project.name}" has no chat workspace yet.`,
+        "Start Workspace",
+      );
+      if (start === "Start Workspace") await vscode.commands.executeCommand("aiSharePoint.startProjectWorkspace", project);
+      return;
+    }
+    await vscode.commands
+      .executeCommand("markdown.showPreview", chatWorkspace.summaryUri(project))
+      .then(undefined, async () => {
+        const doc = await vscode.workspace.openTextDocument(chatWorkspace.summaryUri(project));
+        await vscode.window.showTextDocument(doc);
+      });
+  });
+
+  register("aiSharePoint.resumeFromWorkspace", async (arg) => {
+    const project = await resolveProjectArg(arg);
+    if (!project) return;
+    if (!chatWorkspace.enabled(project.id)) {
+      void vscode.window.showInformationMessage(
+        `"${project.name}" has no chat workspace to resume from. Start one with "Start Project Workspace".`,
+      );
+      return;
+    }
+    telemetry.record("project.workspace", { action: "resume" });
+    await vscode.commands.executeCommand("aiSharePoint.openProjectWorkspace", project);
+    void vscode.window.showInformationMessage(
+      `Skim "${project.name}"'s SUMMARY, then continue in a new @sharepoint chat — keep this project active and its saved context carries the thread even if the earlier chat ran out of room.`,
+    );
   });
 
   // #3 — show what @sharepoint has learned about each model's usable context.

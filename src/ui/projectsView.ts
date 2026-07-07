@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
 import { ProjectsStore } from "../context/projectsStore";
 import { ContextSourcesStore } from "../context/sourcesStore";
+import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
 import { Project } from "../context/types";
 
 type Row =
   | { kind: "project"; project: Project }
-  | { kind: "detail"; project: Project; field: "goals" | "instructions" | "ai" | "sources" };
+  | { kind: "detail"; project: Project; field: "goals" | "instructions" | "ai" | "sources" | "workspace" };
 
 /**
  * Projects view: the discoverable home for creating, switching, and managing
@@ -20,8 +21,10 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<Row> {
   constructor(
     private readonly projects: ProjectsStore,
     private readonly sources: ContextSourcesStore,
+    private readonly chatWorkspace?: ChatWorkspaceStore,
   ) {
     projects.onDidChange(() => this.emitter.fire());
+    chatWorkspace?.onDidChange(() => this.emitter.fire());
   }
 
   getChildren(row?: Row): Row[] {
@@ -29,7 +32,7 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<Row> {
       return this.projects.list().map((project) => ({ kind: "project" as const, project }));
     }
     if (row.kind === "project") {
-      return (["goals", "instructions", "ai", "sources"] as const).map((field) => ({
+      return (["goals", "instructions", "ai", "sources", "workspace"] as const).map((field) => ({
         kind: "detail" as const,
         project: row.project,
         field,
@@ -100,6 +103,23 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<Row> {
           command: "aiSharePoint.manageProjectAiContext",
           title: "Manage AI Context",
           arguments: [p.id],
+        };
+        return item;
+      }
+      case "workspace": {
+        const on = this.chatWorkspace?.enabled(p.id) ?? false;
+        const item = new vscode.TreeItem(`Chat workspace: ${on ? "on" : "off"}`);
+        item.iconPath = new vscode.ThemeIcon(on ? "folder-active" : "new-folder");
+        item.tooltip = new vscode.MarkdownString(
+          on
+            ? "This project mirrors each @sharepoint chat to a browsable folder (transcript + rolling SUMMARY) so a conversation survives the chat's context window. Click to open the SUMMARY."
+            : "Off. Start a chat workspace to save this project's conversations (follow along + restart chats that run out of context). Click to start.",
+        );
+        item.contextValue = on ? "project-workspace-on" : "project-workspace-off";
+        item.command = {
+          command: on ? "aiSharePoint.openProjectWorkspace" : "aiSharePoint.startProjectWorkspace",
+          title: on ? "Open Workspace" : "Start Workspace",
+          arguments: [p],
         };
         return item;
       }

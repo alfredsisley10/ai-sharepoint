@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.111.0 — 2026-07-07
+
+### Added — project chat workspaces (follow along + restart starved chats)
+- **A project can now mirror its @sharepoint chats to a browsable workspace.** Because a Copilot
+  chat's own context window is small — and often hard-clamped in corporate tenants — the conversation
+  is now kept _outside_ the window: a rolling human-readable `SUMMARY.md`, a full per-session
+  transcript, and a `manifest.json` index, written to `.ai-sharepoint/projects/<project>/` (git-ignored
+  automatically; falls back to extension storage when no folder is open). This lets you follow a long
+  conversation, reuse what was already gathered, and **restart** a chat that ran out of context by
+  looking back at the workspace.
+- **Opt-in and safe.** Nothing is written until you run **Start Project Workspace** for a project
+  (Projects view item menu or command palette). After that, each turn under the active project is
+  mirrored automatically (redacted with the same rules as the diagnostics bundle). New commands:
+  **Open Project Workspace** and **Resume Chat from Project Workspace**; the Projects tree shows a
+  **Chat workspace: on/off** row per project.
+- Follow-ups (tracked): caching connected-context/tool results into the workspace for cross-chat reuse,
+  and seeding a fresh chat directly from the saved summary. See ADR-0048.
+
 ## 0.110.4 — 2026-07-07
 
 ### Added — interactive filtering in the Copilot Activity dashboard
