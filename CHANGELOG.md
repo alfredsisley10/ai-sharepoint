@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.126.0 — 2026-07-07
+
+### Security & compatibility — code-review remediation (batch 4)
+- **Prompt-injection containment for fetched content.** Everything a tool returns (page/document bodies,
+  search snippets, list items, tickets) is other people's data and can carry text crafted to hijack the
+  assistant. Search results, fetched items, and whole-site content scans are now fenced in an
+  `<<<UNTRUSTED … >>>` block (embedded markers are neutralized so content can't forge the boundary), and
+  the system prompt instructs the model to treat anything a tool returns as data, never as instructions —
+  and to refuse and report embedded directives while continuing the user's original request.
+- **Windows reserved device names are escaped in generated paths.** A project slug or page-folder name that
+  landed on a DOS device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9) — or ended in a dot/space — was
+  unwritable on Windows while fine on macOS/Linux. Such names are now minimally escaped, shared by the
+  workspace slug and the dossier page-folder logic.
+- **Runtime compatibility pinned to VS Code's Node.** `@types/node` is pinned to `~20` (VS Code 1.95 runs
+  Node 20 via Electron) instead of `^26`, so code can't typecheck against Node APIs that don't exist at
+  runtime; `engines.node` now declares `>=20`.
+- **Microsoft correlation IDs are captured for support.** Graph/SharePoint failures now include the
+  server's `request-id` / `client-request-id` trace tokens — exactly what Microsoft support asks for — in a
+  labeled form that is exempt from GUID redaction (every other GUID stays redacted).
+- **The diagnostics Markdown companion is leak-scanned too.** The export gate scanned only the JSON; it now
+  scans the human-readable `.md` (which reshapes fields) with the same block-severity abort, since it's
+  written to disk as well.
+
 ## 0.125.0 — 2026-07-07
 
 ### Reliability — code-review remediation (batch 3)

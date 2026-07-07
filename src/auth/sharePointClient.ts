@@ -1,5 +1,6 @@
 import { SharePointAuthProvider } from "./types";
 import { AppError } from "../core/errors";
+import { msCorrelationSuffix } from "../core/msCorrelation";
 import { detectProxyInterference, detectProxyFromError, hostOf } from "../core/networkDiagnostics";
 import { wireEnabled, emitWire, capDetail, safeJson, safeUrl } from "../core/wireLog";
 import { SpEditor, fetchSharePointPageEditors } from "./sharePointOwnership";
@@ -388,7 +389,7 @@ export class SharePointClient {
                 ? "graph.throttled"
                 : "graph.error";
       throw new AppError(
-        `Graph request failed (${res.status} ${res.statusText}): ${errBody.slice(0, 500)}`,
+        `Graph request failed (${res.status} ${res.statusText}): ${errBody.slice(0, 500)}${msCorrelationSuffix(res.headers)}`,
         code,
       );
     }

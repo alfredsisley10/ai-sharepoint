@@ -7,6 +7,7 @@ import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
 import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { describeColumn, summarizeCanvas, summarizePageContent, PageContentSummary } from "./siteInspect";
+import { wrapUntrusted } from "./untrusted";
 import { resolveSharePointOwners } from "../auth/sharePointOwnership";
 import { UserDirectory, activeFromDirectory, contactOf } from "../context/userDirectory";
 
@@ -366,26 +367,29 @@ export function registerLanguageModelTools(
           for (const pg of scanned)
             for (const wp of pg.webParts)
               histogram.set(wp.type, (histogram.get(wp.type) ?? 0) + wp.count);
-          return JSON.stringify(
-            {
-              site: { name: site.displayName, url: site.webUrl, role: conn.role },
-              pageCount: pages.length,
-              scannedPages: scanned.length,
-              ...(pages.length > cap
-                ? {
-                    truncated: pages.length - cap,
-                    note: `Only the first ${cap} pages were scanned; call again with maxPages to widen.`,
-                  }
-                : {}),
-              webPartHistogram: [...histogram.entries()]
-                .sort((a, b) => b[1] - a[1])
-                .map(([type, count]) => ({ type, count })),
-              pages: scanned,
-              analysisHint:
-                "Review ACROSS pages: DUPLICATIVE content (near-identical headings/text/links, or several pages on one topic), OUT-OF-DATE content (stale lastModified, superseded topics, dead-looking links), and CONFUSING overlap. Cite page titles + urls in every finding and propose concrete cleanup (merge, archive, update, or delete).",
-            },
-            null,
-            2,
+          return wrapUntrusted(
+            `scanned content of site "${site.displayName}"`,
+            JSON.stringify(
+              {
+                site: { name: site.displayName, url: site.webUrl, role: conn.role },
+                pageCount: pages.length,
+                scannedPages: scanned.length,
+                ...(pages.length > cap
+                  ? {
+                      truncated: pages.length - cap,
+                      note: `Only the first ${cap} pages were scanned; call again with maxPages to widen.`,
+                    }
+                  : {}),
+                webPartHistogram: [...histogram.entries()]
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([type, count]) => ({ type, count })),
+                pages: scanned,
+                analysisHint:
+                  "Review ACROSS pages: DUPLICATIVE content (near-identical headings/text/links, or several pages on one topic), OUT-OF-DATE content (stale lastModified, superseded topics, dead-looking links), and CONFUSING overlap. Cite page titles + urls in every finding and propose concrete cleanup (merge, archive, update, or delete).",
+              },
+              null,
+              2,
+            ),
           );
         },
       ),

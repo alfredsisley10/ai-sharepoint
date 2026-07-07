@@ -1,4 +1,5 @@
 import { Sheet } from "./files/sheet";
+import { avoidReservedName } from "./files/safeName";
 import { NewWorkItem } from "./workItems";
 
 /**
@@ -61,7 +62,7 @@ export const STALE_DAYS = 180;
 /** Filesystem-safe folder name for a page id — the SINGLE definition shared by
  *  the on-disk writer and the outreach link so their paths never diverge. */
 export function pageFolderName(id: string): string {
-  return id.replace(/[^A-Za-z0-9._-]/g, "-") || "page";
+  return avoidReservedName(id.replace(/[^A-Za-z0-9._-]/g, "-") || "page");
 }
 
 export interface PageFlags {

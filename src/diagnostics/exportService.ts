@@ -70,8 +70,12 @@ export class DiagnosticsExportService {
     const json = JSON.stringify(bundle, null, 2);
     const markdown = bundleToMarkdown(bundle);
 
-    // Defense-in-depth gate: refuse to export anything secret-shaped.
-    const findings = scanForLeaks(json, [bundle.anonymousInstallId]);
+    // Defense-in-depth gate: refuse to export anything secret-shaped. Scan
+    // BOTH artifacts — the JSON AND the Markdown companion — since the renderer
+    // reshapes fields (unescaping, concatenation, headings) and could surface a
+    // secret-shaped string the raw JSON structure obscured; the .md is written
+    // to disk too, so it must pass the same bar.
+    const findings = scanForLeaks(`${json}\n${markdown}`, [bundle.anonymousInstallId]);
     const blockers = findings.filter((f) => f.severity === "block");
     if (blockers.length > 0) {
       this.log.error(
