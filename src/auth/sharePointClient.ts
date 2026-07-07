@@ -397,7 +397,16 @@ export class SharePointClient {
       emitWire("graph", "←", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
       return undefined as T;
     }
-    const parsed = (await res.json()) as T;
+    // Some accepted writes reply with NO body — Graph's sendMail answers 202
+    // Accepted and empty, so an unconditional res.json() throws "Unexpected end
+    // of JSON input" and a successful send surfaces as a failure. Treat an empty
+    // body as an undefined result.
+    const raw = await res.text();
+    if (!raw) {
+      emitWire("graph", "←", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
+      return undefined as T;
+    }
+    const parsed = JSON.parse(raw) as T;
     if (wireEnabled()) {
       emitWire(
         "graph",

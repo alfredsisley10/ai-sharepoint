@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.127.0 — 2026-07-07
+
+### Fixed — empty-body Graph writes (found while closing test gaps, batch 5)
+- **A successful Outlook "Send" no longer looks like a failure.** Graph's sendMail returns `202 Accepted`
+  with an EMPTY body, but the shared Graph request machinery called `res.json()` unconditionally, throwing
+  "Unexpected end of JSON input" — so a mail that was actually accepted surfaced as an error. Empty response
+  bodies are now treated as an undefined result (like `204`).
+
+### Tests — close coverage gaps (code-review remediation, batch 5)
+- Added a dedicated **Jira adapter** test suite (the one connector adapter without direct tests): verify,
+  free-text-vs-raw-JQL search with the quote-escaping injection guard, ADF-vs-plain description flattening,
+  project/filter listing, Cloud paging with checkpoint abort, and JSM queue enumeration + not-a-JSM notes.
+- Added **CommsClient** tests over the Graph payload shaping: recipient resolution + fallback, oneOnOne vs
+  group Teams chat creation, mail-draft composition (nothing sent), and the send endpoint — the test that
+  surfaced the empty-202 bug above.
+
 ## 0.126.0 — 2026-07-07
 
 ### Security & compatibility — code-review remediation (batch 4)
