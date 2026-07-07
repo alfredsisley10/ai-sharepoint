@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.117.0 — 2026-07-07
+
+### Added — chat offers to track a Confluence cleanup in a project workspace
+- **When you ask @sharepoint to optimize/clean up/audit a Confluence space, it now offers to track the
+  conversation in a project workspace.** A one-line tip plus a button appears (once per project per
+  session, so it never nags) — clicking it starts the workspace (or creates a project first), so the
+  cleanup gets a durable home for the space dossier (owners, stale/inaccurate pages, recommended
+  revisions) and is restartable if the chat runs out of context.
+
 ## 0.116.0 — 2026-07-07
 
 ### Added — dollar cost estimate in Copilot Activity, on by default

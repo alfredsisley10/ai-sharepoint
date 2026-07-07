@@ -10,6 +10,7 @@ import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
 import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
+import { looksLikeConfluenceOptimization } from "./intent";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { LessonsStore } from "../diagnostics/lessonsStore";
@@ -207,6 +208,10 @@ const LESSONS_NUDGE = [
   "in it — write it in the abstract. Capture sparingly (durable insight, not per-turn detail); it",
   "records to a local, anonymized, user-reviewable ledger and sends nothing.",
 ].join(" ");
+
+/** Per-session dedup so the "track this cleanup?" workspace offer appears at most
+ *  once per project (keyed by project id, or "no-project"). */
+const offeredWorkspace = new Set<string>();
 
 export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
   const handler: vscode.ChatRequestHandler = async (
@@ -782,6 +787,24 @@ async function answerWithModel(
         isFirstConversationTurn,
       )
       .catch(() => undefined);
+  }
+  // If the user is asking to optimize/clean up a Confluence space and this
+  // conversation isn't being tracked yet, offer a project workspace (durable,
+  // cached, restartable) — once per project per session so it never nags.
+  const tracked = activeProject ? deps.chatWorkspace.enabled(activeProject.id) : false;
+  if (!tracked && looksLikeConfluenceOptimization(request.prompt)) {
+    const key = activeProject?.id ?? "no-project";
+    if (!offeredWorkspace.has(key)) {
+      offeredWorkspace.add(key);
+      stream.markdown(
+        "\n\n---\n\n💡 **Track this cleanup?** I can capture this conversation in a project workspace — a durable folder that mirrors the chat, caches page data, and lets you build a Confluence **space dossier** (owners, stale/inaccurate pages, recommended revisions) and resume later if this chat runs out of context.",
+      );
+      stream.button(
+        activeProject
+          ? { command: "aiSharePoint.startProjectWorkspace", title: "📁 Track this in the project workspace", arguments: [activeProject] }
+          : { command: "aiSharePoint.createProject", title: "📁 Create a project to track this" },
+      );
+    }
   }
   // The turn completed — clear the interrupted-restart checkpoint.
   await deps.interactions.finish("completed").catch(() => undefined);
