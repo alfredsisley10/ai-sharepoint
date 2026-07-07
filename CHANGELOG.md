@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.124.0 — 2026-07-07
+
+### Performance — Confluence space dossier (code-review remediation, batch 2)
+- **One HTTP check per distinct outbound link across the whole space, not per page.** A dossier of a
+  large space where hundreds of pages link the same handful of intranet hosts previously re-checked each
+  URL once per page (thousands of live-link probes); a shared per-URL link cache collapses this to
+  one check per distinct URL for the entire sweep.
+- **Single flat space enumeration instead of a per-node subtree walk.** The dossier now discovers the
+  space's pages with one paginated `content?spaceKey=` sweep (`total/pageSize` requests) rather than
+  enumerating root pages and recursively materializing each root's subtree (one request per interior
+  node, with overlapping re-materialization). The dossier reviews each page independently, so the tree
+  *shape* the walk recovered wasn't needed.
+- **Flagged-page bodies are reused, not re-fetched.** The currency review already fetches each page's
+  body; it now returns that text (and version), so caching the current content of flagged pages no longer
+  issues a second `getConfluencePage` fetch per flagged page. Byte-for-byte identical content
+  (both paths run the same `htmlToText`).
+
 ## 0.123.0 — 2026-07-07
 
 ### Fixed / hardened — code-review remediation (batch 1)

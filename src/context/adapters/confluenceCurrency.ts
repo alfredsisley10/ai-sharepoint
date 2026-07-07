@@ -1,5 +1,5 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
-import { fetchJson } from "../http";
+import { fetchJson, htmlToText } from "../http";
 import { UserDirectory, contactOf } from "../userDirectory";
 import { findOwnerLabel } from "./confluenceOwnership";
 
@@ -66,10 +66,29 @@ async function checkOne(url: string, timeoutMs: number): Promise<LinkCheck> {
 
 /** Check links for liveness (HEAD, falling back to GET), bounded concurrency.
  *  Only absolute http(s) URLs are checked; relative links are reported as
- *  unchecked (resolving them needs the page context, left to the caller). */
-export async function checkLinks(urls: string[], timeoutMs: number, concurrency = 6): Promise<LinkCheck[]> {
+ *  unchecked (resolving them needs the page context, left to the caller).
+ *
+ *  `cache` (optional) memoizes each URL's in-flight/settled check across pages:
+ *  a space-wide sweep of hundreds of pages linking the same handful of intranet
+ *  hosts collapses from thousands of requests to one-per-distinct-URL. */
+export async function checkLinks(
+  urls: string[],
+  timeoutMs: number,
+  concurrency = 6,
+  cache?: Map<string, Promise<LinkCheck>>,
+): Promise<LinkCheck[]> {
   const absolute = urls.filter((u) => /^https?:\/\//i.test(u)).slice(0, MAX_LINKS_CHECKED);
-  return mapPool(absolute, concurrency, (u) => checkOne(u, timeoutMs));
+  const check = cache
+    ? (u: string) => {
+        let p = cache.get(u);
+        if (!p) {
+          p = checkOne(u, timeoutMs);
+          cache.set(u, p);
+        }
+        return p;
+      }
+    : (u: string) => checkOne(u, timeoutMs);
+  return mapPool(absolute, concurrency, check);
 }
 
 export interface CurrencyReport {
@@ -85,13 +104,19 @@ export interface CurrencyReport {
   lastUpdated?: string;
   staleDays?: number;
   issues: string[];
+  /** Plain-text of the page body (capped at `caps.maxBodyChars`), captured from
+   *  the same fetch as the review so callers needing the current content of a
+   *  flagged page don't re-fetch it. */
+  bodyText?: string;
+  /** The page's Confluence version number, from the same fetch. */
+  version?: number;
 }
 
 interface PageForReview {
   id?: string;
   title?: string;
   body?: { storage?: { value?: string } };
-  version?: { when?: string };
+  version?: { when?: string; number?: number };
   metadata?: { labels?: { results?: Array<{ name?: string }> } };
   _links?: { webui?: string };
 }
@@ -104,6 +129,7 @@ export async function reviewPageCurrency(
   dir: UserDirectory,
   caps: ReadCaps,
   now: () => string = () => new Date().toISOString(),
+  linkCache?: Map<string, Promise<LinkCheck>>,
 ): Promise<CurrencyReport> {
   const page = await fetchJson<PageForReview>(
     `${baseOf(source)}/rest/api/content/${enc(pageId)}?expand=body.storage,version,metadata.labels`,
@@ -114,7 +140,7 @@ export async function reviewPageCurrency(
   const labels = (page.metadata?.labels?.results ?? []).map((l) => String(l.name ?? "")).filter(Boolean);
 
   const links = extractLinks(html);
-  const checked = await checkLinks(links, caps.timeoutMs);
+  const checked = await checkLinks(links, caps.timeoutMs, 6, linkCache);
   const brokenLinks = checked.filter((c) => !c.ok);
   const uncheckedRelativeLinks = links.filter((u) => !/^https?:\/\//i.test(u)).length;
 
@@ -152,5 +178,9 @@ export async function reviewPageCurrency(
     ...(page.version?.when ? { lastUpdated: page.version.when } : {}),
     ...(staleDays !== undefined ? { staleDays } : {}),
     issues,
+    ...(html ? { bodyText: htmlToText(html, caps.maxBodyChars) } : {}),
+    ...(Number.isFinite(page.version?.number) && (page.version?.number ?? 0) > 0
+      ? { version: page.version!.number }
+      : {}),
   };
 }

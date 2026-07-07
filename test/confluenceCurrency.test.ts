@@ -58,6 +58,48 @@ test("checkLinks checks only absolute links and reports broken ones", async () =
   ]);
 });
 
+test("checkLinks memoizes each distinct url via the shared cache (one check per url)", async () => {
+  const cache = new Map();
+  const { calls } = await withFetch(
+    () => ({ status: 200, body: undefined }),
+    async () => {
+      await checkLinks(["https://x/a", "https://x/b"], 30000, 6, cache);
+      // A second page re-links the same host: only the NEW url hits the network.
+      await checkLinks(["https://x/a", "https://x/c"], 30000, 6, cache);
+    },
+  );
+  assert.deepEqual(calls.sort(), ["https://x/a", "https://x/b", "https://x/c"]);
+});
+
+test("reviewPageCurrency captures body text + version and uses the link cache", async () => {
+  const dir = async (): Promise<UserRecord | undefined> => undefined;
+  const cache = new Map();
+  const handler = (url: string) => {
+    if (url.includes("/rest/api/content/")) {
+      return {
+        body: {
+          id: "55",
+          title: "VPN Guide",
+          body: { storage: { value: '<p>Body <a href="https://good.example/x">good</a></p>' } },
+          version: { when: "2026-06-01T00:00:00Z", number: 7 },
+          metadata: { labels: { results: [] } },
+          _links: { webui: "/p/55" },
+        },
+      };
+    }
+    return { status: 200, body: undefined };
+  };
+  const { result, calls } = await withFetch(handler, async () => {
+    const a = await reviewPageCurrency(SRC, CRED, "55", dir, DEFAULT_CAPS, () => "2026-06-16T00:00:00Z", cache);
+    const b = await reviewPageCurrency(SRC, CRED, "55", dir, DEFAULT_CAPS, () => "2026-06-16T00:00:00Z", cache);
+    return [a, b] as const;
+  });
+  assert.equal(result[0].version, 7);
+  assert.match(result[0].bodyText ?? "", /Body good/);
+  // Two page fetches, but the shared link is checked exactly once.
+  assert.equal(calls.filter((u) => u.includes("good.example")).length, 1);
+});
+
 test("reviewPageCurrency flags broken links, inactive owners, and staleness", async () => {
   const dir = async (sam: string): Promise<UserRecord | undefined> =>
     sam === "jdoe"

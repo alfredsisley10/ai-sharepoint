@@ -8,6 +8,7 @@ import {
   getChildPages,
   getDescendantPages,
   getSpaceRootPages,
+  getSpacePages,
   getPageHierarchy,
   PageRef,
 } from "../src/context/adapters/confluenceHierarchy";
@@ -194,6 +195,22 @@ test("getSpaceRootPages hits the depth=root listing", async () => {
   );
   assert.match(calls[0], /\/space\/ENG\/content\/page\?depth=root/);
   assert.equal(result[0].id, "1");
+});
+
+test("getSpacePages sweeps the flat space listing, fully paginated", async () => {
+  // 100 pages in batch 1, 20 in batch 2 → 120 total, two requests, no tree walk.
+  const { result, calls } = await withFetch(
+    (url) => {
+      const start = Number(new URL(url).searchParams.get("start"));
+      const n = start === 0 ? 100 : 20;
+      return { body: { results: Array.from({ length: n }, (_, k) => ({ id: String(start + k), title: `p${start + k}`, _links: { webui: `/p${start + k}` } })) } };
+    },
+    () => getSpacePages(SRC, CRED, "ENG", DEFAULT_CAPS),
+  );
+  assert.equal(result.length, 120);
+  assert.equal(calls.length, 2, "followed pagination");
+  assert.match(calls[0], /\/content\?spaceKey=ENG&type=page&start=0&limit=100/);
+  assert.ok(!calls.some((c) => /\/child\/page|\/descendant\/page/.test(c)), "no per-node tree walk");
 });
 
 test("getPageHierarchy combines ancestors + children in one view", async () => {

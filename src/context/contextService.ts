@@ -87,12 +87,13 @@ import {
   prepareAccessRequestNote,
   ManageabilityReport,
 } from "./adapters/confluenceEntitlements";
-import { reviewPageCurrency, CurrencyReport } from "./adapters/confluenceCurrency";
+import { reviewPageCurrency, CurrencyReport, LinkCheck } from "./adapters/confluenceCurrency";
 import {
   getPageAncestors,
   getChildPages,
   getDescendantPages,
   getSpaceRootPages,
+  getSpacePages,
   getPageHierarchy,
   buildPageTree,
   HierarchyResult,
@@ -1198,23 +1199,19 @@ export class ContextService {
     const includeContent = opts.includeContent ?? true;
 
     return this.tracked(source, false, async () => {
-      // Enumerate the space: root pages + each root's subtree, deduped by id.
-      const roots = await getSpaceRootPages(source, credential, spaceKey, caps);
-      const byId = new Map<string, { id: string; title: string; url: string }>();
-      for (const r of roots) if (r.id) byId.set(r.id, r);
-      for (const r of roots) {
-        if (byId.size >= maxPages * 3) break; // generous discovery ceiling
-        try {
-          for (const d of await getDescendantPages(source, credential, r.id, caps)) {
-            if (d.id) byId.set(d.id, d);
-          }
-        } catch {
-          // A single unreadable subtree shouldn't sink the whole dossier.
-        }
-      }
-      const all = [...byId.values()];
+      // Enumerate the space in a single flat, paginated sweep — the whole-space
+      // pass reviews each page independently, so the tree shape a root+subtree
+      // walk recovers isn't needed and its per-node request cost is avoided.
+      const all = await getSpacePages(source, credential, spaceKey, caps, maxPages * 3);
       const totalPages = all.length;
       const targets = all.slice(0, maxPages);
+
+      // One link-liveness check per DISTINCT url across the entire space: a
+      // space of hundreds of pages linking the same handful of intranet hosts
+      // collapses from thousands of HTTP checks to one-per-url. Reviews also
+      // capture each flagged page's body text, so no second content fetch.
+      const linkCache = new Map<string, Promise<LinkCheck>>();
+      const bodyById = new Map<string, { body?: string; version?: number }>();
 
       const pages: DossierPage[] = [];
       let done = 0;
@@ -1222,7 +1219,7 @@ export class ContextService {
         const batch = targets.slice(i, i + concurrency);
         const reports = await Promise.all(
           batch.map((t) =>
-            reviewPageCurrency(source, credential, t.id, dirFn, caps).catch(() => undefined),
+            reviewPageCurrency(source, credential, t.id, dirFn, caps, undefined, linkCache).catch(() => undefined),
           ),
         );
         for (let k = 0; k < batch.length; k++) {
@@ -1240,6 +1237,10 @@ export class ContextService {
               brokenLinks: rep.brokenLinks.length,
               issues: rep.issues,
             });
+            bodyById.set(rep.pageId || t.id, {
+              ...(rep.bodyText !== undefined ? { body: rep.bodyText } : {}),
+              ...(rep.version !== undefined ? { version: rep.version } : {}),
+            });
           } else {
             pages.push({ id: t.id, title: t.title, url: t.url, owners: [], hasOwnerLabel: false, brokenLinks: 0, issues: ["could not review"] });
           }
@@ -1248,23 +1249,15 @@ export class ContextService {
         opts.onProgress?.(done, targets.length);
       }
 
-      // Cache current body text for FLAGGED pages only (bounds cost) so the
-      // workspace can show current state and seed recommended revisions.
+      // Attach current body text for FLAGGED pages only (bounds what's written
+      // to disk), reusing the text captured during the currency review above —
+      // no second fetch per flagged page.
       if (includeContent) {
-        const flagged = pages.filter((p) => flagsFor(p).flagged);
-        for (let i = 0; i < flagged.length; i += concurrency) {
-          const batch = flagged.slice(i, i + concurrency);
-          const items = await Promise.all(
-            batch.map((p) => getConfluencePage(source, credential, p.id, caps).catch(() => undefined)),
-          );
-          for (let k = 0; k < batch.length; k++) {
-            const item = items[k];
-            if (item) {
-              batch[k]!.content = item.body;
-              const v = Number(item.meta?.version);
-              if (Number.isFinite(v) && v > 0) batch[k]!.version = v;
-            }
-          }
+        for (const p of pages) {
+          if (!flagsFor(p).flagged) continue;
+          const cached = bodyById.get(p.id);
+          if (cached?.body !== undefined) p.content = cached.body;
+          if (cached?.version !== undefined) p.version = cached.version;
         }
       }
 
