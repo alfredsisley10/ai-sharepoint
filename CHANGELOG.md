@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.125.0 — 2026-07-07
+
+### Reliability — code-review remediation (batch 3)
+- **HTTP responses are size-capped while STREAMING, not after buffering.** The read wrapper previously
+  pulled the entire response body into memory with `res.text()` and only then checked it against the 2 MB
+  read cap (ADR-0012) — so a source streaming far more than the cap (a runaway export, a misbehaving or
+  hostile endpoint, a huge HTML block page) was fully materialized before the cap could fire. It now reads
+  incrementally and cancels the transfer the moment the accumulated bytes cross the cap. Error/diagnostic
+  bodies are read through the same bounded path.
+- **The read-through cache de-duplicates in-flight loads.** `TtlCache.getOrLoad` no longer lets concurrent
+  misses for the same key each fire their own load (thundering herd) — the second caller joins the first's
+  pending load. A rejected load isn't cached and clears the slot so the next call retries; invalidation
+  drops in-flight slots so a post-write read starts fresh.
+- **The space dossier reports when it's INCOMPLETE.** Pages that couldn't be reviewed are now counted, and a
+  throttle (HTTP 429/503) is called out distinctly — the inventory header says how many pages are missing
+  and, when throttled, that re-running (optionally at lower concurrency) should recover them. Previously a
+  throttled sweep silently produced a partial inventory that looked complete.
+- **Device-code sign-in is cancellable.** MSAL polls the token endpoint for up to ~15 minutes; the sign-in
+  prompt now offers **"Cancel Sign-in"**, which stops the poll instead of leaving it running in the
+  background until the code expires.
+
 ## 0.124.0 — 2026-07-07
 
 ### Performance — Confluence space dossier (code-review remediation, batch 2)

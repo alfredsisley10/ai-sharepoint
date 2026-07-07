@@ -79,6 +79,23 @@ test("summarizeDossier counts flags and distinct owners", () => {
   assert.equal(s.owners, 2);
 });
 
+test("summarizeDossier + inventory surface review failures and throttling", () => {
+  const d = dossier([page({ id: "1", issues: ["could not review"], owners: [] })], {
+    reviewFailures: 1,
+    throttled: true,
+  });
+  const s = summarizeDossier(d);
+  assert.equal(s.reviewFailures, 1);
+  assert.equal(s.throttled, true);
+  const md = renderInventoryMarkdown(d);
+  assert.match(md, /could not be reviewed because the source throttled/i);
+  assert.match(md, /INCOMPLETE/);
+  // Without a throttle the warning stays generic (no re-run advice tied to 429).
+  const md2 = renderInventoryMarkdown(dossier([page({ id: "1", issues: ["could not review"] })], { reviewFailures: 1 }));
+  assert.match(md2, /1 page\(s\) could not be reviewed/);
+  assert.doesNotMatch(md2, /throttled/i);
+});
+
 test("groupByOwner buckets pages, unassigned last-ish, most-flagged first", () => {
   const d = dossier([
     page({ id: "1", owners: [{ sam: "a", active: true }], staleDays: 400 }),

@@ -1214,12 +1214,20 @@ export class ContextService {
       const bodyById = new Map<string, { body?: string; version?: number }>();
 
       const pages: DossierPage[] = [];
+      let reviewFailures = 0;
+      let throttled = false;
       let done = 0;
       for (let i = 0; i < targets.length; i += concurrency) {
         const batch = targets.slice(i, i + concurrency);
         const reports = await Promise.all(
           batch.map((t) =>
-            reviewPageCurrency(source, credential, t.id, dirFn, caps, undefined, linkCache).catch(() => undefined),
+            reviewPageCurrency(source, credential, t.id, dirFn, caps, undefined, linkCache).catch((err) => {
+              // Distinguish a THROTTLE (dossier is merely incomplete, re-run it)
+              // from any other review failure — both leave a "could not review"
+              // row, but only the former means the source pushed back.
+              if (classifyError(err) === "graph.throttled") throttled = true;
+              return undefined;
+            }),
           ),
         );
         for (let k = 0; k < batch.length; k++) {
@@ -1242,6 +1250,7 @@ export class ContextService {
               ...(rep.version !== undefined ? { version: rep.version } : {}),
             });
           } else {
+            reviewFailures += 1;
             pages.push({ id: t.id, title: t.title, url: t.url, owners: [], hasOwnerLabel: false, brokenLinks: 0, issues: ["could not review"] });
           }
         }
@@ -1261,7 +1270,15 @@ export class ContextService {
         }
       }
 
-      return { spaceKey, generatedAt: new Date().toISOString(), pages, totalPages, truncated: totalPages > targets.length };
+      return {
+        spaceKey,
+        generatedAt: new Date().toISOString(),
+        pages,
+        totalPages,
+        truncated: totalPages > targets.length,
+        ...(reviewFailures > 0 ? { reviewFailures } : {}),
+        ...(throttled ? { throttled: true } : {}),
+      };
     });
   }
 

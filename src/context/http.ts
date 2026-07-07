@@ -59,6 +59,60 @@ export function authHeaders(credential: ContextCredential): Record<string, strin
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Read a response body as text but STOP at `maxBytes` instead of buffering the
+ * whole stream first. `res.text()` materializes the entire body before anyone
+ * can check its size, so a source that streams far more than the read cap (a
+ * runaway export, a misbehaving or hostile endpoint, an HTML block page with a
+ * huge payload) forces the whole thing into memory before the cap is even
+ * evaluated. This reads incrementally and cancels the transfer the moment the
+ * accumulated bytes exceed the cap, reporting `truncated` so the caller can
+ * decide whether that's an error (a real read) or just enough for diagnosis
+ * (an error-body excerpt). Byte-accurate (counts wire bytes, not chars).
+ */
+async function readCappedText(res: Response, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  const body = res.body;
+  if (!body) {
+    // No readable stream (empty body / 204, or a polyfill): fall back to text()
+    // but still bound what we return.
+    const text = await res.text();
+    return text.length > maxBytes ? { text: text.slice(0, maxBytes), truncated: true } : { text, truncated: false };
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  let truncated = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+      if (bytes > maxBytes) {
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    // Abort the underlying transfer — we've read enough (or all of it).
+    await reader.cancel().catch(() => undefined);
+  }
+  if (!truncated) text += decoder.decode();
+  return { text, truncated };
+}
+
+/** Read an error/diagnostic body, capped and never throwing — a huge or
+ *  slow-draining error page can't be turned into an OOM while we're already
+ *  handling a failure. */
+async function readErrorBody(res: Response): Promise<string> {
+  try {
+    return (await readCappedText(res, MAX_RESPONSE_BYTES)).text;
+  } catch {
+    return "";
+  }
+}
+
 /** Same-origin Referer for a request URL. Atlassian's CSRF filter (and others)
  *  reject a state-changing REST call when BOTH Origin and Referer are null —
  *  the default for a bare programmatic fetch — so writes present a first-party
@@ -168,7 +222,7 @@ export async function fetchJson<T>(
       // Evidence-based diagnosis (never a blanket "session expired" — fresh
       // captures fail too): the server's own error body, any off-host
       // redirect, and the replayed cookie NAMES (values never appear).
-      const body = await res.text().catch(() => "");
+      const body = await readErrorBody(res);
       const session = parseSnowSessionSecret(credential.secret);
       const d = describeSnowRejection({
         status: res.status,
@@ -182,7 +236,7 @@ export async function fetchJson<T>(
     }
     // A content filter can answer 401/403 with its OWN block page — diagnose
     // that as a proxy/filter issue (the real fix), not "bad credentials".
-    const rawBody = await res.text().catch(() => "");
+    const rawBody = await readErrorBody(res);
     const filtered = detectProxyInterference({ status: res.status, bodyText: rawBody, headers: res.headers, host: hostOf(url) });
     if (filtered && filtered.kind === "blocked") {
       throw new AppError(`${filtered.message}\n\n${filtered.summary}`, "network", filtered.summary);
@@ -234,7 +288,7 @@ export async function fetchJson<T>(
     // bare "request failed" (and so the generic advice — see core/errors — is
     // suppressed rather than blaming the network/credential). The page-tree
     // explorer already falls back to a page-by-page walk automatically.
-    const body = await res.text().catch(() => "");
+    const body = await readErrorBody(res);
     const reason = redactText(body).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
     throw new AppError(
       `The source returned a server error (${res.status} ${res.statusText})${reason ? `: ${reason}` : ""}.`,
@@ -243,22 +297,22 @@ export async function fetchJson<T>(
     );
   }
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = await readErrorBody(res);
     throw new AppError(
       `Source request failed (${res.status} ${res.statusText}): ${body.slice(0, 300)}`,
       "unknown",
     );
   }
-  const text = await res.text();
+  const { text, truncated } = await readCappedText(res, MAX_RESPONSE_BYTES);
   if (wireEnabled()) {
     emitWire(
       "http",
       "←",
-      `${method} ${safeUrl(url)} ${res.status} · ${text.length} bytes (${Date.now() - started}ms)`,
+      `${method} ${safeUrl(url)} ${res.status} · ${text.length} bytes${truncated ? "+ (capped)" : ""} (${Date.now() - started}ms)`,
       capDetail(text),
     );
   }
-  if (text.length > MAX_RESPONSE_BYTES) {
+  if (truncated) {
     throw new AppError(
       `Source response exceeded the ${MAX_RESPONSE_BYTES / 1024 / 1024} MB read cap (ADR-0012).`,
       "config",

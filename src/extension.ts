@@ -13,6 +13,7 @@ import { estimateProbeCost } from "./copilot/premiumCost";
 import { readPremiumPricing } from "./copilot/premiumPricing";
 import { formatCost } from "./copilot/tokenCost";
 import { AuthProviderRegistry, AUTH_PROVIDERS } from "./auth/providerRegistry";
+import { DeviceCodePrompt } from "./auth/deviceCodeProvider";
 import { tenantCacheHandle } from "./auth/msalCache";
 import { isSupportedSiteUrl } from "./auth/sharePointClient";
 import { SitesStore, SiteConnection } from "./auth/sitesStore";
@@ -357,7 +358,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const sites = new SitesStore(context.globalState, context.workspaceState);
   const spSessions = new SharePointSessionStore(context.secrets, context.globalState);
   const registry = new AuthProviderRegistry(secrets, (info) => {
-    void showDeviceCodePrompt(info.userCode, info.verificationUri);
+    void showDeviceCodePrompt(info);
   });
   const access = new SiteAccess(sites, registry);
   const exporter = new DiagnosticsExportService(
@@ -7306,20 +7307,23 @@ export function deactivate(): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function showDeviceCodePrompt(
-  userCode: string,
-  verificationUri: string,
-): Promise<void> {
+async function showDeviceCodePrompt(info: DeviceCodePrompt): Promise<void> {
+  const { userCode, verificationUri } = info;
   const pick = await vscode.window.showInformationMessage(
     `Device-code sign-in: enter code ${userCode} at ${verificationUri}`,
     "Copy Code & Open Browser",
     "Copy Code",
+    "Cancel Sign-in",
   );
   if (pick === "Copy Code & Open Browser") {
     await vscode.env.clipboard.writeText(userCode);
     await vscode.env.openExternal(vscode.Uri.parse(verificationUri));
   } else if (pick === "Copy Code") {
     await vscode.env.clipboard.writeText(userCode);
+  } else if (pick === "Cancel Sign-in") {
+    // Stop MSAL's background polling instead of leaving it to run until the
+    // code expires (~15 min).
+    info.cancel();
   }
 }
 
