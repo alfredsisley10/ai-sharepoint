@@ -301,20 +301,6 @@ async function spaceVersionAuthors(
   return authors;
 }
 
-/** Most prolific contributors for a SPACE — bounded: tally version authors
- *  across the space's pages (capped). An approximation, not a full crawl. */
-export async function getConfluenceSpaceContributors(
-  source: ContextSource,
-  credential: ContextCredential,
-  spaceKey: string,
-  timeoutMs: number,
-  maxPages = 25,
-  maxVersionsPerPage = 100,
-): Promise<ContributorTally[]> {
-  const authors = await spaceVersionAuthors(source, credential, spaceKey, timeoutMs, maxPages, maxVersionsPerPage);
-  return tallyContributors(authors.map((a) => a.sam));
-}
-
 /** Space contributors ranked by RECENCY-WEIGHTED activity. */
 export async function getConfluenceSpaceContributorsWeighted(
   source: ContextSource,

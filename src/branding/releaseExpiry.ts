@@ -102,10 +102,6 @@ export function setReleaseStatus(status: ExpiryStatus): void {
   current = status;
 }
 
-export function releaseStatus(): ExpiryStatus {
-  return current;
-}
-
 export function releaseExpired(): boolean {
   return current.state === "expired";
 }

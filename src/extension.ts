@@ -92,6 +92,7 @@ import {
   EXPORT_TIMEOUT_MS,
   EXPORT_DIR,
 } from "./context/exportData";
+import { ensureGitignored } from "./context/files/gitignore";
 import { deriveSplunkObsEndpoints } from "./context/adapters/splunkObservability";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
@@ -480,6 +481,9 @@ export function activate(context: vscode.ExtensionContext): void {
     if (ws) {
       const dir = vscode.Uri.joinPath(ws.uri, EXPORT_DIR);
       await vscode.workspace.fs.createDirectory(dir);
+      // These files carry raw (unredacted) enterprise data — keep them out of
+      // the user's repo the same way the chat workspace protects itself.
+      await ensureGitignored(ws.uri, `${EXPORT_DIR}/`);
       for (const f of files) {
         await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, f.name), f.bytes);
         paths.push(`${EXPORT_DIR}/${f.name}`);
@@ -4516,6 +4520,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (ws) {
         const dir = vscode.Uri.joinPath(ws.uri, EXPORT_DIR);
         await vscode.workspace.fs.createDirectory(dir);
+        await ensureGitignored(ws.uri, `${EXPORT_DIR}/`);
         target = vscode.Uri.joinPath(dir, fileName);
         shownPath = `${EXPORT_DIR}/${fileName}`;
       } else {

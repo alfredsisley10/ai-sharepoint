@@ -52,8 +52,3 @@ export function findByLocation(items: FileSource[], loc: FileLocation): FileSour
   const key = fileLocationKey(loc);
   return items.find((f) => fileLocationKey(f.location) === key);
 }
-
-/** A short human description of where a source lives (for tree/tooltip). */
-export function describeLocation(loc: FileLocation): string {
-  return loc.kind === "local" ? loc.path : loc.webUrl || `OneDrive/SharePoint item ${loc.itemId}`;
-}

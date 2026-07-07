@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.122.0",
+  "version": "0.123.0",
   "release": {
     "channel": "standard"
   },
@@ -2476,7 +2476,7 @@
       {
         "name": "aisharepoint_sp_manage_page",
         "displayName": "SharePoint Pages (browser session)",
-        "toolReferenceName": "spPages",
+        "toolReferenceName": "spSessionPages",
         "canBeReferencedInPrompt": true,
         "icon": "$(browser)",
         "tags": [

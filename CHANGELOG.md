@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.123.0 — 2026-07-07
+
+### Fixed / hardened — code-review remediation (batch 1)
+- **Reliability:** `ContextSourcesStore` now **serializes every Memento write**, closing a read-modify-write
+  race where a concurrent operation on a source could clobber the ADR-0009 auth-failure counter (making the
+  account-protection lockout trip late or never) or the source list (a removed source resurrected / an added
+  one dropped).
+- **Supportability:** the diagnostics bundle now reports the **compiled** `EXTENSION_VERSION` (with the
+  manifest version and a **⚠ TORN INSTALL** marker when they disagree) — previously it reported only the
+  manifest version, which *concealed* the torn-install failures the bundle exists to help triage.
+- **Security:** the `ai-sharepoint-exports/` folder (which holds raw, unredacted data exports) is now
+  **git-ignored** automatically, matching the chat-workspace protection, so exports aren't committed by
+  accident. The gitignore logic is now a single shared helper.
+- **Correctness:** fixed a chat-tool reference collision (`aisharepoint_sp_manage_page` and
+  `aisharepoint_list_pages` both claimed `#spPages`; the session tool is now `#spSessionPages`).
+- **Cleanup:** removed four verified-dead exports.
+
 ## 0.122.0 — 2026-07-07
 
 ### Added — revise learned lessons in place

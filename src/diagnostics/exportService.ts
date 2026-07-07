@@ -14,6 +14,7 @@ import { ErrorReportStore } from "./errorReports";
 import { UsageMeter } from "../copilot/meter";
 import { SitesStore } from "../auth/sitesStore";
 import { anonHost, anonToken } from "../core/anonymize";
+import { EXTENSION_VERSION } from "../core/version";
 import { GRAPH_POWERSHELL_CLIENT_ID } from "../auth/authConfig";
 import { Logger } from "../core/log";
 
@@ -156,7 +157,11 @@ export class DiagnosticsExportService {
       scope,
       anonymousInstallId: identity.id,
       environment: {
-        extensionVersion: String(this.ctx.extension.packageJSON.version ?? "0.0.0"),
+        // The COMPILED version is authoritative; the manifest version can lag in
+        // a torn install (the exact failure this bundle should help triage).
+        extensionVersion: EXTENSION_VERSION,
+        manifestVersion: String(this.ctx.extension.packageJSON.version ?? "0.0.0"),
+        torn: String(this.ctx.extension.packageJSON.version ?? "") !== EXTENSION_VERSION,
         vscodeVersion: vscode.version,
         platform: `${process.platform}-${process.arch}`,
         uiKind: vscode.env.uiKind === vscode.UIKind.Web ? "web" : "desktop",

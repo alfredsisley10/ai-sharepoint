@@ -12,7 +12,14 @@ import { TelemetryEvent } from "./telemetry";
 export type BundleScope = "full" | "usage" | "errors";
 
 export interface BundleEnvironment {
+  /** The COMPILED version (EXTENSION_VERSION) — what's actually running. */
   extensionVersion: string;
+  /** The version VS Code loaded from the manifest. Differs from
+   *  extensionVersion in a TORN install (new code, stale cached manifest). */
+  manifestVersion?: string;
+  /** True when the two disagree — the one signal support needs to spot a torn
+   *  install (missing views/commands) that the manifest version alone conceals. */
+  torn?: boolean;
   vscodeVersion: string;
   platform: string; // e.g. "linux-x64"
   uiKind: string; // "desktop" | "web"
@@ -110,7 +117,11 @@ export function bundleToMarkdown(b: DiagnosticsBundle): string {
   lines.push(`| Generated | ${b.generatedAt} |`);
   lines.push(`| Scope | ${b.scope} |`);
   lines.push(`| Anonymous install ID | \`${b.anonymousInstallId}\` |`);
-  lines.push(`| Extension | ${b.environment.extensionVersion} |`);
+  lines.push(
+    `| Extension | ${b.environment.extensionVersion}${
+      b.environment.torn ? ` ⚠ TORN INSTALL — manifest reports ${b.environment.manifestVersion} (reload the window to reconcile)` : ""
+    } |`,
+  );
   lines.push(
     `| VS Code | ${b.environment.vscodeVersion} (${b.environment.uiKind}${b.environment.remoteName ? `, remote: ${b.environment.remoteName}` : ""}) |`,
   );
