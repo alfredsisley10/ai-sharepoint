@@ -11,6 +11,7 @@ import {
   onAdvertised,
   needsEffectiveProbe,
   describeModelLimit,
+  mergeModelLimit,
 } from "../src/core/contextBudget";
 
 const sec = (label: string, priority: number, tokens: number, required = false): PromptSection & { tokens: number } =>
@@ -136,6 +137,25 @@ test("onAdvertised records the free advertised ceiling and flags drift", () => {
 test("onSuccess/onOverflow stamp measuredAtAdvertised for drift detection", () => {
   assert.equal(onSuccess(undefined, 128000, 5000, "t").measuredAtAdvertised, 128000);
   assert.equal(onOverflow(undefined, 128000, 9000, "t")?.measuredAtAdvertised, 128000);
+});
+
+test("mergeModelLimit combines shared results conservatively", () => {
+  // Higher proven known-good wins; tighter (lower) cap wins; advertised carried.
+  const merged = mergeModelLimit(
+    { advertised: 128000, knownGood: 80000, effectiveCap: 100000 },
+    { advertised: 128000, knownGood: 95000, effectiveCap: 90000, measuredAtAdvertised: 128000 },
+    "now",
+  );
+  assert.equal(merged.knownGood, 95000);
+  assert.equal(merged.effectiveCap, 90000);
+  assert.equal(merged.advertised, 128000);
+  assert.equal(merged.measuredAtAdvertised, 128000);
+  // Importing into an empty slot just takes the incoming values.
+  const fresh = mergeModelLimit(undefined, { advertised: 200000, knownGood: 150000 }, "now");
+  assert.equal(fresh.advertised, 200000);
+  assert.equal(fresh.knownGood, 150000);
+  // A teammate's looser cap never loosens a locally tighter one.
+  assert.equal(mergeModelLimit({ effectiveCap: 60000 }, { effectiveCap: 90000 }, "now").effectiveCap, 60000);
 });
 
 test("describeModelLimit shapes reported/tested/budget for display", () => {

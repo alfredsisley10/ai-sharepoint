@@ -8,6 +8,10 @@ import { EXTENSION_VERSION } from "./core/version";
 import { redactError } from "./core/redaction";
 import { UsageMeter } from "./copilot/meter";
 import { CopilotService } from "./copilot/copilotService";
+import { ModelCostTable } from "./copilot/modelCosts";
+import { estimateProbeCost } from "./copilot/premiumCost";
+import { readPremiumPricing } from "./copilot/premiumPricing";
+import { formatCost } from "./copilot/tokenCost";
 import { AuthProviderRegistry, AUTH_PROVIDERS } from "./auth/providerRegistry";
 import { tenantCacheHandle } from "./auth/msalCache";
 import { isSupportedSiteUrl } from "./auth/sharePointClient";
@@ -348,6 +352,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const interactions = new InteractionCache(context.workspaceState, nowIso);
   const meter = new UsageMeter(context.globalState);
   const copilot = new CopilotService(meter);
+  const modelCosts = new ModelCostTable();
   const sites = new SitesStore(context.globalState, context.workspaceState);
   const spSessions = new SharePointSessionStore(context.secrets, context.globalState);
   const registry = new AuthProviderRegistry(secrets, (info) => {
@@ -4651,7 +4656,14 @@ export function activate(context: vscode.ExtensionContext): void {
         return schema ? [[s.id, schema] as const] : [];
       }),
     );
-    const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites, selMemory, allSourceNames, selPrompts, allProjectNames);
+    const pricingCfg = vscode.workspace.getConfiguration("aiSharePoint");
+    const pricingExport = {
+      pricePerPremiumRequest: pricingCfg.get<number>("usage.pricePerPremiumRequest", 0.04),
+      tokenCostInputPerMillion: pricingCfg.get<number>("usage.tokenCostInputPerMillion", 0),
+      tokenCostOutputPerMillion: pricingCfg.get<number>("usage.tokenCostOutputPerMillion", 0),
+      currencySymbol: pricingCfg.get<string>("usage.currencySymbol", "$"),
+    };
+    const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites, selMemory, allSourceNames, selPrompts, allProjectNames, modelLimits.list(), pricingExport);
     const json = JSON.stringify(exportDoc, null, 2);
     // Defense in depth (ADR-0013): the builder is secret-free by construction;
     // exportLeakBlockers refuses to write if anything credential-shaped slipped
@@ -4711,10 +4723,43 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(`Could not import: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
+    // Shared, non-secret extras (probed model limits + cost/pricing settings):
+    // fold the limits into the store and offer to apply the pricing to settings.
+    const applySharedExtras = async (): Promise<string[]> => {
+      const notes: string[] = [];
+      const n = await modelLimits.importLimits(parsed.modelLimits).catch(() => 0);
+      if (n) {
+        usageProvider.refresh();
+        notes.push(`${n} model limit(s)`);
+      }
+      if (parsed.pricing) {
+        const p = parsed.pricing;
+        const applyP = await vscode.window.showInformationMessage(
+          `This config includes cost/pricing settings (premium request ${p.currencySymbol ?? "$"}${p.pricePerPremiumRequest ?? "—"}${p.tokenCostInputPerMillion ? `, tokens ${p.currencySymbol ?? "$"}${p.tokenCostInputPerMillion}/M in` : ""}). Apply them to your settings?`,
+          "Apply pricing",
+          "Skip",
+        );
+        if (applyP === "Apply pricing") {
+          const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+          if (p.pricePerPremiumRequest !== undefined) await cfg.update("usage.pricePerPremiumRequest", p.pricePerPremiumRequest, vscode.ConfigurationTarget.Global);
+          if (p.tokenCostInputPerMillion !== undefined) await cfg.update("usage.tokenCostInputPerMillion", p.tokenCostInputPerMillion, vscode.ConfigurationTarget.Global);
+          if (p.tokenCostOutputPerMillion !== undefined) await cfg.update("usage.tokenCostOutputPerMillion", p.tokenCostOutputPerMillion, vscode.ConfigurationTarget.Global);
+          if (p.currencySymbol) await cfg.update("usage.currencySymbol", p.currencySymbol, vscode.ConfigurationTarget.Global);
+          notes.push("pricing applied");
+        }
+      }
+      return notes;
+    };
+
     if (parsed.sites.length === 0 && parsed.sources.length === 0 && parsed.projects.length === 0 && parsed.memory.length === 0 && parsed.prompts.length === 0) {
-      void vscode.window.showWarningMessage(
-        `Nothing to import.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) were malformed.` : ""}`,
-      );
+      if (parsed.modelLimits.length || parsed.pricing) {
+        const notes = await applySharedExtras();
+        void vscode.window.showInformationMessage(notes.length ? `Imported ${notes.join(", ")}.` : "Nothing new to import.");
+      } else {
+        void vscode.window.showWarningMessage(
+          `Nothing to import.${parsed.warnings.length ? ` ${parsed.warnings.length} entr(ies) were malformed.` : ""}`,
+        );
+      }
       return;
     }
     // Let the user choose which items in the file to bring in.
@@ -4965,6 +5010,7 @@ export function activate(context: vscode.ExtensionContext): void {
       merged: mergesApplied,
       mergeMode,
     });
+    const extraNotes = await applySharedExtras();
     const done = [
       freshSites.length ? `${freshSites.length} site(s)` : "",
       fresh.length ? `${fresh.length} source(s)` : "",
@@ -4972,6 +5018,7 @@ export function activate(context: vscode.ExtensionContext): void {
       memPlan.toAdd.length ? `${memPlan.toAdd.length} memory note(s)` : "",
       promptPlan.toAdd.length ? `${promptPlan.toAdd.length} prompt(s)` : "",
       mergesApplied ? `${mergesApplied} merged` : "",
+      ...extraNotes,
     ].filter(Boolean).join(", ");
     void vscode.window.showInformationMessage(
       `Imported ${done || "the selected items"}.${parsed.warnings.length ? ` (${parsed.warnings.length} note(s): ${parsed.warnings.slice(0, 2).join(" ")}${parsed.warnings.length > 2 ? " …" : ""})` : ""} Sign in to each site/source to activate (lockout-safe single verify).`,
@@ -6594,8 +6641,13 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage("No GitHub Copilot model is available — sign in to Copilot and retry.");
       return;
     }
+    const est = estimateProbeCost(modelCosts.multiplierFor(model.family || model.id), PROBE_MAX_STEPS, readPremiumPricing().pricePerRequest);
+    const costPhrase =
+      est.cost > 0
+        ? ` Estimated cost up to ~${formatCost(est.cost, readPremiumPricing().currency)} (≤${est.premiumRequests} premium request(s) at your configured rate).`
+        : "";
     const proceed = await vscode.window.showWarningMessage(
-      `Probe the real context limit for “${model.name}”? This sends up to ${PROBE_MAX_STEPS} test prompts using your Copilot allowance to find the largest input it actually accepts (advertised: ${model.maxInputTokens?.toLocaleString() ?? "unknown"} tokens).`,
+      `Probe the real context limit for “${model.name}”? This sends up to ${PROBE_MAX_STEPS} test prompts using your Copilot allowance to find the largest input it actually accepts (advertised: ${model.maxInputTokens?.toLocaleString() ?? "unknown"} tokens).${costPhrase}`,
       { modal: true },
       "Probe",
     );

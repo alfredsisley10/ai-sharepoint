@@ -143,6 +143,25 @@ export interface ModelLimitDisplay {
   measured: boolean;
 }
 
+/** Merge an imported model-limit record into a local one, conservatively: the
+ *  higher proven known-good, the lower (tighter) learned cap, and the incoming
+ *  advertised/baseline when present. Used when importing shared probe results so
+ *  a teammate's measurements never loosen a limit you've already proven tighter. */
+export function mergeModelLimit(existing: ModelLimit | undefined, incoming: ModelLimit, now: string): ModelLimit {
+  const knownGood = Math.max(existing?.knownGood ?? 0, incoming.knownGood ?? 0) || undefined;
+  const caps = [existing?.effectiveCap, incoming.effectiveCap].filter((x): x is number => x !== undefined);
+  const effectiveCap = caps.length ? Math.min(...caps) : undefined;
+  const advertised = incoming.advertised ?? existing?.advertised;
+  const measuredAtAdvertised = incoming.measuredAtAdvertised ?? existing?.measuredAtAdvertised;
+  return {
+    ...(advertised !== undefined ? { advertised } : {}),
+    ...(effectiveCap !== undefined ? { effectiveCap } : {}),
+    ...(knownGood !== undefined ? { knownGood } : {}),
+    ...(measuredAtAdvertised !== undefined ? { measuredAtAdvertised } : {}),
+    updatedAt: now,
+  };
+}
+
 /** Shape a stored ModelLimit for display in the Copilot Activity surfaces:
  *  the reported limit, what testing has proven, and the resulting budget cap. */
 export function describeModelLimit(row: { key: string } & ModelLimit): ModelLimitDisplay {

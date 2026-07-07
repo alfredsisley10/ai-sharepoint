@@ -47,3 +47,18 @@ export function estimatePremiumCost(
   const price = Number.isFinite(p.pricePerRequest) ? Math.max(0, p.pricePerRequest) : 0;
   return premiumRequests(rows, multiplierFor) * price;
 }
+
+export interface ProbeCostEstimate {
+  /** Upper-bound premium requests the probe may consume (steps × multiplier). */
+  premiumRequests: number;
+  /** Upper-bound dollar cost at the configured per-request price. */
+  cost: number;
+}
+
+/** Estimate the (upper-bound) cost of a context-limit probe: it sends up to
+ *  `steps` test requests, each consuming `multiplier` premium requests. */
+export function estimateProbeCost(multiplier: number, steps: number, pricePerRequest: number): ProbeCostEstimate {
+  const pr = Math.max(0, steps) * Math.max(0, multiplier);
+  const price = Number.isFinite(pricePerRequest) ? Math.max(0, pricePerRequest) : 0;
+  return { premiumRequests: pr, cost: pr * price };
+}

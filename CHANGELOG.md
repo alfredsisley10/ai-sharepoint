@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.119.0 — 2026-07-07
+
+### Added — probe cost estimates + exportable probed limits & pricing
+- **Context-limit probing now shows its estimated cost before running.** Both the manual **Probe Model
+  Context Limit** command and the automatic (opt-in) probe offer now include an upper-bound dollar
+  estimate — up to `PROBE_MAX_STEPS` test requests × the model's premium-request multiplier × your
+  configured per-request price — so you know the cost before proceeding. A re-probe (after an
+  advertised-limit drift) shows the same estimate.
+- **Probed model limits and pricing now travel with the configuration export.** The reference-config
+  export/import now carries the learned per-model context limits (non-secret token counts, merged
+  conservatively on import so a teammate's looser measurement never loosens a limit you've proven
+  tighter) and your cost/pricing settings (premium-request price, token rates, currency). A team can
+  share one exact enterprise pricing definition and skip re-probing on every machine. Both remain
+  secret-free (they pass the export leak scan); pricing is applied on import only with your consent.
+
 ## 0.118.0 — 2026-07-07
 
 ### Changed — chat follow-up suggestions are now context-aware

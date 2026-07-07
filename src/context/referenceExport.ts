@@ -4,6 +4,7 @@ import { SourceSchema } from "./db/schemaIndex";
 import { Project, INSTRUCTIONS_MAX_CHARS, GOALS_MAX_CHARS, AI_CONTEXT_MAX_CHARS } from "./types";
 import { MemoryItem, MemoryScope, MemoryScopeKind, memoryKey, mergeMemory, sameMemoryContent, normalizeMemoryInput } from "./memory";
 import { PromptItem, PromptScope, PromptScopeKind, promptKey, mergePrompt, samePromptContent, normalizePromptInput } from "./promptLibrary";
+import { ModelLimit } from "../core/contextBudget";
 import { scanForLeaks } from "../diagnostics/bundle";
 
 /**
@@ -87,6 +88,27 @@ export interface ExportedPrompt {
   tags?: string[];
 }
 
+/** A learned/probed per-model context limit — non-secret token counts, keyed by
+ *  the portable model family/id so a team shares probe results (skipping the
+ *  metered probe on every machine). */
+export interface ExportedModelLimit {
+  key: string;
+  advertised?: number;
+  effectiveCap?: number;
+  knownGood?: number;
+  measuredAtAdvertised?: number;
+  updatedAt?: string;
+}
+
+/** Cost settings so a team/enterprise shares one pricing definition. Plain
+ *  numbers + a currency symbol; no secrets. */
+export interface ExportedPricing {
+  pricePerPremiumRequest?: number;
+  tokenCostInputPerMillion?: number;
+  tokenCostOutputPerMillion?: number;
+  currencySymbol?: string;
+}
+
 export interface ReferenceExport {
   $schema: typeof REFERENCE_EXPORT_SCHEMA;
   exportedAt: string;
@@ -115,6 +137,10 @@ export interface ReferenceExport {
   /** Prompt Library entries (global or scoped), portably keyed. Optional so older
    *  importers tolerate it. Imported with review + dedup/merge. */
   prompts?: ExportedPrompt[];
+  /** Learned/probed per-model context limits (non-secret). Optional. */
+  modelLimits?: ExportedModelLimit[];
+  /** Cost/pricing settings (non-secret). Optional; applied to settings on import. */
+  pricing?: ExportedPricing;
 }
 
 export const EXPORT_NOTICE =
@@ -153,6 +179,10 @@ export function buildReferenceExport(
   /** id→name for ALL projects, so a project-scoped prompt re-keys to the project
    *  name (machine-local ids never travel) even if that project isn't exported. */
   projectNamesById?: Map<string, string>,
+  /** Learned/probed per-model context limits to share (non-secret). */
+  modelLimits?: Array<{ key: string } & ModelLimit>,
+  /** Cost/pricing settings to share (non-secret). */
+  pricing?: ExportedPricing,
 ): ReferenceExport {
   const byId = new Map(sources.map((s) => [s.id, s.displayName]));
   const memNames = sourceNamesById ?? byId;
@@ -232,6 +262,20 @@ export function buildReferenceExport(
       : {}),
     ...(memory.length > 0 ? { memory } : {}),
     ...(prompts.length > 0 ? { prompts } : {}),
+    // Explicit allowlist (non-secret token counts only).
+    ...(modelLimits && modelLimits.length > 0
+      ? {
+          modelLimits: modelLimits.map((m) => ({
+            key: m.key,
+            ...(m.advertised !== undefined ? { advertised: m.advertised } : {}),
+            ...(m.effectiveCap !== undefined ? { effectiveCap: m.effectiveCap } : {}),
+            ...(m.knownGood !== undefined ? { knownGood: m.knownGood } : {}),
+            ...(m.measuredAtAdvertised !== undefined ? { measuredAtAdvertised: m.measuredAtAdvertised } : {}),
+            ...(m.updatedAt ? { updatedAt: m.updatedAt } : {}),
+          })),
+        }
+      : {}),
+    ...(pricing && Object.values(pricing).some((v) => v !== undefined) ? { pricing } : {}),
   };
 }
 
@@ -271,6 +315,10 @@ export interface ParsedImport {
   memory: ParsedMemory[];
   /** Prompt Library entries, still portably keyed; the command remaps + merges. */
   prompts: ParsedPrompt[];
+  /** Learned/probed per-model context limits to fold into the local store. */
+  modelLimits: ExportedModelLimit[];
+  /** Cost/pricing settings to apply (with the user's consent) on import. */
+  pricing?: ExportedPricing;
 }
 
 const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "powerbi", "servicenow", "splunk", "splunkobs", "grafana", "m365copilot"]);
@@ -283,7 +331,7 @@ export function parseReferenceImport(
   importedAt: string,
   newId: () => string,
 ): ParsedImport {
-  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [], sites: [], memory: [], prompts: [] };
+  const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [], sites: [], memory: [], prompts: [], modelLimits: [] };
   let raw: ReferenceExport;
   try {
     raw = JSON.parse(json) as ReferenceExport;
@@ -456,6 +504,47 @@ export function parseReferenceImport(
       body: norm.body,
       ...(norm.tags ? { tags: norm.tags } : {}),
     });
+  }
+
+  // Model limits: non-secret token counts keyed by portable model id. Keep only
+  // finite positive numbers; a bad entry is skipped rather than corrupting a budget.
+  const posInt = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined;
+  for (const m of Array.isArray(raw.modelLimits) ? raw.modelLimits : ([] as ExportedModelLimit[])) {
+    if (!m || typeof m.key !== "string" || !m.key.trim()) {
+      out.warnings.push("A model-limit entry was malformed and was skipped.");
+      continue;
+    }
+    const entry: ExportedModelLimit = { key: m.key.trim() };
+    const adv = posInt(m.advertised);
+    const eff = posInt(m.effectiveCap);
+    const kg = posInt(m.knownGood);
+    const ma = posInt(m.measuredAtAdvertised);
+    if (adv !== undefined) entry.advertised = adv;
+    if (eff !== undefined) entry.effectiveCap = eff;
+    if (kg !== undefined) entry.knownGood = kg;
+    if (ma !== undefined) entry.measuredAtAdvertised = ma;
+    if (typeof m.updatedAt === "string") entry.updatedAt = m.updatedAt;
+    if (adv === undefined && eff === undefined && kg === undefined) continue; // nothing useful
+    out.modelLimits.push(entry);
+  }
+
+  // Pricing: plain non-negative numbers + a currency symbol.
+  const nonNeg = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
+  if (raw.pricing && typeof raw.pricing === "object") {
+    const p = raw.pricing as ExportedPricing;
+    const pricing: ExportedPricing = {};
+    const ppr = nonNeg(p.pricePerPremiumRequest);
+    const inMil = nonNeg(p.tokenCostInputPerMillion);
+    const outMil = nonNeg(p.tokenCostOutputPerMillion);
+    if (ppr !== undefined) pricing.pricePerPremiumRequest = ppr;
+    if (inMil !== undefined) pricing.tokenCostInputPerMillion = inMil;
+    if (outMil !== undefined) pricing.tokenCostOutputPerMillion = outMil;
+    if (typeof p.currencySymbol === "string" && p.currencySymbol.trim()) {
+      pricing.currencySymbol = p.currencySymbol.trim().slice(0, 4);
+    }
+    if (Object.keys(pricing).length > 0) out.pricing = pricing;
   }
   return out;
 }

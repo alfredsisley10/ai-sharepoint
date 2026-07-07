@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ModelLimit, onAdvertised, onOverflow, onSuccess, resolveLimit } from "../core/contextBudget";
+import { ModelLimit, onAdvertised, onOverflow, onSuccess, resolveLimit, mergeModelLimit } from "../core/contextBudget";
 
 /**
  * The "memory" half of effective-context probing (#3): each model's learned
@@ -61,5 +61,17 @@ export class ModelLimitsStore {
 
   list(): Array<{ key: string } & ModelLimit> {
     return Object.entries(this.all()).map(([key, v]) => ({ key, ...v }));
+  }
+
+  /** Merge imported (shared) per-model limits into the store, conservatively.
+   *  Returns how many entries were folded in. */
+  async importLimits(entries: Array<{ key: string } & ModelLimit>): Promise<number> {
+    if (!entries.length) return 0;
+    const all = this.all();
+    for (const { key, ...rest } of entries) {
+      all[key] = mergeModelLimit(all[key], rest, this.now());
+    }
+    await this.memento.update(KEY, all);
+    return entries.length;
   }
 }

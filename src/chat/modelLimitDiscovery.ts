@@ -2,6 +2,11 @@ import * as vscode from "vscode";
 import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
 import { needsEffectiveProbe } from "../core/contextBudget";
 import { runContextLimitProbe } from "./contextLimitProbe";
+import { PROBE_MAX_STEPS } from "../core/contextProbe";
+import { ModelCostTable } from "../copilot/modelCosts";
+import { estimateProbeCost } from "../copilot/premiumCost";
+import { readPremiumPricing } from "../copilot/premiumPricing";
+import { formatCost } from "../copilot/tokenCost";
 
 /**
  * Startup / model-discovery context-limit capture.
@@ -95,10 +100,19 @@ export async function maybeOfferContextProbe(
 
   const names = candidates.map((c) => c.model.name);
   const list = names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} +${names.length - 3} more`;
+  // Estimated upper-bound cost across the candidate models (each probe sends up
+  // to PROBE_MAX_STEPS requests; premium requests = steps × the model multiplier).
+  const costs = new ModelCostTable();
+  const pricing = readPremiumPricing();
+  const totalCost = candidates.reduce(
+    (sum, c) => sum + estimateProbeCost(costs.multiplierFor(c.key), PROBE_MAX_STEPS, pricing.pricePerRequest).cost,
+    0,
+  );
+  const costPhrase = totalCost > 0 ? ` Estimated cost up to ~${formatCost(totalCost, pricing.currency)} at your configured rate.` : "";
   const choice = await vscode.window.showInformationMessage(
     `AI SharePoint can measure the real context limit for ${candidates.length} Copilot model(s) (${list}). ` +
       "The published limit is often larger than Copilot actually delivers, so measuring it lets the extension pack prompts optimally and avoid mid-chat overflows. " +
-      "It sends a few short test prompts (uses a little of your Copilot allowance); results are saved so this runs only once per model.",
+      `It sends a few short test prompts (uses a little of your Copilot allowance); results are saved so this runs only once per model.${costPhrase}`,
     "Measure now",
     "Not now",
     "Don't ask again",
