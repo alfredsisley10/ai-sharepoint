@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.110.4 — 2026-07-07
+
+### Added — interactive filtering in the Copilot Activity dashboard
+- **Click the "failed / cancelled" card to filter the whole dashboard to failures.** The daily chart
+  switches to failures-per-day (red), and the by-model and by-task tables switch to failure counts
+  with zero-failure rows dropped — so you can see exactly where the failures are concentrated. A
+  banner and a "show all activity" link (and the "requests this month" card) take you back. Cards are
+  keyboard-accessible; all filtering re-renders through the same locked-down, nonce'd webview (no new
+  scripts or network access).
+
 ## 0.110.3 — 2026-07-07
 
 ### Added — know the context limits up front

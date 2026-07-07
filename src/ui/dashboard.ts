@@ -13,6 +13,8 @@ import { readTokenRates } from "../copilot/tokenRates";
 export class UsageDashboard {
   private panel: vscode.WebviewPanel | undefined;
   private readonly disposables: vscode.Disposable[] = [];
+  /** Active view filter — toggled by clicking the summary cards. */
+  private filter: "all" | "failed" = "all";
 
   constructor(
     private readonly meter: UsageMeter,
@@ -42,13 +44,21 @@ export class UsageDashboard {
       }
     });
     this.disposables.push(
-      this.panel.webview.onDidReceiveMessage((msg: { command?: string }) => {
+      this.panel.webview.onDidReceiveMessage((msg: { command?: string; value?: string }) => {
         switch (msg?.command) {
           case "export":
             void vscode.commands.executeCommand("aiSharePoint.exportDiagnostics");
             break;
           case "reset":
             void vscode.commands.executeCommand("aiSharePoint.resetUsage");
+            break;
+          case "filter":
+            this.filter = msg.value === "failed" ? "failed" : "all";
+            this.render();
+            break;
+          case "filter-all":
+            this.filter = "all";
+            this.render();
             break;
         }
       }),
@@ -88,6 +98,7 @@ export class UsageDashboard {
       byModel: byModel.map((m) => ({
         key: m.key,
         requests: m.requests,
+        failures: m.failures,
         inputTokens: m.inputTokens,
         outputTokens: m.outputTokens,
         ...(showCost ? { cost: formatCost(estimateCost(m.inputTokens, m.outputTokens, rates), rates.currency) } : {}),
@@ -95,8 +106,10 @@ export class UsageDashboard {
       byLabel: this.meter.byLabelThisMonth(nowIso).map((l) => ({
         key: l.key,
         requests: l.requests,
+        failures: l.failures,
       })),
       ...(showCost ? { monthCost: formatCost(monthTotal, rates.currency) } : {}),
+      filter: this.filter,
     };
   }
 

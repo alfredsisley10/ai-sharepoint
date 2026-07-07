@@ -68,6 +68,35 @@ test("empty activity renders friendly empty states", () => {
   assert.ok(html.includes("No requests yet"));
 });
 
+test("failed filter switches the chart + tables to failures and offers a way back", () => {
+  const all = renderDashboardHtml(data(), "n");
+  assert.ok(!all.includes("Showing"), "no filter banner in the default view");
+  assert.ok(all.includes('data-filter="failed"'), "failed card is clickable");
+
+  const failed = renderDashboardHtml(
+    data({
+      filter: "failed",
+      byModel: [
+        { key: "gpt-a", requests: 60, failures: 3, inputTokens: 5000, outputTokens: 9000 },
+        { key: "gpt-b", requests: 40, failures: 0, inputTokens: 1000, outputTokens: 1000 },
+      ],
+      byLabel: [
+        { key: "chat", requests: 60, failures: 2 },
+        { key: "tool:x", requests: 20, failures: 0 },
+      ],
+    }),
+    "n",
+  );
+  assert.ok(failed.includes("Showing"), "shows the failed-only banner");
+  assert.ok(failed.includes("failures per day"), "chart heading reflects failures");
+  assert.ok(failed.includes("<th>Failed</th>"), "tables switch to a Failed column");
+  assert.ok(failed.includes("btn-clear-filter"), "offers a show-all control");
+  // Only rows with failures survive the filter.
+  assert.ok(failed.includes("gpt-a"));
+  assert.ok(!failed.includes("gpt-b"), "zero-failure model row is dropped");
+  assert.ok(!failed.includes("tool:x"), "zero-failure task row is dropped");
+});
+
 test("cost is hidden by default and shown only when a rate produces monthCost", () => {
   const noCost = renderDashboardHtml(data(), "n");
   assert.ok(!noCost.includes("est. cost this month"));
