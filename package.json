@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.119.1",
+  "version": "0.120.0",
   "release": {
     "channel": "standard"
   },
@@ -761,7 +761,7 @@
       },
       {
         "view": "aiSharePoint.projectsView",
-        "contents": "Projects group reference sources & bookmarks, define **goals** and **instructions** for @sharepoint, and keep a separate **AI-managed context** the assistant learns over time.\n[Create Project](command:aiSharePoint.createProject)\nActivate a project to scope chat and the Reference Sources view to it."
+        "contents": "Projects group reference sources & bookmarks, define **goals** and **instructions** for @sharepoint, and keep a separate **AI-managed context** the assistant learns over time.\n[Create Project](command:aiSharePoint.createProject)\nActivate a project to scope chat and the Reference Sources view to it. Each project can also mirror its chats to a durable **workspace** (follow along, cache data, restart starved chats) and build a Confluence **space dossier** — owners, stale pages, and recommended revisions.\n[Build Confluence Space Dossier](command:aiSharePoint.buildSpaceDossier)"
       },
       {
         "view": "aiSharePoint.promptsView",
@@ -796,6 +796,64 @@
       }
     ],
     "languageModelTools": [
+      {
+        "name": "aisharepoint_build_space_dossier",
+        "displayName": "Build Confluence Space Dossier",
+        "toolReferenceName": "spBuildDossier",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(list-tree)",
+        "tags": [
+          "sharepoint",
+          "confluence"
+        ],
+        "modelDescription": "Aggregate a whole Confluence space into a durable dossier in the active project's workspace, for content cleanup. For every page it resolves the owner (recency-weighted contributor, LDAP active-employee checked), staleness, and data-quality flags (broken links, currency issues), then writes inventory.md/.json, owners.md, dossier.xlsx, per-owner outreach drafts, and per-page recommended-revision scaffolds, and opens a de-duplicated remediation work item for every flagged page. Requires an active project (the dossier is saved into its workspace). Use when the user asks to optimize/clean up/audit a Confluence space. It reads the whole space (can be many requests) but uses no Copilot premium requests. Args: spaceKey (required), optional source (the Confluence source alias/name if the project has more than one).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "spaceKey": {
+              "type": "string",
+              "description": "The Confluence space key to aggregate (Space Settings → Space Details → Key)."
+            },
+            "source": {
+              "type": "string",
+              "description": "Optional: the Confluence source alias or name, if the project has more than one."
+            }
+          },
+          "required": [
+            "spaceKey"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_start_project_workspace",
+        "displayName": "Start Project Workspace",
+        "toolReferenceName": "spStartWorkspace",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(new-folder)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Start a chat workspace for the active project so this conversation is mirrored to a durable, browsable folder (transcript + rolling SUMMARY + cached context) and survives the chat's context window (useful in context-limited corporate environments). Use when the user agrees to track/clean up a conversation. Requires an active project. No args.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "aisharepoint_workspace_summary",
+        "displayName": "Read Project Workspace Summary",
+        "toolReferenceName": "spWorkspaceSummary",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(book)",
+        "tags": [
+          "sharepoint"
+        ],
+        "modelDescription": "Read the active project's workspace SUMMARY (goals, session outline, and pointers to cached context) so you can RESUME a prior conversation without re-fetching everything. Use at the start of a resumed chat, or when the user asks where things stand. Requires an active project with a workspace. No args.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
       {
         "name": "aisharepoint_recommend_page_revision",
         "displayName": "Recommend Page Revision",
@@ -2800,6 +2858,11 @@
           "group": "navigation@2"
         },
         {
+          "command": "aiSharePoint.buildSpaceDossier",
+          "when": "view == aiSharePoint.projectsView",
+          "group": "navigation@3"
+        },
+        {
           "command": "aiSharePoint.addPrompt",
           "when": "view == aiSharePoint.promptsView",
           "group": "navigation@1"
@@ -3393,6 +3456,18 @@
             },
             "completionEvents": [
               "onCommand:aiSharePoint.createProject"
+            ]
+          },
+          {
+            "id": "cleanupSpace",
+            "title": "%walkthrough.aiSharePoint.gettingStarted.step.cleanupSpace.title%",
+            "description": "%walkthrough.aiSharePoint.gettingStarted.step.cleanupSpace.description%",
+            "media": {
+              "image": "media/walkthrough/projects.svg",
+              "altText": "Track and clean up a Confluence space in a project workspace"
+            },
+            "completionEvents": [
+              "onCommand:aiSharePoint.buildSpaceDossier"
             ]
           },
           {

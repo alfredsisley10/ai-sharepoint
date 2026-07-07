@@ -72,3 +72,11 @@ project so interleaved turns cannot clobber the summary.
   context + tool results are cached to `context/<session>.md` (redacted,
   bounded) for reuse, and "Resume Chat from Project Workspace" writes `RESUME.md`
   and opens a new @sharepoint chat prefilled with a compact restart brief.
+- **Delivered (0.120.0) — chat can drive the flow (usability cohesion).**
+  `chat/dossierTools.ts` adds `build_space_dossier`, `start_project_workspace`,
+  and `workspace_summary` tools (sharing `buildDossierInto` with the command),
+  and the participant INSTRUCTIONS describe the
+  workspace→dossier→owners→revisions→outreach loop — so the assistant can
+  actually run what its follow-ups suggest instead of pointing at commands.
+  Onboarding gains a "Track & clean up a Confluence space" walkthrough step, and
+  the Projects view surfaces the dossier (welcome text + title button).

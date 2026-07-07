@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.120.0 — 2026-07-07
+
+### Changed — usability: the chat can now drive the cleanup flow it suggests
+- **The assistant can actually run the workspace + dossier flow, not just point at commands.** Three
+  new chat tools close the gap where the follow-ups and the "track this cleanup?" offer suggested
+  actions the chat couldn't perform: `aisharepoint_build_space_dossier` (aggregate a Confluence space
+  → inventory/owners/xlsx/outreach + a work item per flagged page, into the project workspace),
+  `aisharepoint_start_project_workspace` (begin tracking the conversation), and
+  `aisharepoint_workspace_summary` (read the SUMMARY to resume without re-fetching). The participant
+  instructions now describe the workspace→dossier→owners→revisions→outreach loop, so when you ask to
+  optimize a Confluence space the assistant drives it end-to-end. The command and tool share one
+  implementation (`buildDossierInto`).
+- **Onboarding refreshed.** A new "Track & clean up a Confluence space" walkthrough step introduces
+  the workspace + dossier flow, and the "See what the extension asked Copilot" step now mentions the
+  dollar-cost estimate and reported/tested context limits (its old "not estimated" copy was outdated).
+- **Discoverability.** The Projects view welcome text now describes chat workspaces and the dossier,
+  and a "Build Confluence Space Dossier" button sits on the Projects view title bar.
+
 ## 0.119.1 — 2026-07-07
 
 ### Fixed — review-pass correctness fixes

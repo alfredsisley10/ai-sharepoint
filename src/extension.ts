@@ -143,7 +143,7 @@ import {
 } from "./context/projectsStore";
 import { ProjectsTreeProvider } from "./ui/projectsView";
 import { ChatWorkspaceStore } from "./context/chatWorkspaceStore";
-import { summarizeDossier, dossierWorkItemSeeds } from "./context/spaceDossier";
+import { registerDossierTools, buildDossierInto } from "./chat/dossierTools";
 import { registerPageRevisionTool } from "./chat/pageRevisionTool";
 import { registerProjectTools } from "./chat/projectTools";
 import {
@@ -1002,6 +1002,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ...tryRegister("page-revision tool", () => [
       registerPageRevisionTool(projects, chatWorkspace, telemetry, errors),
     ]),
+    ...tryRegister("dossier tools", () =>
+      registerDossierTools(projects, contextSources, contextService, chatWorkspace, workItems, telemetry, errors),
+    ),
     schemas,
     catalogs,
     projects,
@@ -6862,35 +6865,18 @@ export function activate(context: vscode.ExtensionContext): void {
     )?.trim();
     if (!spaceKey) return;
 
-    const dossier = await vscode.window.withProgress(
+    const r = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Building dossier for ${spaceKey}…`, cancellable: false },
       (progress) =>
-        contextService.buildConfluenceSpaceDossier(source, spaceKey, {
-          onProgress: (done, total) => progress.report({ message: `reviewed ${done}/${total} page(s)…` }),
-        }),
+        buildDossierInto(project, source, spaceKey, { contextService, chatWorkspace, workItems }, (done, total) =>
+          progress.report({ message: `reviewed ${done}/${total} page(s)…` }),
+        ),
     );
-
-    const dir = await chatWorkspace.writeDossier(project, dossier, { outreach: true });
-    const summary = summarizeDossier(dossier);
-
-    // Open a remediation work item per flagged page (dedup against existing
-    // dossier items for this space by page ref).
-    const existingRefs = new Set(
-      workItems
-        .list()
-        .filter((w) => w.tags?.includes(spaceKey) && w.target.ref)
-        .map((w) => w.target.ref),
-    );
-    const seeds = dossierWorkItemSeeds(dossier, source.alias ?? source.displayName).filter(
-      (s) => !existingRefs.has(s.target.ref),
-    );
-    for (const seed of seeds) {
-      await workItems.create(seed).catch(() => undefined);
-    }
+    const dir = r.dir;
     telemetry.record("project.dossier", { space: "redacted" });
 
     const choice = await vscode.window.showInformationMessage(
-      `Dossier for ${spaceKey}: ${summary.captured}/${summary.totalPages} page(s) reviewed${dossier.truncated ? " (capped)" : ""} — ${summary.flagged} flagged (${summary.stale} stale, ${summary.ownerless} no active owner, ${summary.dataQuality} data-quality) across ${summary.owners} owner(s). Opened ${seeds.length} new work item(s). Saved to the "${project.name}" workspace.`,
+      `Dossier for ${spaceKey}: ${r.captured}/${r.total} page(s) reviewed${r.truncated ? " (capped)" : ""} — ${r.flagged} flagged. Opened ${r.created} new work item(s). Saved to the "${project.name}" workspace.`,
       "Open Inventory",
       "Open Owners",
     );
