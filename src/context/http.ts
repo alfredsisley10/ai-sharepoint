@@ -226,6 +226,22 @@ export async function fetchJson<T>(
   if (res.status === 429 || res.status === 503) {
     throw new AppError(`Source is throttling requests (${res.status}).`, "graph.throttled");
   }
+  if (res.status === 500 || res.status === 502 || res.status === 504) {
+    // A genuine SERVER error — the credential is fine; the source failed to
+    // handle the request. The common trigger is a whole-subtree Confluence read
+    // (descendant/page materializes the entire tree server-side and 500s on
+    // large/deep spaces). Carry an actionable summary so it doesn't surface as a
+    // bare "request failed" (and so the generic advice — see core/errors — is
+    // suppressed rather than blaming the network/credential). The page-tree
+    // explorer already falls back to a page-by-page walk automatically.
+    const body = await res.text().catch(() => "");
+    const reason = redactText(body).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+    throw new AppError(
+      `The source returned a server error (${res.status} ${res.statusText})${reason ? `: ${reason}` : ""}.`,
+      "unknown",
+      "The server (not your sign-in) failed to handle this request. On Confluence this most often hits a whole-subtree read of a large or deeply-nested page. Retry in a moment; if it persists, narrow the scope to a smaller subtree or a specific child page.",
+    );
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new AppError(

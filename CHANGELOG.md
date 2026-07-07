@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.110.2 — 2026-07-07
+
+### Fixed — 500 errors when viewing a Confluence subtree
+- **The page-tree explorer now survives a Confluence 500 on large/deep subtrees.** Confluence's
+  `descendant/page` endpoint materializes the entire subtree server-side in one request (and, with
+  `expand=ancestors`, re-expands every node's breadcrumb), so on large or deeply-nested pages — and
+  on Data Center especially — it routinely answers **HTTP 500**. That endpoint is now a **fast path
+  only**: when it fails with a server/upstream error, the connector falls back to a bounded,
+  breadth-first walk over the cheap, stable single-level `child/page` endpoint, which never triggers
+  the whole-subtree blow-up, needs no expensive expand, and degrades per-branch (one restricted or
+  transiently-erroring page is skipped, not fatal). The rebuilt tree is identical to the fast path's.
+  A terminal error (bad credential, forbidden, not-found) is **not** retried this way — a different
+  endpoint won't fix it.
+- **Server errors surface a clear, actionable message instead of a bare "request failed".** A 500 /
+  502 / 504 from any REST connector now carries its own remediation ("the server, not your sign-in,
+  failed to handle this — retry, or narrow the scope to a smaller subtree/child page") rather than
+  falling through to the generic (network/credential) advice.
+
 ## 0.110.1 — 2026-07-07
 
 ### Fixed — misleading Microsoft-endpoint advice on non-Microsoft connectors
