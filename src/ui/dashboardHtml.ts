@@ -30,8 +30,10 @@ export interface DashboardData {
     cost?: string;
   }>;
   byLabel: Array<{ key: string; requests: number; failures?: number }>;
-  /** Formatted estimated total cost this month, present only when a rate is set. */
+  /** Formatted estimated token cost this month, present only when a token rate is set. */
   monthCost?: string;
+  /** Formatted estimated premium-request cost this month (default $0.04/request). */
+  premiumCost?: string;
   /** Active view: "all" (default) or "failed" — clicking the failed/cancelled
    *  card filters the chart + tables to failures only. */
   filter?: "all" | "failed";
@@ -220,7 +222,8 @@ export function renderDashboardHtml(
     <div class="card${failedView ? " active" : ""}" data-filter="all" role="button" tabindex="0" title="Show all activity"><span class="k">${data.monthRequests}</span><span class="s">requests this month${failedView ? " — click to show all" : ""}</span></div>
     <div class="card" data-filter="all"><span class="k">${data.todayRequests}</span><span class="s">requests today</span></div>
     ${data.monthFailures > 0 ? `<div class="card fail${failedView ? " active" : ""}" data-filter="failed" role="button" tabindex="0" title="Filter to failed / cancelled"><span class="k">${data.monthFailures}</span><span class="s">failed / cancelled — click to ${failedView ? "keep" : "filter"} (still billed by GitHub)</span></div>` : ""}
-    ${data.monthCost !== undefined ? `<div class="card"><span class="k">${esc(data.monthCost)}</span><span class="s">est. cost this month (your rate)</span></div>` : ""}
+    ${data.premiumCost !== undefined ? `<div class="card"><span class="k">${esc(data.premiumCost)}</span><span class="s">est. cost this month (premium requests @ $0.04)</span></div>` : ""}
+    ${data.monthCost !== undefined ? `<div class="card"><span class="k">${esc(data.monthCost)}</span><span class="s">est. token cost this month (your rate)</span></div>` : ""}
   </div>
 
   ${failedView ? `<div class="filterbar">Showing <strong>failed / cancelled</strong> only · <button id="btn-clear-filter" class="linkish">show all activity</button></div>` : ""}
@@ -267,8 +270,12 @@ export function renderDashboardHtml(
     Counts are this extension's own requests, measured locally — factual, but they say nothing
     about premium-request consumption against your plan. Your GitHub billing/plan page is the
     only authoritative source for that.${
+      data.premiumCost !== undefined
+        ? " Estimated cost = your requests × each model's published premium-request multiplier × the $0.04/request overage rate; your plan's allowance may make the real charge lower."
+        : ""
+    }${
       data.monthCost !== undefined
-        ? " Estimated cost multiplies your configured per-token rate by the locally-measured tokens — an estimate from a rate you set, not a GitHub bill."
+        ? " Token cost multiplies your configured per-token rate by the locally-measured tokens — an estimate from a rate you set."
         : ""
     } Generated ${esc(data.generatedAt)}.
   </footer>

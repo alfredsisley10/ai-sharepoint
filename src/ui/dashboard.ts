@@ -4,6 +4,9 @@ import { UsageMeter } from "../copilot/meter";
 import { renderDashboardHtml, DashboardData } from "./dashboardHtml";
 import { costEnabled, estimateCost, formatCost } from "../copilot/tokenCost";
 import { readTokenRates } from "../copilot/tokenRates";
+import { premiumCostEnabled, estimatePremiumCost } from "../copilot/premiumCost";
+import { readPremiumPricing } from "../copilot/premiumPricing";
+import { ModelCostTable } from "../copilot/modelCosts";
 import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
 import { describeModelLimit } from "../core/contextBudget";
 
@@ -15,6 +18,7 @@ import { describeModelLimit } from "../core/contextBudget";
 export class UsageDashboard {
   private panel: vscode.WebviewPanel | undefined;
   private readonly disposables: vscode.Disposable[] = [];
+  private readonly costs = new ModelCostTable();
   /** Active view filter — toggled by clicking the summary cards. */
   private filter: "all" | "failed" = "all";
 
@@ -92,6 +96,10 @@ export class UsageDashboard {
     const byModel = this.meter.byModelThisMonth(nowIso);
     let monthTotal = 0;
     for (const m of byModel) monthTotal += estimateCost(m.inputTokens, m.outputTokens, rates);
+    const premium = readPremiumPricing();
+    const premiumCost = premiumCostEnabled(premium)
+      ? formatCost(estimatePremiumCost(byModel, (k) => this.costs.multiplierFor(k), premium), premium.currency)
+      : undefined;
     return {
       generatedAt: nowIso,
       todayRequests: this.meter.requestsToday(nowIso),
@@ -112,6 +120,7 @@ export class UsageDashboard {
         failures: l.failures,
       })),
       ...(showCost ? { monthCost: formatCost(monthTotal, rates.currency) } : {}),
+      ...(premiumCost !== undefined ? { premiumCost } : {}),
       filter: this.filter,
       modelLimits: (this.modelLimits?.list() ?? [])
         .map(describeModelLimit)

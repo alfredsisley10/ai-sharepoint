@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.116.0 — 2026-07-07
+
+### Added — dollar cost estimate in Copilot Activity, on by default
+- **The Copilot Activity view now shows an estimated dollar cost out of the box.** Using GitHub's own
+  public pricing model — premium requests × each model's published premium-request multiplier
+  (`model-costs.json`) × the **$0.04**/premium-request overage rate — the tree and dashboard show an
+  "est. cost this month" without any configuration. It's clearly labelled as an estimate at the
+  overage rate (your plan's monthly premium-request allowance may make the real charge lower; GitHub
+  billing is authoritative). Configurable via `aiSharePoint.usage.pricePerPremiumRequest` (set to `0`
+  to hide). The optional token-based cost (for those who price by the underlying token API) remains,
+  now labelled "est. token cost" to distinguish it.
+
 ## 0.115.0 — 2026-07-07
 
 ### Added — model context limits in the Copilot Activity view

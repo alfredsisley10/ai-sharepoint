@@ -129,9 +129,18 @@ test("cost is hidden by default and shown only when a rate produces monthCost", 
     "n",
   );
   assert.ok(withCost.includes("$3.00"));
-  assert.ok(withCost.includes("est. cost this month"));
+  assert.ok(withCost.includes("est. token cost this month"));
   assert.ok(withCost.includes("<th>Est. cost</th>"));
   assert.ok(withCost.includes("$1.20"));
   // Framed as the user's own estimate, never as a GitHub bill.
-  assert.ok(/estimate from a rate you set|rate you set/i.test(withCost));
+  assert.ok(/rate you set/i.test(withCost));
+});
+
+test("premium-request cost card renders when present, framed as an estimate", () => {
+  const none = renderDashboardHtml(data(), "n");
+  assert.ok(!none.includes("premium requests @"));
+  const withPremium = renderDashboardHtml(data({ premiumCost: "$4.80" }), "n");
+  assert.ok(withPremium.includes("$4.80"));
+  assert.ok(withPremium.includes("premium requests @ $0.04"));
+  assert.ok(/allowance may make the real charge lower/i.test(withPremium));
 });

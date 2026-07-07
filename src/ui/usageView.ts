@@ -2,6 +2,9 @@ import * as vscode from "vscode";
 import { UsageMeter } from "../copilot/meter";
 import { costEnabled, estimateCost, formatCost } from "../copilot/tokenCost";
 import { readTokenRates } from "../copilot/tokenRates";
+import { premiumCostEnabled, estimatePremiumCost } from "../copilot/premiumCost";
+import { readPremiumPricing } from "../copilot/premiumPricing";
+import { ModelCostTable } from "../copilot/modelCosts";
 import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
 import { describeModelLimit } from "../core/contextBudget";
 
@@ -25,6 +28,7 @@ interface UsageNode {
 export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private readonly costs = new ModelCostTable();
 
   constructor(
     private readonly meter: UsageMeter,
@@ -117,6 +121,12 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
           rates.currency,
         )
       : undefined;
+    // Copilot's own pricing model: premium requests × multiplier × price. On by
+    // default (published $0.04/request), so dollars show without configuration.
+    const premium = readPremiumPricing();
+    const premiumCost = premiumCostEnabled(premium)
+      ? formatCost(estimatePremiumCost(byModel, (k) => this.costs.multiplierFor(k), premium), premium.currency)
+      : undefined;
 
     return [
       {
@@ -133,12 +143,25 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         label: `Today: ${this.meter.requestsToday(nowIso)} request(s)`,
         icon: new vscode.ThemeIcon("calendar"),
       },
+      ...(premiumCost !== undefined
+        ? [
+            {
+              id: "premiumCost",
+              label: `Est. cost this month: ${premiumCost}`,
+              icon: new vscode.ThemeIcon("credit-card"),
+              tooltip: new vscode.MarkdownString(
+                "Estimate at GitHub's published **$0.04 / premium request** overage rate × each model's premium-request multiplier × your local request counts.\n\nYour plan includes a monthly premium-request allowance, so the real charge may be lower — **GitHub billing is authoritative**. Click to change the rate in Settings.",
+              ),
+              command: { command: "workbench.action.openSettings", title: "Edit premium-request price", arguments: ["aiSharePoint.usage.pricePerPremiumRequest"] },
+            } as UsageNode,
+          ]
+        : []),
       ...(monthCost !== undefined
         ? [
             {
               id: "cost",
-              label: `Est. cost this month: ${monthCost}`,
-              icon: new vscode.ThemeIcon("credit-card"),
+              label: `Est. token cost this month: ${monthCost}`,
+              icon: new vscode.ThemeIcon("symbol-number"),
               tooltip:
                 "Estimate = your configured per-token rate × the tokens this extension measured locally. It reflects a rate you set in Settings (AI SharePoint › Usage), not your GitHub bill.",
               command: { command: "workbench.action.openSettings", title: "Edit token rate", arguments: ["aiSharePoint.usage.tokenCost"] },
