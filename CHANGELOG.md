@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.110.3 — 2026-07-07
+
+### Added — know the context limits up front
+- **Advertised context limits are now captured at startup (free).** On activation and whenever the
+  Copilot model set changes (e.g. you sign in later), the extension records each model's advertised
+  `maxInputTokens` — no LLM calls, no quota. So from the very first turn we budget prompts against
+  each model's real published ceiling instead of the conservative 8,192-token fallback.
+- **Opt-in, cached effective-limit probing.** Copilot often delivers less than the advertised limit,
+  so when a model is new — or its advertised limit changes — the extension now **offers** (never
+  silently runs) a one-time measurement of the real usable limit. It asks first because it spends a
+  little Copilot allowance, caches the result so each model is only asked about once, and re-offers
+  only if the advertised ceiling later drifts. Controlled by `aiSharePoint.context.offerProbeOnNewModels`
+  (on by default; "Don't ask again" turns it off). The manual **Probe Model Context Limit** command is
+  unchanged and now shares the same measurement path.
+
+### Added — see estimated cost in Copilot Activity
+- **Optional dollar amounts next to token counts.** Raw token totals are hard to relate to, so you can
+  now set your own token rate (`aiSharePoint.usage.tokenCostInputPerMillion`,
+  `…tokenCostOutputPerMillion`, `…currencySymbol`) and the Copilot Activity view + dashboard show an
+  estimated cost per model and for the month. It's strictly opt-in and clearly labelled as an estimate
+  from a rate **you** set — not a GitHub bill. Leave the rates at `0` and nothing changes.
+
 ## 0.110.2 — 2026-07-07
 
 ### Fixed — 500 errors when viewing a Confluence subtree

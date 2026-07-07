@@ -8,6 +8,8 @@ import {
   resolveLimit,
   onSuccess,
   onOverflow,
+  onAdvertised,
+  needsEffectiveProbe,
 } from "../src/core/contextBudget";
 
 const sec = (label: string, priority: number, tokens: number, required = false): PromptSection & { tokens: number } =>
@@ -112,4 +114,39 @@ test("resolveLimit clamps advertised by the learned cap but floors at known-good
   // a known-good larger than a stale cap wins (never budget below proven-good).
   assert.equal(resolveLimit({ effectiveCap: 4000, knownGood: 6000 }, 128000), 6000);
   assert.equal(resolveLimit(undefined, undefined), undefined);
+});
+
+test("onAdvertised records the free advertised ceiling and flags drift", () => {
+  const first = onAdvertised(undefined, 128000, "t1");
+  assert.equal(first.next.advertised, 128000);
+  assert.equal(first.changed, true);
+  assert.equal(first.next.knownGood, undefined, "no measurement invented");
+  assert.equal(first.next.effectiveCap, undefined);
+  // Same value again → no change.
+  assert.equal(onAdvertised(first.next, 128000, "t2").changed, false);
+  // A new advertised value → drift.
+  const moved = onAdvertised(first.next, 200000, "t3");
+  assert.equal(moved.changed, true);
+  assert.equal(moved.next.advertised, 200000);
+  // Invalid advertised is ignored (no phantom change).
+  assert.equal(onAdvertised(first.next, 0, "t4").changed, false);
+});
+
+test("onSuccess/onOverflow stamp measuredAtAdvertised for drift detection", () => {
+  assert.equal(onSuccess(undefined, 128000, 5000, "t").measuredAtAdvertised, 128000);
+  assert.equal(onOverflow(undefined, 128000, 9000, "t")?.measuredAtAdvertised, 128000);
+});
+
+test("needsEffectiveProbe: offer when unmeasured or advertised drifted, not once measured", () => {
+  // No advertised value → nothing to probe against.
+  assert.equal(needsEffectiveProbe(undefined, undefined), false);
+  // Brand-new model with an advertised limit → offer.
+  assert.equal(needsEffectiveProbe(undefined, 128000), true);
+  // Advertised recorded but never measured → still offer.
+  assert.equal(needsEffectiveProbe({ advertised: 128000 }, 128000), true);
+  // Measured under this ceiling → cached, don't offer.
+  assert.equal(needsEffectiveProbe({ knownGood: 90000, measuredAtAdvertised: 128000 }, 128000), false);
+  assert.equal(needsEffectiveProbe({ effectiveCap: 80000, measuredAtAdvertised: 128000 }, 128000), false);
+  // Provider moved the advertised ceiling since we measured → re-offer.
+  assert.equal(needsEffectiveProbe({ knownGood: 90000, measuredAtAdvertised: 128000 }, 200000), true);
 });

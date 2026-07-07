@@ -27,15 +27,9 @@ import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
 import { getDefangReport } from "./chat/proxyDefangLog";
 import { InteractionCache } from "./chat/interactionCache";
-import { looksLikeOverflow } from "./core/contextBudget";
-import {
-  initialProbeWindow,
-  nextProbeSize,
-  probeConverged,
-  probeFiller,
-  PROBE_TOLERANCE,
-  PROBE_MAX_STEPS,
-} from "./core/contextProbe";
+import { PROBE_MAX_STEPS } from "./core/contextProbe";
+import { runContextLimitProbe } from "./chat/contextLimitProbe";
+import { discoverAdvertisedLimits, maybeOfferContextProbe } from "./chat/modelLimitDiscovery";
 import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
 import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
@@ -918,9 +912,25 @@ export function activate(context: vscode.ExtensionContext): void {
     usageProvider.refresh();
   };
   void refreshCopilotState();
+
+  // Capture each Copilot model's advertised context ceiling (free — no LLM
+  // calls) at startup and whenever the model set changes, so we budget prompts
+  // against real published limits instead of the conservative fallback. Then, if
+  // any model is new or its advertised limit drifted, OFFER (never silently run)
+  // a one-time effective-limit probe; results are cached so it asks only once.
+  const captureModelLimits = async () => {
+    const { candidates } = await discoverAdvertisedLimits(modelLimits).catch(() => ({ recorded: 0, candidates: [] }));
+    usageProvider.refresh();
+    await maybeOfferContextProbe(candidates, modelLimits, telemetry).catch(() => undefined);
+  };
+  void captureModelLimits();
+
   context.subscriptions.push(
     vscode.extensions.onDidChange(() => void refreshCopilotState()),
-    vscode.lm.onDidChangeChatModels(() => void refreshCopilotState()),
+    vscode.lm.onDidChangeChatModels(() => {
+      void refreshCopilotState();
+      void captureModelLimits();
+    }),
   );
 
   // --- Chat + tools ------------------------------------------------------
@@ -6586,46 +6596,15 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Measuring the real context limit for ${model.name}…`, cancellable: true },
       async (progress, ptoken) => {
-        let { low, high } = initialProbeWindow(advertised, modelLimits.get(key)?.knownGood);
-        let lastGood = low;
-        for (let step = 0; step < PROBE_MAX_STEPS && !probeConverged(low, high, PROBE_TOLERANCE) && !ptoken.isCancellationRequested; step++) {
-          const target = nextProbeSize(low, high, PROBE_TOLERANCE);
-          if (target === undefined) break;
-          progress.report({ message: `testing ~${target.toLocaleString()} tokens (step ${step + 1}/${PROBE_MAX_STEPS})…` });
-          const filler = probeFiller(target);
-          let measured = target;
-          try {
-            measured = await model.countTokens(filler);
-          } catch {
-            /* keep the requested target as the estimate */
-          }
-          try {
-            const resp = await model.sendRequest(
-              [vscode.LanguageModelChatMessage.User(`${filler}\n\nReply with exactly: OK`)],
-              { justification: "AI SharePoint context-limit probe" },
-              ptoken,
-            );
-            for await (const _part of resp.stream) {
-              /* drain — success is reaching the end without an overflow throw */
-            }
-            lastGood = Math.max(lastGood, measured);
-            low = Math.max(low, measured);
-            await modelLimits.recordSuccess(key, advertised, measured).catch(() => undefined);
-          } catch (err) {
-            if (looksLikeOverflow(redactError(err).message)) {
-              high = Math.min(high, measured);
-              await modelLimits.recordOverflow(key, advertised, measured).catch(() => undefined);
-            } else {
-              throw err; // network/entitlement — stop and surface it
-            }
-          }
-        }
-        const effective = modelLimits.effectiveLimit(key, advertised) ?? lastGood;
+        const result = await runContextLimitProbe(model, key, modelLimits, {
+          token: ptoken,
+          onStep: (message) => progress.report({ message }),
+        });
         // Anonymized counter (categorical only): a probe ran and whether it
         // finished or the user cancelled — never the prompt or the measured size.
-        telemetry.record("context.probe", { outcome: ptoken.isCancellationRequested ? "cancelled" : "completed" });
+        telemetry.record("context.probe", { outcome: result.cancelled ? "cancelled" : "completed" });
         void vscode.window.showInformationMessage(
-          `Context probe for ${model.name}: advertised ${advertised?.toLocaleString() ?? "unknown"}, measured usable ≈ ${lastGood.toLocaleString()} tokens (budgeting cap ${effective.toLocaleString()}). Saved — chats now budget to this.`,
+          `Context probe for ${model.name}: advertised ${advertised?.toLocaleString() ?? "unknown"}, measured usable ≈ ${result.lastGood.toLocaleString()} tokens (budgeting cap ${result.effective.toLocaleString()}). Saved — chats now budget to this.`,
         );
       },
     );

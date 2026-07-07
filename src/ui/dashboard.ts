@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import * as crypto from "node:crypto";
 import { UsageMeter } from "../copilot/meter";
 import { renderDashboardHtml, DashboardData } from "./dashboardHtml";
+import { costEnabled, estimateCost, formatCost } from "../copilot/tokenCost";
+import { readTokenRates } from "../copilot/tokenRates";
 
 /**
  * Copilot Activity dashboard webview panel. Singleton; re-renders live while
@@ -72,22 +74,29 @@ export class UsageDashboard {
 
   private collect(): DashboardData {
     const nowIso = this.now();
+    const rates = readTokenRates();
+    const showCost = costEnabled(rates);
+    const byModel = this.meter.byModelThisMonth(nowIso);
+    let monthTotal = 0;
+    for (const m of byModel) monthTotal += estimateCost(m.inputTokens, m.outputTokens, rates);
     return {
       generatedAt: nowIso,
       todayRequests: this.meter.requestsToday(nowIso),
       monthRequests: this.meter.requestsThisMonth(nowIso),
       monthFailures: this.meter.failuresThisMonth(nowIso),
       daily: this.meter.dailySeries(nowIso, 30),
-      byModel: this.meter.byModelThisMonth(nowIso).map((m) => ({
+      byModel: byModel.map((m) => ({
         key: m.key,
         requests: m.requests,
         inputTokens: m.inputTokens,
         outputTokens: m.outputTokens,
+        ...(showCost ? { cost: formatCost(estimateCost(m.inputTokens, m.outputTokens, rates), rates.currency) } : {}),
       })),
       byLabel: this.meter.byLabelThisMonth(nowIso).map((l) => ({
         key: l.key,
         requests: l.requests,
       })),
+      ...(showCost ? { monthCost: formatCost(monthTotal, rates.currency) } : {}),
     };
   }
 

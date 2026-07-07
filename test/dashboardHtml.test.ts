@@ -67,3 +67,23 @@ test("empty activity renders friendly empty states", () => {
   const html = renderDashboardHtml(data({ byModel: [], byLabel: [] }), "n");
   assert.ok(html.includes("No requests yet"));
 });
+
+test("cost is hidden by default and shown only when a rate produces monthCost", () => {
+  const noCost = renderDashboardHtml(data(), "n");
+  assert.ok(!noCost.includes("est. cost this month"));
+  assert.ok(!noCost.includes("Est. cost"));
+
+  const withCost = renderDashboardHtml(
+    data({
+      monthCost: "$3.00",
+      byModel: [{ key: "gpt-test", requests: 60, inputTokens: 5000, outputTokens: 9000, cost: "$1.20" }],
+    }),
+    "n",
+  );
+  assert.ok(withCost.includes("$3.00"));
+  assert.ok(withCost.includes("est. cost this month"));
+  assert.ok(withCost.includes("<th>Est. cost</th>"));
+  assert.ok(withCost.includes("$1.20"));
+  // Framed as the user's own estimate, never as a GitHub bill.
+  assert.ok(/estimate from a rate you set|rate you set/i.test(withCost));
+});

@@ -23,8 +23,13 @@ export interface DashboardData {
     requests: number;
     inputTokens: number;
     outputTokens: number;
+    /** Formatted estimated cost (e.g. "$1.20") — present only when the user has
+     *  configured a token rate. */
+    cost?: string;
   }>;
   byLabel: Array<{ key: string; requests: number }>;
+  /** Formatted estimated total cost this month, present only when a rate is set. */
+  monthCost?: string;
 }
 
 export function esc(s: string): string {
@@ -93,13 +98,18 @@ export function renderDashboardHtml(
   data: DashboardData,
   nonce: string,
 ): string {
+  const showCost = data.monthCost !== undefined;
+  const modelCols = showCost
+    ? ["Model", "Requests", "Tokens in / out", "Est. cost"]
+    : ["Model", "Requests", "Tokens in / out"];
   const modelRows = tableRows(
     data.byModel.map((m) => ({
       Model: m.key,
       Requests: m.requests,
       "Tokens in / out": `${m.inputTokens.toLocaleString()} / ${m.outputTokens.toLocaleString()}`,
+      ...(showCost ? { "Est. cost": m.cost ?? "" } : {}),
     })),
-    ["Model", "Requests", "Tokens in / out"],
+    modelCols,
   );
   const labelRows = tableRows(
     data.byLabel.map((l) => ({
@@ -176,6 +186,7 @@ export function renderDashboardHtml(
     <div class="card"><span class="k">${data.todayRequests}</span><span class="s">requests today</span></div>
     <div class="card"><span class="k">${data.monthRequests}</span><span class="s">requests this month</span></div>
     ${data.monthFailures > 0 ? `<div class="card"><span class="k">${data.monthFailures}</span><span class="s">failed / cancelled (still billed by GitHub)</span></div>` : ""}
+    ${data.monthCost !== undefined ? `<div class="card"><span class="k">${esc(data.monthCost)}</span><span class="s">est. cost this month (your rate)</span></div>` : ""}
   </div>
 
   <h2>Last 30 days — requests per day</h2>
@@ -184,7 +195,7 @@ export function renderDashboardHtml(
   <h2>By model (this month)</h2>
   ${
     data.byModel.length > 0
-      ? `<table><thead><tr><th>Model</th><th>Requests</th><th>Tokens in / out</th></tr></thead><tbody>${modelRows}</tbody></table>`
+      ? `<table><thead><tr>${modelCols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${modelRows}</tbody></table>`
       : `<div class="empty">No requests yet — try “@sharepoint” in chat or “AI SharePoint: Ask Copilot”.</div>`
   }
 
@@ -203,7 +214,11 @@ export function renderDashboardHtml(
   <footer>
     Counts are this extension's own requests, measured locally — factual, but they say nothing
     about premium-request consumption against your plan. Your GitHub billing/plan page is the
-    only authoritative source for that. Generated ${esc(data.generatedAt)}.
+    only authoritative source for that.${
+      data.monthCost !== undefined
+        ? " Estimated cost multiplies your configured per-token rate by the locally-measured tokens — an estimate from a rate you set, not a GitHub bill."
+        : ""
+    } Generated ${esc(data.generatedAt)}.
   </footer>
 </div>
 <script nonce="${nonce}">

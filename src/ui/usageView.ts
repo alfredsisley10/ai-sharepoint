@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { UsageMeter } from "../copilot/meter";
+import { costEnabled, estimateCost, formatCost } from "../copilot/tokenCost";
+import { readTokenRates } from "../copilot/tokenRates";
 
 interface UsageNode {
   id: string;
@@ -64,6 +66,14 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
     const monthFailures = this.meter.failuresThisMonth(nowIso);
     const byModel = this.meter.byModelThisMonth(nowIso);
     const byLabel = this.meter.byLabelThisMonth(nowIso);
+    const rates = readTokenRates();
+    const showCost = costEnabled(rates);
+    const monthCost = showCost
+      ? formatCost(
+          byModel.reduce((sum, m) => sum + estimateCost(m.inputTokens, m.outputTokens, rates), 0),
+          rates.currency,
+        )
+      : undefined;
 
     return [
       {
@@ -80,6 +90,18 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         label: `Today: ${this.meter.requestsToday(nowIso)} request(s)`,
         icon: new vscode.ThemeIcon("calendar"),
       },
+      ...(monthCost !== undefined
+        ? [
+            {
+              id: "cost",
+              label: `Est. cost this month: ${monthCost}`,
+              icon: new vscode.ThemeIcon("credit-card"),
+              tooltip:
+                "Estimate = your configured per-token rate × the tokens this extension measured locally. It reflects a rate you set in Settings (AI SharePoint › Usage), not your GitHub bill.",
+              command: { command: "workbench.action.openSettings", title: "Edit token rate", arguments: ["aiSharePoint.usage.tokenCost"] },
+            } as UsageNode,
+          ]
+        : []),
       {
         id: "byModel",
         label: "By model (this month)",
@@ -88,7 +110,9 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         children: byModel.map((m) => ({
           id: `model:${m.key}`,
           label: m.key,
-          description: `${m.requests} req · ${m.inputTokens.toLocaleString()} in / ${m.outputTokens.toLocaleString()} out`,
+          description: `${m.requests} req · ${m.inputTokens.toLocaleString()} in / ${m.outputTokens.toLocaleString()} out${
+            showCost ? ` · ${formatCost(estimateCost(m.inputTokens, m.outputTokens, rates), rates.currency)}` : ""
+          }`,
           icon: new vscode.ThemeIcon("symbol-misc"),
           tooltip: m.failures ? `${m.failures} failed` : undefined,
         })),

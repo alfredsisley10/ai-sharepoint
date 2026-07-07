@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.110.2",
+  "version": "0.110.3",
   "release": {
     "channel": "standard"
   },
@@ -3451,6 +3451,32 @@
           "scope": "machine",
           "order": 14,
           "markdownDescription": "%config.aiSharePoint.context.autoProbeOnFirstUse.markdownDescription%"
+        },
+        "aiSharePoint.context.offerProbeOnNewModels": {
+          "type": "boolean",
+          "default": true,
+          "order": 15,
+          "markdownDescription": "When a Copilot model first appears — or its **advertised** context limit changes — offer to measure the model's **real** usable limit (Copilot often delivers less than the published `maxInputTokens`). Measuring sends a few short test prompts and uses a little of your Copilot allowance; the result is cached, so each model is only ever asked about once. Advertised limits are always captured for free regardless of this setting. Turn off to never be prompted (you can still run **AI SharePoint: Probe Model Context Limit** manually)."
+        },
+        "aiSharePoint.usage.tokenCostInputPerMillion": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "order": 30,
+          "markdownDescription": "Your cost per **1,000,000 input tokens**, in the currency set below. When this or the output rate is non-zero, the **Copilot Activity** view shows an estimated cost next to the locally-measured token counts. This is an estimate from a rate **you** enter — not your GitHub bill. Leave at `0` to hide cost."
+        },
+        "aiSharePoint.usage.tokenCostOutputPerMillion": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "order": 31,
+          "markdownDescription": "Your cost per **1,000,000 output tokens**, in the currency set below. See `aiSharePoint.usage.tokenCostInputPerMillion`. Leave at `0` to hide cost."
+        },
+        "aiSharePoint.usage.currencySymbol": {
+          "type": "string",
+          "default": "$",
+          "order": 32,
+          "markdownDescription": "Currency symbol shown in front of estimated costs in the Copilot Activity view (e.g. `$`, `£`, `€`)."
         },
         "aiSharePoint.proxy.mode": {
           "type": "string",

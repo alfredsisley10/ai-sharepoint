@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ModelLimit, onOverflow, onSuccess, resolveLimit } from "../core/contextBudget";
+import { ModelLimit, onAdvertised, onOverflow, onSuccess, resolveLimit } from "../core/contextBudget";
 
 /**
  * The "memory" half of effective-context probing (#3): each model's learned
@@ -28,6 +28,18 @@ export class ModelLimitsStore {
    *  what we've learned). Undefined only when nothing is known. */
   effectiveLimit(key: string, advertised: number | undefined): number | undefined {
     return resolveLimit(this.all()[key], advertised);
+  }
+
+  /** Record a model's advertised context ceiling with no measurement (free, no
+   *  Copilot quota). Returns true if the advertised value changed from what we
+   *  had — the drift signal that makes a re-probe worth offering. */
+  async recordAdvertised(key: string, advertised: number | undefined): Promise<boolean> {
+    const all = this.all();
+    const { next, changed } = onAdvertised(all[key], advertised, this.now());
+    if (!changed && all[key]) return false; // nothing new to persist
+    all[key] = next;
+    await this.memento.update(KEY, all);
+    return changed;
   }
 
   async recordSuccess(key: string, advertised: number | undefined, inputTokens: number): Promise<void> {
