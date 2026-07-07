@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.121.0 — 2026-07-07
+
+### Added — learned heuristics now improve future answers (closed the self-improvement loop)
+- **Captured lessons are now recalled into the prompt, not just stored.** Previously the assistant
+  could *capture* a generalized heuristic when it self-corrected (opt-in `lessons.capture`) and you
+  could review/export/prune it — but nothing ever read those lessons back, so they never changed
+  behavior. Now a bounded, droppable **"Learned heuristics"** section injects the most relevant
+  captured lessons into each turn (relevance-ranked by your connected source types, most-observed
+  first), so past self-corrections continuously improve future answers. Controlled by
+  `aiSharePoint.lessons.applyLearned` (default on); review/prune them via **Review Lessons Learned**,
+  export via **Export Lessons Learned**. Trimmed first under context pressure, so it never crowds out
+  your request or connected data.
+
 ## 0.120.0 — 2026-07-07
 
 ### Changed — usability: the chat can now drive the cleanup flow it suggests

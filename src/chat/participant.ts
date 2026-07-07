@@ -15,6 +15,7 @@ import { computeFollowups } from "./followups";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { LessonsStore } from "../diagnostics/lessonsStore";
+import { lessonsContextBlock } from "../diagnostics/lessons";
 import { MemoryStore } from "../context/memoryStore";
 import { memoryContextBlock } from "../context/memory";
 import { BlockedTermsStore } from "../diagnostics/blockedTermsStore";
@@ -504,6 +505,13 @@ async function answerWithModel(
     ? `${activeProject.goals || activeProject.instructions ? "" : `\n## Project: ${activeProject.name}`}\n### AI-managed memory — learnings you saved in earlier sessions (NOT user-authored; add via remember_project_context, correct/remove via forget_project_context, with the user's approval)\n${activeProject.aiContext}`
     : "";
   const lessonsOn = deps.lessons.enabled();
+  // RECALL the other half of the self-improvement loop: inject the learned
+  // heuristics captured in earlier sessions as a (droppable) prompt section so
+  // they actually change behavior — relevance-ranked by the scoped source types.
+  // On by default whenever lessons exist; the user can turn recall off.
+  const applyLearned = vscode.workspace.getConfiguration("aiSharePoint").get<boolean>("lessons.applyLearned", true);
+  const scopedTypes = deps.projects.scope(deps.sources.list()).map((s) => s.type);
+  const learnedBlock = applyLearned ? lessonsContextBlock(deps.lessons.list(), { relevantTags: scopedTypes }) : "";
   // Proxy-block avoidance (#4): a system note so the model avoids blocked words
   // in its REPLY, plus (below) defang/warn on the outgoing prompt itself.
   const proxyMode = deps.proxyTerms.mode();
@@ -523,6 +531,7 @@ async function answerWithModel(
     })(),
     ...(contextBlock ? [{ label: "connected context", text: `\n## Connected context\n${contextBlock}`, priority: 50 }] : []),
     ...(projectUserBlock ? [{ label: "project goals/instructions", text: projectUserBlock, priority: 40 }] : []),
+    ...(learnedBlock ? [{ label: "learned heuristics", text: `\n${learnedBlock}`, priority: 35 }] : []),
     ...(projectAiBlock ? [{ label: "project memory", text: projectAiBlock, priority: 30 }] : []),
     ...(history ? [{ label: "conversation history", text: `\n## Conversation so far\n${history}`, priority: 20 }] : []),
     { label: "user request", text: `\n## User request\n${request.prompt}`, priority: 100, required: true },

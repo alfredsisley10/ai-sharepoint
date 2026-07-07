@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.120.0",
+  "version": "0.121.0",
   "release": {
     "channel": "standard"
   },
@@ -3557,6 +3557,12 @@
           "default": false,
           "order": 10.5,
           "markdownDescription": "%config.aiSharePoint.lessons.capture.markdownDescription%"
+        },
+        "aiSharePoint.lessons.applyLearned": {
+          "type": "boolean",
+          "default": true,
+          "order": 10.6,
+          "markdownDescription": "Inject the **learned heuristics** you've captured (see `aiSharePoint.lessons.capture`) back into @sharepoint's prompt, so past self-corrections continuously improve future answers — relevance-ranked by your connected sources and trimmed first under context pressure. Review or prune them with **Review Lessons Learned**. Turn off to keep capturing without applying them."
         },
         "aiSharePoint.sync.allowedRemoteHosts": {
           "type": "array",
