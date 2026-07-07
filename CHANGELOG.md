@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.118.0 — 2026-07-07
+
+### Changed — chat follow-up suggestions are now context-aware
+- **The follow-up chips adapt to what you're connected to and doing.** Instead of the fixed "Explore my
+  site / Plan a site / Check Copilot activity", they now reflect your scoped sources and the task in
+  flight: a Confluence cleanup surfaces **Build space dossier → Find page owners → Draft owner
+  outreach**; Jira/ServiceNow/database sources get their own review prompts; SharePoint site prompts
+  appear only when a site is connected (and site planning references your project goals); a tracked
+  project offers **Resume from workspace**, an untracked one nudges goals/next-steps; and a
+  cost/activity option is always kept (now "Check Copilot cost & activity").
+
 ## 0.117.0 — 2026-07-07
 
 ### Added — chat offers to track a Confluence cleanup in a project workspace

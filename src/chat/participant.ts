@@ -11,6 +11,7 @@ import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
 import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
 import { looksLikeConfluenceOptimization } from "./intent";
+import { computeFollowups } from "./followups";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { LessonsStore } from "../diagnostics/lessonsStore";
@@ -305,12 +306,20 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
     "icon.png",
   );
   participant.followupProvider = {
-    provideFollowups() {
-      return [
-        { prompt: "What lists and pages does my site have?", label: "Explore my site" },
-        { prompt: "Suggest a structure for a product-management site", label: "Plan a site" },
-        { prompt: "/usage", label: "Check Copilot activity" },
-      ];
+    provideFollowups(_result, context) {
+      const active = deps.projects.active();
+      const scoped = deps.projects.scope(deps.sources.list());
+      const lastPrompt = [...context.history]
+        .reverse()
+        .find((t): t is vscode.ChatRequestTurn => t instanceof vscode.ChatRequestTurn)?.prompt;
+      return computeFollowups({
+        ...(active
+          ? { project: { name: active.name, hasGoals: Boolean(active.goals), workspaceEnabled: deps.chatWorkspace.enabled(active.id) } }
+          : {}),
+        sourceTypes: scoped.map((s) => s.type),
+        hasSites: deps.sites.list().length > 0,
+        ...(lastPrompt ? { lastPrompt } : {}),
+      });
     },
   };
   return participant;
