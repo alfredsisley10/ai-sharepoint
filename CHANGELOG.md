@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.114.0 — 2026-07-07
+
+### Added — context cache + one-click chat resume in project workspaces
+- **Each turn's gathered data is now cached in the workspace.** When a project workspace is active, the
+  connected-context block and every tool result for a turn are appended to `context/<session>.md`
+  (redacted, bounded) — a browsable knowledge cache so a later chat, or a resume, can reuse what was
+  already gathered instead of re-fetching.
+- **"Resume Chat from Project Workspace" now seeds a fresh chat.** It writes a compact `RESUME.md`
+  restart brief (goals + the most recent conversation outline), opens it, activates the project, and
+  opens a new @sharepoint chat prefilled with a short resume prompt (falling back to copying the
+  prompt to the clipboard if the chat can't be opened programmatically). The full history stays in the
+  workspace, so the new chat doesn't have to carry it all in its context window — directly addressing
+  starved/failed chats in context-limited corporate environments. Completes the ADR-0048 follow-ups.
+
 ## 0.113.0 — 2026-07-07
 
 ### Added — cached page content + recommended revisions in the dossier

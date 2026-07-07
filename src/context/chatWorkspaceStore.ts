@@ -8,6 +8,10 @@ import {
   foldTurn,
   renderSummary,
   renderTurn,
+  renderKnowledgeEntry,
+  hasKnowledge,
+  buildResumeBrief,
+  buildResumeSeedPrompt,
   slugify,
   transcriptHeader,
 } from "./chatWorkspace";
@@ -156,11 +160,16 @@ export class ChatWorkspaceStore {
    */
   async recordTurn(project: Project, turn: WorkspaceTurn, newSession: boolean): Promise<void> {
     if (!this.enabled(project.id)) return;
+    const CAP = 8000;
     const safe: WorkspaceTurn = {
       at: turn.at,
       model: turn.model,
       prompt: redactText(turn.prompt),
       reply: redactText(turn.reply),
+      ...(turn.context?.trim() ? { context: redactText(turn.context).slice(0, CAP) } : {}),
+      ...(turn.toolResults?.length
+        ? { toolResults: turn.toolResults.map((t) => ({ name: t.name, detail: redactText(t.detail).slice(0, CAP) })) }
+        : {}),
     };
     await this.queue(project.id, async () => {
       const loaded = await this.loadManifest(project);
@@ -169,9 +178,28 @@ export class ChatWorkspaceStore {
       let existing = session.turns === 1 ? "" : (await this.readText(fileUri)) ?? "";
       if (!existing) existing = transcriptHeader(session, project.name);
       await this.writeText(fileUri, existing + renderTurn(safe, session.turns));
+      // Knowledge cache: the connected context + tool results, so a later chat
+      // (or a resume) can reuse what was gathered instead of re-fetching.
+      if (hasKnowledge(safe)) {
+        const kUri = vscode.Uri.joinPath(this.baseUri(project), "context", `${session.id}.md`);
+        const kExisting = (await this.readText(kUri)) ?? `# ${project.name} — cached context (session ${session.id})\n\n`;
+        await this.writeText(kUri, kExisting + renderKnowledgeEntry(safe, session.turns));
+      }
       await this.writeText(this.manifestUri(project), JSON.stringify(manifest, null, 2));
       await this.writeText(this.summaryUri(project), renderSummary(manifest, project));
       this.emitter.fire();
+    });
+  }
+
+  /** Write RESUME.md (a compact restart brief) and return it plus a short seed
+   *  prompt to prefill a new chat. Used by "Resume Chat from Project Workspace". */
+  async writeResume(project: Project): Promise<{ uri: vscode.Uri; seedPrompt: string } | undefined> {
+    if (!this.enabled(project.id)) return undefined;
+    return this.queue(project.id, async () => {
+      const manifest = await this.loadManifest(project);
+      const uri = vscode.Uri.joinPath(this.baseUri(project), "RESUME.md");
+      await this.writeText(uri, buildResumeBrief(manifest, project));
+      return { uri, seedPrompt: buildResumeSeedPrompt(manifest, project.name) };
     });
   }
 

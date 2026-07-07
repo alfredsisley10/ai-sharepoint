@@ -68,7 +68,7 @@ project so interleaved turns cannot clobber the summary.
   writes a preserved `recommended.md` scaffold; the `aisharepoint_recommend_page_revision`
   chat tool saves assistant-proposed revisions there, and owner outreach links
   them.
-- Cache the connected-context blocks and tool results per turn into the
-  workspace so later chats reuse them instead of re-fetching (efficiency).
-- "Resume in new chat" that seeds a fresh chat directly from the summary +
-  cached context.
+- **Delivered (0.114.0) — context cache + chat resume.** Each turn's connected
+  context + tool results are cached to `context/<session>.md` (redacted,
+  bounded) for reuse, and "Resume Chat from Project Workspace" writes `RESUME.md`
+  and opens a new @sharepoint chat prefilled with a compact restart brief.

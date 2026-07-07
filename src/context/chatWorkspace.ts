@@ -13,6 +13,12 @@
  * unit-tested; chatWorkspaceStore.ts layers the filesystem + redaction on top.
  */
 
+export interface ToolResultRef {
+  name: string;
+  /** Bounded, redacted result text captured for reuse. */
+  detail: string;
+}
+
 export interface WorkspaceTurn {
   /** ISO timestamp (UTC). */
   at: string;
@@ -21,6 +27,11 @@ export interface WorkspaceTurn {
   prompt: string;
   /** The assistant's reply (already redacted by the caller). */
   reply: string;
+  /** The connected-context block assembled for this turn (redacted) — cached so
+   *  a later chat can reuse gathered data instead of re-fetching. */
+  context?: string;
+  /** Tool calls + their results this turn (redacted, bounded). */
+  toolResults?: ToolResultRef[];
 }
 
 export interface SessionMeta {
@@ -157,6 +168,77 @@ export function renderTurn(turn: WorkspaceTurn, index: number): string {
   ].join("\n");
 }
 
+/** True when a turn carried reusable knowledge (context or tool results). */
+export function hasKnowledge(turn: WorkspaceTurn): boolean {
+  return Boolean(turn.context?.trim() || (turn.toolResults && turn.toolResults.length > 0));
+}
+
+/** A knowledge-cache entry for a turn: the connected context + tool results,
+ *  appended to `context/<session>.md` so a later chat (or the user) can reuse
+ *  what was gathered instead of re-fetching. Newest last. */
+export function renderKnowledgeEntry(turn: WorkspaceTurn, index: number): string {
+  const lines: string[] = [`## Turn ${index} — ${turn.at}`, "", `**Asked:** ${snippet(turn.prompt, 200)}`, ""];
+  if (turn.context?.trim()) {
+    lines.push("### Connected context", "", turn.context.trim(), "");
+  }
+  for (const t of turn.toolResults ?? []) {
+    lines.push(`### Tool: ${t.name}`, "", "```", t.detail.trim(), "```", "");
+  }
+  lines.push("---", "");
+  return lines.join("\n");
+}
+
+/** A compact restart brief for seeding a fresh chat when one ran out of context:
+ *  the user's goals/instructions and the most recent conversation outline. Kept
+ *  short (the point is to fit a new chat's window). Pure. */
+export function buildResumeBrief(
+  manifest: WorkspaceManifest,
+  project: { name: string; goals?: string; instructions?: string },
+  recentOutline = 15,
+): string {
+  const last = manifest.sessions[manifest.sessions.length - 1];
+  const outline = (last?.outline ?? []).slice(-recentOutline);
+  const lines: string[] = [
+    `# Resume — ${project.name}`,
+    "",
+    `_Seed for continuing a prior conversation (${manifest.sessions.length} session(s), ${manifest.totalTurns} turn(s)). Full transcripts and cached context live in this workspace._`,
+    "",
+  ];
+  if (project.goals) lines.push("## Goals", "", project.goals, "");
+  if (project.instructions) lines.push("## Instructions", "", project.instructions, "");
+  lines.push("## Where we left off", "");
+  if (outline.length) {
+    outline.forEach((o, i) => lines.push(`${i + 1}. ${o}`));
+  } else {
+    lines.push("_No prior turns captured._");
+  }
+  lines.push(
+    "",
+    "> Continue from here. The project's SUMMARY.md, session transcripts, and `context/` cache hold",
+    "> the earlier detail if you need to look something up rather than re-fetch it.",
+    "",
+  );
+  return lines.join("\n");
+}
+
+/** A short seed prompt to prefill a new @sharepoint chat on resume. */
+export function buildResumeSeedPrompt(
+  manifest: WorkspaceManifest,
+  projectName: string,
+  recentOutline = 8,
+): string {
+  const last = manifest.sessions[manifest.sessions.length - 1];
+  const outline = (last?.outline ?? []).slice(-recentOutline);
+  const bullets = outline.map((o) => `- ${o}`).join("\n");
+  return [
+    `I'm resuming an earlier conversation for the project "${projectName}".`,
+    outline.length ? `Recently we covered:\n${bullets}` : "",
+    "Its full history and cached context are saved in the project workspace (RESUME.md / SUMMARY.md / transcripts). Please continue from where we left off.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 /** The rolling SUMMARY.md — regenerated from the manifest on every turn. Includes
  *  the user's own project goals/instructions (if any) followed by a session index
  *  and a per-session conversation outline. Deterministic; no LLM. */
@@ -194,8 +276,9 @@ export function renderSummary(
 
   lines.push(
     "> This file mirrors your @sharepoint chats under this project so a conversation survives the",
-    "> chat's context window. To restart a starved chat, skim this summary and open the relevant",
-    "> session transcript, then continue in a new chat.",
+    "> chat's context window. To restart a starved chat, skim this summary, open the relevant session",
+    "> transcript (and the `context/` cache of gathered data), then continue in a new chat — or run",
+    "> \"Resume Chat from Project Workspace\" to seed one automatically.",
     "",
   );
   return lines.join("\n");

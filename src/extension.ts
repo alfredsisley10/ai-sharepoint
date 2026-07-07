@@ -6742,10 +6742,24 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     telemetry.record("project.workspace", { action: "resume" });
-    await vscode.commands.executeCommand("aiSharePoint.openProjectWorkspace", project);
-    void vscode.window.showInformationMessage(
-      `Skim "${project.name}"'s SUMMARY, then continue in a new @sharepoint chat — keep this project active and its saved context carries the thread even if the earlier chat ran out of room.`,
-    );
+    const resume = await chatWorkspace.writeResume(project);
+    // Make sure this project is the active scope so the resumed chat inherits it.
+    if (projects.activeId() !== project.id) await projects.setActive(project.id);
+    // Open the restart brief for the user to skim.
+    await vscode.commands
+      .executeCommand("markdown.showPreview", resume?.uri ?? chatWorkspace.summaryUri(project))
+      .then(undefined, () => undefined);
+    // Seed a fresh @sharepoint chat with a short brief; the full history stays in
+    // the workspace so the new chat needn't carry it all in its context window.
+    const seeded = await vscode.commands
+      .executeCommand("workbench.action.chat.open", { query: `@sharepoint ${resume?.seedPrompt ?? "Resume our prior conversation."}` })
+      .then(() => true, () => false);
+    if (!seeded && resume) {
+      await vscode.env.clipboard.writeText(resume.seedPrompt);
+      void vscode.window.showInformationMessage(
+        `Copied a resume prompt for "${project.name}" to the clipboard — paste it into @sharepoint. The full history is in the workspace (RESUME.md).`,
+      );
+    }
   });
 
   // Confluence content-management: aggregate a target space into the project

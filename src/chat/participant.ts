@@ -601,6 +601,7 @@ async function answerWithModel(
 
   let sawText = false;
   let fullReply = ""; // accumulates the visible answer across tool rounds (workspace mirror)
+  const turnKnowledge: Array<{ name: string; detail: string }> = []; // tool results for the workspace cache
   let overflowRetries = 0;
   let transientRetries = 0;
   for (let round = 0; ; round++) {
@@ -742,6 +743,7 @@ async function answerWithModel(
         // Completion status: what came back, not just what was attempted —
         // "Search of CMDB: 12 result(s) — continuing…" (pilot).
         stream.progress(describeToolResult(call.name, call.input, rendered));
+        if (rendered.trim()) turnKnowledge.push({ name: call.name, detail: rendered });
         resultParts.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
       } catch (err) {
         emitWire("tool", "✗", `${call.name} — ${redactError(err).message}`);
@@ -769,7 +771,14 @@ async function answerWithModel(
     await deps.chatWorkspace
       .recordTurn(
         activeProject,
-        { at: deps.now(), model: model.name, prompt: request.prompt, reply: fullReply },
+        {
+          at: deps.now(),
+          model: model.name,
+          prompt: request.prompt,
+          reply: fullReply,
+          ...(contextBlock?.trim() ? { context: contextBlock } : {}),
+          ...(turnKnowledge.length ? { toolResults: turnKnowledge } : {}),
+        },
         isFirstConversationTurn,
       )
       .catch(() => undefined);

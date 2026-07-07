@@ -9,6 +9,10 @@ import {
   renderTurn,
   transcriptHeader,
   renderSummary,
+  renderKnowledgeEntry,
+  hasKnowledge,
+  buildResumeBrief,
+  buildResumeSeedPrompt,
   WorkspaceTurn,
   OUTLINE_CAP,
 } from "../src/context/chatWorkspace";
@@ -113,4 +117,36 @@ test("renderSummary includes goals, session index, and the outline", () => {
 test("renderSummary handles an empty workspace", () => {
   const md = renderSummary(emptyManifest("p", "P", "2026-07-07T00:00:00Z"), {});
   assert.match(md, /No chats captured yet/);
+});
+
+test("hasKnowledge detects context or tool results", () => {
+  assert.equal(hasKnowledge(turn("a", "b")), false);
+  assert.equal(hasKnowledge({ ...turn("a", "b"), context: "ctx" }), true);
+  assert.equal(hasKnowledge({ ...turn("a", "b"), toolResults: [{ name: "search", detail: "x" }] }), true);
+  assert.equal(hasKnowledge({ ...turn("a", "b"), toolResults: [] }), false);
+});
+
+test("renderKnowledgeEntry captures context and tool results", () => {
+  const md = renderKnowledgeEntry(
+    { ...turn("What owns X?", "…"), context: "site: ENG", toolResults: [{ name: "search_context", detail: "hit 1\nhit 2" }] },
+    2,
+  );
+  assert.match(md, /## Turn 2/);
+  assert.match(md, /### Connected context/);
+  assert.match(md, /site: ENG/);
+  assert.match(md, /### Tool: search_context/);
+  assert.match(md, /hit 1/);
+});
+
+test("buildResumeBrief and seed prompt carry goals + recent outline", () => {
+  let m = emptyManifest("p", "Cleanup", "2026-07-07T00:00:00Z");
+  m = foldTurn(m, turn("Which pages are stale?", "…"), true, "2026-07-07T10:00:00Z").manifest;
+  m = foldTurn(m, turn("Who owns them?", "…"), false, "2026-07-07T10:05:00Z").manifest;
+  const brief = buildResumeBrief(m, { name: "Cleanup", goals: "Tidy ENG" });
+  assert.match(brief, /# Resume — Cleanup/);
+  assert.match(brief, /Tidy ENG/);
+  assert.match(brief, /Who owns them\?/);
+  const seed = buildResumeSeedPrompt(m, "Cleanup");
+  assert.match(seed, /resuming an earlier conversation for the project "Cleanup"/);
+  assert.match(seed, /Which pages are stale\?/);
 });
