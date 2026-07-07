@@ -35,6 +35,8 @@ export interface DashboardData {
   /** Active view: "all" (default) or "failed" — clicking the failed/cancelled
    *  card filters the chart + tables to failures only. */
   filter?: "all" | "failed";
+  /** Per-model reported (advertised) vs. tested (measured) context limits. */
+  modelLimits?: Array<{ key: string; reported?: number; tested?: number; cap?: number; drifted: boolean }>;
 }
 
 export function esc(s: string): string {
@@ -238,6 +240,22 @@ export function renderDashboardHtml(
     (failedView ? hasFailLabelRows : data.byLabel.length > 0)
       ? `<table><thead><tr>${labelCols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${labelRows}</tbody></table>`
       : `<div class="empty">${failedView ? "No failed or cancelled task activity this month." : "No task activity recorded yet."}</div>`
+  }
+
+  ${
+    data.modelLimits && data.modelLimits.length > 0
+      ? `<h2>Model context limits</h2>
+  <p class="muted">Reported = the model's advertised input limit. Tested = the largest input actually proven to work (or the learned ceiling). Budget = what chats are held to. Run “Probe Model Context Limit” to measure.</p>
+  <table><thead><tr><th>Model</th><th>Reported</th><th>Tested</th><th>Budget</th></tr></thead><tbody>${tableRows(
+    data.modelLimits.map((m) => ({
+      Model: `${m.key}${m.drifted ? " ⚠" : ""}`,
+      Reported: m.reported?.toLocaleString() ?? "?",
+      Tested: m.tested?.toLocaleString() ?? "not tested",
+      Budget: m.cap?.toLocaleString() ?? "?",
+    })),
+    ["Model", "Reported", "Tested", "Budget"],
+  )}</tbody></table>`
+      : ""
   }
 
   <div class="actions">

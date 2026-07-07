@@ -364,7 +364,7 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
     nowIso,
   );
-  const dashboard = new UsageDashboard(meter, nowIso);
+  const dashboard = new UsageDashboard(meter, nowIso, modelLimits);
   const statusBar = new UsageStatusBar(meter, nowIso);
   const version = String(context.extension.packageJSON.version ?? "0.0.0");
 
@@ -637,6 +637,7 @@ export function activate(context: vscode.ExtensionContext): void {
     meter,
     nowIso,
     () => copilotState.signedIn,
+    modelLimits,
   );
   const verboseWireOn = () =>
     vscode.workspace.getConfiguration("aiSharePoint").get<boolean>("logging.verboseWire", false);

@@ -10,6 +10,7 @@ import {
   onOverflow,
   onAdvertised,
   needsEffectiveProbe,
+  describeModelLimit,
 } from "../src/core/contextBudget";
 
 const sec = (label: string, priority: number, tokens: number, required = false): PromptSection & { tokens: number } =>
@@ -135,6 +136,31 @@ test("onAdvertised records the free advertised ceiling and flags drift", () => {
 test("onSuccess/onOverflow stamp measuredAtAdvertised for drift detection", () => {
   assert.equal(onSuccess(undefined, 128000, 5000, "t").measuredAtAdvertised, 128000);
   assert.equal(onOverflow(undefined, 128000, 9000, "t")?.measuredAtAdvertised, 128000);
+});
+
+test("describeModelLimit shapes reported/tested/budget for display", () => {
+  // Advertised only, never tested.
+  const a = describeModelLimit({ key: "gpt", advertised: 128000 });
+  assert.equal(a.advertised, 128000);
+  assert.equal(a.measured, false);
+  assert.equal(a.cap, 128000); // budgets to advertised when nothing learned
+  assert.equal(a.drifted, false);
+
+  // Known-good is a FLOOR, not a cap: we still budget to advertised until an
+  // overflow teaches us lower, so cap stays at advertised while tested = 90000.
+  const b = describeModelLimit({ key: "gpt", advertised: 128000, knownGood: 90000, measuredAtAdvertised: 128000 });
+  assert.equal(b.measured, true);
+  assert.equal(b.knownGood, 90000);
+  assert.equal(b.cap, 128000);
+
+  // Overflow-learned cap.
+  const c = describeModelLimit({ key: "gpt", advertised: 128000, effectiveCap: 80000, measuredAtAdvertised: 128000 });
+  assert.equal(c.effectiveCap, 80000);
+  assert.equal(c.cap, 80000);
+
+  // Advertised drifted since measurement.
+  const d = describeModelLimit({ key: "gpt", advertised: 200000, knownGood: 90000, measuredAtAdvertised: 128000 });
+  assert.equal(d.drifted, true);
 });
 
 test("needsEffectiveProbe: offer when unmeasured or advertised drifted, not once measured", () => {

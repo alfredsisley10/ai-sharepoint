@@ -4,6 +4,8 @@ import { UsageMeter } from "../copilot/meter";
 import { renderDashboardHtml, DashboardData } from "./dashboardHtml";
 import { costEnabled, estimateCost, formatCost } from "../copilot/tokenCost";
 import { readTokenRates } from "../copilot/tokenRates";
+import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
+import { describeModelLimit } from "../core/contextBudget";
 
 /**
  * Copilot Activity dashboard webview panel. Singleton; re-renders live while
@@ -19,6 +21,7 @@ export class UsageDashboard {
   constructor(
     private readonly meter: UsageMeter,
     private readonly now: () => string,
+    private readonly modelLimits?: ModelLimitsStore,
   ) {}
 
   show(): void {
@@ -110,6 +113,16 @@ export class UsageDashboard {
       })),
       ...(showCost ? { monthCost: formatCost(monthTotal, rates.currency) } : {}),
       filter: this.filter,
+      modelLimits: (this.modelLimits?.list() ?? [])
+        .map(describeModelLimit)
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map((r) => ({
+          key: r.key,
+          reported: r.advertised,
+          tested: r.measured ? r.knownGood ?? r.effectiveCap : undefined,
+          cap: r.cap,
+          drifted: r.drifted,
+        })),
     };
   }
 

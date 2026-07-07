@@ -68,6 +68,25 @@ test("empty activity renders friendly empty states", () => {
   assert.ok(html.includes("No requests yet"));
 });
 
+test("model context limits render reported/tested/budget when present", () => {
+  const none = renderDashboardHtml(data(), "n");
+  assert.ok(!none.includes("Model context limits"));
+  const withLimits = renderDashboardHtml(
+    data({
+      modelLimits: [
+        { key: "gpt-a", reported: 128000, tested: 90000, cap: 90000, drifted: false },
+        { key: "gpt-b", reported: 200000, tested: undefined, cap: 200000, drifted: true },
+      ],
+    }),
+    "n",
+  );
+  assert.ok(withLimits.includes("Model context limits"));
+  assert.ok(withLimits.includes("128,000"));
+  assert.ok(withLimits.includes("90,000"));
+  assert.ok(withLimits.includes("not tested"));
+  assert.ok(withLimits.includes("gpt-b ⚠")); // drift marker
+});
+
 test("failed filter switches the chart + tables to failures and offers a way back", () => {
   const all = renderDashboardHtml(data(), "n");
   assert.ok(!all.includes("Showing"), "no filter banner in the default view");

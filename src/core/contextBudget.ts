@@ -127,6 +127,39 @@ export function resolveLimit(
   return eff;
 }
 
+export interface ModelLimitDisplay {
+  key: string;
+  /** Reported/advertised maxInputTokens. */
+  advertised?: number;
+  /** Largest input that has actually succeeded (tested). */
+  knownGood?: number;
+  /** Learned ceiling from an overflow (tested). */
+  effectiveCap?: number;
+  /** The budgeting cap actually used (advertised clamped by what we learned). */
+  cap?: number;
+  /** Advertised moved since we last measured — the cached test is stale. */
+  drifted: boolean;
+  /** Any tested (measured) data exists. */
+  measured: boolean;
+}
+
+/** Shape a stored ModelLimit for display in the Copilot Activity surfaces:
+ *  the reported limit, what testing has proven, and the resulting budget cap. */
+export function describeModelLimit(row: { key: string } & ModelLimit): ModelLimitDisplay {
+  return {
+    key: row.key,
+    advertised: row.advertised,
+    knownGood: row.knownGood,
+    effectiveCap: row.effectiveCap,
+    cap: resolveLimit(row, row.advertised),
+    drifted:
+      row.measuredAtAdvertised !== undefined &&
+      row.advertised !== undefined &&
+      row.measuredAtAdvertised !== row.advertised,
+    measured: row.effectiveCap !== undefined || row.knownGood !== undefined,
+  };
+}
+
 /** Fold a successful send into the record (raise the known-good high-water mark). */
 export function onSuccess(
   rec: ModelLimit | undefined,

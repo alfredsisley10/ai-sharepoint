@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.115.0 — 2026-07-07
+
+### Added — model context limits in the Copilot Activity view
+- **The Copilot Activity tab now shows each model's reported vs. tested context limit.** A new
+  **Model context limits** section (in both the Activity tree and the dashboard) lists, per model, the
+  **reported** advertised `maxInputTokens`, the **tested** figure (largest input actually proven to
+  work / the learned overflow ceiling), and the **budget** cap chats are actually held to — with a ⚠
+  marker when the advertised limit has drifted since it was last measured. Advertised limits populate
+  automatically on startup; clicking a model runs **Probe Model Context Limit** to measure the real
+  one.
+
 ## 0.114.0 — 2026-07-07
 
 ### Added — context cache + one-click chat resume in project workspaces
