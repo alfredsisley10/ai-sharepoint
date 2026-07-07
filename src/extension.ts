@@ -139,6 +139,7 @@ import {
 } from "./context/projectsStore";
 import { ProjectsTreeProvider } from "./ui/projectsView";
 import { ChatWorkspaceStore } from "./context/chatWorkspaceStore";
+import { summarizeDossier, dossierWorkItemSeeds } from "./context/spaceDossier";
 import { registerProjectTools } from "./chat/projectTools";
 import {
   enumeratePowerBiDatasets,
@@ -6741,6 +6742,86 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage(
       `Skim "${project.name}"'s SUMMARY, then continue in a new @sharepoint chat — keep this project active and its saved context carries the thread even if the earlier chat ran out of room.`,
     );
+  });
+
+  // Confluence content-management: aggregate a target space into the project
+  // workspace (inventory + owners + XLSX), open a remediation work item for every
+  // flagged page, and draft per-owner outreach — the durable, restartable home
+  // for a space cleanup (ADR-0048 follow-up; reuses the ownership/currency suite).
+  register("aiSharePoint.buildSpaceDossier", async (arg) => {
+    const project = await resolveProjectArg(arg);
+    if (!project) return;
+    // Pick a Confluence source — prefer the project's own members.
+    const confluenceSources = contextSources
+      .list()
+      .filter((s) => s.type === "confluence")
+      .filter((s) => (project.sourceIds.length ? project.sourceIds.includes(s.id) : true));
+    if (confluenceSources.length === 0) {
+      void vscode.window.showWarningMessage(
+        "No Confluence source is available for this project. Add one via 'Add Context Source' (and include it in the project).",
+      );
+      return;
+    }
+    const source =
+      confluenceSources.length === 1
+        ? confluenceSources[0]!
+        : await vscode.window
+            .showQuickPick(
+              confluenceSources.map((s) => ({ label: s.displayName, description: s.baseUrl, id: s.id })),
+              { title: "Confluence source for the dossier", ignoreFocusOut: true },
+            )
+            .then((p) => (p ? contextSources.get(p.id) : undefined));
+    if (!source) return;
+    const scopeSpace = source.writeScope?.kind === "space" ? source.writeScope.spaceKey : undefined;
+    const spaceKey = (
+      await vscode.window.showInputBox({
+        title: "Target Confluence space key",
+        value: scopeSpace ?? "",
+        placeHolder: "e.g. ENG",
+        prompt: "The space to aggregate (Space Settings → Space Details → Key).",
+        ignoreFocusOut: true,
+        validateInput: (v) => (v.trim() ? undefined : "A space key is required."),
+      })
+    )?.trim();
+    if (!spaceKey) return;
+
+    const dossier = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Building dossier for ${spaceKey}…`, cancellable: false },
+      (progress) =>
+        contextService.buildConfluenceSpaceDossier(source, spaceKey, {
+          onProgress: (done, total) => progress.report({ message: `reviewed ${done}/${total} page(s)…` }),
+        }),
+    );
+
+    const dir = await chatWorkspace.writeDossier(project, dossier, { outreach: true });
+    const summary = summarizeDossier(dossier);
+
+    // Open a remediation work item per flagged page (dedup against existing
+    // dossier items for this space by page ref).
+    const existingRefs = new Set(
+      workItems
+        .list()
+        .filter((w) => w.tags?.includes(spaceKey) && w.target.ref)
+        .map((w) => w.target.ref),
+    );
+    const seeds = dossierWorkItemSeeds(dossier, source.alias ?? source.displayName).filter(
+      (s) => !existingRefs.has(s.target.ref),
+    );
+    for (const seed of seeds) {
+      await workItems.create(seed).catch(() => undefined);
+    }
+    telemetry.record("project.dossier", { space: "redacted" });
+
+    const choice = await vscode.window.showInformationMessage(
+      `Dossier for ${spaceKey}: ${summary.captured}/${summary.totalPages} page(s) reviewed${dossier.truncated ? " (capped)" : ""} — ${summary.flagged} flagged (${summary.stale} stale, ${summary.ownerless} no active owner, ${summary.dataQuality} data-quality) across ${summary.owners} owner(s). Opened ${seeds.length} new work item(s). Saved to the "${project.name}" workspace.`,
+      "Open Inventory",
+      "Open Owners",
+    );
+    if (choice === "Open Inventory") {
+      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.joinPath(dir, "inventory.md")).then(undefined, () => undefined);
+    } else if (choice === "Open Owners") {
+      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.joinPath(dir, "owners.md")).then(undefined, () => undefined);
+    }
   });
 
   // #3 — show what @sharepoint has learned about each model's usable context.

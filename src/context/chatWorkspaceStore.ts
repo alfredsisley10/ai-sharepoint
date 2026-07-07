@@ -11,6 +11,17 @@ import {
   slugify,
   transcriptHeader,
 } from "./chatWorkspace";
+import {
+  SpaceDossier,
+  groupByOwner,
+  renderInventoryJson,
+  renderInventoryMarkdown,
+  renderOwnersMarkdown,
+  renderOutreachDraft,
+  dossierSheets,
+  flagsFor,
+} from "./spaceDossier";
+import { buildXlsx } from "./files/xlsxWrite";
 
 /**
  * Filesystem + redaction layer for project chat workspaces (ADR-0048). Writes
@@ -149,6 +160,52 @@ export class ChatWorkspaceStore {
       await this.writeText(this.manifestUri(project), JSON.stringify(manifest, null, 2));
       await this.writeText(this.summaryUri(project), renderSummary(manifest, project));
       this.emitter.fire();
+    });
+  }
+
+  /** The `space/<KEY>/` folder within a project's workspace. */
+  dossierUri(project: Project, spaceKey: string): vscode.Uri {
+    const safe = spaceKey.replace(/[^A-Za-z0-9._-]/g, "-") || "space";
+    return vscode.Uri.joinPath(this.baseUri(project), "space", safe);
+  }
+
+  /**
+   * Write a Confluence space dossier into the project workspace: the inventory
+   * (markdown + JSON), the by-owner view, an .xlsx workbook, and (optionally) a
+   * per-owner outreach draft for every owner with flagged pages. Ensures the
+   * workspace exists first. Returns the dossier folder. Content is derived from
+   * the user's own Confluence read — not redacted (owner emails are needed for
+   * coordination).
+   */
+  async writeDossier(
+    project: Project,
+    dossier: SpaceDossier,
+    opts: { outreach?: boolean } = {},
+  ): Promise<vscode.Uri> {
+    return this.queue(project.id, async () => {
+      if (!this.enabled(project.id)) await this.setEnabled(project.id, true);
+      const dir = this.dossierUri(project, dossier.spaceKey);
+      await vscode.workspace.fs.createDirectory(dir);
+      await this.ensureGitignored();
+      await this.writeText(vscode.Uri.joinPath(dir, "inventory.md"), renderInventoryMarkdown(dossier));
+      await this.writeText(vscode.Uri.joinPath(dir, "inventory.json"), renderInventoryJson(dossier));
+      await this.writeText(vscode.Uri.joinPath(dir, "owners.md"), renderOwnersMarkdown(dossier));
+      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, "dossier.xlsx"), buildXlsx(dossierSheets(dossier)));
+      if (opts.outreach) {
+        const outreachDir = vscode.Uri.joinPath(dir, "outreach");
+        await vscode.workspace.fs.createDirectory(outreachDir);
+        for (const group of groupByOwner(dossier)) {
+          if (group.owner.sam === "(unassigned)") continue;
+          if (!group.pages.some((p) => flagsFor(p).flagged)) continue;
+          const file = `${group.owner.sam.replace(/[^A-Za-z0-9._-]/g, "-") || "owner"}.md`;
+          await this.writeText(
+            vscode.Uri.joinPath(outreachDir, file),
+            renderOutreachDraft(group, dossier.spaceKey, dossier.generatedAt),
+          );
+        }
+      }
+      this.emitter.fire();
+      return dir;
     });
   }
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.112.0 — 2026-07-07
+
+### Added — Confluence space dossier in the project workspace
+- **Point at a target Confluence space and aggregate it into the project workspace.** A new
+  **Build Confluence Space Dossier** command (Projects view item menu / command palette) walks the
+  whole space (via the resilient hierarchy walk), and for every page resolves the **owner**
+  (recency-weighted contributor, LDAP active-employee checked), **staleness**, and **data-quality**
+  flags (broken links, currency issues). It writes a durable, browsable dossier under the project
+  workspace — `space/<KEY>/inventory.md` + `inventory.json`, a by-**owners.md** view, and a
+  two-sheet **`dossier.xlsx`** (Pages + Owners) for export.
+- **Straight into the remediation backlog.** Every flagged page opens a work item (ADR-0045) carrying
+  the resolved owner and reason tags (`stale`/`ownerless`/`data-quality`), de-duplicated against
+  prior dossier runs for the space — so status, communications, and follow-ups are tracked and
+  restartable through the existing work-inventory tooling.
+- **Owner outreach drafts.** For each owner with flagged pages, a per-owner outreach draft
+  (`space/<KEY>/outreach/<owner>.md`) is generated listing exactly which of their pages need
+  attention — the starting point for coordinating communications and follow-ups. All pure rendering
+  is unit-tested; the aggregation reuses the existing ownership/currency/authority suite.
+
 ## 0.111.0 — 2026-07-07
 
 ### Added — project chat workspaces (follow along + restart starved chats)

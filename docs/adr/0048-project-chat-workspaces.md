@@ -55,12 +55,15 @@ project so interleaved turns cannot clobber the summary.
   opt-in — acceptable for corporate use, and reversible (disable + delete the
   folder).
 
-## Follow-ups (not in the core)
+## Follow-ups
 
+- **Delivered (0.112.0) — Confluence space dossier.** `context/spaceDossier.ts`
+  (pure) + `ContextService.buildConfluenceSpaceDossier` aggregate a target space
+  (page inventory, owners, staleness, data-quality) into the workspace under
+  `space/<KEY>/` (`inventory.md/.json`, `owners.md`, `dossier.xlsx`), open a
+  de-duplicated work item per flagged page (ADR-0045), and draft per-owner
+  outreach under `space/<KEY>/outreach/`. Reuses the ownership/currency suite.
 - Cache the connected-context blocks and tool results per turn into the
   workspace so later chats reuse them instead of re-fetching (efficiency).
 - "Resume in new chat" that seeds a fresh chat directly from the summary +
   cached context.
-- Confluence content-management shaping of the workspace (aggregate page
-  details, owners, stale/inconsistent pages, and drive owner communications /
-  follow-ups) — see the oversight/work-inventory suite (ADR-0045).
