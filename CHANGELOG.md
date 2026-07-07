@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.110.1 — 2026-07-07
+
+### Fixed — misleading Microsoft-endpoint advice on non-Microsoft connectors
+- **A rejected or unreachable non-Microsoft connector no longer blames Microsoft.** The generic
+  fallback remediation for a `network` failure hardcoded "confirm login.microsoftonline.com /
+  graph.microsoft.com are allowlisted", and the `auth.failed` fallback assumed an Entra
+  tenant/client-ID problem. Both fire for **every** connector whose error carries no summary of its
+  own, so — for example — a Jira **basic username/password** connector that hit an un-fingerprinted
+  network failure while refreshing a rotated password reported that it "could not access Microsoft
+  Graph and login.microsoftonline.com", which is nonsense for basic auth. The un-fingerprinted
+  fallbacks are **host- and provider-agnostic by definition**, so they are now neutral: the network
+  advice points at "this connector's host", and the auth advice leads with re-entering the credential
+  and scopes the Entra guidance to Microsoft sign-in explicitly. Fingerprinted proxy/TLS-inspection
+  failures and Microsoft sign-in failures keep their own targeted guidance unchanged. A full audit
+  confirmed every connector's add-wizard method, refresh routing, and verify dispatch are correct and
+  that stored credentials are keyed per source (no cross-mapping) — the only defect was the advice
+  text.
+
 ## 0.110.0 — 2026-07-02
 
 ### Added — information-sprawl reconciliation suite

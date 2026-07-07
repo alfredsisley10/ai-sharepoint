@@ -31,7 +31,21 @@ test("advice exists for actionable codes", () => {
 test("an error with its own remediation suppresses generic advice (no Entra text on session expiry)", () => {
   const own = new AppError("Splunk rejected the sign-in (401).", "auth.failed", "Your Splunk browser session has expired — re-capture the cookie.");
   assert.equal(adviceForError(own, "auth.failed"), undefined);
-  // No userSummary → the generic per-code advice still applies.
-  assert.match(adviceForError(new AppError("x", "auth.failed"), "auth.failed") ?? "", /administrator/);
-  assert.match(adviceForError(new Error("AADSTS50126"), "auth.failed") ?? "", /administrator/);
+  // No userSummary → the generic per-code advice still applies. It leads with
+  // the connector-agnostic action (re-enter the credential) and scopes the
+  // Entra/tenant guidance to Microsoft sign-in only.
+  const authAdvice = adviceForError(new AppError("x", "auth.failed"), "auth.failed") ?? "";
+  assert.match(authAdvice, /re-enter the credential/i);
+  assert.match(authAdvice, /Microsoft\/Entra sign-in only.*tenant/i);
+  assert.match(adviceForError(new Error("AADSTS50126"), "auth.failed") ?? "", /tenant/);
+});
+
+test("generic network advice is provider-neutral — never names Microsoft hosts for a non-Microsoft connector", () => {
+  // Regression: a Jira basic-auth refresh hit an un-fingerprinted network
+  // failure and the fallback advice told the user to allowlist
+  // login.microsoftonline.com / graph.microsoft.com (nonsense for Jira). The
+  // un-fingerprinted network fallback is host-agnostic and must stay neutral.
+  const advice = adviceForError(new AppError("Context request failed: fetch failed", "network"), "network") ?? "";
+  assert.doesNotMatch(advice, /microsoftonline|graph\.microsoft/i);
+  assert.match(advice, /this connector's host is allowlisted/i);
 });
