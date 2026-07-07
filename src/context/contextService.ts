@@ -1262,7 +1262,7 @@ export class ContextService {
             if (item) {
               batch[k]!.content = item.body;
               const v = Number(item.meta?.version);
-              if (Number.isFinite(v)) batch[k]!.version = v;
+              if (Number.isFinite(v) && v > 0) batch[k]!.version = v;
             }
           }
         }

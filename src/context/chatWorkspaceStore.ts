@@ -27,6 +27,7 @@ import {
   renderRecommendedScaffold,
   dossierSheets,
   flagsFor,
+  pageFolderName,
 } from "./spaceDossier";
 import { buildXlsx } from "./files/xlsxWrite";
 
@@ -158,7 +159,7 @@ export class ChatWorkspaceStore {
    * into the chat path) unless the project's workspace is enabled. `newSession`
    * starts a fresh session file (first turn of a conversation).
    */
-  async recordTurn(project: Project, turn: WorkspaceTurn, newSession: boolean): Promise<void> {
+  async recordTurn(project: Project, turn: WorkspaceTurn, newSession: boolean, conversationKey?: string): Promise<void> {
     if (!this.enabled(project.id)) return;
     const CAP = 8000;
     const safe: WorkspaceTurn = {
@@ -173,7 +174,7 @@ export class ChatWorkspaceStore {
     };
     await this.queue(project.id, async () => {
       const loaded = await this.loadManifest(project);
-      const { manifest, session } = foldTurn(loaded, safe, newSession, this.now());
+      const { manifest, session } = foldTurn(loaded, safe, newSession, this.now(), conversationKey);
       const fileUri = vscode.Uri.joinPath(this.baseUri(project), session.file);
       let existing = session.turns === 1 ? "" : (await this.readText(fileUri)) ?? "";
       if (!existing) existing = transcriptHeader(session, project.name);
@@ -237,7 +238,7 @@ export class ChatWorkspaceStore {
       // once so an owner/assistant's edits survive a re-run.
       for (const p of dossier.pages) {
         if (p.content === undefined) continue;
-        const pageDir = vscode.Uri.joinPath(dir, "pages", p.id.replace(/[^A-Za-z0-9._-]/g, "-") || "page");
+        const pageDir = vscode.Uri.joinPath(dir, "pages", pageFolderName(p.id));
         await vscode.workspace.fs.createDirectory(pageDir);
         await this.writeText(vscode.Uri.joinPath(pageDir, "current.md"), renderCurrentContent(p));
         const recUri = vscode.Uri.joinPath(pageDir, "recommended.md");
@@ -266,8 +267,7 @@ export class ChatWorkspaceStore {
 
   /** The recommended-revision file for a page within a space dossier. */
   recommendedRevisionUri(project: Project, spaceKey: string, pageId: string): vscode.Uri {
-    const safeId = pageId.replace(/[^A-Za-z0-9._-]/g, "-") || "page";
-    return vscode.Uri.joinPath(this.dossierUri(project, spaceKey), "pages", safeId, "recommended.md");
+    return vscode.Uri.joinPath(this.dossierUri(project, spaceKey), "pages", pageFolderName(pageId), "recommended.md");
   }
 
   /**
@@ -283,8 +283,7 @@ export class ChatWorkspaceStore {
   ): Promise<vscode.Uri> {
     return this.queue(project.id, async () => {
       if (!this.enabled(project.id)) await this.setEnabled(project.id, true);
-      const safeId = page.id.replace(/[^A-Za-z0-9._-]/g, "-") || "page";
-      const pageDir = vscode.Uri.joinPath(this.dossierUri(project, spaceKey), "pages", safeId);
+      const pageDir = vscode.Uri.joinPath(this.dossierUri(project, spaceKey), "pages", pageFolderName(page.id));
       await vscode.workspace.fs.createDirectory(pageDir);
       await this.ensureGitignored();
       const dp: DossierPage = {

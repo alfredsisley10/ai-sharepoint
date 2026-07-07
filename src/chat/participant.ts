@@ -464,8 +464,13 @@ async function answerWithModel(
   const activeProject = deps.projects.active();
   // A project chat workspace mirrors each turn to disk (opt-in per project) so
   // the conversation survives the chat's small context window. An empty history
-  // marks the first turn of a new conversation → a fresh session file.
+  // marks the first turn of a new conversation → a fresh session file. The
+  // conversation key (this chat's opening prompt) lets two chats open against the
+  // same project append to their OWN session instead of the most recent one.
   const isFirstConversationTurn = context.history.length === 0;
+  const firstReqPrompt = context.history
+    .find((t): t is vscode.ChatRequestTurn => t instanceof vscode.ChatRequestTurn)?.prompt;
+  const conversationKey = (firstReqPrompt ?? request.prompt).slice(0, 200);
   // Project context: USER-DEFINED (goals + instructions) and AI-MANAGED
   // (learned across sessions) are presented as separate, clearly-labeled blocks
   // so the model never conflates them — and as separate budget sections (#2/#3)
@@ -794,6 +799,7 @@ async function answerWithModel(
           ...(turnKnowledge.length ? { toolResults: turnKnowledge } : {}),
         },
         isFirstConversationTurn,
+        conversationKey,
       )
       .catch(() => undefined);
   }

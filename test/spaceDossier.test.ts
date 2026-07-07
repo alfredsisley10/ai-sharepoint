@@ -15,6 +15,7 @@ import {
   renderOutreachDraft,
   renderCurrentContent,
   renderRecommendedScaffold,
+  pageFolderName,
   STALE_DAYS,
 } from "../src/context/spaceDossier";
 
@@ -145,11 +146,23 @@ test("renderOutreachDraft addresses the owner and lists their flagged pages", ()
   assert.match(md, /not updated in 400 days/);
 });
 
+test("pageFolderName matches the on-disk sanitization (outreach link never 404s)", () => {
+  assert.equal(pageFolderName("12345"), "12345");
+  assert.equal(pageFolderName("a b/c"), "a-b-c");
+  assert.equal(pageFolderName(""), "page"); // empty id falls back
+  assert.equal(pageFolderName("///"), "---"); // sanitized, non-empty
+});
+
 test("renderOutreachDraft links the recommended revision when content was cached", () => {
   const withContent = groupByOwner(
     dossier([page({ id: "42", title: "Old", staleDays: 400, content: "current body", owners: [{ sam: "jdoe", active: true }] })]),
   )[0]!;
   assert.match(renderOutreachDraft(withContent, "ENG", "t"), /\(\.\.\/pages\/42\/recommended\.md\)/);
+  // A non-numeric id links through the sanitized folder name, matching disk.
+  const oddId = groupByOwner(
+    dossier([page({ id: "a b/c", title: "Odd", staleDays: 400, content: "x", owners: [{ sam: "jdoe", active: true }] })]),
+  )[0]!;
+  assert.match(renderOutreachDraft(oddId, "ENG", "t"), /\(\.\.\/pages\/a-b-c\/recommended\.md\)/);
   const noContent = groupByOwner(
     dossier([page({ id: "42", title: "Old", staleDays: 400, owners: [{ sam: "jdoe", active: true }] })]),
   )[0]!;

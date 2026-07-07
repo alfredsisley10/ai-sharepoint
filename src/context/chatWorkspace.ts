@@ -45,6 +45,10 @@ export interface SessionMeta {
   model?: string;
   /** Derived from the first prompt — a human label for the session. */
   title: string;
+  /** Stable-ish key identifying the conversation this session mirrors (the first
+   *  prompt of the chat). Lets concurrent chats under the same project append to
+   *  their OWN session instead of whichever was created most recently. */
+  conversationKey?: string;
   /** Truncated prompts, in order — the conversation outline for the SUMMARY and
    *  for restartability. Capped so the manifest can't grow without bound. */
   outline: string[];
@@ -93,18 +97,26 @@ export function nextSessionId(dateIso: string, existing: SessionMeta[]): string 
 
 /**
  * Fold one completed turn into the manifest. Starts a new session when
- * `newSession` is set or there is no current session, otherwise appends to the
- * most recent session. Returns the updated manifest and the session the turn
- * landed in (so the caller knows which transcript file to append to). Pure.
+ * `newSession` is set, otherwise appends to the session for this conversation
+ * (matched by `conversationKey`, falling back to the most recent session when no
+ * key is supplied or matches). Matching by conversation key stops two chats open
+ * against the same project from cross-contaminating each other's transcript.
+ * Returns the updated manifest and the session the turn landed in (so the caller
+ * knows which transcript file to append to). Pure.
  */
 export function foldTurn(
   manifest: WorkspaceManifest,
   turn: WorkspaceTurn,
   newSession: boolean,
   now: string,
+  conversationKey?: string,
 ): { manifest: WorkspaceManifest; session: SessionMeta } {
   const sessions = manifest.sessions.map((s) => ({ ...s, outline: [...s.outline] }));
-  let session = sessions[sessions.length - 1];
+  let session: SessionMeta | undefined;
+  if (!newSession) {
+    if (conversationKey) session = [...sessions].reverse().find((s) => s.conversationKey === conversationKey);
+    if (!session) session = sessions[sessions.length - 1];
+  }
   if (!session || newSession) {
     const id = nextSessionId(turn.at, sessions);
     session = {
@@ -115,6 +127,7 @@ export function foldTurn(
       turns: 0,
       model: turn.model,
       title: snippet(turn.prompt, TITLE_MAX) || "Untitled session",
+      ...(conversationKey ? { conversationKey } : {}),
       outline: [],
     };
     sessions.push(session);

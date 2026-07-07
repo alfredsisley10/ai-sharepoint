@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.119.1 — 2026-07-07
+
+### Fixed — review-pass correctness fixes
+- **Concurrent chats under one project no longer cross-contaminate transcripts.** Each turn now routes
+  to its own session by a conversation key (the chat's opening prompt) instead of always appending to
+  the most-recently-created session, so two @sharepoint chats open against the same project keep
+  separate transcripts, outlines, and resume briefs.
+- **Space dossier:** the outreach "recommended revision" link and the on-disk page folder now share a
+  single sanitization helper (`pageFolderName`), so a non-numeric page id can't produce a dangling
+  link; a page with no version no longer renders "· v0"; and a reference-config export no longer ships
+  unconfigured (zero) token rates that an import could apply over a recipient's real rates.
+
 ## 0.119.0 — 2026-07-07
 
 ### Added — probe cost estimates + exportable probed limits & pricing

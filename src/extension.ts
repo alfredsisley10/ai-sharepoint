@@ -4657,10 +4657,16 @@ export function activate(context: vscode.ExtensionContext): void {
       }),
     );
     const pricingCfg = vscode.workspace.getConfiguration("aiSharePoint");
+    // Only export DELIBERATELY-set rates: a zero token rate means "not
+    // configured", so exporting it would let an import reset a recipient's real
+    // rates to zero. The premium-request price + currency always travel (they
+    // carry a real default the whole team should share).
+    const inMil = pricingCfg.get<number>("usage.tokenCostInputPerMillion", 0);
+    const outMil = pricingCfg.get<number>("usage.tokenCostOutputPerMillion", 0);
     const pricingExport = {
       pricePerPremiumRequest: pricingCfg.get<number>("usage.pricePerPremiumRequest", 0.04),
-      tokenCostInputPerMillion: pricingCfg.get<number>("usage.tokenCostInputPerMillion", 0),
-      tokenCostOutputPerMillion: pricingCfg.get<number>("usage.tokenCostOutputPerMillion", 0),
+      ...(inMil > 0 ? { tokenCostInputPerMillion: inMil } : {}),
+      ...(outMil > 0 ? { tokenCostOutputPerMillion: outMil } : {}),
       currencySymbol: pricingCfg.get<string>("usage.currencySymbol", "$"),
     };
     const exportDoc = buildReferenceExport(selSources, selBookmarks, nowIso(), schemasById, selProjects, selSites, selMemory, allSourceNames, selPrompts, allProjectNames, modelLimits.list(), pricingExport);

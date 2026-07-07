@@ -50,6 +50,12 @@ export interface SpaceDossier {
 /** A page is "stale" past this age (matches the currency review's default). */
 export const STALE_DAYS = 180;
 
+/** Filesystem-safe folder name for a page id — the SINGLE definition shared by
+ *  the on-disk writer and the outreach link so their paths never diverge. */
+export function pageFolderName(id: string): string {
+  return id.replace(/[^A-Za-z0-9._-]/g, "-") || "page";
+}
+
 export interface PageFlags {
   stale: boolean;
   /** No CURRENT (active) owner could be resolved. */
@@ -296,7 +302,7 @@ export function renderOutreachDraft(group: OwnerGroup, spaceKey: string, generat
       p.brokenLinks > 0 ? `${p.brokenLinks} broken link(s)` : "",
       ...p.issues,
     ].filter(Boolean);
-    const rec = p.content !== undefined ? ` · recommended revision: [\`recommended.md\`](../pages/${p.id}/recommended.md)` : "";
+    const rec = p.content !== undefined ? ` · recommended revision: [\`recommended.md\`](../pages/${pageFolderName(p.id)}/recommended.md)` : "";
     lines.push(`- [${escapePipe(p.title)}](${p.url}) — ${why.join("; ") || "needs review"}${rec}`);
   }
   lines.push(

@@ -64,6 +64,29 @@ test("foldTurn starts a session, appends turns, and titles from the first prompt
   assert.equal(r3.session.id, "2026-07-08-1");
 });
 
+test("foldTurn routes turns to the right session by conversation key (concurrent chats)", () => {
+  // Two conversations under one project, interleaved.
+  let m = emptyManifest("p", "P", "2026-07-07T00:00:00Z");
+  m = foldTurn(m, turn("A: which pages are stale?", "…"), true, "t", "convA").manifest; // S1 (convA)
+  m = foldTurn(m, turn("B: audit the wiki", "…"), true, "t", "convB").manifest; // S2 (convB), now "last"
+  // Turn 2 of conversation A must land in S1, not the most-recent S2.
+  const r = foldTurn(m, turn("A: who owns them?", "…"), false, "t", "convA");
+  assert.equal(r.session.conversationKey, "convA");
+  assert.equal(r.session.id, r.manifest.sessions[0]!.id); // the first (convA) session
+  assert.deepEqual(r.session.outline, ["A: which pages are stale?", "A: who owns them?"]);
+  // convB's session is untouched.
+  const sB = r.manifest.sessions.find((s) => s.conversationKey === "convB")!;
+  assert.equal(sB.turns, 1);
+});
+
+test("foldTurn without a conversation key keeps legacy append-to-last behavior", () => {
+  let m = emptyManifest("p", "P", "2026-07-07T00:00:00Z");
+  m = foldTurn(m, turn("a", "b"), true, "t").manifest;
+  const r = foldTurn(m, turn("c", "d"), false, "t");
+  assert.equal(r.manifest.sessions.length, 1);
+  assert.equal(r.session.turns, 2);
+});
+
 test("foldTurn caps the per-session outline", () => {
   let m = emptyManifest("p", "P", "2026-07-07T00:00:00Z");
   for (let i = 0; i < OUTLINE_CAP + 25; i++) {
