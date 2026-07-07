@@ -35,7 +35,7 @@ import { PROBE_MAX_STEPS } from "./core/contextProbe";
 import { runContextLimitProbe } from "./chat/contextLimitProbe";
 import { discoverAdvertisedLimits, maybeOfferContextProbe } from "./chat/modelLimitDiscovery";
 import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
-import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
+import { buildLessonsExport, lessonsToMarkdown, LESSON_CATEGORIES } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
 import { SyncEngine } from "./sync/syncEngine";
 import { openOrInitRepository } from "./sync/vscodeGit";
@@ -6419,8 +6419,9 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     await vscode.window.showTextDocument(doc, { preview: true });
     const choice = await vscode.window.showInformationMessage(
-      `${all.length} anonymized lesson(s) captured. Nothing is transmitted — review here, then export a file to share with the developer.`,
+      `${all.length} anonymized lesson(s) captured. Nothing is transmitted — review, revise, or export here.`,
       "Export…",
+      "Edit a Lesson…",
       "Remove Entries…",
       "Clear All",
     );
@@ -6428,6 +6429,46 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.commands.executeCommand("aiSharePoint.exportLessons");
     } else if (choice === "Clear All") {
       await vscode.commands.executeCommand("aiSharePoint.clearLessons");
+    } else if (choice === "Edit a Lesson…") {
+      const pick = await vscode.window.showQuickPick(
+        all.map((l) => ({
+          label: l.lesson.slice(0, 80),
+          description: `${l.category} · ${l.count}×`,
+          detail: `When: ${l.trigger.slice(0, 100)}`,
+          id: l.id,
+        })),
+        { ignoreFocusOut: true, title: "Revise a learned heuristic", placeHolder: "Pick a lesson to edit its trigger/heuristic." },
+      );
+      if (!pick) return;
+      const current = all.find((l) => l.id === pick.id);
+      if (!current) return;
+      const trigger = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Trigger — the situation this applies to",
+        value: current.trigger,
+        prompt: "Keep it generalized/anonymized (no real names, space keys, or URLs — they're re-scrubbed on save).",
+      });
+      if (trigger === undefined) return;
+      const lesson = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Heuristic — the better action to take",
+        value: current.lesson,
+        prompt: "The reusable rule to apply when the trigger matches.",
+      });
+      if (lesson === undefined) return;
+      const category = await vscode.window.showQuickPick(
+        LESSON_CATEGORIES.map((c) => ({ label: c, picked: c === current.category })),
+        { ignoreFocusOut: true, title: "Category" },
+      );
+      const updated = await lessons.update(current.id, {
+        category: (category?.label as (typeof LESSON_CATEGORIES)[number]) ?? current.category,
+        trigger,
+        lesson,
+        ...(current.tags ? { tags: current.tags } : {}),
+      });
+      void vscode.window.showInformationMessage(
+        updated ? "Lesson revised. It applies to future @sharepoint answers immediately." : "No change — the edit was empty.",
+      );
     } else if (choice === "Remove Entries…") {
       const picks = await vscode.window.showQuickPick(
         all.map((l) => ({

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.122.0 — 2026-07-07
+
+### Added — revise learned lessons in place
+- **Learned heuristics are now fully revisable, not just prune-able.** *Review Lessons Learned* gains
+  an **"Edit a Lesson…"** action: pick a captured lesson and edit its trigger, heuristic, and category
+  in place (re-scrubbed/normalized on save, id and observation count preserved; an edit that collides
+  with another lesson merges them). A revised lesson applies to future @sharepoint answers
+  immediately — completing inspect / export / **revise** for the memory the assistant learns.
+
 ## 0.121.0 — 2026-07-07
 
 ### Added — learned heuristics now improve future answers (closed the self-improvement loop)
