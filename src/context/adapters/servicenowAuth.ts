@@ -162,6 +162,40 @@ export async function refreshSnowTokens(
   return next;
 }
 
+/*
+ * ── Browser SSO parity: why there is no zero-config "pop a browser" here ──
+ *
+ * Users reasonably ask why ServiceNow can't sign in like Office 365 — one
+ * click, browser opens, done. The honest technical answer:
+ *
+ *  - Office 365 works because Entra ID implements standard OAuth2
+ *    authorization-code + PKCE for ANY tenant with Microsoft's own well-known
+ *    first-party client IDs, and VS Code ships a built-in Microsoft
+ *    authentication provider/broker. No per-tenant admin setup is needed.
+ *  - A ServiceNow instance CAN do the exact same flow — this module
+ *    implements it (buildSnowAuthUrl / exchangeSnowCode, the `snow-oauth`
+ *    method: PKCE over a loopback redirect, the browser's existing SSO
+ *    session does the authenticating). But ServiceNow ships NO universal
+ *    client ID: the flow only works against an OAuth client an admin
+ *    registers on that instance (System OAuth → Application Registry,
+ *    redirect URL http://localhost:51725/callback), surfaced to the wizard
+ *    via the `aiSharePoint.servicenow.oauthClientId` setting. Zero-config
+ *    browser sign-in is therefore impossible by ServiceNow's design, not an
+ *    extension limitation.
+ *  - Cookies in an EXTERNAL browser are unreadable by design: a VS Code
+ *    extension cannot open another browser's cookie jar (OS-encrypted,
+ *    process-isolated). That is why the zero-admin path is "paste the
+ *    Cookie header" (`snow-session`) rather than silent cookie pickup.
+ *  - VS Code's built-in auth providers cover Microsoft and GitHub only —
+ *    there is no ServiceNow provider to delegate to.
+ *
+ * So the ladder is: `snow-session` (cookie replay — zero admin setup,
+ * fragile, expires with the browser session) → `snow-oidc` (paste an
+ * IdP-minted JWT the instance validates — needs an OIDC provider registered
+ * on the instance) → `snow-oauth` (true browser pop, O365-like — needs an
+ * admin-registered OAuth client, but then it's durable with refresh tokens).
+ */
+
 /** Cookie ATTRIBUTE names (from Set-Cookie text or DevTools table columns)
  *  that are not session cookies — dropped during normalization so a paste
  *  of richer material never sends `Path=/` as a cookie. */
@@ -182,6 +216,58 @@ const COOKIE_ATTRIBUTES = new Set([
 
 /** RFC 6265 cookie-name token. */
 const COOKIE_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/*
+ * ── Cookie ALLOWLIST (pilot: "are we processing too many cookies?") ──
+ * A DevTools "copy all" capture routinely carries dozens of third-party
+ * analytics/marketing cookies and cookies for OTHER domains. Replaying them
+ * hurts twice: an oversized Cookie header gets rejected by WAFs/load
+ * balancers (431, or a silent drop that surfaces as a baffling failure), and
+ * stale SSO-intermediate cookies (old IdP state) can poison an otherwise
+ * valid session. Only a handful of cookies actually authenticate a
+ * ServiceNow session, so everything else is dropped before the wire:
+ *  - JSESSIONID / glide_session_store — the session itself;
+ *  - glide_* (glide_user_route, glide_sso_id, glide_user_activity,
+ *    glide_node_id_for_js, …) — ServiceNow routing/SSO state;
+ *  - __CJ — CSRF-adjacent ServiceNow cookie;
+ *  - BIGipServer* (F5), citrix_ns_id / NSC_* (NetScaler), AWSALB/AWSALBCORS
+ *    (AWS ALB) — load-balancer affinity, needed so replayed requests land on
+ *    the node that owns the session.
+ * Matching is case-insensitive (exports vary in casing). FAIL-OPEN: if the
+ * filter would leave ZERO cookies (an unexpected capture shape), the
+ * original set is kept — a too-aggressive filter must never break a working
+ * setup.
+ *
+ * cleanCookieString is a SHARED utility — sharePointRestSession.ts replays
+ * SharePoint Online sessions through it (ADR-0046) — so the allowlist also
+ * keeps the SharePoint session cookies (FedAuth / FedAuth1… multi-part,
+ * rtFa, SPOIDCRL). Fail-open alone would not protect a SharePoint capture
+ * that also carries an LB-affinity cookie.
+ */
+const SNOW_COOKIE_NAMES = new Set([
+  "jsessionid",
+  "glide_user_route",
+  "glide_session_store",
+  "glide_sso_id",
+  "glide_user_activity",
+  "glide_node_id_for_js",
+  "__cj",
+  "citrix_ns_id",
+  "awsalb",
+  "awsalbcors",
+  // SharePoint session replay (shared consumer — see note above):
+  "rtfa",
+  "spoidcrl",
+]);
+const SNOW_COOKIE_PREFIXES = ["glide", "bigipserver", "nsc_", "fedauth"];
+
+/** Whether a cookie NAME belongs to a replayable browser session — ServiceNow
+ *  session/routing/SSO state, load-balancer affinity, or the SharePoint
+ *  session cookies (shared consumer). Pure; names only. */
+export function isSnowSessionCookie(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return SNOW_COOKIE_NAMES.has(n) || SNOW_COOKIE_PREFIXES.some((p) => n.startsWith(p));
+}
 
 interface ParsedCookie {
   name: string;
@@ -238,10 +324,26 @@ function pairsFromJson(parsed: unknown): ParsedCookie[] | undefined {
  *  - one name=value per line (cookie-manager exports);
  *  - Set-Cookie style text (attributes like Path/Secure/HttpOnly dropped).
  * Idempotent on already-clean strings; called again at send time so stored
- * captures self-heal. */
+ * captures self-heal.
+ *
+ * The result is then narrowed to the ServiceNow session allowlist (see
+ * SNOW_COOKIE_NAMES above): third-party/analytics/other-domain cookies from a
+ * "copy all" capture are dropped, keeping the header small (WAF/LB size
+ * limits) and free of stale SSO-intermediate state. Order and exact values of
+ * the kept cookies are preserved. Fail-open: if nothing matches the
+ * allowlist, the full parsed set is kept unchanged. */
 export function cleanCookieString(raw: string): string {
+  const pairs = parseCookiePairs(raw);
+  const kept = pairs.filter((p) => isSnowSessionCookie(p.name));
+  return (kept.length > 0 ? kept : pairs).map((p) => `${p.name}=${p.value}`).join("; ");
+}
+
+/** Parse a pasted capture into deduplicated name/value pairs (all accepted
+ *  shapes; see cleanCookieString). No allowlist applied \u2014 this is the raw
+ *  parsed set, which the names-only diagnostics compare against. */
+function parseCookiePairs(raw: string): ParsedCookie[] {
   const text = raw.replace(/^\uFEFF/, "").trim().replace(/^cookie:\s*/i, "").trim();
-  if (!text) return "";
+  if (!text) return [];
   let pairs: ParsedCookie[] | undefined;
   if (text.startsWith("[") || text.startsWith("{")) {
     try {
@@ -273,7 +375,38 @@ export function cleanCookieString(raw: string): string {
     seen.add(name);
     out.push({ name, value: p.value.trim().replace(/^"(.*)"$/, "$1") });
   }
-  return out.map((p) => `${p.name}=${p.value}`).join("; ");
+  return out;
+}
+
+/** Names-only report of what the allowlist did to a capture — what is sent,
+ *  what was dropped, whether the filter had to fail open, and whether an
+ *  essential session cookie (JSESSIONID or glide_session_store) is present.
+ *  Pure and safe to show/log: cookie VALUES never appear anywhere. */
+export interface SnowCookieDiagnostics {
+  /** Cookie names that go on the wire (post-filter, original order). */
+  kept: string[];
+  /** Cookie names parsed from the capture but not sent. */
+  dropped: string[];
+  /** True when nothing matched the allowlist so the whole set was kept. */
+  failOpen: boolean;
+  /** True when JSESSIONID or glide_session_store is among the kept names. */
+  hasSessionCookie: boolean;
+}
+
+export function snowCookieDiagnostics(raw: string): SnowCookieDiagnostics {
+  const pairs = parseCookiePairs(raw);
+  const matched = pairs.filter((p) => isSnowSessionCookie(p.name));
+  const failOpen = matched.length === 0 && pairs.length > 0;
+  const kept = failOpen ? pairs : matched;
+  return {
+    kept: kept.map((p) => p.name),
+    dropped: failOpen ? [] : pairs.filter((p) => !isSnowSessionCookie(p.name)).map((p) => p.name),
+    failOpen,
+    hasSessionCookie: kept.some((p) => {
+      const n = p.name.toLowerCase();
+      return n === "jsessionid" || n === "glide_session_store";
+    }),
+  };
 }
 
 /** Cookie NAMES in a stored capture — safe to show/log (never values).
@@ -480,10 +613,13 @@ export function describeSnowRejection(args: {
   /** Whether an X-UserToken (g_ck) accompanied the cookies. */
   userTokenSent?: boolean;
 }): SnowRejection {
-  const names = cookieNames(args.storedCookies);
+  const diag = snowCookieDiagnostics(args.storedCookies);
+  const names = diag.kept;
   const lower = names.map((n) => n.toLowerCase());
   const missing: string[] = [];
-  if (!lower.includes("jsessionid")) missing.push("JSESSIONID (the session cookie)");
+  if (!diag.hasSessionCookie) {
+    missing.push("JSESSIONID / glide_session_store (the session cookies)");
+  }
   if (!lower.some((n) => n.startsWith("glide"))) missing.push("the glide_* cookies");
 
   // What the server actually said: ServiceNow's JSON error envelope, or the
@@ -513,16 +649,29 @@ export function describeSnowRejection(args: {
   const loginish = /log\s?-?in|sign\s?-?in|sso|saml|authenticat/i.test(`${htmlTitle} ${redirectedTo}`);
   const kind: SnowRejection["kind"] = args.status !== undefined || redirectedTo !== "" || loginish ? "auth" : "other";
 
+  // Names only, capped — a "copy all" capture can carry dozens of trackers.
+  const droppedNote =
+    diag.dropped.length > 0
+      ? ` ${diag.dropped.length} unrelated cookie${diag.dropped.length === 1 ? "" : "s"} from the capture ${diag.dropped.length === 1 ? "was" : "were"} filtered out before sending (${
+          diag.dropped.slice(0, 8).join(", ") + (diag.dropped.length > 8 ? `, +${diag.dropped.length - 8} more` : "")
+        }).`
+      : "";
   const message =
     (args.status !== undefined
       ? `ServiceNow rejected the session cookies (${args.status})`
       : `ServiceNow answered the API call with a page instead of JSON`) +
     (serverSaid ? ` — server returned ${serverSaid}` : "") +
     (redirectedTo ? `; the request was redirected to ${redirectedTo}` : "") +
-    `. Cookies replayed: ${names.length > 0 ? names.join(", ") : "none parseable from the stored capture"}.`;
+    `. Cookies replayed: ${names.length > 0 ? names.join(", ") : "none parseable from the stored capture"}.` +
+    droppedNote;
 
   const recapture =
-    `Re-capture via Test Context Source: sign in to ServiceNow in the browser, open DevTools → Network, click any request to ${hostOf(args.requestUrl)}, and copy the WHOLE Cookie header (the raw "Cookie: …" line or just its value — both work).`;
+    `Re-capture via Test Context Source: sign in to ServiceNow in the browser, open DevTools → Network, click any request to ${hostOf(args.requestUrl)} (not another site — cookies are per-host), and copy the WHOLE Cookie header (the raw "Cookie: …" line or just its value — both work). Only the ServiceNow session cookies (JSESSIONID, glide_*, and load-balancer affinity cookies) are replayed; anything else in the paste is ignored.`;
+  // Cookie replay is inherently fragile (browser session lifetime, gateways,
+  // CSRF tokens). Point at the durable options that exist today — see the
+  // "Browser SSO parity" note above for why a zero-config browser pop can't.
+  const alternatives =
+    "More durable alternatives: if a ServiceNow admin registers an OAuth client for the instance (System OAuth → Application Registry, redirect URL http://localhost:51725/callback) and you set aiSharePoint.servicenow.oauthClientId, the \"Browser OAuth sign-in\" option opens your browser and reuses your SSO session the way Office 365 sign-in does, with refresh tokens; or, if your identity provider (Entra ID, Okta, …) can mint OIDC tokens the instance trusts, paste one via the SSO-token option.";
   let cause: string;
   if (missing.length > 0) {
     cause = `The capture is missing ${missing.join(" and ")} — the session cannot authenticate without them.`;
@@ -534,10 +683,10 @@ export function describeSnowRejection(args: {
     cause =
       "Complete, fresh cookies that still get \"User Not Authenticated\" almost always mean this instance requires the page CSRF token (X-UserToken) for API calls. Get it from the signed-in tab: DevTools → Console → type g_ck → Enter → copy the printed value, then re-capture and paste it when the wizard asks for the optional X-UserToken.";
   } else if (redirectedTo) {
-    cause = `An SSO/login front-end (${redirectedTo}) intercepted the call. Fresh cookies fail too when the gateway's own cookies are missing or it only accepts browser traffic — copying the full Cookie header (which includes the gateway's cookies) usually satisfies it.`;
+    cause = `An SSO/login front-end (${redirectedTo}) intercepted the call. Such gateways often demand their own cookies or accept only real-browser traffic, so cookie replay is fragile behind them — the OAuth browser sign-in below is the reliable fix.`;
   } else {
     cause =
-      "If these cookies were captured just now, the session is NOT expired — most often the paste missed some of the host's cookies (every cookie matters, including load-balancer/SSO ones like BIGipServer*), the instance requires the page CSRF token (re-capture and supply the optional X-UserToken: DevTools Console → g_ck), or a security gateway in front of the instance accepts only browser requests. If they were captured a while ago, the browser session has timed out.";
+      "If these cookies were captured just now, the session is NOT expired — most often the paste missed one of the host's session cookies (JSESSIONID and the glide_* set), the instance requires the page CSRF token (re-capture and supply the optional X-UserToken: DevTools Console → g_ck), or a security gateway in front of the instance accepts only browser requests. If they were captured a while ago, the browser session has timed out.";
   }
-  return { message, summary: `${cause} ${recapture}`, kind };
+  return { message, summary: `${cause} ${recapture} ${alternatives}`, kind };
 }

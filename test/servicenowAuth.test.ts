@@ -235,6 +235,157 @@ test("userTokenIssue: empty is fine (optional); junk is rejected with g_ck guida
   assert.match(userTokenIssue("has spaces in it which tokens never do") ?? "", /g_ck/);
 });
 
+// --- Cookie allowlist (pilot: "are we processing too many cookies?") --------
+
+test("cleanCookieString drops third-party/analytics cookies, keeping only session/affinity ones in order", async () => {
+  const { cleanCookieString } = await import("../src/context/adapters/servicenowAuth");
+  const capture = [
+    "BIGipServerpool_corp=1234.5678.0000", // LB affinity, listed first — order must survive
+    "_ga=GA1.2.111", // Google Analytics
+    "OptanonConsent=isIABGlobal=false", // OneTrust
+    "JSESSIONID=ABC123",
+    "AMCV_ADOBE=MCMID|999", // Adobe
+    "glide_user_route=glide.abcdef",
+    "MUID=msft", // Microsoft ads
+    "glide_session_store=STORE1",
+    "s_cc=true",
+  ].join("; ");
+  assert.equal(
+    cleanCookieString(capture),
+    "BIGipServerpool_corp=1234.5678.0000; JSESSIONID=ABC123; glide_user_route=glide.abcdef; glide_session_store=STORE1",
+  );
+});
+
+test("isSnowSessionCookie: exact names, prefixes (BIGipServer*, NSC_*, glide*), case-insensitive", async () => {
+  const { isSnowSessionCookie } = await import("../src/context/adapters/servicenowAuth");
+  for (const name of [
+    "JSESSIONID",
+    "jsessionid", // exports vary in casing
+    "glide_user_route",
+    "glide_session_store",
+    "glide_sso_id",
+    "glide_user_activity",
+    "glide_node_id_for_js",
+    "glide_anything_new", // glide prefix catches future glide cookies
+    "__CJ",
+    "BIGipServerpool_corp~https", // F5 prefix
+    "NSC_wlus-jsessionid", // NetScaler prefix
+    "citrix_ns_id",
+    "AWSALB",
+    "AWSALBCORS",
+  ]) {
+    assert.equal(isSnowSessionCookie(name), true, name);
+  }
+  for (const name of ["_ga", "OptanonConsent", "MUID", "AMCV_x", "mbox", "ai_user", "XSRF-TOKEN"]) {
+    assert.equal(isSnowSessionCookie(name), false, name);
+  }
+});
+
+test("cookie filter fails OPEN: a capture with zero allowlisted cookies is kept unchanged", async () => {
+  const { cleanCookieString } = await import("../src/context/adapters/servicenowAuth");
+  // Unexpected capture shape (e.g. a proxy that renames cookies) — a
+  // too-aggressive filter must not break a setup that was working.
+  assert.equal(
+    cleanCookieString("WEIRD_SESSION=abc; CUSTOM_AUTH=def"),
+    "WEIRD_SESSION=abc; CUSTOM_AUTH=def",
+  );
+});
+
+test("shared consumer: SharePoint session cookies (FedAuth*, rtFa, SPOIDCRL) survive alongside LB cookies", async () => {
+  const { cleanCookieString } = await import("../src/context/adapters/servicenowAuth");
+  // sharePointRestSession.ts replays SPO sessions through cleanCookieString;
+  // fail-open would not save FedAuth here because BIGipServer matches.
+  assert.equal(
+    cleanCookieString("FedAuth=t1; FedAuth1=t2; rtFa=r; SPOIDCRL=s; _ga=GA1.2; BIGipServersp=9.9"),
+    "FedAuth=t1; FedAuth1=t2; rtFa=r; SPOIDCRL=s; BIGipServersp=9.9",
+  );
+});
+
+test("snowCookieDiagnostics reports NAMES ONLY: kept/dropped, fail-open, essential-session presence", async () => {
+  const { snowCookieDiagnostics } = await import("../src/context/adapters/servicenowAuth");
+  const d = snowCookieDiagnostics("JSESSIONID=secretvalue1; _ga=secretvalue2; glide_user_route=g");
+  assert.deepEqual(d.kept, ["JSESSIONID", "glide_user_route"]);
+  assert.deepEqual(d.dropped, ["_ga"]);
+  assert.equal(d.failOpen, false);
+  assert.equal(d.hasSessionCookie, true);
+  // No cookie VALUE may ever appear in the diagnostics.
+  assert.ok(!JSON.stringify(d).includes("secretvalue"), JSON.stringify(d));
+
+  // glide_session_store alone also counts as the session cookie.
+  assert.equal(snowCookieDiagnostics("glide_session_store=x").hasSessionCookie, true);
+  // Affinity-only capture: filtered normally, but no session cookie present.
+  const affinity = snowCookieDiagnostics("BIGipServerpool=1.2.3; _ga=x");
+  assert.deepEqual(affinity.kept, ["BIGipServerpool"]);
+  assert.equal(affinity.hasSessionCookie, false);
+
+  // Fail-open: nothing matches → everything kept, nothing reported dropped.
+  const open = snowCookieDiagnostics("WEIRD=1; OTHER=2");
+  assert.deepEqual(open.kept, ["WEIRD", "OTHER"]);
+  assert.deepEqual(open.dropped, []);
+  assert.equal(open.failOpen, true);
+  assert.equal(open.hasSessionCookie, false);
+
+  // Empty capture: nothing kept, not fail-open.
+  const empty = snowCookieDiagnostics("");
+  assert.deepEqual(empty.kept, []);
+  assert.equal(empty.failOpen, false);
+});
+
+test("allowlist shrinks an oversized 'copy all cookies' capture below WAF header limits", async () => {
+  const { cleanCookieString } = await import("../src/context/adapters/servicenowAuth");
+  // 40 tracker cookies with fat values (the realistic DevTools "copy all"
+  // shape that trips 8 KB WAF/LB header caps) around the real session set.
+  const junk = Array.from({ length: 40 }, (_, i) => `tracker_${i}=${"v".repeat(300)}`);
+  const raw = [`JSESSIONID=ABC`, ...junk, `glide_user_route=g`, `BIGipServerpool=1.2.3`].join("; ");
+  const cleaned = cleanCookieString(raw);
+  assert.ok(raw.length > 8_000, String(raw.length)); // the problem is real…
+  assert.ok(cleaned.length < 100, String(cleaned.length)); // …and the filter fixes it
+  assert.equal(cleaned, "JSESSIONID=ABC; glide_user_route=g; BIGipServerpool=1.2.3");
+});
+
+test("describeSnowRejection names the filtered-out cookies (names only, capped) and what was replayed", async () => {
+  const { describeSnowRejection } = await import("../src/context/adapters/servicenowAuth");
+  const junk = Array.from({ length: 12 }, (_, i) => `trk${i}=secret_${i}`).join("; ");
+  const d = describeSnowRejection({
+    status: 401,
+    bodyText: "{}",
+    requestUrl: "https://corp.service-now.com/api/now/table/incident",
+    storedCookies: `JSESSIONID=topsecret; glide_user_route=g; ${junk}`,
+  });
+  assert.match(d.message, /Cookies replayed: JSESSIONID, glide_user_route\./);
+  assert.match(d.message, /12 unrelated cookies from the capture were filtered out/);
+  assert.match(d.message, /trk0, trk1/); // dropped names are listed…
+  assert.match(d.message, /\+4 more/); // …capped at 8
+  assert.ok(!d.message.includes("topsecret") && !d.message.includes("secret_"), d.message); // never values
+});
+
+test("describeSnowRejection: glide_session_store alone satisfies the session-cookie check", async () => {
+  const { describeSnowRejection } = await import("../src/context/adapters/servicenowAuth");
+  const d = describeSnowRejection({
+    status: 401,
+    bodyText: "{}",
+    requestUrl: "https://corp.service-now.com/api/now/table/incident",
+    storedCookies: "glide_session_store=x; glide_user_route=g",
+  });
+  assert.ok(!/capture is missing/.test(d.summary), d.summary);
+});
+
+test("describeSnowRejection points at the durable paths: admin-registered OAuth client and OIDC tokens", async () => {
+  const { describeSnowRejection, SNOW_REDIRECT_URI } = await import("../src/context/adapters/servicenowAuth");
+  const d = describeSnowRejection({
+    status: 401,
+    bodyText: "{}",
+    requestUrl: "https://corp.service-now.com/api/now/table/incident",
+    storedCookies: "JSESSIONID=a; glide_user_route=g",
+  });
+  // Browser pop like O365 needs an admin-registered OAuth client — the
+  // guidance must say where (Application Registry) and which redirect URL.
+  assert.match(d.summary, /Application Registry/);
+  assert.ok(d.summary.includes(SNOW_REDIRECT_URI), d.summary);
+  assert.match(d.summary, /aiSharePoint\.servicenow\.oauthClientId/);
+  assert.match(d.summary, /OIDC/);
+});
+
 test("describeSnowRejection: complete fresh cookies + 'User Not Authenticated' without a token points at g_ck", async () => {
   const { describeSnowRejection } = await import("../src/context/adapters/servicenowAuth");
   const noToken = describeSnowRejection({
