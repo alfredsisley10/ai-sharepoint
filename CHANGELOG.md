@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.128.0 — 2026-07-08
+
+### Refactor — de-duplication (code-review remediation, batch 6, safe subset)
+- **Shared Confluence REST helpers.** `enc` / `baseOf` / `webUrl` were copy-pasted byte-for-byte across the
+  Confluence adapter family (currency, hierarchy, entitlements, authority, cache, archive, write,
+  ownership). They now live once in `confluenceCommon.ts`, removing the drift risk (one copy trimmed the
+  trailing slash differently) and the duplication. Pure motion — call sites unchanged.
+- **Unified transport handling for raw-fetch adapters.** Power BI, M365 Copilot, and Splunk each hand-rolled
+  the same fetch + timeout + transport-error try/catch. They now share `fetchWithTimeout`, which *also*
+  applies the HTTP/2-reset guidance and proxy / TLS-inspection diagnosis the main HTTP path already had — so
+  a transport failure on these connectors now yields an actionable diagnosis instead of a bare
+  "fetch failed". Each adapter keeps its own status taxonomy and body parsing.
+
+_Deferred (need a runtime-verification path or are churn-without-functional-benefit, so held for dedicated
+PRs): the `CollectionStore<T>` base for the ~20 Memento stores, splitting `contextTools.ts`, and the
+`extension.ts` decomposition._
+
 ## 0.127.0 — 2026-07-07
 
 ### Fixed — empty-body Graph writes (found while closing test gaps, batch 5)
