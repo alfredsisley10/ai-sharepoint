@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.129.0",
+  "version": "0.130.0",
   "release": {
     "channel": "standard"
   },
@@ -2520,7 +2520,7 @@
       },
       {
         "name": "aisharepoint_avoid_term",
-        "displayName": "Manage Proxy Avoid-List",
+        "displayName": "Manage Proxy Rules",
         "toolReferenceName": "spAvoidTerm",
         "canBeReferencedInPrompt": true,
         "icon": "$(shield)",

@@ -74,6 +74,14 @@ export class UsageDashboard {
           this.render();
         }
       }),
+      // Cost rows derive from settings (premium price / token rates), so
+      // re-render when those change — otherwise the dashboard keeps showing the
+      // old price until the next request.
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration("aiSharePoint.usage") && this.panel?.visible) {
+          this.render();
+        }
+      }),
       this.panel.onDidChangeViewState((e) => {
         if (e.webviewPanel.visible) {
           this.render();
@@ -105,7 +113,20 @@ export class UsageDashboard {
       todayRequests: this.meter.requestsToday(nowIso),
       monthRequests: this.meter.requestsThisMonth(nowIso),
       monthFailures: this.meter.failuresThisMonth(nowIso),
-      daily: this.meter.dailySeries(nowIso, 30),
+      daily: this.meter.dailySeries(nowIso, 30).map((d) => ({
+        day: d.day,
+        requests: d.requests,
+        failures: d.failures,
+        // Exact daily premium-request cost from the per-model breakdown.
+        ...(premiumCostEnabled(premium)
+          ? {
+              cost: Object.entries(d.byModel).reduce(
+                (sum, [k, s]) => sum + s.requests * this.costs.multiplierFor(k) * premium.pricePerRequest,
+                0,
+              ),
+            }
+          : {}),
+      })),
       byModel: byModel.map((m) => ({
         key: m.key,
         requests: m.requests,
@@ -120,7 +141,9 @@ export class UsageDashboard {
         failures: l.failures,
       })),
       ...(showCost ? { monthCost: formatCost(monthTotal, rates.currency) } : {}),
-      ...(premiumCost !== undefined ? { premiumCost } : {}),
+      ...(premiumCost !== undefined
+        ? { premiumCost, premiumRate: formatCost(premium.pricePerRequest, premium.currency) }
+        : {}),
       filter: this.filter,
       modelLimits: (this.modelLimits?.list() ?? [])
         .map(describeModelLimit)

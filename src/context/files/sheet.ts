@@ -9,3 +9,10 @@ export interface Sheet {
   name: string;
   rows: string[][];
 }
+
+/** Render a sheet as RFC-4180 CSV (CRLF rows; cells with comma/quote/newline
+ *  quoted, inner quotes doubled). Pure. */
+export function sheetToCsv(sheet: Sheet): string {
+  const esc = (cell: string) => (/[",\n\r]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell);
+  return sheet.rows.map((r) => r.map(esc).join(",")).join("\r\n");
+}

@@ -115,6 +115,7 @@ export function registerDossierTools(
           `Reviewed ${r.captured}/${r.total} page(s)${r.truncated ? " (capped)" : ""}; ${r.flagged} flagged (stale / no active owner / data-quality). Opened ${r.created} new remediation work item(s).`,
           `Artifacts: inventory.md (+ .json), owners.md (grouped by owner), dossier.xlsx, and per-owner outreach drafts under outreach/. Recommended-revision scaffolds are under pages/<id>/.`,
           `Next: use list_work_items to see the backlog, resolve_page_owners / review_page_currency for detail, recommend_page_revision to propose fixes, and draft_communication to reach owners.`,
+          `Once the space is cleaned up, you can declare it AUTHORITATIVE (mark_authority) and sweep the rest of Confluence (find_conflicts) AND your SharePoint sites (scan_site_content) for stale/inaccurate pages that contradict it — then recommend corrections on the non-authoritative side.`,
         ].join(" ");
       }),
     ),

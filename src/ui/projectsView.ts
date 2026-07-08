@@ -6,7 +6,18 @@ import { Project } from "../context/types";
 
 type Row =
   | { kind: "project"; project: Project }
-  | { kind: "detail"; project: Project; field: "goals" | "instructions" | "ai" | "sources" | "workspace" };
+  | { kind: "detail"; project: Project; field: "goals" | "instructions" | "ai" | "sources" | "workspace" }
+  | { kind: "dir"; uri: vscode.Uri; name: string }
+  | { kind: "file"; uri: vscode.Uri; name: string };
+
+/** Order directory entries: folders first, then files, each alphabetical. */
+function sortEntries(entries: [string, vscode.FileType][]): [string, vscode.FileType][] {
+  return [...entries].sort((a, b) => {
+    const aDir = a[1] === vscode.FileType.Directory ? 0 : 1;
+    const bDir = b[1] === vscode.FileType.Directory ? 0 : 1;
+    return aDir - bDir || a[0].localeCompare(b[0]);
+  });
+}
 
 /**
  * Projects view: the discoverable home for creating, switching, and managing
@@ -27,7 +38,7 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<Row> {
     chatWorkspace?.onDidChange(() => this.emitter.fire());
   }
 
-  getChildren(row?: Row): Row[] {
+  async getChildren(row?: Row): Promise<Row[]> {
     if (!row) {
       return this.projects.list().map((project) => ({ kind: "project" as const, project }));
     }
@@ -38,7 +49,31 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<Row> {
         field,
       }));
     }
+    // The workspace row (when on) and any folder under it browse the on-disk
+    // project workspace — where the space dossier (inventory, owners,
+    // dossier.xlsx, recommended-revision scaffolds, per-owner outreach) and chat
+    // transcripts are written, so the user can open all project content here.
+    if (row.kind === "detail" && row.field === "workspace" && this.chatWorkspace?.enabled(row.project.id)) {
+      return this.readDir(this.chatWorkspace.baseUri(row.project));
+    }
+    if (row.kind === "dir") {
+      return this.readDir(row.uri);
+    }
     return [];
+  }
+
+  private async readDir(uri: vscode.Uri): Promise<Row[]> {
+    let entries: [string, vscode.FileType][];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(uri);
+    } catch {
+      return []; // folder not created yet (no dossier / transcript written)
+    }
+    return sortEntries(entries).map(([name, type]) =>
+      type === vscode.FileType.Directory
+        ? { kind: "dir" as const, uri: vscode.Uri.joinPath(uri, name), name }
+        : { kind: "file" as const, uri: vscode.Uri.joinPath(uri, name), name },
+    );
   }
 
   getTreeItem(row: Row): vscode.TreeItem {
@@ -68,6 +103,24 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<Row> {
         title: "Switch to Project",
         arguments: [row.project.id],
       };
+      return item;
+    }
+    if (row.kind === "dir") {
+      // Plain tree item (not resourceUri-backed) so it renders with uniform
+      // indentation/indent-guides like the rest of the Projects tree.
+      const item = new vscode.TreeItem(row.name, vscode.TreeItemCollapsibleState.Collapsed);
+      item.iconPath = vscode.ThemeIcon.Folder;
+      item.contextValue = "project-file-dir";
+      return item;
+    }
+    if (row.kind === "file") {
+      const item = new vscode.TreeItem(row.name, vscode.TreeItemCollapsibleState.None);
+      item.iconPath = vscode.ThemeIcon.File;
+      item.contextValue = "project-file";
+      item.tooltip = row.uri.fsPath;
+      // Open on click — text files in an editor tab; xlsx and other binaries in
+      // their default app.
+      item.command = { command: "vscode.open", title: "Open", arguments: [row.uri] };
       return item;
     }
     const p = row.project;
@@ -108,12 +161,17 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<Row> {
       }
       case "workspace": {
         const on = this.chatWorkspace?.enabled(p.id) ?? false;
-        const item = new vscode.TreeItem(`Chat workspace: ${on ? "on" : "off"}`);
+        // When on, expand to browse the workspace files (dossier, owners,
+        // dossier.xlsx, recommended scaffolds, outreach, transcripts).
+        const item = new vscode.TreeItem(
+          `Workspace files${on ? "" : ": off"}`,
+          on ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+        );
         item.iconPath = new vscode.ThemeIcon(on ? "folder-active" : "new-folder");
         item.tooltip = new vscode.MarkdownString(
           on
-            ? "This project mirrors each @sharepoint chat to a browsable folder (transcript + rolling SUMMARY) so a conversation survives the chat's context window. Click to open the SUMMARY."
-            : "Off. Start a chat workspace to save this project's conversations (follow along + restart chats that run out of context). Click to start.",
+            ? "Browse this project's workspace: the space **dossier** (inventory, owners, `dossier.xlsx`, recommended-revision scaffolds, per-owner outreach) and chat transcripts. Expand to open any file; click the label to open the SUMMARY."
+            : "Off. Start a chat workspace to save this project's conversations and dossiers into a browsable folder. Click to start.",
         );
         item.contextValue = on ? "project-workspace-on" : "project-workspace-off";
         item.command = {

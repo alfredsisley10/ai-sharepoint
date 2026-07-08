@@ -38,7 +38,7 @@ import { registerLessonsTools } from "./chat/lessonsTools";
 import { registerMemoryTools } from "./chat/memoryTools";
 import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
-import { getDefangReport } from "./chat/proxyDefangLog";
+import { getDefangReport, getLatestDefangReport } from "./chat/proxyDefangLog";
 import { InteractionCache } from "./chat/interactionCache";
 import { PROBE_MAX_STEPS } from "./core/contextProbe";
 import { runContextLimitProbe } from "./chat/contextLimitProbe";
@@ -237,6 +237,9 @@ import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { MemoryStore } from "./context/memoryStore";
 import { PromptStore } from "./context/promptStore";
+import { newSeedPrompts } from "./context/promptSeeds";
+import { effectiveInputCap } from "./core/contextBudget";
+import { progressMessage } from "./core/progress";
 import { PromptsTreeProvider } from "./ui/promptsView";
 import { PromptItem, PromptScope, PromptScopeKind, normalizePromptInput } from "./context/promptLibrary";
 import { MemoryItem, MemoryScope, MemoryScopeKind, normalizeMemoryInput } from "./context/memory";
@@ -402,6 +405,30 @@ export function activate(context: vscode.ExtensionContext): void {
           void vscode.commands.executeCommand("workbench.action.reloadWindow");
         }
       });
+  } else {
+    // Not torn, but was the extension just UPDATED since the last activation?
+    // VS Code only registers new contributions (settings, commands, views) after
+    // a window reload, so a fresh update can leave the UI stale — e.g. a
+    // newly-added setting that "appears only after a restart". Advise a reload
+    // once per version so the user isn't left wondering why new features/settings
+    // aren't showing. (Skipped on first-ever install — nothing to reload for.)
+    const LAST_VERSION_KEY = "aiSharePoint.lastActivatedVersion";
+    const previous = context.globalState.get<string>(LAST_VERSION_KEY);
+    if (previous && previous !== EXTENSION_VERSION) {
+      log.info(`AI SharePoint updated ${previous} → ${EXTENSION_VERSION}.`);
+      void vscode.window
+        .showInformationMessage(
+          `AI SharePoint updated to v${EXTENSION_VERSION}. If new settings, commands, or views don't appear, reload the window so VS Code picks up the updated manifest.`,
+          "Reload Window",
+          "Dismiss",
+        )
+        .then((pick) => {
+          if (pick === "Reload Window") {
+            void vscode.commands.executeCommand("workbench.action.reloadWindow");
+          }
+        });
+    }
+    void context.globalState.update(LAST_VERSION_KEY, EXTENSION_VERSION);
   }
 
   context.subscriptions.push(
@@ -523,6 +550,22 @@ export function activate(context: vscode.ExtensionContext): void {
     return writeExportFiles(files);
   };
   const prompts = new PromptStore(context.globalState);
+  // Seed the Prompt Library with built-in starter prompts for the flagship
+  // flows — once per id, so a deleted seed isn't re-added and new built-ins in a
+  // later release are added without duplicating the rest.
+  void (async () => {
+    const KEY = "aiSharePoint.seededPromptIds";
+    const seeded = context.globalState.get<string[]>(KEY) ?? [];
+    const fresh = newSeedPrompts(seeded);
+    if (fresh.length === 0) return;
+    const stamp = nowIso();
+    for (const s of fresh) {
+      await prompts
+        .add({ id: s.id, scope: { kind: "global" }, title: s.title, body: s.body, tags: s.tags, createdAt: stamp, updatedAt: stamp })
+        .catch(() => undefined);
+    }
+    await context.globalState.update(KEY, [...seeded, ...fresh.map((s) => s.id)]);
+  })();
   const outlookWorkspaces = new OutlookWorkspaceStore(context.globalState);
   context.subscriptions.push(outlookWorkspaces);
   const teamsScopes = new TeamsScopeStore(context.globalState);
@@ -1161,15 +1204,23 @@ export function activate(context: vscode.ExtensionContext): void {
       .getConfiguration("aiSharePoint")
       .get<string>("copilot.preferredModelFamily", "");
     const pick = await vscode.window.showQuickPick(
-      models.map((m) => ({
-        label: `$(circuit-board) ${m.name}`,
-        description: `${m.badge} · ${m.tier}${m.family === preferred ? " · current default" : ""}`,
-        detail: `family ${m.family} · max input ${m.maxInputTokens.toLocaleString()} tokens`,
-        family: m.family,
-      })),
+      models.map((m) => {
+        const key = m.family || m.id;
+        const usable = effectiveInputCap(m.maxInputTokens, modelLimits.effectiveLimit(key, m.maxInputTokens));
+        const rec = modelLimits.get(key);
+        const tested = Boolean(rec && (rec.knownGood !== undefined || rec.effectiveCap !== undefined));
+        return {
+          label: `$(circuit-board) ${m.name}`,
+          description: `${m.badge} · ${m.tier}${m.family === preferred ? " · current default" : ""}`,
+          // Show the real per-turn USABLE budget (and whether it's measured), not
+          // just the advertised max — that's what decides if a big turn fits.
+          detail: `family ${m.family} · advertised ${m.maxInputTokens.toLocaleString()} · usable ~${usable.toLocaleString()} tokens ${tested ? "(tested)" : "(untested — run Probe Model Context Limit)"}`,
+          family: m.family,
+        };
+      }),
       {
         ignoreFocusOut: true,
-        title: "Copilot models — published premium-request multiplier",
+        title: "Copilot models — cost (premium multiplier) + usable context budget",
         placeHolder: "Pick a model to set it as this extension's default (Esc to just browse)",
       },
     );
@@ -3137,11 +3188,17 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // --- Projects: named scopes for sources/bookmarks/instructions -----------
-  const promptProjectDetails = async (current?: Project): Promise<Project | undefined> => {
+  const promptProjectDetails = async (
+    current?: Project,
+    /** Pre-fill values for a NEW project (e.g. a Confluence space cleanup),
+     *  so the wizard opens populated instead of blank. Ignored when editing. */
+    seed?: { name?: string; description?: string; goals?: string; instructions?: string; sourceIds?: string[] },
+  ): Promise<Project | undefined> => {
+    const pre = current ? undefined : seed;
     const name = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: current ? "Project — name" : "New project — name",
-      value: current?.name ?? "",
+      value: current?.name ?? pre?.name ?? "",
       placeHolder: "AI Automation Initiative",
       validateInput: (v) => (v.trim() ? undefined : "Enter a project name"),
     });
@@ -3149,13 +3206,13 @@ export function activate(context: vscode.ExtensionContext): void {
     const description = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "Project — description (optional, Enter to skip)",
-      value: current?.description ?? "",
+      value: current?.description ?? pre?.description ?? "",
     });
     if (description === undefined) return undefined;
     const goals = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "Project — goals / objectives (optional, Enter to skip)",
-      value: current?.goals ?? "",
+      value: current?.goals ?? pre?.goals ?? "",
       placeHolder: "e.g. Build an AI-automation knowledge base; identify owners of legacy apps.",
       prompt: `What this project is for. Shown to @sharepoint as your goals (max ${GOALS_MAX_CHARS} chars).`,
       validateInput: (v) => (v.length > GOALS_MAX_CHARS ? `Max ${GOALS_MAX_CHARS} characters.` : undefined),
@@ -3164,7 +3221,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const instructions = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "Project — instructions & reference context (optional, Enter to skip)",
-      value: current?.instructions ?? "",
+      value: current?.instructions ?? pre?.instructions ?? "",
       placeHolder: "e.g. Prefer the CMDB for application questions; cite Confluence pages; answer in German.",
       prompt: `Your baseline instructions + common reference context, prepended to every @sharepoint turn while active (max ${INSTRUCTIONS_MAX_CHARS} chars). Separate from the AI-managed context.`,
       validateInput: (v) =>
@@ -3176,7 +3233,7 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showWarningMessage("Add at least one reference source before scoping a project.");
       return undefined;
     }
-    const member = new Set(current?.sourceIds ?? []);
+    const member = new Set(current?.sourceIds ?? pre?.sourceIds ?? []);
     const picks = await vscode.window.showQuickPick(
       all.map((s) => ({
         label: s.displayName,
@@ -3203,8 +3260,14 @@ export function activate(context: vscode.ExtensionContext): void {
     };
   };
 
-  register("aiSharePoint.createProject", async () => {
-    const project = await promptProjectDetails();
+  register("aiSharePoint.createProject", async (arg) => {
+    // A caller (e.g. the chat "Create a project to track this" button for a
+    // Confluence space cleanup) may pass a seed to pre-populate the wizard.
+    const seed =
+      arg && typeof arg === "object"
+        ? (arg as { name?: string; description?: string; goals?: string; instructions?: string; sourceIds?: string[] })
+        : undefined;
+    const project = await promptProjectDetails(undefined, seed);
     if (!project) return;
     await projects.upsert(project);
     await projects.setActive(project.id);
@@ -6633,10 +6696,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // Open the "what was changed" report for a defanged chat request (invoked from
   // the button the participant renders). The report is session-scoped.
   register("aiSharePoint.showProxyDefangDetails", async (arg?: unknown) => {
-    const md = typeof arg === "string" ? getDefangReport(arg) : undefined;
+    // From a command argument (an id), show that report; from the command
+    // palette (no arg), show the most recent one.
+    const md = typeof arg === "string" ? getDefangReport(arg) : getLatestDefangReport();
     if (!md) {
       void vscode.window.showInformationMessage(
-        "Those proxy-avoidance details are no longer available — the report is kept only for the current session.",
+        "No proxy-rules changes to show yet — details appear here after an outgoing message is adjusted in `defang` mode (kept for the current session only).",
       );
       return;
     }
@@ -6647,7 +6712,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // One-click remediation for a suspected content-proxy block (surfaced as a
   // button under a failed @sharepoint turn): turn on defang so outgoing chat
   // messages auto-obfuscate avoid-list words. Idempotent and reversible via the
-  // aiSharePoint.proxy.mode setting / Manage Proxy Avoid-List.
+  // aiSharePoint.proxy.mode setting / Manage Proxy Rules.
   register("aiSharePoint.enableProxyDefang", async () => {
     const cfg = vscode.workspace.getConfiguration("aiSharePoint");
     if (cfg.get<string>("proxy.mode", "off") === "defang") {
@@ -6658,7 +6723,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     await cfg.update("proxy.mode", "defang", vscode.ConfigurationTarget.Global);
     const pick = await vscode.window.showInformationMessage(
-      "Proxy defang enabled. Outgoing chat messages now auto-obfuscate avoid-list words (an invisible zero-width character is inserted so a content proxy can't match them; the AI still reads the original text). Retry your request — and add any specific trigger words via Manage Proxy Avoid-List.",
+      "Proxy defang enabled. Outgoing chat messages now auto-obfuscate avoid-list words (an invisible zero-width character is inserted so a content proxy can't match them; the AI still reads the original text). Retry your request — and add any specific trigger words via Manage Proxy Rules.",
       "Manage Avoid-List",
     );
     if (pick === "Manage Avoid-List") {
@@ -6918,12 +6983,19 @@ export function activate(context: vscode.ExtensionContext): void {
     )?.trim();
     if (!spaceKey) return;
 
+    const dossierStarted = Date.now();
+    let lastDone = 0;
     const r = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Building dossier for ${spaceKey}…`, cancellable: false },
       (progress) =>
-        buildDossierInto(project, source, spaceKey, { contextService, chatWorkspace, workItems }, (done, total) =>
-          progress.report({ message: `reviewed ${done}/${total} page(s)…` }),
-        ),
+        buildDossierInto(project, source, spaceKey, { contextService, chatWorkspace, workItems }, (done, total) => {
+          const increment = total > 0 ? ((done - lastDone) / total) * 100 : 0;
+          lastDone = done;
+          progress.report({
+            message: progressMessage(done, total, Date.now() - dossierStarted, "page"),
+            increment,
+          });
+        }),
     );
     const dir = r.dir;
     telemetry.record("project.dossier", { space: "redacted" });

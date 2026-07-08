@@ -31,6 +31,13 @@ export function getDefangReport(id: string): string | undefined {
   return reports.get(id);
 }
 
+/** The most recent stored report (for the command-palette entry, which has no
+ *  id to pass). Undefined when nothing has been defanged this session. */
+export function getLatestDefangReport(): string | undefined {
+  const id = order[order.length - 1];
+  return id ? reports.get(id) : undefined;
+}
+
 /** Test-only: clear the in-memory log. */
 export function _resetDefangReports(): void {
   reports.clear();

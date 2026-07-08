@@ -153,6 +153,34 @@ test("dossierWorkItemSeeds only seeds flagged pages, carrying owner + tags", () 
   assert.ok(seeds[0]!.tags?.includes("stale"));
 });
 
+test("suggestedOwner drives the work item, scaffold, and inventory for untagged pages", () => {
+  const d = dossier(
+    [
+      page({
+        id: "9",
+        title: "Orphan",
+        owners: [], // no tag → ownerless → flagged
+        suggestedOwner: { sam: "asmith", active: false, basis: "top contributor (directory not wired — unverified)" },
+      }),
+    ],
+    { ownerDetection: { directoryWired: false, ownerlessPages: 1, suggested: 1, noContributorHistory: 0 } },
+  );
+  // Work item is attributed to the suggested owner + recommends setting the tag.
+  const seeds = dossierWorkItemSeeds(d, "wiki");
+  assert.equal(seeds[0]!.owner?.sam, "asmith");
+  assert.match(seeds[0]!.finding, /suggested owner: asmith/);
+  assert.match(seeds[0]!.finding, /adding the label `owners\|asmith`/);
+  // Scaffold names the suggested owner + the label to add.
+  const scaffold = renderRecommendedScaffold(d.pages[0]!);
+  assert.match(scaffold, /Suggested owner: \*\*asmith\*\*/);
+  assert.match(scaffold, /activity unverified/);
+  // Inventory owner cell + the no-directory diagnostic note.
+  const inv = renderInventoryMarkdown(d);
+  assert.match(inv, /→ asmith \(suggested\)/);
+  assert.match(inv, /Owner detection:/);
+  assert.match(inv, /No LDAP\/M365 directory is wired/);
+});
+
 test("renderOutreachDraft addresses the owner and lists their flagged pages", () => {
   const group = groupByOwner(
     dossier([page({ title: "Old", staleDays: 400, owners: [{ sam: "jdoe", active: true, contact: "j@c.com" }] })]),

@@ -10,7 +10,8 @@ import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
 import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
-import { looksLikeConfluenceOptimization } from "./intent";
+import { looksLikeConfluenceOptimization, confluenceOptimizationSeed } from "./intent";
+import { betterModelFor } from "../copilot/modelRecommend";
 import { computeFollowups } from "./followups";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
@@ -152,6 +153,15 @@ const INSTRUCTIONS = [
   "site, or inspect_site/site_overview for a part), THEN search_context the other source for",
   "the same topics, compare them point by point, and recommend which side to fix (usually the",
   "non-authoritative one) with specific edits.",
+  "AUTHORITATIVE-SOURCE LIFECYCLE (the payoff after a cleanup): once a Confluence space is cleaned",
+  "up, offer to declare it AUTHORITATIVE for its topic(s) with mark_authority, then hunt down the",
+  "stale/inaccurate copies that confuse users. The full sweep is BOTH sources: (1) gather_authority",
+  "to load the truth; (2) find_conflicts to sweep the REST of Confluence for pages on the topic;",
+  "(3) scan_site_content / inspect_site on the relevant SharePoint site(s) for the same topic;",
+  "(4) compare each candidate against the authoritative content and recommend correct / merge /",
+  "archive on the NON-authoritative side, citing page titles + URLs, and track each as a work item.",
+  "This closes the loop: people spin up non-authoritative pages that are wrong or go out of date, and",
+  "this is how we find and fix them across Confluence AND SharePoint.",
   "You are also a capable SharePoint DEVELOPER: when the user asks you to design or change a",
   "managed site, IMPLEMENT it yourself end-to-end instead of handing the user manual steps —",
   "(1) optionally pull_site for a fresh baseline, (2) write the lists/*.json and pages/*.json",
@@ -569,6 +579,30 @@ async function answerWithModel(
 
   const joinSections = (ss: PromptSection[]) => ss.map((s) => s.text).join("\n");
 
+  // When the active model had to trim, advise a larger-budget model that would
+  // fit (the "running out of tested context — switch model" recommendation).
+  const recommendBiggerModel = async (neededTokens: number, activeUsable: number): Promise<void> => {
+    const choices = (await deps.copilot.listModels()).map((mi) => {
+      const key = mi.family || mi.id;
+      return {
+        key,
+        name: mi.name,
+        advertised: mi.maxInputTokens,
+        usable: effectiveInputCap(mi.maxInputTokens, deps.modelLimits.effectiveLimit(key, mi.maxInputTokens)),
+        multiplier: mi.multiplier,
+        tested: false,
+      };
+    });
+    const better = betterModelFor(modelKey, activeUsable, choices, neededTokens);
+    if (!better) return;
+    stream.markdown(
+      `> 💡 **${better.name}** has a larger usable budget (~${better.usable.toLocaleString()} tokens) and would fit this turn without trimming${
+        better.multiplier > 0 ? ` (premium ${better.multiplier}×)` : ""
+      }. Pick it from the model selector for large-context turns.\n\n`,
+    );
+    stream.button({ command: "aiSharePoint.listModels", title: `🔀 Compare models (try ${better.name})` });
+  };
+
   // Build the model-facing message for a given token cap: budget the sections to
   // fit, then defang avoid-terms. Reusable so the send can RE-BUDGET under a
   // tighter cap and retry if the prompt overflows the model's real context limit.
@@ -578,6 +612,7 @@ async function answerWithModel(
   const rebuildOutgoing = async (capValue: number, announce: boolean): Promise<{ outgoing: string; inputTokens: number }> => {
     let p = joinSections(sections);
     let toks = await countText(p);
+    const fullToks = toks; // pre-trim size — what a bigger model would need to fit
     if (toks > capValue) {
       const counts = new Map<PromptSection, number>();
       for (const s of sections) counts.set(s, await countText(s.text));
@@ -591,6 +626,9 @@ async function answerWithModel(
               .map((d) => d.label)
               .join(", ")} to fit — start a new chat or narrow the request to keep everything.\n\n`,
           );
+          // Recommend a bigger-budget model when one is available (the "running
+          // out of tested context — switch model" advisory).
+          await recommendBiggerModel(fullToks, capValue).catch(() => undefined);
         }
       }
     }
@@ -604,13 +642,10 @@ async function answerWithModel(
       if (announce && r.changes.length > 0) {
         const total = r.changes.reduce((n, c) => n + c.count, 0);
         stream.progress(`🛡️ Adjusted ${total} occurrence(s) of ${r.changes.length} avoid-term(s) so a content proxy won't block this message`);
-        // Transparency: let the user open exactly what was rewritten.
-        const reportId = recordDefangReport(renderDefangReport(r.changes));
-        stream.button({
-          command: "aiSharePoint.showProxyDefangDetails",
-          title: "🛡️ See what was changed",
-          arguments: [reportId],
-        });
+        // Record the report (retrievable via "AI SharePoint: Show Proxy Rules
+        // Details") for transparency, but don't clutter the chat with a
+        // persistent button on every defanged turn.
+        recordDefangReport(renderDefangReport(r.changes));
       }
     } else if (announce && proxyMode === "warn" && proxyTerms.length > 0) {
       const hits = scanForTerms(`${request.prompt}\n${contextBlock ?? ""}`, proxyTerms);
@@ -843,7 +878,21 @@ async function answerWithModel(
       stream.button(
         activeProject
           ? { command: "aiSharePoint.startProjectWorkspace", title: "📁 Track this in the project workspace", arguments: [activeProject] }
-          : { command: "aiSharePoint.createProject", title: "📁 Create a project to track this" },
+          : {
+              command: "aiSharePoint.createProject",
+              title: "📁 Create a project to track this",
+              // Pre-populate the wizard from the cleanup context: a sensible
+              // name/goals/instructions and the Confluence source(s) in scope.
+              arguments: [
+                confluenceOptimizationSeed(
+                  request.prompt,
+                  deps.projects
+                    .scope(deps.sources.list())
+                    .filter((s) => s.type === "confluence")
+                    .map((s) => s.id),
+                ),
+              ],
+            },
       );
     }
   }

@@ -30,6 +30,7 @@ import {
   pageFolderName,
 } from "./spaceDossier";
 import { buildXlsx } from "./files/xlsxWrite";
+import { sheetToCsv } from "./files/sheet";
 import { ensureGitignored } from "./files/gitignore";
 
 /**
@@ -232,7 +233,13 @@ export class ChatWorkspaceStore {
       await this.writeText(vscode.Uri.joinPath(dir, "inventory.md"), renderInventoryMarkdown(dossier));
       await this.writeText(vscode.Uri.joinPath(dir, "inventory.json"), renderInventoryJson(dossier));
       await this.writeText(vscode.Uri.joinPath(dir, "owners.md"), renderOwnersMarkdown(dossier));
-      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, "dossier.xlsx"), buildXlsx(dossierSheets(dossier)));
+      const sheets = dossierSheets(dossier);
+      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, "dossier.xlsx"), buildXlsx(sheets));
+      // CSV alongside the workbook for tools/imports that prefer it (Pages =
+      // the page inventory, Owners = the per-owner rollup).
+      for (const s of sheets) {
+        await this.writeText(vscode.Uri.joinPath(dir, `${s.name.toLowerCase()}.csv`), sheetToCsv(s));
+      }
 
       // Per-page tracking for pages whose current content was cached: refresh
       // current.md every run, but write the recommended-revision scaffold only

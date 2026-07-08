@@ -178,6 +178,14 @@ test("describeModelLimit shapes reported/tested/budget for display", () => {
   assert.equal(c.effectiveCap, 80000);
   assert.equal(c.cap, 80000);
 
+  // `usable` is the resolved ceiling with the 15% safety margin applied — the
+  // real per-turn budget, distinct from the raw ceiling `cap`.
+  assert.equal(a.usable, effectiveInputCap(128000, 128000)); // 0.85 × 128000
+  assert.equal(c.usable, effectiveInputCap(128000, 80000)); // 0.85 × 80000
+  assert.ok((c.usable ?? 0) < (c.cap ?? 0), "usable is below the ceiling");
+  // No ceiling known → no usable figure invented.
+  assert.equal(describeModelLimit({ key: "gpt" }).usable, undefined);
+
   // Advertised drifted since measurement.
   const d = describeModelLimit({ key: "gpt", advertised: 200000, knownGood: 90000, measuredAtAdvertised: 128000 });
   assert.equal(d.drifted, true);

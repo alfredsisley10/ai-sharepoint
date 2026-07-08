@@ -1270,6 +1270,61 @@ export class ContextService {
         }
       }
 
+      // Suggest a TARGET owner for pages with no (active) owner tag, so ownership
+      // can be ESTABLISHED (a recommended "add the owners| label" update). The
+      // recency-weighted top contributor is the candidate — active-verified when
+      // a directory is wired, otherwise suggested UNVERIFIED (the common reason a
+      // space returns "zero owners": no directory, so every contributor is
+      // treated inactive). Diagnosed so the result is explainable. One page-
+      // history read per ownerless page, bounded by the maxPages cap above.
+      const ownerless = pages.filter((p) => flagsFor(p).ownerless);
+      let suggestedOwners = 0;
+      let noContributorHistory = 0;
+      const nowMs = Date.now();
+      for (let i = 0; i < ownerless.length; i += concurrency) {
+        const batch = ownerless.slice(i, i + concurrency);
+        await Promise.all(
+          batch.map(async (p) => {
+            let tallies;
+            try {
+              tallies = await getConfluencePageContributorsWeighted(source, credential, p.id, caps.timeoutMs, nowMs);
+            } catch {
+              return; // history unreadable — leave unsuggested
+            }
+            if (!tallies.length) {
+              noContributorHistory += 1;
+              return;
+            }
+            // Prefer the first ACTIVE contributor when a directory can verify;
+            // otherwise the top contributor (unverified) — better than nothing.
+            let chosen = tallies[0]!;
+            let active = false;
+            if (directory) {
+              for (const c of tallies) {
+                const rec = await dirFn(c.sam);
+                if (rec?.active) {
+                  chosen = c;
+                  active = true;
+                  break;
+                }
+              }
+            }
+            const rec = await dirFn(chosen.sam);
+            p.suggestedOwner = {
+              sam: chosen.sam,
+              active,
+              ...(contactOf(rec) ? { contact: contactOf(rec) } : {}),
+              basis: directory
+                ? active
+                  ? "top active contributor"
+                  : "top contributor (none active in directory)"
+                : "top contributor (directory not wired — unverified)",
+            };
+            suggestedOwners += 1;
+          }),
+        );
+      }
+
       return {
         spaceKey,
         generatedAt: new Date().toISOString(),
@@ -1278,6 +1333,16 @@ export class ContextService {
         truncated: totalPages > targets.length,
         ...(reviewFailures > 0 ? { reviewFailures } : {}),
         ...(throttled ? { throttled: true } : {}),
+        ...(ownerless.length > 0
+          ? {
+              ownerDetection: {
+                directoryWired: Boolean(directory),
+                ownerlessPages: ownerless.length,
+                suggested: suggestedOwners,
+                noContributorHistory,
+              },
+            }
+          : {}),
       };
     });
   }

@@ -106,10 +106,10 @@ export function defang(text: string, terms: string[]): { text: string; hit: stri
 
 /** Render the "what was changed" report as Markdown for a read-only preview. */
 export function renderDefangReport(changes: DefangChange[]): string {
-  if (changes.length === 0) return "# Proxy avoidance\n\nNothing was changed in this request.";
+  if (changes.length === 0) return "# Proxy rules\n\nNothing was changed in this request.";
   const total = changes.reduce((n, c) => n + c.count, 0);
   return [
-    "# Proxy avoidance — what was changed in this request",
+    "# Proxy rules — what was changed in this request",
     "",
     "Your `aiSharePoint.proxy.mode` is set to **defang**. Before this request was sent, an invisible zero-width character was inserted inside each avoid-list word below, so a corporate content filter / DLP proxy can't match the word — while the AI model still reads the original text. **Nothing was removed, and no meaning was changed.**",
     "",
@@ -117,7 +117,7 @@ export function renderDefangReport(changes: DefangChange[]): string {
     "|---|---|---|",
     ...changes.map((c) => `| \`${c.term}\` | ${c.count} | ${c.context.replace(/\|/g, "\\|")} |`),
     "",
-    `_${total} occurrence(s) across ${changes.length} term(s). The «guillemets» mark where each term appeared in your original text. Edit the list via “AI SharePoint: Manage Proxy Avoid-List”._`,
+    `_${total} occurrence(s) across ${changes.length} term(s). The «guillemets» mark where each term appeared in your original text. Edit the list via “AI SharePoint: Manage Proxy Rules”._`,
   ].join("\n");
 }
 
@@ -143,10 +143,10 @@ export function buildProxyNudge(terms: string[], mode: ProxyMode): string {
  */
 export function proxyBlockAdvice(networkFailures: number): string | undefined {
   if (networkFailures >= 3) {
-    return `This is network failure #${networkFailures} for chat in this workspace. Repeated network-level failures are very often a **corporate proxy blocking the message content** (a false positive on a word it deems sensitive), not a connectivity problem. Add the likely trigger word(s) to the avoid-list ("AI SharePoint: Manage Proxy Avoid-List") and set \`aiSharePoint.proxy.mode\` to \`defang\` so future messages slip past automatically.`;
+    return `This is network failure #${networkFailures} for chat in this workspace. Repeated network-level failures are very often a **corporate proxy blocking the message content** (a false positive on a word it deems sensitive), not a connectivity problem. Add the likely trigger word(s) to the avoid-list ("AI SharePoint: Manage Proxy Rules") and set \`aiSharePoint.proxy.mode\` to \`defang\` so future messages slip past automatically.`;
   }
   if (networkFailures >= 1) {
-    return `If this recurs, a corporate proxy may be blocking specific words in the request or reply (not a connectivity issue). Maintain a words-to-avoid list via "AI SharePoint: Manage Proxy Avoid-List" and enable \`aiSharePoint.proxy.mode: defang\`.`;
+    return `If this recurs, a corporate proxy may be blocking specific words in the request or reply (not a connectivity issue). Maintain a words-to-avoid list via "AI SharePoint: Manage Proxy Rules" and enable \`aiSharePoint.proxy.mode: defang\`.`;
   }
   return undefined;
 }
