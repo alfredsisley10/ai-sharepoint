@@ -119,12 +119,19 @@ interface PageForReview {
   _links?: { webui?: string };
 }
 
-/** Review a page's currency: dead links + stale/invalid owner tags + age. */
+/** Review a page's currency: dead links + stale/invalid owner tags + age.
+ *
+ *  `dir` is the active-employee directory (LDAP/M365). Pass `undefined` when
+ *  NO directory is configured: labeled owners are then treated as **active
+ *  (unverified)** — the same semantics resolveOwners uses — so a fully-tagged
+ *  healthy space is never flagged 100% "inactive owner(s)"/ownerless just
+ *  because activity can't be checked. With no directory there is no evidence
+ *  anyone is inactive, so no "inactive owner(s)" issue can be raised. */
 export async function reviewPageCurrency(
   source: ContextSource,
   credential: ContextCredential,
   pageId: string,
-  dir: UserDirectory,
+  dir: UserDirectory | undefined,
   caps: ReadCaps,
   now: () => string = () => new Date().toISOString(),
   linkCache?: Map<string, Promise<LinkCheck>>,
@@ -145,8 +152,17 @@ export async function reviewPageCurrency(
   const ownerSams = findOwnerLabel(labels) ?? [];
   const owners = await Promise.all(
     ownerSams.map(async (sam) => {
-      const rec = await dir(sam);
-      return { sam, active: rec?.active ?? false, ...(contactOf(rec) ? { contact: contactOf(rec) } : {}) };
+      // No directory wired → active-by-default (UNVERIFIED). A directory
+      // FAULT steps down to the same unverified answer instead of failing
+      // the review or falsely deactivating the owner (mirrors resolveOwners'
+      // checkActive step-down in confluenceOwnership.ts).
+      if (!dir) return { sam, active: true };
+      try {
+        const rec = await dir(sam);
+        return { sam, active: rec?.active ?? false, ...(contactOf(rec) ? { contact: contactOf(rec) } : {}) };
+      } catch {
+        return { sam, active: true };
+      }
     }),
   );
   const inactiveOwners = owners.filter((o) => !o.active).map((o) => o.sam);

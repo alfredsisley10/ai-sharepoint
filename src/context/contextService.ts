@@ -19,7 +19,7 @@ import { verifyJira, searchJira, getJiraIssue } from "./adapters/jira";
 import { verifyGithub, searchGithub, getGithubItem, githubApiBase } from "./adapters/github";
 import { parseGithubAppSecret, mintInstallationToken, InstallationToken } from "./adapters/githubAuth";
 import { verifyLdap, searchLdap, searchLdapRaw, getLdapEntry, LdapTlsOptions } from "./ldap/ldapClient";
-import { ldapUserDirectory, ldapUserDirectoryByEmail, activeFromDirectory, contactOf, UserDirectory } from "./userDirectory";
+import { ldapUserDirectory, ldapUserDirectoryByEmail, activeFromDirectory, contactOf, UserDirectory, UserRecord } from "./userDirectory";
 import { cachedUserDirectory } from "./directoryCache";
 import { DirectoryCacheStore } from "./directoryCacheStore";
 import { OwnershipCacheStore } from "./ownershipCacheStore";
@@ -178,10 +178,18 @@ export class ContextService {
   private userDirectory(): { dir: UserDirectory; label: string } | undefined {
     const ldap = this.store.list().find((s) => s.type === "ldap");
     if (!ldap) return undefined;
-    const live: UserDirectory = ldapUserDirectory(async (filter, attrs) => {
-      const cred = await this.storedCredential(ldap);
-      return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
-    });
+    // Every LIVE lookup runs through tracked(): gate() refuses once the LDAP
+    // source's ADR-0009 circuit is open, auth failures count toward it, and a
+    // success clears it. Without this, one dossier over a space with an
+    // expired LDAP password would fire dozens–hundreds of fresh bad binds —
+    // an AD account-lockout hazard. The cachedUserDirectory wrapper stays
+    // OUTSIDE so cache hits never touch the gate (or the network).
+    const live: UserDirectory = ldapUserDirectory((filter, attrs) =>
+      this.tracked(ldap, false, async () => {
+        const cred = await this.storedCredential(ldap);
+        return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
+      }),
+    );
     const dir = this.directoryCache
       ? cachedUserDirectory(
           live,
@@ -199,10 +207,14 @@ export class ContextService {
   emailUserDirectory(): { dir: UserDirectory; label: string } | undefined {
     const ldap = this.store.list().find((s) => s.type === "ldap");
     if (!ldap) return undefined;
-    const live: UserDirectory = ldapUserDirectoryByEmail(async (filter, attrs) => {
-      const cred = await this.storedCredential(ldap);
-      return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
-    });
+    // Same lockout accounting as userDirectory(): live binds are gated +
+    // counted via tracked(); only cache misses ever reach the network.
+    const live: UserDirectory = ldapUserDirectoryByEmail((filter, attrs) =>
+      this.tracked(ldap, false, async () => {
+        const cred = await this.storedCredential(ldap);
+        return searchLdapRaw(ldap, cred, filter, attrs, this.ldapTls(), this.caps());
+      }),
+    );
     const dir = this.directoryCache
       ? cachedUserDirectory(
           live,
@@ -306,6 +318,14 @@ export class ContextService {
    *  every read. */
   private readonly snowUserTokens = new Map<string, { token: string; at: number }>();
   private static readonly SNOW_GCK_TTL_MS = 10 * 60_000;
+  /** NEGATIVE cache for the g_ck probe: `fetchSnowUserToken` runs a multi-path
+   *  discovery (up to three requests), so a source whose session can't yield a
+   *  token would otherwise re-run the whole probe on EVERY read while it keeps
+   *  failing. Remember the failure per source and skip re-probing for ~5 min —
+   *  reads proceed with any pasted fallback token (or cookies only), and the
+   *  next read after the window retries the probe automatically. */
+  private readonly snowUserTokenRetryAt = new Map<string, number>();
+  private static readonly SNOW_GCK_RETRY_MS = 5 * 60_000;
 
   private async snowUserToken(
     sourceId: string,
@@ -314,8 +334,15 @@ export class ContextService {
   ): Promise<string | undefined> {
     const cached = this.snowUserTokens.get(sourceId);
     if (cached && Date.now() - cached.at < ContextService.SNOW_GCK_TTL_MS) return cached.token;
+    const retryAt = this.snowUserTokenRetryAt.get(sourceId);
+    if (retryAt !== undefined && Date.now() < retryAt) return undefined;
     const token = await fetchSnowUserToken(baseUrl, cookies, this.caps().timeoutMs).catch(() => undefined);
-    if (token) this.snowUserTokens.set(sourceId, { token, at: Date.now() });
+    if (token) {
+      this.snowUserTokens.set(sourceId, { token, at: Date.now() });
+      this.snowUserTokenRetryAt.delete(sourceId);
+    } else {
+      this.snowUserTokenRetryAt.set(sourceId, Date.now() + ContextService.SNOW_GCK_RETRY_MS);
+    }
     return token;
   }
 
@@ -904,7 +931,38 @@ export class ContextService {
       if (op.action === "add") {
         return { action: "add", labels: await addConfluenceLabels(source, credential, op.pageId, op.labels, caps.timeoutMs) };
       }
-      for (const l of op.labels) await removeConfluenceLabel(source, credential, op.pageId, l, caps.timeoutMs);
+      // Remove: settle EVERY label with a per-label catch. Removals are
+      // sequential and independent, so a mid-batch failure must not hide that
+      // the earlier labels WERE removed — the error lists removed vs failed
+      // explicitly so a retry targets only what's still there.
+      const removed: string[] = [];
+      const failures: Array<{ label: string; error: unknown }> = [];
+      for (const l of op.labels) {
+        try {
+          await removeConfluenceLabel(source, credential, op.pageId, l, caps.timeoutMs);
+          removed.push(l);
+        } catch (err) {
+          failures.push({ label: l, error: err });
+        }
+      }
+      if (failures.length) {
+        const kinds = failures.map((f) => classifyError(f.error));
+        const detail = failures
+          .map(
+            (f) =>
+              `${f.label} (${redactText(f.error instanceof Error ? f.error.message : String(f.error)).slice(0, 200)})`,
+          )
+          .join("; ");
+        throw new AppError(
+          `Label removal on page ${op.pageId} was PARTIALLY applied — removed: ${
+            removed.length ? removed.join(", ") : "(none)"
+          }; failed: ${detail}. The removed labels are already gone; after fixing the error, re-run the removal with only the failed label(s).`,
+          // Preserve the failure classification (an auth rejection must still
+          // feed the ADR-0009 breaker via tracked()).
+          kinds.includes("auth.failed") ? "auth.failed" : kinds[0]!,
+          "Some labels were removed before the failure — the message lists exactly which.",
+        );
+      }
       return { action: "remove", labels: await getConfluencePageLabels(source, credential, op.pageId, caps.timeoutMs) };
     });
     // A label change is a mutation → drop the read cache so the next read is fresh.
@@ -1242,14 +1300,15 @@ export class ContextService {
 
   /** Review a page's currency: broken links, owner tag, and age. Global READ.
    *  Owner-activity is verified against the configured LDAP directory when one
-   *  exists (else owners are reported without an active check). */
+   *  exists; with none, labeled owners are treated as active (UNVERIFIED —
+   *  matching resolveOwners) so healthy tagged pages aren't flagged. */
   async reviewConfluenceCurrency(source: ContextSource, pageId: string): Promise<CurrencyReport> {
     if (source.type !== "confluence") throw new AppError("Currency review targets a Confluence source.", "config");
     const caps = this.caps();
     const credential = await this.storedCredential(source);
     const directory = this.userDirectory();
     return this.tracked(source, false, () =>
-      reviewPageCurrency(source, credential, pageId, directory ? directory.dir : async () => undefined, caps),
+      reviewPageCurrency(source, credential, pageId, directory?.dir, caps),
     );
   }
 
@@ -1275,12 +1334,18 @@ export class ContextService {
     const caps = this.caps();
     const credential = await this.storedCredential(source);
     const directory = this.userDirectory();
-    const dirFn = directory ? directory.dir : async () => undefined;
     const maxPages = Math.max(1, opts.maxPages ?? 200);
     const concurrency = Math.max(1, Math.min(8, opts.concurrency ?? 5));
     const includeContent = opts.includeContent ?? true;
 
     return this.tracked(source, false, async () => {
+      // Failure kinds that ABORT the sweep instead of degrading a single row:
+      // a rejected credential invalidates every remaining request (and the
+      // throw is what feeds the ADR-0009 auth-lockout breaker — swallowing it
+      // would let tracked() record a SUCCESS and wipe lockout progress after
+      // up to maxPages doomed calls), and a throttling server must be backed
+      // off from, not swept. Mirrors resolveConfluenceOwners' abortKinds.
+      const abortKinds = new Set(["auth.failed", "graph.throttled"]);
       // Enumerate the space in a single flat, paginated sweep — the whole-space
       // pass reviews each page independently, so the tree shape a root+subtree
       // walk recovers isn't needed and its per-node request cost is avoided.
@@ -1297,17 +1362,16 @@ export class ContextService {
 
       const pages: DossierPage[] = [];
       let reviewFailures = 0;
-      let throttled = false;
       let done = 0;
       for (let i = 0; i < targets.length; i += concurrency) {
         const batch = targets.slice(i, i + concurrency);
         const reports = await Promise.all(
           batch.map((t) =>
-            reviewPageCurrency(source, credential, t.id, dirFn, caps, undefined, linkCache).catch((err) => {
-              // Distinguish a THROTTLE (dossier is merely incomplete, re-run it)
-              // from any other review failure — both leave a "could not review"
-              // row, but only the former means the source pushed back.
-              if (classifyError(err) === "graph.throttled") throttled = true;
+            reviewPageCurrency(source, credential, t.id, directory?.dir, caps, undefined, linkCache).catch((err) => {
+              // Systemic failures (revoked credential, throttle) abort the
+              // whole sweep — see abortKinds above. Anything else degrades to
+              // a "could not review" row and the sweep continues.
+              if (abortKinds.has(classifyError(err))) throw err;
               return undefined;
             }),
           ),
@@ -1355,9 +1419,10 @@ export class ContextService {
       // Suggest a TARGET owner for pages with no (active) owner tag, so ownership
       // can be ESTABLISHED (a recommended "add the owners| label" update). The
       // recency-weighted top contributor is the candidate — active-verified when
-      // a directory is wired, otherwise suggested UNVERIFIED (the common reason a
-      // space returns "zero owners": no directory, so every contributor is
-      // treated inactive). Diagnosed so the result is explainable. One page-
+      // a directory is wired, otherwise suggested UNVERIFIED. (Tagged owners are
+      // treated as active when no directory is wired — see reviewPageCurrency —
+      // so "ownerless" here means genuinely untagged, or tagged-but-inactive per
+      // a wired directory.) Diagnosed so the result is explainable. One page-
       // history read per ownerless page, bounded by the maxPages cap above.
       const ownerless = pages.filter((p) => flagsFor(p).ownerless);
       let suggestedOwners = 0;
@@ -1373,6 +1438,10 @@ export class ContextService {
             try {
               tallies = await getConfluencePageContributorsWeighted(source, credential, p.id, caps.timeoutMs, nowMs);
             } catch (err) {
+              // Systemic failures (revoked credential, throttle) abort — the
+              // remaining reads are doomed too, and the throw must reach
+              // tracked() to feed the breaker/backoff (see abortKinds above).
+              if (abortKinds.has(classifyError(err))) throw err;
               // History unreadable — leave unsuggested, but COUNT it and keep a
               // sample error: "every page failed" (an endpoint/auth problem)
               // must be distinguishable from "no page has history".
@@ -1390,12 +1459,12 @@ export class ContextService {
             // one flaky LDAP call must not abort the whole (expensive) dossier.
             let chosen = tallies[0]!;
             let active = false;
-            let rec: Awaited<ReturnType<typeof dirFn>>;
+            let rec: UserRecord | undefined;
             let dirFailed = false;
             if (directory) {
               try {
                 for (const c of tallies) {
-                  const r = await dirFn(c.sam);
+                  const r = await directory.dir(c.sam);
                   if (r?.active) {
                     chosen = c;
                     active = true;
@@ -1403,7 +1472,7 @@ export class ContextService {
                     break;
                   }
                 }
-                if (!rec) rec = await dirFn(chosen.sam);
+                if (!rec) rec = await directory.dir(chosen.sam);
               } catch {
                 dirFailed = true;
                 chosen = tallies[0]!;
@@ -1435,7 +1504,6 @@ export class ContextService {
         totalPages,
         truncated: totalPages > targets.length,
         ...(reviewFailures > 0 ? { reviewFailures } : {}),
-        ...(throttled ? { throttled: true } : {}),
         ...(ownerless.length > 0
           ? {
               ownerDetection: {

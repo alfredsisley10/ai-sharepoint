@@ -57,7 +57,9 @@ export interface SpaceDossier {
   reviewFailures?: number;
   /** True when at least one review failed because the source THROTTLED us
    *  (429/503). This is the important distinction: those pages aren't
-   *  data-quality problems, the dossier is just INCOMPLETE — re-run it. */
+   *  data-quality problems, the dossier is just INCOMPLETE — re-run it.
+   *  (The current builder ABORTS on a throttle instead of degrading, so this
+   *  is only seen on dossiers persisted by older builds.) */
   throttled?: boolean;
   /** Diagnostics for TARGET-OWNER detection on untagged pages, so a zero-owner
    *  result is explainable (the common cause: no directory wired, so nothing
@@ -184,6 +186,48 @@ export function groupByOwner(d: SpaceDossier): OwnerGroup[] {
   );
 }
 
+export interface SuggestedOwnerGroup {
+  sam: string;
+  /** Directory-verified active (false also covers "unverified" — see basis). */
+  active: boolean;
+  contact?: string;
+  basis: string;
+  pages: DossierPage[];
+  stale: number;
+  dataQuality: number;
+}
+
+/** Group pages by their SUGGESTED target owner — the outreach list for
+ *  ESTABLISHING ownership. Distinct from groupByOwner (the assigned-owner
+ *  rollup): a page appears here when it has no (active) owner tag and
+ *  target-owner detection produced a candidate, so outreach can proceed from
+ *  the export alone. Most pages first. */
+export function groupBySuggestedOwner(d: SpaceDossier): SuggestedOwnerGroup[] {
+  const map = new Map<string, SuggestedOwnerGroup>();
+  for (const p of d.pages) {
+    const s = p.suggestedOwner;
+    if (!s) continue;
+    let g = map.get(s.sam);
+    if (!g) {
+      g = {
+        sam: s.sam,
+        active: s.active,
+        ...(s.contact ? { contact: s.contact } : {}),
+        basis: s.basis,
+        pages: [],
+        stale: 0,
+        dataQuality: 0,
+      };
+      map.set(s.sam, g);
+    }
+    g.pages.push(p);
+    const f = flagsFor(p);
+    if (f.stale) g.stale += 1;
+    if (f.dataQuality) g.dataQuality += 1;
+  }
+  return [...map.values()].sort((a, b) => b.pages.length - a.pages.length || a.sam.localeCompare(b.sam));
+}
+
 function flagBadges(p: DossierPage): string {
   const f = flagsFor(p);
   const b: string[] = [];
@@ -193,14 +237,39 @@ function flagBadges(p: DossierPage): string {
   return b.join(", ") || "ok";
 }
 
+/** A suggested TARGET owner (non-null DossierPage.suggestedOwner). */
+export type SuggestedOwner = NonNullable<DossierPage["suggestedOwner"]>;
+
+/** How much to trust a suggestion, in plain words, derived from the active
+ *  check + basis — the SHARED wording for every human-facing surface. */
+export function suggestedOwnerNote(s: Pick<SuggestedOwner, "active" | "basis">): string {
+  if (s.active) return "suggested";
+  return /unverified/i.test(s.basis) ? "suggested — unverified" : "suggested — inactive per directory";
+}
+
+/** Human-clear rendering of a suggested target owner, e.g.
+ *  `jdoe (suggested — unverified)`. */
+function suggestedOwnerText(s: SuggestedOwner): string {
+  return `${s.sam} (${suggestedOwnerNote(s)})`;
+}
+
+function suggestedOwnerLabel(s: SuggestedOwner): string {
+  return `→ ${suggestedOwnerText(s)}`;
+}
+
 function ownerLabel(p: DossierPage): string {
   const o = primaryOwner(p);
+  const suggested = p.suggestedOwner ? suggestedOwnerLabel(p.suggestedOwner) : undefined;
   if (!o) {
     // No tagged owner — show the suggested target owner so the inventory names
     // who to establish ownership with.
-    return p.suggestedOwner ? `→ ${p.suggestedOwner.sam} (suggested)` : "—";
+    return suggested ?? "—";
   }
-  return `${o.sam}${o.active ? "" : " (inactive)"}`;
+  const tagged = `${o.sam}${o.active ? "" : " (inactive)"}`;
+  // A page whose only tagged owner is inactive is still effectively ownerless —
+  // show the suggested target owner alongside so the re-owning candidate is
+  // named right in the inventory.
+  return !o.active && suggested ? `${tagged} · ${suggested}` : tagged;
 }
 
 export function renderInventoryMarkdown(d: SpaceDossier): string {
@@ -277,22 +346,72 @@ export function renderOwnersMarkdown(d: SpaceDossier): string {
     }
     lines.push("");
   }
+  // Suggested TARGET owners: pages with no (active) owner tag, grouped by the
+  // contributor target-owner detection proposes — kept in their own section
+  // (never mixed with the assigned owners above) so outreach for ESTABLISHING
+  // ownership can proceed from this file alone.
+  const suggested = groupBySuggestedOwner(d);
+  if (suggested.length) {
+    lines.push(
+      "## Suggested target owners",
+      "",
+      "_The pages below have no (active) `owners|` tag; each owner is **suggested** from contribution history. Confirm with them, then set the `owners|<sam>` label to establish ownership._",
+      "",
+    );
+    for (const g of suggested) {
+      const contact = g.contact ? ` · ${g.contact}` : "";
+      lines.push(`### → ${g.sam}${contact} · _${suggestedOwnerNote(g)}_`);
+      lines.push(`${g.pages.length} page(s) · ${g.stale} stale · ${g.dataQuality} data-quality · basis: ${g.basis}`, "");
+      for (const p of g.pages) {
+        lines.push(`- [${escapePipe(p.title)}](${p.url}) — ${flagBadges(p)}`);
+      }
+      lines.push("");
+    }
+  }
   return lines.join("\n");
 }
 
-/** Two-sheet workbook: one page per row, plus an owner rollup. */
+/** The "Active" cell for a suggested owner: false means either genuinely
+ *  inactive OR merely unverified (no directory) — the basis disambiguates,
+ *  and the cell must not claim "no" when nothing was checked. */
+function suggestedActiveCell(s: Pick<SuggestedOwner, "active" | "basis">): string {
+  return s.active ? "yes" : /unverified/i.test(s.basis) ? "unverified" : "no";
+}
+
+/** Two-sheet workbook: one page per row, plus an owner rollup. The suggested
+ *  TARGET owner travels in its own columns/rows (never blended into the
+ *  assigned-owner column) so the distinction stays machine-readable in the
+ *  .xlsx and the derived CSVs. */
 export function dossierSheets(d: SpaceDossier): Sheet[] {
   const pages: string[][] = [
-    ["Page", "URL", "Owner", "Owner active", "Contact", "Updated", "Stale days", "Broken links", "Issues", "Flags"],
+    [
+      "Page",
+      "URL",
+      "Owner",
+      "Owner active",
+      "Contact",
+      "Target owner (suggested)",
+      "Target owner contact",
+      "Target owner basis",
+      "Updated",
+      "Stale days",
+      "Broken links",
+      "Issues",
+      "Flags",
+    ],
   ];
   for (const p of d.pages) {
     const o = primaryOwner(p);
+    const s = p.suggestedOwner;
     pages.push([
       p.title,
       p.url,
       o?.sam ?? "",
       o ? (o.active ? "yes" : "no") : "",
       o?.contact ?? "",
+      s?.sam ?? "",
+      s?.contact ?? "",
+      s?.basis ?? "",
       p.lastUpdated?.slice(0, 10) ?? "",
       p.staleDays !== undefined ? String(p.staleDays) : "",
       String(p.brokenLinks),
@@ -300,15 +419,31 @@ export function dossierSheets(d: SpaceDossier): Sheet[] {
       flagBadges(p),
     ]);
   }
-  const owners: string[][] = [["Owner", "Active", "Contact", "Pages", "Stale", "Data-quality"]];
+  const owners: string[][] = [["Owner", "Role", "Active", "Contact", "Pages", "Stale", "Data-quality", "Basis"]];
   for (const g of groupByOwner(d)) {
     owners.push([
       g.owner.sam,
+      "assigned",
       g.owner.active ? "yes" : "no",
       "contact" in g.owner ? g.owner.contact ?? "" : "",
       String(g.pages.length),
       String(g.stale),
       String(g.dataQuality),
+      "",
+    ]);
+  }
+  // Suggested TARGET owners as their own rows (Role = "suggested"), so outreach
+  // for establishing ownership can proceed from the export alone.
+  for (const g of groupBySuggestedOwner(d)) {
+    owners.push([
+      g.sam,
+      "suggested",
+      suggestedActiveCell(g),
+      g.contact ?? "",
+      String(g.pages.length),
+      String(g.stale),
+      String(g.dataQuality),
+      g.basis,
     ]);
   }
   return [
@@ -382,6 +517,11 @@ export function renderOutreachDraft(group: OwnerGroup, spaceKey: string, generat
   for (const p of flagged) {
     const why = [
       flagsFor(p).stale ? `not updated in ${p.staleDays} days` : "",
+      // No active owner tag + a detected target owner: name the candidate so
+      // the re-owning conversation can start from the draft itself.
+      flagsFor(p).ownerless && p.suggestedOwner
+        ? `no active owner tag — target owner ${suggestedOwnerText(p.suggestedOwner)}`
+        : "",
       p.brokenLinks > 0 ? `${p.brokenLinks} broken link(s)` : "",
       ...p.issues,
     ].filter(Boolean);
@@ -391,6 +531,43 @@ export function renderOutreachDraft(group: OwnerGroup, spaceKey: string, generat
   lines.push(
     "",
     "Could you review these and either update them, confirm they're still accurate, or let me know if ownership should move? Where noted, a recommended revision is attached for your review. I'll follow up in a week.",
+    "",
+    "Thanks!",
+    "",
+  );
+  return lines.join("\n");
+}
+
+/** An outreach draft for a SUGGESTED target owner: their pages carry no
+ *  (active) `owners|` tag, and target-owner detection proposes them from
+ *  contribution history. Asks them to confirm/accept ownership (the `owners|`
+ *  label) rather than to fix content — the ESTABLISH-ownership counterpart of
+ *  renderOutreachDraft, so outreach can proceed straight from the export. */
+export function renderSuggestedOwnerOutreachDraft(
+  group: SuggestedOwnerGroup,
+  spaceKey: string,
+  generatedAt: string,
+): string {
+  const to = group.contact ?? group.sam;
+  const lines: string[] = [
+    `# Outreach draft — ${group.sam} (suggested target owner)`,
+    "",
+    `_To: ${to} · space ${spaceKey} · drafted ${generatedAt}_`,
+    "",
+    `_${group.sam} is the SUGGESTED owner (${group.basis}) — these pages have no active \`owners|\` tag yet. Confirm before setting the label._`,
+    "",
+    `Hi ${group.sam},`,
+    "",
+    `During a content review of the **${spaceKey}** Confluence space, the following ${group.pages.length} page(s) turned up without an (active) owner. Based on the pages' contribution history, you look like the best owner for them:`,
+    "",
+  ];
+  for (const p of group.pages) {
+    const rec = p.content !== undefined ? ` · recommended revision: [\`recommended.md\`](../pages/${pageFolderName(p.id)}/recommended.md)` : "";
+    lines.push(`- [${escapePipe(p.title)}](${p.url}) — ${flagBadges(p)}${rec}`);
+  }
+  lines.push(
+    "",
+    `Could you confirm whether you can own these pages? If so, I'll set the \`owners|${group.sam}\` label so future reviews reach you directly; if not, a pointer to the right owner would help just as much.`,
     "",
     "Thanks!",
     "",
@@ -422,7 +599,7 @@ export function renderRecommendedScaffold(p: DossierPage): string {
     f.stale ? `Stale — not updated in ${p.staleDays} days.` : "",
     f.ownerless
       ? p.suggestedOwner
-        ? `No owner tag. Suggested owner: **${p.suggestedOwner.sam}**${p.suggestedOwner.active ? "" : " (activity unverified)"} — establish ownership by adding the label \`owners|${p.suggestedOwner.sam}\`.`
+        ? `No active owner tag. Suggested target owner: **${p.suggestedOwner.sam}** (${suggestedOwnerNote(p.suggestedOwner)}: ${p.suggestedOwner.basis}) — establish ownership by adding the label \`owners|${p.suggestedOwner.sam}\`.`
         : "No owner tag, and no contributor history was available to suggest one."
       : "",
     p.brokenLinks > 0 ? `${p.brokenLinks} broken link(s).` : "",

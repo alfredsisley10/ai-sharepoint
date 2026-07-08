@@ -100,7 +100,7 @@ test("reviewPageCurrency captures body text + version and uses the link cache", 
   assert.equal(calls.filter((u) => u.includes("good.example")).length, 1);
 });
 
-test("reviewPageCurrency flags broken links, inactive owners, and staleness", async () => {
+test("reviewPageCurrency with a WIRED directory flags broken links, inactive owners, and staleness", async () => {
   const dir = async (sam: string): Promise<UserRecord | undefined> =>
     sam === "jdoe"
       ? { sam: "jdoe", active: true, email: "jdoe@x" }
@@ -135,4 +135,52 @@ test("reviewPageCurrency flags broken links, inactive owners, and staleness", as
   assert.ok(result.issues.some((i) => /broken link/.test(i)));
   assert.ok(result.issues.some((i) => /inactive owner/.test(i)));
   assert.ok(result.issues.some((i) => /not updated/.test(i)));
+});
+
+const TAGGED_PAGE = {
+  id: "55",
+  title: "VPN Guide",
+  body: { storage: { value: "<p>plain</p>" } },
+  version: { when: "2026-06-01T00:00:00Z", number: 3 },
+  metadata: { labels: { results: [{ name: "owners|jdoe|olduser" }] } },
+  _links: { webui: "/p/55" },
+};
+
+test("reviewPageCurrency with NO directory treats labeled owners as active (unverified) — no inactive issue", async () => {
+  // The regression this locks: with no LDAP directory configured, a fully
+  // tagged healthy space must NOT flag every owner inactive/ownerless (which
+  // opened a work item per page and drafted outreach for everyone). Matching
+  // resolveOwners, everyone is treated active when nothing can verify them.
+  const { result } = await withFetch(
+    (url) => (url.includes("/rest/api/content/") ? { body: TAGGED_PAGE } : { status: 200, body: undefined }),
+    () => reviewPageCurrency(SRC, CRED, "55", undefined, DEFAULT_CAPS, () => "2026-06-16T00:00:00Z"),
+  );
+  assert.equal(result.hasOwnerLabel, true);
+  assert.deepEqual(
+    result.owners.map((o) => ({ sam: o.sam, active: o.active })),
+    [
+      { sam: "jdoe", active: true },
+      { sam: "olduser", active: true },
+    ],
+  );
+  assert.deepEqual(result.inactiveOwners, []);
+  assert.ok(!result.issues.some((i) => /inactive owner/.test(i)), `no inactive-owner issue: ${result.issues}`);
+  // No directory ⇒ no contact enrichment either.
+  assert.ok(result.owners.every((o) => o.contact === undefined));
+});
+
+test("reviewPageCurrency degrades a FAULTING directory to active-unverified instead of failing or flagging", async () => {
+  // Mirrors resolveOwners' checkActive step-down: a flaky/locked-out LDAP must
+  // turn the activity check into a less-reliable answer, not an error and not
+  // a false "inactive owner(s)" flag.
+  const dir = async (): Promise<UserRecord | undefined> => {
+    throw new Error("Authentication rejected (401) — LDAP circuit open");
+  };
+  const { result } = await withFetch(
+    (url) => (url.includes("/rest/api/content/") ? { body: TAGGED_PAGE } : { status: 200, body: undefined }),
+    () => reviewPageCurrency(SRC, CRED, "55", dir, DEFAULT_CAPS, () => "2026-06-16T00:00:00Z"),
+  );
+  assert.deepEqual(result.inactiveOwners, []);
+  assert.ok(result.owners.every((o) => o.active));
+  assert.ok(!result.issues.some((i) => /inactive owner/.test(i)));
 });
