@@ -47,7 +47,10 @@ test("renderOwners shows the unverified-directory note when no directory is wire
   });
   assert.match(out, /# Page owner\(s\)/);
   assert.match(out, /Owner\(s\): jdoe/);
-  assert.match(out, /no LDAP\/M365 directory is configured/);
+  // Determined WITHOUT verification, framed as a valid result, not a failure,
+  // with an actionable path to enable active-employee verification.
+  assert.match(out, /WITHOUT active-employee verification/);
+  assert.match(out, /Add Context Source/);
 });
 
 test("renderOwners marks inactive contacts and reports directory-on validation", () => {

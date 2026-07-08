@@ -1057,6 +1057,7 @@ export class ContextService {
             ? getConfluenceSpaceContributorsWeighted(source, credential, meta.spaceKey, caps.timeoutMs, nowMs)
             : Promise.resolve([]),
         isActive: directory ? activeFromDirectory(directory.dir) : async () => true,
+        directoryWired: Boolean(directory),
       });
       const ownerContacts = directory
         ? await Promise.all(

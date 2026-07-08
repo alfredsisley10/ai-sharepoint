@@ -149,6 +149,10 @@ export async function resolveOwners(input: {
    *  can flag it as administrative rather than effective. */
   spaceOwners?: () => Promise<string[]>;
   marker?: string;
+  /** Whether an active-employee directory (LDAP/AD) backs `isActive`. Only
+   *  affects the diagnostic note wording so an empty result is explainable
+   *  (no directory → "no contributor history" rather than "no ACTIVE one"). */
+  directoryWired?: boolean;
 }): Promise<OwnerResolution> {
   const marker = input.marker ?? DEFAULT_OWNER_MARKER;
 
@@ -190,7 +194,13 @@ export async function resolveOwners(input: {
     }
   }
 
-  return { owners: [], basis: "none", note: "No active contributor found on the page or in the space." };
+  return {
+    owners: [],
+    basis: "none",
+    note: input.directoryWired
+      ? "No active contributor found on the page or in the space."
+      : "No contributor history was found on the page or in the space, so no owner could be inferred (this is not an LDAP/directory problem — even unverified resolution needs some edit history).",
+  };
 }
 
 // ---------------------------------------------------------------------------
