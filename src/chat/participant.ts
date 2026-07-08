@@ -281,6 +281,12 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
           return await answerWithModel(deps, request, context, stream, token);
       }
     } catch (err) {
+      // The user pressing Stop is a deliberate action, not a failure — end the
+      // turn quietly: no error card, no capture, no Restart offer.
+      if (err instanceof vscode.CancellationError || token.isCancellationRequested) {
+        await deps.interactions.finish("interrupted", "cancelled").catch(() => undefined);
+        return {};
+      }
       const code = deps.errors.capture("chat", err);
       const safe = redactError(err);
       const kind = classifySendFailure(safe.message);
@@ -692,6 +698,14 @@ async function answerWithModel(
   let overflowRetries = 0;
   let transientRetries = 0;
   for (let round = 0; ; round++) {
+    // The user pressed Stop between rounds — end the turn quietly instead of
+    // sending the next round with an already-cancelled token (which would
+    // surface their own deliberate stop as an error card).
+    if (token.isCancellationRequested) break;
+    // Whether this send is the turn's first billed attempt — captured up front
+    // because the auto-retry branch decrements `round` before `continue`, so by
+    // the time the finally meters the request `round` may read -1.
+    const firstAttempt = round === 0;
     // Per-round status so the user can follow a multi-step turn (pilot):
     // name the model and the step so long turns read as a narrated plan.
     stream.progress(
@@ -725,6 +739,13 @@ async function answerWithModel(
       ok = true;
       deps.copilot.noteEntitlementSuccess(); // entitlement proven this turn
     } catch (sendErr) {
+      // A deliberate user cancel is neither transient nor retryable — rethrow
+      // before classification (its message matches the TRANSIENT "aborted"
+      // pattern) so the turn exits quietly instead of auto-retrying against
+      // the already-cancelled token.
+      if (sendErr instanceof vscode.CancellationError || token.isCancellationRequested) {
+        throw sendErr;
+      }
       // A Copilot "not authorized" refusal trips the shared circuit breaker so
       // subsequent turns/commands fail fast instead of re-hitting it (throws a
       // copilot.entitlement error); anything else falls through to the existing
@@ -778,7 +799,7 @@ async function answerWithModel(
       }
       await deps.meter.record(
         modelKey,
-        round === 0 ? inputTokens : 0,
+        firstAttempt ? inputTokens : 0,
         outputTokens,
         deps.now(),
         "chat",
@@ -786,7 +807,7 @@ async function answerWithModel(
       );
       // A clean first-round send proves this prompt size works — raise the
       // model's known-good high-water mark so we never over-trim below it.
-      if (ok && round === 0) {
+      if (ok && firstAttempt) {
         await deps.modelLimits
           .recordSuccess(modelKey, model.maxInputTokens, inputTokens)
           .catch(() => undefined);
@@ -833,6 +854,12 @@ async function answerWithModel(
         if (rendered.trim()) turnKnowledge.push({ name: call.name, detail: rendered });
         resultParts.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
       } catch (err) {
+        // The user pressed Stop — that must end the TURN (quiet exit in the
+        // outer handler), not be reported to the model as a tool failure that
+        // the next round would then send with a cancelled token.
+        if (err instanceof vscode.CancellationError || token.isCancellationRequested) {
+          throw err;
+        }
         emitWire("tool", "✗", `${call.name} — ${redactError(err).message}`);
         // Tool denied (user rejected a confirmation) or failed — tell the
         // model so it can continue gracefully instead of dying mid-turn.
@@ -848,7 +875,7 @@ async function answerWithModel(
     messages.push(vscode.LanguageModelChatMessage.User(resultParts));
   }
 
-  if (!sawText) {
+  if (!sawText && !token.isCancellationRequested) {
     stream.markdown("_(The model returned no text — try rephrasing.)_");
   }
   // Mirror the completed turn into the active project's chat workspace (a no-op

@@ -50,6 +50,7 @@
         "aiSharePoint.ldap.tlsRejectUnauthorized",
         "aiSharePoint.ldap.useStartTls",
         "aiSharePoint.ldap.allowRawFilters",
+        "aiSharePoint.db.allowTrustServerCertificate",
         "aiSharePoint.servicenow.oauthClientId"
       ]
     }
@@ -3767,6 +3768,13 @@
           "scope": "machine",
           "order": 17,
           "markdownDescription": "%config.aiSharePoint.ldap.allowRawFilters.markdownDescription%"
+        },
+        "aiSharePoint.db.allowTrustServerCertificate": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "order": 17,
+          "markdownDescription": "%config.aiSharePoint.db.allowTrustServerCertificate.markdownDescription%"
         },
         "aiSharePoint.logging.verboseWire": {
           "type": "boolean",

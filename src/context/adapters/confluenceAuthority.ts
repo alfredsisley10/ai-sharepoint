@@ -1,6 +1,7 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson, htmlToText } from "../http";
 import { enc, baseOf, webUrl } from "./confluenceCommon";
+import { fetchAllPages } from "./confluenceHierarchy";
 
 /**
  * Confluence "authoritative source" construct (ADR-0040). Declare a **space**,
@@ -99,12 +100,20 @@ export async function gatherAuthorityPages(
     );
     return [toScopePage(source, c, caps.maxBodyChars)];
   }
-  const path =
-    scope.kind === "subtree" && scope.pageId
-      ? `${base}/rest/api/content/${enc(scope.pageId)}/descendant/page?expand=body.storage&limit=${maxPages}`
-      : `${base}/rest/api/content?spaceKey=${enc(scope.spaceKey ?? "")}&type=page&expand=body.storage&limit=${maxPages}`;
-  const res = await fetchJson<{ results?: ContentItem[] }>(path, credential, caps.timeoutMs);
-  const pages = (res.results ?? []).map((c) => toScopePage(source, c, caps.maxBodyChars));
+  // These listings paginate with start+limit — a single-`limit` request would
+  // silently truncate the authoritative truth on larger spaces (the server may
+  // also cap `limit` below what we ask). fetchAllPages walks to completion,
+  // bounded by maxPages.
+  const results = await fetchAllPages(
+    credential,
+    (start, limit) =>
+      scope.kind === "subtree" && scope.pageId
+        ? `${base}/rest/api/content/${enc(scope.pageId)}/descendant/page?expand=body.storage&start=${start}&limit=${limit}`
+        : `${base}/rest/api/content?spaceKey=${enc(scope.spaceKey ?? "")}&type=page&expand=body.storage&start=${start}&limit=${limit}`,
+    caps,
+    maxPages,
+  );
+  const pages = results.map((c) => toScopePage(source, c, caps.maxBodyChars));
   // A subtree's authoritative content includes the root page itself.
   if (scope.kind === "subtree" && scope.pageId && !pages.some((p) => p.id === scope.pageId)) {
     const root = await fetchJson<ContentItem>(
@@ -120,7 +129,9 @@ export async function gatherAuthorityPages(
 /** Build the CQL to find pages about a topic, optionally excluding a space
  *  (the authoritative space). Pure/testable. */
 export function buildTopicSearchCql(topic: string, excludeSpaceKey?: string): string {
-  const q = topic.replace(/"/g, '\\"');
+  // Escape backslash BEFORE quote — otherwise a term ending in "\" escapes the
+  // closing quote and breaks out into raw CQL.
+  const q = topic.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   return [`type = page`, `text ~ "${q}"`, ...(excludeSpaceKey ? [`space != "${excludeSpaceKey}"`] : [])].join(" AND ");
 }
 

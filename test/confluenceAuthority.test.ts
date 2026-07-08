@@ -58,6 +58,18 @@ test("buildTopicSearchCql excludes the authoritative space when given", () => {
   assert.equal(buildTopicSearchCql("VPN"), 'type = page AND text ~ "VPN"');
 });
 
+test("buildTopicSearchCql: a topic ending in a backslash cannot escape the closing quote", () => {
+  // Backslash is escaped BEFORE the quote, so the literal terminates properly
+  // and the space-exclusion clause survives instead of being swallowed.
+  assert.equal(
+    buildTopicSearchCql("VPN\\", "DEV"),
+    'type = page AND text ~ "VPN\\\\" AND space != "DEV"',
+  );
+  // Embedded quotes are still escaped (and their preceding backslashes doubled).
+  assert.equal(buildTopicSearchCql('say "hi"'), 'type = page AND text ~ "say \\"hi\\""');
+  assert.equal(buildTopicSearchCql('\\"'), 'type = page AND text ~ "\\\\\\""');
+});
+
 test("gatherAuthorityPages (page) returns the page's text", async () => {
   const { result } = await withFetch(
     () => ({ body: { id: "1", title: "VPN Guide", body: { storage: { value: "<p>Use GlobalProtect</p>" } }, _links: { webui: "/p/1" } } }),
@@ -75,6 +87,31 @@ test("gatherAuthorityPages (subtree) includes the root plus its descendants", as
     () => gatherAuthorityPages(SRC, CRED, { topic: "vpn", kind: "subtree", pageId: "1" }, DEFAULT_CAPS),
   );
   assert.deepEqual(result.map((p) => p.id), ["1", "2"]); // root unshifted, then descendants
+});
+
+test("gatherAuthorityPages (space) paginates past a full first page instead of truncating", async () => {
+  const pageOf = (start: number, count: number) => ({
+    body: {
+      results: Array.from({ length: count }, (_, i) => ({
+        id: String(start + i + 1),
+        title: `Page ${start + i + 1}`,
+        body: { storage: { value: "<p>x</p>" } },
+      })),
+    },
+  });
+  const { result, calls } = await withFetch(
+    (url) => {
+      const start = Number(new URL(url).searchParams.get("start") ?? "0");
+      // A FULL first page (100 = the batch size) means more may follow; the
+      // second page is short, ending the walk.
+      return start === 0 ? pageOf(0, 100) : pageOf(start, 20);
+    },
+    () => gatherAuthorityPages(SRC, CRED, { topic: "vpn", kind: "space", spaceKey: "DEV" }, DEFAULT_CAPS, 150),
+  );
+  assert.equal(calls.length, 2, "continues after a full first page");
+  assert.match(decodeURIComponent(calls[1].url), /start=100/);
+  assert.equal(result.length, 120);
+  assert.equal(result[119].id, "120");
 });
 
 test("findConflictCandidates searches the topic and excludes the authoritative pages", async () => {

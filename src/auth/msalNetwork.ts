@@ -4,8 +4,7 @@ import {
   NetworkResponse,
 } from "@azure/msal-node";
 import { emitWire, safeUrl } from "../core/wireLog";
-
-const REQUEST_TIMEOUT_MS = 30_000;
+import { REQUEST_TIMEOUT_MS } from "./sharePointClient";
 
 /**
  * MSAL network module backed by the extension host's global `fetch`.

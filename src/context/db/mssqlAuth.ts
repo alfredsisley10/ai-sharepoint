@@ -68,17 +68,31 @@ export interface MssqlConnectParams {
    *  when set, the port is omitted (mutually exclusive in TDS). */
   instanceName?: string;
   encrypt: boolean;
-  /** SSMS "Trust server certificate" equivalent — explicit opt-in only. */
+  /** SSMS "Trust server certificate" equivalent — the URL parameter is honored
+   *  only behind the machine-scoped aiSharePoint.db.allowTrustServerCertificate
+   *  opt-in (a per-source URL must never switch cert validation off alone). */
   trustServerCertificate: boolean;
+  /** True when ?trustServerCertificate=true was present but the machine-scoped
+   *  allowance is off — the parameter was ignored, validation stays ON. */
+  trustServerCertificateIgnored?: boolean;
 }
 
-/** Parse mssql:// URL query params: ?instance=PROD&encrypt=true|false&trustServerCertificate=true */
-export function parseMssqlParams(params: URLSearchParams): MssqlConnectParams {
+/** Parse mssql:// URL query params: ?instance=PROD&encrypt=true|false&trustServerCertificate=true.
+ *  Disabling certificate validation is a machine-level decision, not a per-URL
+ *  one: `allowTrustServerCertificate` carries the machine-scoped setting
+ *  (aiSharePoint.db.allowTrustServerCertificate, same pattern as
+ *  ldap.allowRawFilters); without it the parameter is ignored and flagged. */
+export function parseMssqlParams(
+  params: URLSearchParams,
+  allowTrustServerCertificate = false,
+): MssqlConnectParams {
   const instance = params.get("instance")?.trim();
+  const wantsTrust = params.get("trustServerCertificate") === "true";
   return {
     ...(instance ? { instanceName: instance } : {}),
     encrypt: params.get("encrypt") !== "false",
-    trustServerCertificate: params.get("trustServerCertificate") === "true",
+    trustServerCertificate: wantsTrust && allowTrustServerCertificate,
+    ...(wantsTrust && !allowTrustServerCertificate ? { trustServerCertificateIgnored: true } : {}),
   };
 }
 

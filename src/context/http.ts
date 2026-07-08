@@ -262,7 +262,10 @@ export async function fetchJson<T>(
         storedCookies: session.cookies,
         userTokenSent: Boolean(session.userToken),
       });
-      throw new AppError(d.message, "auth.failed", d.summary);
+      // Redacted like every sibling branch — the diagnosis embeds the server's
+      // own error text (JSON message/detail or HTML title), which can echo
+      // emails/PII. The summary carries only guidance, no server body text.
+      throw new AppError(redactText(d.message), "auth.failed", d.summary);
     }
     // A content filter can answer 401/403 with its OWN block page — diagnose
     // that as a proxy/filter issue (the real fix), not "bad credentials".
@@ -367,7 +370,9 @@ export async function fetchJson<T>(
         storedCookies: session.cookies,
         userTokenSent: Boolean(session.userToken),
       });
-      throw new AppError(d.message, d.kind === "auth" ? "auth.failed" : "network", d.summary);
+      // Redacted like every sibling branch — the message embeds server text
+      // (the page's <title> / error body), which can echo emails/PII.
+      throw new AppError(redactText(d.message), d.kind === "auth" ? "auth.failed" : "network", d.summary);
     }
     // Non-JSON where JSON was expected is the classic shape of a filter's block
     // page or a captive-portal/login redirect — name the filter when we can.

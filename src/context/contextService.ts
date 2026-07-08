@@ -456,7 +456,14 @@ export class ContextService {
   }
 
   private dbTls(): DbTlsOptions {
-    return { caBundlePath: this.caBundlePath("ldap.caCertificatesFile") };
+    return {
+      caBundlePath: this.caBundlePath("ldap.caCertificatesFile"),
+      // ?trustServerCertificate=true (cert validation off) is honored only
+      // behind this machine-scoped opt-in — same pattern as ldap.allowRawFilters.
+      allowTrustServerCertificate: vscode.workspace
+        .getConfiguration("aiSharePoint")
+        .get<boolean>("db.allowTrustServerCertificate", false),
+    };
   }
 
   private static readonly DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);

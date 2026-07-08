@@ -130,15 +130,17 @@ export async function listAllConfluenceSpaces(
       credential,
       caps.timeoutMs,
     );
-    const page = (res.results ?? []).filter((sp) => sp.key);
-    for (const sp of page) {
+    const results = res.results ?? [];
+    for (const sp of results.filter((s) => s.key)) {
       spaces.push({
         key: sp.key!,
         name: sp.name ?? sp.key!,
         url: webUrl(source, sp._links?.webui),
       });
     }
-    if (page.length < pageSize) return { spaces, complete: true };
+    // End-of-sweep is judged on the UNFILTERED page: a full page with a keyless
+    // entry must NOT truncate the catalog (mirrors readVersionAuthors).
+    if (results.length < pageSize) return { spaces, complete: true };
     if (!(await checkpoint())) return { spaces, complete: false };
   }
   return { spaces, complete: false };

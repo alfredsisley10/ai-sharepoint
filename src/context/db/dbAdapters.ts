@@ -75,6 +75,10 @@ function wireSqlResult(
 
 export interface DbTlsOptions {
   caBundlePath?: string;
+  /** Machine-scoped opt-in (aiSharePoint.db.allowTrustServerCertificate)
+   *  gating the per-URL ?trustServerCertificate=true escape hatch — without
+   *  it a connection URL can never switch SQL Server cert validation off. */
+  allowTrustServerCertificate?: boolean;
 }
 
 export interface BrowseCandidate {
@@ -151,7 +155,7 @@ export function mapDbError(err: unknown, engine: string): AppError {
     return new AppError(
       `${engine} TLS certificate validation failed: ${msg}`,
       "config",
-      `Database TLS certificate not trusted${proxy?.vendor ? ` (looks like ${proxy.vendor})` : ""} — deploy the corporate CA to the OS store, set aiSharePoint.ldap.caCertificatesFile (shared pinned bundle), or for SQL Server with a self-signed certificate append ?trustServerCertificate=true to the connection URL (the SSMS checkbox equivalent).`,
+      `Database TLS certificate not trusted${proxy?.vendor ? ` (looks like ${proxy.vendor})` : ""} — deploy the corporate CA to the OS store, set aiSharePoint.ldap.caCertificatesFile (shared pinned bundle), or for SQL Server with a self-signed certificate append ?trustServerCertificate=true to the connection URL AND enable the machine-scoped aiSharePoint.db.allowTrustServerCertificate setting (the SSMS checkbox equivalent — without the setting the URL parameter is ignored).`,
     );
   }
   // A query that ran out of time is NOT a connection problem — say so, with
@@ -185,7 +189,7 @@ async function mssqlRows(
 ): Promise<Array<Record<string, unknown>>> {
   const { host, port, database, params } = parseDbUrl(source);
   const ca = loadTrustedCAs(tls.caBundlePath);
-  const mp = parseMssqlParams(params);
+  const mp = parseMssqlParams(params, tls.allowTrustServerCertificate === true);
   const connection = new TdsConnection({
     server: host,
     // SQL Server Authentication or Windows Authentication (NTLM) — selected
@@ -222,6 +226,15 @@ async function mssqlRows(
   };
   const target = `${host}${port ? `:${port}` : mp.instanceName ? `\\${mp.instanceName}` : ""}/${database}`;
   const started = Date.now();
+  // The URL asked to disable certificate validation but the machine-scoped
+  // setting doesn't allow it — note the ignore instead of failing mysteriously.
+  if (mp.trustServerCertificateIgnored) {
+    emitWire(
+      "mssql",
+      "→",
+      `${target} — ?trustServerCertificate=true ignored (enable aiSharePoint.db.allowTrustServerCertificate to honor it); certificate validation stays ON`,
+    );
+  }
   if (wireEnabled()) {
     emitWire("mssql", "→", target, capDetail(`SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;\n${sql}`));
   }
@@ -327,7 +340,9 @@ async function mysqlRows(
       user: credential.username,
       password: credential.secret,
       connectTimeout: caps.timeoutMs,
-      ...(params.get("ssl") === "true"
+      // TLS ON by default — opt out explicitly with ?ssl=false (mirrors the
+      // Postgres branch; cleartext to a reference database must be deliberate).
+      ...(params.get("ssl") !== "false"
         ? { ssl: { rejectUnauthorized: true, ...(ca ? { ca: ca.join("\n") } : {}) } }
         : {}),
     });
