@@ -237,6 +237,7 @@ import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { MemoryStore } from "./context/memoryStore";
 import { PromptStore } from "./context/promptStore";
+import { newSeedPrompts } from "./context/promptSeeds";
 import { PromptsTreeProvider } from "./ui/promptsView";
 import { PromptItem, PromptScope, PromptScopeKind, normalizePromptInput } from "./context/promptLibrary";
 import { MemoryItem, MemoryScope, MemoryScopeKind, normalizeMemoryInput } from "./context/memory";
@@ -523,6 +524,22 @@ export function activate(context: vscode.ExtensionContext): void {
     return writeExportFiles(files);
   };
   const prompts = new PromptStore(context.globalState);
+  // Seed the Prompt Library with built-in starter prompts for the flagship
+  // flows — once per id, so a deleted seed isn't re-added and new built-ins in a
+  // later release are added without duplicating the rest.
+  void (async () => {
+    const KEY = "aiSharePoint.seededPromptIds";
+    const seeded = context.globalState.get<string[]>(KEY) ?? [];
+    const fresh = newSeedPrompts(seeded);
+    if (fresh.length === 0) return;
+    const stamp = nowIso();
+    for (const s of fresh) {
+      await prompts
+        .add({ id: s.id, scope: { kind: "global" }, title: s.title, body: s.body, tags: s.tags, createdAt: stamp, updatedAt: stamp })
+        .catch(() => undefined);
+    }
+    await context.globalState.update(KEY, [...seeded, ...fresh.map((s) => s.id)]);
+  })();
   const outlookWorkspaces = new OutlookWorkspaceStore(context.globalState);
   context.subscriptions.push(outlookWorkspaces);
   const teamsScopes = new TeamsScopeStore(context.globalState);
