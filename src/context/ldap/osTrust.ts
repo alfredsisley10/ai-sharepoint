@@ -22,12 +22,56 @@
 
 import * as fs from "node:fs";
 import * as tls from "node:tls";
+import { execFileSync } from "node:child_process";
 
 const LINUX_BUNDLES = [
   "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu
   "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // RHEL/Fedora
   "/etc/ssl/ca-bundle.pem", // SUSE
 ];
+
+/**
+ * Read the OS trust store the SAME way Edge/Chrome do, as PEM strings — the
+ * fallback for runtimes without `tls.getCACertificates` (Node < 22.15, i.e. the
+ * VS Code 1.95 host). No native modules: shell out to the platform's own tool.
+ *  - Windows: PowerShell over the Root + CA stores (LocalMachine + CurrentUser),
+ *    where MDM/GPO installs the corporate proxy's root CA.
+ *  - macOS: `security` over the System-root, System, and login keychains.
+ * Best-effort — any failure returns []. `run` is injected for unit tests.
+ */
+export function readPlatformOsCerts(
+  platform: NodeJS.Platform = process.platform,
+  run: (cmd: string, args: string[]) => string = (cmd, args) =>
+    execFileSync(cmd, args, { encoding: "utf8", timeout: 15_000, maxBuffer: 16 * 1024 * 1024 }),
+): string[] {
+  try {
+    if (platform === "win32") {
+      const ps =
+        "$ErrorActionPreference='SilentlyContinue';" +
+        "Get-ChildItem Cert:\\LocalMachine\\Root,Cert:\\CurrentUser\\Root,Cert:\\LocalMachine\\CA,Cert:\\CurrentUser\\CA |" +
+        " ForEach-Object { \"-----BEGIN CERTIFICATE-----\"; [Convert]::ToBase64String($_.RawData, 'InsertLineBreaks'); \"-----END CERTIFICATE-----\" }";
+      return splitPemBundle(run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps]));
+    }
+    if (platform === "darwin") {
+      const out = [
+        "/System/Library/Keychains/SystemRootCertificates.keychain",
+        "/Library/Keychains/System.keychain",
+      ]
+        .map((kc) => {
+          try {
+            return run("/usr/bin/security", ["find-certificate", "-a", "-p", kc]);
+          } catch {
+            return "";
+          }
+        })
+        .join("\n");
+      return splitPemBundle(out);
+    }
+  } catch {
+    // tool missing / blocked — fall through
+  }
+  return [];
+}
 
 /** Split a PEM bundle into individual certificates. */
 export function splitPemBundle(text: string): string[] {
@@ -63,20 +107,18 @@ export function loadTrustedCAs(
   const env = sources?.env ?? process.env;
   const extras: string[] = [];
 
-  // OS trust store (Node ≥ 22.15) — feature-detected, never throws.
+  // OS trust store: `tls.getCACertificates("system")` (Node ≥ 22.15) when
+  // available, else the platform shell-out reader (Node 20 / VS Code 1.95 host).
+  // Both surface the SAME store Edge/Chrome trust, where the corporate proxy CA
+  // lives. Feature-detected, never throws.
   try {
+    const nativeGet = (tls as unknown as { getCACertificates?: (t: string) => string[] }).getCACertificates;
     const getCAs =
       sources?.systemCerts ??
-      ((tls as unknown as { getCACertificates?: (t: string) => string[] })
-        .getCACertificates
-        ? () =>
-            (
-              tls as unknown as { getCACertificates: (t: string) => string[] }
-            ).getCACertificates("system")
-        : undefined);
-    if (getCAs) {
-      extras.push(...getCAs());
-    }
+      (typeof nativeGet === "function"
+        ? () => nativeGet.call(tls, "system")
+        : () => readPlatformOsCerts());
+    extras.push(...getCAs());
   } catch {
     // OS store unreadable — continue with other sources.
   }

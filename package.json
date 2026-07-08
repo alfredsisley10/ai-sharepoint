@@ -3728,6 +3728,13 @@
           "order": 16,
           "markdownDescription": "%config.aiSharePoint.ldap.caCertificatesFile.markdownDescription%"
         },
+        "aiSharePoint.network.caCertificatesFile": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "order": 17,
+          "markdownDescription": "%config.aiSharePoint.network.caCertificatesFile.markdownDescription%"
+        },
         "aiSharePoint.ldap.allowRawFilters": {
           "type": "boolean",
           "default": false,
