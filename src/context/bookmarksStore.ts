@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { ContextBookmark } from "./types";
+import { MementoListStore } from "./mementoListStore";
 import {
   listForSource,
   resolveBookmark,
@@ -17,14 +18,13 @@ const KEY = "aiSharePoint.contextBookmarks";
  * credentials always stay in the keychain. Logic lives in bookmarkOps (pure,
  * tested); this is the vscode-backed persistence wrapper.
  */
-export class BookmarksStore {
-  private readonly emitter = new vscode.EventEmitter<void>();
-  readonly onDidChange = this.emitter.event;
-
-  constructor(private readonly state: vscode.Memento) {}
+export class BookmarksStore extends MementoListStore<ContextBookmark> {
+  constructor(state: vscode.Memento) {
+    super(state, KEY);
+  }
 
   list(): ContextBookmark[] {
-    return this.state.get<ContextBookmark[]>(KEY) ?? [];
+    return this.all();
   }
 
   listForSource(sourceId: string): ContextBookmark[] {
@@ -35,28 +35,19 @@ export class BookmarksStore {
     return resolveBookmark(this.list(), name, sourceId);
   }
 
-  private async save(next: ContextBookmark[]): Promise<void> {
-    await this.state.update(KEY, next);
-    this.emitter.fire();
-  }
-
   add(bookmark: ContextBookmark): Promise<void> {
-    return this.save(withBookmark(this.list(), bookmark));
+    return this.persist(withBookmark(this.list(), bookmark));
   }
 
   update(bookmark: ContextBookmark): Promise<void> {
-    return this.save(withUpdatedBookmark(this.list(), bookmark));
+    return this.persist(withUpdatedBookmark(this.list(), bookmark));
   }
 
   remove(id: string): Promise<void> {
-    return this.save(withoutBookmark(this.list(), id));
+    return this.persist(withoutBookmark(this.list(), id));
   }
 
   removeForSource(sourceId: string): Promise<void> {
-    return this.save(withoutSource(this.list(), sourceId));
-  }
-
-  dispose(): void {
-    this.emitter.dispose();
+    return this.persist(withoutSource(this.list(), sourceId));
   }
 }
