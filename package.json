@@ -553,6 +553,12 @@
         "icon": "$(folder-opened)"
       },
       {
+        "command": "aiSharePoint.revealProjectWorkspace",
+        "title": "Reveal in File Explorer / Finder",
+        "category": "%category%",
+        "icon": "$(folder-active)"
+      },
+      {
         "command": "aiSharePoint.resumeFromWorkspace",
         "title": "Resume Chat from Project Workspace",
         "category": "%category%",
@@ -2904,6 +2910,26 @@
           "command": "aiSharePoint.buildSpaceDossier",
           "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "9_workspace@4"
+        },
+        {
+          "command": "aiSharePoint.revealProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem == project-workspace-on",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.revealProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem == project-workspace-on",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "aiSharePoint.revealProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project-file(-dir)?$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "aiSharePoint.revealProjectWorkspace",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project-file(-dir)?$/",
+          "group": "1_actions@1"
         },
         {
           "command": "aiSharePoint.readFileSource",

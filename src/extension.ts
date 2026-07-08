@@ -6915,6 +6915,24 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  register("aiSharePoint.revealProjectWorkspace", async (arg) => {
+    // From a folder/file node reveal that path; otherwise the project's
+    // workspace folder — opens Windows Explorer / macOS Finder / the Linux file
+    // manager on the OS-native browser.
+    const node = (arg ?? {}) as { uri?: unknown; project?: unknown };
+    let target = node.uri instanceof vscode.Uri ? node.uri : undefined;
+    if (!target) {
+      const project = await resolveProjectArg(node.project ?? arg);
+      if (!project) return;
+      if (!chatWorkspace.enabled(project.id)) {
+        void vscode.window.showInformationMessage(`"${project.name}" has no workspace folder yet — start a workspace first.`);
+        return;
+      }
+      target = chatWorkspace.baseUri(project);
+    }
+    await vscode.commands.executeCommand("revealFileInOS", target);
+  });
+
   register("aiSharePoint.openProjectWorkspace", async (arg) => {
     const project = await resolveProjectArg(arg);
     if (!project) return;
