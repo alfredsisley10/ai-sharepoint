@@ -163,6 +163,36 @@ export function diagnoseTransportError(
   };
 }
 
+/**
+ * The shared front-half of every adapter's request wrapper: fetch with a
+ * timeout, and convert a TRANSPORT failure (DNS, reset, TLS, timeout) into a
+ * diagnosed `AppError` — the HTTP/2-reset guidance and the proxy /
+ * TLS-inspection / content-filter detection that `fetchJson` already does, so
+ * the raw-fetch adapters (Power BI, M365 Copilot, Splunk, ServiceNow SSO) get
+ * the same actionable diagnosis instead of a bare "fetch failed". Returns the
+ * raw `Response`; each API keeps its own status taxonomy and body parsing.
+ * `channel` names the wire-log lane and the error's product label.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  channel: string,
+): Promise<Response> {
+  const started = Date.now();
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    emitWire(channel, "✗", `${init.method ?? "GET"} ${safeUrl(url)} — ${raw} (${Date.now() - started}ms)`);
+    const diag = diagnoseTransportError(init.method ?? "GET", raw);
+    if (diag) throw new AppError(diag.message, "network", diag.summary);
+    const proxy = detectProxyFromError(err, url);
+    if (proxy) throw new AppError(`${proxy.message}\n\n${proxy.summary}`, "network", proxy.summary);
+    throw new AppError(`${channel} request failed: ${raw}`, "network");
+  }
+}
+
 export async function fetchJson<T>(
   url: string,
   credential: ContextCredential,

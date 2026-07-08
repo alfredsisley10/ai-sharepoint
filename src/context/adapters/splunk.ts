@@ -6,6 +6,7 @@ import {
 } from "../types";
 
 import { AppError } from "../../core/errors";
+import { fetchWithTimeout } from "../http";
 import { wireEnabled, emitWire, capDetail, safeUrl } from "../../core/wireLog";
 
 /**
@@ -249,9 +250,9 @@ async function postSplunk<T>(
     const scheme = credential.method === "pat" ? "Bearer" : credential.method === "splunk-session" ? "Splunk" : "Basic";
     emitWire("splunk", "→", `POST ${safeUrl(url)}`, `Authorization: ${scheme} ***\n${capDetail(safeForm)}`);
   }
-  let res: Response;
-  try {
-    res = await fetch(url, {
+  const res = await fetchWithTimeout(
+    url,
+    {
       method: "POST",
       headers: {
         Authorization: splunkAuthHeader(credential),
@@ -259,15 +260,10 @@ async function postSplunk<T>(
         Accept: "application/json",
       },
       body: new URLSearchParams(form).toString(),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    emitWire("splunk", "✗", `POST ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
-    throw new AppError(
-      `Splunk request failed: ${err instanceof Error ? err.message : String(err)}`,
-      "network",
-    );
-  }
+    },
+    timeoutMs,
+    "splunk",
+  );
   if (res.status === 401 || res.status === 403) {
     emitWire("splunk", "✗", `POST ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
     throw new AppError(
@@ -309,19 +305,12 @@ async function getSplunk<T>(
   // discipline; splunkd accepts output_mode=json on the query string.
   const started = Date.now();
   emitWire("splunk", "→", `GET ${safeUrl(url)}`);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      headers: { Authorization: splunkAuthHeader(credential), Accept: "application/json" },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    emitWire("splunk", "✗", `GET ${safeUrl(url)} — ${err instanceof Error ? err.message : String(err)}`);
-    throw new AppError(
-      `Splunk request failed: ${err instanceof Error ? err.message : String(err)}`,
-      "network",
-    );
-  }
+  const res = await fetchWithTimeout(
+    url,
+    { headers: { Authorization: splunkAuthHeader(credential), Accept: "application/json" } },
+    timeoutMs,
+    "splunk",
+  );
   if (res.status === 401 || res.status === 403) {
     emitWire("splunk", "✗", `GET ${safeUrl(url)} ${res.status} (${Date.now() - started}ms)`);
     throw new AppError(

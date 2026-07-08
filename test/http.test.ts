@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { diagnoseTransportError, fetchJson, authHeaders } from "../src/context/http";
+import { diagnoseTransportError, fetchJson, fetchWithTimeout, authHeaders } from "../src/context/http";
 import { ContextCredential } from "../src/context/types";
 import { AppError } from "../src/core/errors";
 
@@ -163,6 +163,52 @@ test("an over-cap response is rejected without buffering the whole stream", asyn
     assert.match((err as AppError).message, /read cap/);
     // Reader was cancelled well before draining all 8 chunks.
     assert.ok(pulled <= 4, `stopped early, pulled ${pulled} chunks`);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("fetchWithTimeout returns the raw response on success", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
+  try {
+    const res = await fetchWithTimeout("https://x/y", { method: "GET" }, 5000, "powerbi");
+    assert.equal(res.status, 200);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("fetchWithTimeout diagnoses an HTTP/2 reset transport failure (not a bare 'fetch failed')", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("net::ERR_HTTP2_PROTOCOL_ERROR");
+  }) as typeof fetch;
+  try {
+    const err = await fetchWithTimeout("https://x/y", { method: "POST" }, 5000, "splunk").then(
+      () => undefined,
+      (e) => e,
+    );
+    assert.ok(err instanceof AppError);
+    assert.equal((err as AppError).code, "network");
+    assert.match((err as AppError).message, /reset before the source replied/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("fetchWithTimeout labels an undiagnosed transport failure with the channel", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("some obscure socket error");
+  }) as typeof fetch;
+  try {
+    const err = await fetchWithTimeout("https://x/y", {}, 5000, "m365copilot").then(
+      () => undefined,
+      (e) => e,
+    );
+    assert.ok(err instanceof AppError);
+    assert.match((err as AppError).message, /m365copilot request failed: some obscure socket error/);
   } finally {
     globalThis.fetch = original;
   }
