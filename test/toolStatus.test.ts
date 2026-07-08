@@ -63,9 +63,13 @@ test("Confluence governance tools get input-aware status lines", () => {
     describeToolCall("aisharepoint_manage_confluence_labels", { action: "list", pageId: "1" }),
     "Reading Confluence page label(s)…",
   );
-  assert.equal(
+  assert.match(
     describeToolCall("aisharepoint_review_space_manageability", { spaceKey: "ENG" }),
-    "Reviewing manageability of space ENG…",
+    /Auditing read\/write access across space ENG/,
+  );
+  assert.match(
+    describeToolCall("aisharepoint_build_space_dossier", { spaceKey: "ENG" }),
+    /Building the dossier for space ENG/,
   );
   assert.equal(
     describeToolCall("aisharepoint_move_confluence_page", { pageId: "1", parentId: "2" }),

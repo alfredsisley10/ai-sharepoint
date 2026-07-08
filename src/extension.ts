@@ -239,6 +239,7 @@ import { MemoryStore } from "./context/memoryStore";
 import { PromptStore } from "./context/promptStore";
 import { newSeedPrompts } from "./context/promptSeeds";
 import { effectiveInputCap } from "./core/contextBudget";
+import { progressMessage } from "./core/progress";
 import { PromptsTreeProvider } from "./ui/promptsView";
 import { PromptItem, PromptScope, PromptScopeKind, normalizePromptInput } from "./context/promptLibrary";
 import { MemoryItem, MemoryScope, MemoryScopeKind, normalizeMemoryInput } from "./context/memory";
@@ -6982,12 +6983,19 @@ export function activate(context: vscode.ExtensionContext): void {
     )?.trim();
     if (!spaceKey) return;
 
+    const dossierStarted = Date.now();
+    let lastDone = 0;
     const r = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Building dossier for ${spaceKey}…`, cancellable: false },
       (progress) =>
-        buildDossierInto(project, source, spaceKey, { contextService, chatWorkspace, workItems }, (done, total) =>
-          progress.report({ message: `reviewed ${done}/${total} page(s)…` }),
-        ),
+        buildDossierInto(project, source, spaceKey, { contextService, chatWorkspace, workItems }, (done, total) => {
+          const increment = total > 0 ? ((done - lastDone) / total) * 100 : 0;
+          lastDone = done;
+          progress.report({
+            message: progressMessage(done, total, Date.now() - dossierStarted, "page"),
+            increment,
+          });
+        }),
     );
     const dir = r.dir;
     telemetry.record("project.dossier", { space: "redacted" });

@@ -129,8 +129,10 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Removing Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""} from search (awaiting approval)…`;
     case "aisharepoint_resolve_page_owners":
       return `Resolving the owner(s) of Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""}…`;
+    case "aisharepoint_build_space_dossier":
+      return `Building the dossier for ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"} — reviewing every page (owners, staleness, links); this can take a while…`;
     case "aisharepoint_review_space_manageability":
-      return `Reviewing manageability of ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"}…`;
+      return `Auditing read/write access across ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"} — checking every page; this can take a while…`;
     case "aisharepoint_review_page_currency":
       return `Reviewing currency of Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""}…`;
     case "aisharepoint_confluence_page_tree":
@@ -144,7 +146,7 @@ export function describeToolCall(name: string, input: unknown): string {
         ? `Inspecting page “${short(String(i.page), 40)}” (read-only)…`
         : `Inspecting ${str(i.site) ?? "the site"} architecture (read-only)…`;
     case "aisharepoint_scan_site_content":
-      return `Scanning every page of ${str(i.site) ?? "the site"} for content (read-only)…`;
+      return `Scanning every page of ${str(i.site) ?? "the site"} for content — this can take a while (read-only)…`;
     case "aisharepoint_list_pages":
       return `Listing pages of ${str(i.site) ?? "the site"}…`;
     case "aisharepoint_list_connections":
