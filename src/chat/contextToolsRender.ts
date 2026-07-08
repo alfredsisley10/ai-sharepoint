@@ -88,13 +88,20 @@ function ownershipFailureAdvice(kind: string): string {
   }
 }
 
+/** Diagnostics can carry multi-paragraph proxy advice — keep each audit bullet
+ *  on one line so the list stays attached to its ✓/✗ marker. */
+function oneLine(s: string): string {
+  return s.replace(/\s*\n+\s*/g, " ").trim();
+}
+
 export function renderOwners(r: {
   resolution: OwnerResolution;
   labels: string[];
   directoryWired: boolean;
   directoryLabel?: string;
   ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
-  pageProbe?: { ok: boolean; title?: string; spaceKey?: string; error?: string };
+  pageProbe?: { ok: boolean; title?: string; spaceKey?: string; error?: string; errorKind?: string };
+  contactLookupFailures?: number;
   cached?: boolean;
 }): string {
   const { resolution } = r;
@@ -125,19 +132,26 @@ export function renderOwners(r: {
     verification === "directory"
       ? `Active-employee validation: ON via ${r.directoryLabel ?? "the configured directory"} (ranked by recency-weighted contribution; inactive contributors skipped).`
       : verification === "unavailable"
-        ? `Active-employee validation: CONFIGURED BUT UNAVAILABLE — the ${r.directoryLabel ?? "directory"} lookup failed during this run, so owners are reported UNVERIFIED (treated as active). This is a step-down, not a failure of ownership itself. Check the LDAP/Active Directory connector (Test Connection) and re-run with refresh:true to verify.`
+        ? `Active-employee validation: CONFIGURED BUT UNAVAILABLE — the ${r.directoryLabel ?? "directory"} lookup failed during this run${
+            resolution.directoryFault ? ` (${oneLine(resolution.directoryFault)})` : ""
+          }, so owners are reported UNVERIFIED (treated as active). This is a step-down, not a failure of ownership itself. Check the LDAP/Active Directory connector (Test Connection) and re-run with refresh:true to verify.`
         : UNVERIFIED_OWNER_NOTE,
   );
 
   // The auditable "how": page probe + every method step with its outcome.
   const audit = resolution.audit ?? [];
+  const resolved = resolution.owners.length > 0;
   if (audit.length || r.pageProbe) {
     lines.push("", "## How ownership was determined");
     if (r.pageProbe) {
       lines.push(
         r.pageProbe.ok
           ? `- ✓ Page lookup: “${r.pageProbe.title ?? "(untitled)"}”${r.pageProbe.spaceKey ? ` in space ${r.pageProbe.spaceKey}` : ""}`
-          : `- ✗ Page lookup FAILED: ${r.pageProbe.error ?? "unknown error"} — the pageId itself may be wrong; everything below is best-effort.`,
+          : resolved
+            ? `- ✗ Page lookup failed (${oneLine(r.pageProbe.error ?? "unknown error")}) — page metadata unavailable (limits the space fallback); the methods below still answered.`
+            : `- ✗ Page lookup FAILED: ${oneLine(r.pageProbe.error ?? "unknown error")}${
+                r.pageProbe.errorKind === "graph.notFound" ? " — the pageId itself may be wrong; everything below is best-effort." : ""
+              }`,
       );
     }
     for (const a of audit) {
@@ -147,26 +161,42 @@ export function renderOwners(r: {
         : "";
       lines.push(
         a.outcome === "failed"
-          ? `- ✗ ${label}: FAILED — ${a.error?.message ?? a.detail}`
+          ? `- ✗ ${label}: FAILED — ${oneLine(a.error?.message ?? a.detail)}`
           : `- ${AUDIT_MARKS[a.outcome]} ${label}: ${a.detail}${considered}`,
       );
     }
   }
 
-  // Troubleshooting — only when something actually failed.
+  // Troubleshooting — only when something actually failed or was dropped.
   const failures = audit.filter((a) => a.outcome === "failed");
-  if (failures.length || r.pageProbe?.ok === false || verification === "unavailable") {
+  const contactDrops = r.contactLookupFailures ?? 0;
+  if (failures.length || r.pageProbe?.ok === false || verification === "unavailable" || contactDrops > 0) {
     lines.push("", "## Troubleshooting");
     if (r.pageProbe?.ok === false) {
-      lines.push(`- Page lookup: ${r.pageProbe.error ?? "failed"} — ${ownershipFailureAdvice("graph.notFound")}`);
+      lines.push(
+        `- Page lookup: ${oneLine(r.pageProbe.error ?? "failed")} — ${ownershipFailureAdvice(r.pageProbe.errorKind ?? "unknown")}`,
+      );
     }
     for (const f of failures) {
-      lines.push(`- ${OWNERSHIP_STEP_LABELS[f.step] ?? f.step}: ${f.error?.message ?? f.detail} — ${ownershipFailureAdvice(f.error?.kind ?? "unknown")}`);
+      lines.push(
+        `- ${OWNERSHIP_STEP_LABELS[f.step] ?? f.step}: ${oneLine(f.error?.message ?? f.detail)} — ${ownershipFailureAdvice(f.error?.kind ?? "unknown")}`,
+      );
     }
     if (verification === "unavailable") {
-      lines.push("- Directory: active-employee checks failed mid-run — verify the LDAP/Active Directory connector (Test Connection), then re-run with refresh:true.");
+      lines.push(
+        `- Directory: active-employee checks failed mid-run${
+          resolution.directoryFault ? ` (${oneLine(resolution.directoryFault)})` : ""
+        } — verify the LDAP/Active Directory connector (Test Connection), then re-run with refresh:true.`,
+      );
     }
-    lines.push("- This degraded result was NOT cached — a re-run recomputes it from scratch.");
+    if (contactDrops > 0) {
+      lines.push(
+        `- Contact lookup failed for ${contactDrops} owner(s) — shown as bare account name(s), possibly missing an inactive flag; re-run with refresh:true once the directory recovers.`,
+      );
+    }
+    lines.push(
+      "- This degraded result was NOT cached. After fixing the issue, re-run with refresh:true to recompute (a plain re-run may serve an older cached answer).",
+    );
   }
   return lines.join("\n");
 }

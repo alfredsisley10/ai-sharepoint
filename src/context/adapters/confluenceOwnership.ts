@@ -1,6 +1,7 @@
 import { ContextSource, ContextCredential } from "../types";
 import { fetchJson } from "../http";
-import { AppError, classifyError } from "../../core/errors";
+import { AppError, classifyError, ErrorCode } from "../../core/errors";
+import { redactText } from "../../core/redaction";
 import { CONFLUENCE_WRITE_HEADERS } from "./confluenceWrite";
 import { enc, baseOf as base } from "./confluenceCommon";
 
@@ -174,6 +175,9 @@ export interface OwnerResolution {
    *  directory IS configured but failed during this run, so the pipeline
    *  stepped down to unverified rather than failing. */
   verification?: "directory" | "off" | "unavailable";
+  /** WHY verification is "unavailable": the directory's own (redacted) error,
+   *  so the outage is troubleshootable rather than just announced. */
+  directoryFault?: string;
   /** User-facing step-down notices accumulated during the run. */
   degraded?: string[];
 }
@@ -186,8 +190,22 @@ async function supply<T>(v: Supplied<T>): Promise<T> {
   return typeof v === "function" ? (v as () => Promise<T>)() : v;
 }
 
+/** Audit-safe error capture: REDACTED (server bodies can echo emails/PII into
+ *  error messages, and the audit travels in the tool's success payload where
+ *  the wrapper's redactError never runs) and bounded. */
 function errInfo(err: unknown): { message: string; kind: string } {
-  return { message: err instanceof Error ? err.message : String(err), kind: classifyError(err) };
+  const raw = err instanceof Error ? err.message : String(err);
+  return { message: redactText(raw).slice(0, 400), kind: classifyError(err) };
+}
+
+/** Failure kinds that ABORT resolution instead of stepping down: a rejected
+ *  credential invalidates every subsequent read with the same credential (and
+ *  the throw is what feeds the ADR-0009 auth-lockout breaker in the caller),
+ *  and a throttling server must be backed off from, not swept. */
+const ABORT_KINDS: ErrorCode[] = ["auth.failed", "graph.throttled"];
+
+function rethrowIfAbort(err: unknown): void {
+  if (ABORT_KINDS.includes(classifyError(err))) throw err;
 }
 
 /**
@@ -201,11 +219,20 @@ function errInfo(err: unknown): { message: string; kind: string } {
  * `isActive` (directory outage) degrades activity checks to "assume active,
  * report unverified" instead of failing the run. The returned `audit`,
  * `verification` and `degraded` fields make the outcome fully explainable.
+ *
+ * Two failure kinds ABORT instead of stepping down (the throw is deliberate —
+ * it feeds the caller's auth-lockout breaker and throttle backoff): a rejected
+ * credential (`auth.failed`) and a throttling source (`graph.throttled`),
+ * since every remaining read would use the same credential/connection.
  */
 export async function resolveOwners(input: {
   pageLabels: Supplied<string[]>;
   pageContributors: Supplied<ContributorTally[]>;
-  spaceContributors: () => Promise<ContributorTally[]>;
+  /** Lazy space sweep. OMIT it when the space can't be swept and say why in
+   *  `spaceSkippedReason` — the audit then records an honest "skipped" instead
+   *  of a fabricated failure or a misleading "empty space". */
+  spaceContributors?: () => Promise<ContributorTally[]>;
+  spaceSkippedReason?: string;
   isActive: ActivePredicate;
   /** Last resort: the administratively-configured space owners/admins. Often
    *  NOT the effective owner (they can't fix the content), so tried only after
@@ -231,10 +258,31 @@ export async function resolveOwners(input: {
     try {
       return await input.isActive(sam);
     } catch (err) {
-      directoryFault = err instanceof Error ? err.message : String(err);
+      directoryFault = redactText(err instanceof Error ? err.message : String(err)).slice(0, 300);
       return true;
     }
   };
+
+  /**
+   * Pick the owner from a ranked list, verified when possible. If the
+   * directory faults MID-walk, restart with the plain top contributor — the
+   * deterministic unverified answer (the same one a from-the-start outage
+   * yields) — instead of whichever candidate the fault happened to land on.
+   */
+  const pickActive = async (ranked: ContributorTally[]): Promise<string | undefined> => {
+    const faultBefore = directoryFault !== undefined;
+    for (const c of ranked) {
+      if (await checkActive(c.sam)) {
+        if (!faultBefore && directoryFault !== undefined) return ranked[0]!.sam;
+        return c.sam;
+      }
+    }
+    return undefined;
+  };
+
+  // Any step that FOUND candidates which then failed the active check — drives
+  // an accurate "why none" note (a directory answer, not missing history).
+  let sawVetoedCandidates = false;
 
   const finish = (
     r: Pick<OwnerResolution, "owners" | "basis" | "considered" | "note">,
@@ -243,7 +291,14 @@ export async function resolveOwners(input: {
     if (determinedBy) {
       const after = OWNERSHIP_STEP_ORDER.slice(OWNERSHIP_STEP_ORDER.indexOf(determinedBy) + 1);
       for (const step of after) {
-        audit.push({ step, outcome: "skipped", detail: "not attempted — an earlier method already determined the owner" });
+        audit.push({
+          step,
+          outcome: "skipped",
+          detail:
+            step === "space-owners" && !input.spaceOwners
+              ? "no space-owner lookup available for this source"
+              : "not attempted — an earlier method already determined the owner",
+        });
       }
     }
     const degraded: string[] = [];
@@ -261,11 +316,13 @@ export async function resolveOwners(input: {
       ...r,
       audit,
       verification: input.directoryWired ? (directoryFault ? "unavailable" : "directory") : "off",
+      ...(directoryFault ? { directoryFault } : {}),
       ...(degraded.length ? { degraded } : {}),
     };
   };
 
   // 1. Explicit owner label — authoritative when present.
+  let labelReadFailed = false;
   try {
     const labels = await supply(input.pageLabels);
     const labelOwners = findOwnerLabel(labels, marker);
@@ -296,31 +353,31 @@ export async function resolveOwners(input: {
         : "the page has no labels",
     });
   } catch (err) {
+    rethrowIfAbort(err);
+    labelReadFailed = true;
     audit.push({ step: "owner-label", outcome: "failed", detail: "could not read the page's labels", error: errInfo(err) });
   }
 
   // 2. Most-prolific (recency-weighted) ACTIVE page contributor.
+  let pageReadFailed = false;
   try {
     const ranked = await supply(input.pageContributors);
     if (!ranked.length) {
       audit.push({ step: "page-contributors", outcome: "no-result", detail: "the page's version history yielded no contributors" });
     } else {
-      let owner: string | undefined;
-      for (const c of ranked) {
-        if (await checkActive(c.sam)) {
-          owner = c.sam;
-          break;
-        }
-      }
+      const owner = await pickActive(ranked);
       if (owner) {
         audit.push({
           step: "page-contributors",
           outcome: "hit",
-          detail: `top ${directoryFault || !input.directoryWired ? "" : "ACTIVE "}recency-weighted contributor of ${ranked.length}: ${owner}`,
+          detail: `top ${directoryFault || !input.directoryWired ? "" : "ACTIVE "}recency-weighted contributor of ${ranked.length}: ${owner}${
+            directoryFault ? " (unverified — the directory failed during checks)" : ""
+          }`,
           considered: ranked.slice(0, 5),
         });
         return finish({ owners: [owner], basis: "page-contributor", considered: ranked }, "page-contributors");
       }
+      sawVetoedCandidates = true;
       audit.push({
         step: "page-contributors",
         outcome: "no-result",
@@ -329,6 +386,8 @@ export async function resolveOwners(input: {
       });
     }
   } catch (err) {
+    rethrowIfAbort(err);
+    pageReadFailed = true;
     audit.push({
       step: "page-contributors",
       outcome: "failed",
@@ -337,42 +396,58 @@ export async function resolveOwners(input: {
     });
   }
 
-  // 3. Most-prolific (recency-weighted) ACTIVE space contributor.
-  try {
-    const spaceRanked = await input.spaceContributors();
-    if (!spaceRanked.length) {
-      audit.push({ step: "space-contributors", outcome: "no-result", detail: "the space's version history yielded no contributors" });
-    } else {
-      let owner: string | undefined;
-      for (const c of spaceRanked) {
-        if (await checkActive(c.sam)) {
-          owner = c.sam;
-          break;
-        }
-      }
-      if (owner) {
-        audit.push({
-          step: "space-contributors",
-          outcome: "hit",
-          detail: `top ${directoryFault || !input.directoryWired ? "" : "ACTIVE "}recency-weighted contributor across the space: ${owner}`,
-          considered: spaceRanked.slice(0, 5),
-        });
-        return finish({ owners: [owner], basis: "space-contributor", considered: spaceRanked }, "space-contributors");
-      }
-      audit.push({
-        step: "space-contributors",
-        outcome: "no-result",
-        detail: `${spaceRanked.length} space contributor(s) found, but none is an active employee per the directory`,
-        considered: spaceRanked.slice(0, 5),
-      });
-    }
-  } catch (err) {
+  // 3. Most-prolific (recency-weighted) ACTIVE space contributor. The sweep is
+  // the EXPENSIVE step (a page listing + per-page history), so it is skipped —
+  // honestly, in the audit — when there's no space to sweep or when both
+  // page-level reads already failed (a systemic fault: the same reads would
+  // fail again ×N pages, turning one sick instance into a minutes-long crawl).
+  if (!input.spaceContributors) {
     audit.push({
       step: "space-contributors",
-      outcome: "failed",
-      detail: "could not read the space's version history",
-      error: errInfo(err),
+      outcome: "skipped",
+      detail: `not attempted — ${input.spaceSkippedReason ?? "no space sweep is available for this source"}`,
     });
+  } else if (labelReadFailed && pageReadFailed) {
+    audit.push({
+      step: "space-contributors",
+      outcome: "skipped",
+      detail: "not attempted — both page-level reads failed (a systemic problem); fix those first, then re-run with refresh",
+    });
+  } else {
+    try {
+      const spaceRanked = await input.spaceContributors();
+      if (!spaceRanked.length) {
+        audit.push({ step: "space-contributors", outcome: "no-result", detail: "the space's version history yielded no contributors" });
+      } else {
+        const owner = await pickActive(spaceRanked);
+        if (owner) {
+          audit.push({
+            step: "space-contributors",
+            outcome: "hit",
+            detail: `top ${directoryFault || !input.directoryWired ? "" : "ACTIVE "}recency-weighted contributor across the space: ${owner}${
+              directoryFault ? " (unverified — the directory failed during checks)" : ""
+            }`,
+            considered: spaceRanked.slice(0, 5),
+          });
+          return finish({ owners: [owner], basis: "space-contributor", considered: spaceRanked }, "space-contributors");
+        }
+        sawVetoedCandidates = true;
+        audit.push({
+          step: "space-contributors",
+          outcome: "no-result",
+          detail: `${spaceRanked.length} space contributor(s) found, but none is an active employee per the directory`,
+          considered: spaceRanked.slice(0, 5),
+        });
+      }
+    } catch (err) {
+      rethrowIfAbort(err);
+      audit.push({
+        step: "space-contributors",
+        outcome: "failed",
+        detail: "could not read the space's version history",
+        error: errInfo(err),
+      });
+    }
   }
 
   // 4. Administratively-configured space owners (last resort).
@@ -399,6 +474,7 @@ export async function resolveOwners(input: {
           "space-owners",
         );
       }
+      if (configured.length) sawVetoedCandidates = true;
       audit.push({
         step: "space-owners",
         outcome: "no-result",
@@ -407,6 +483,7 @@ export async function resolveOwners(input: {
           : "the space has no configured owners",
       });
     } catch (err) {
+      rethrowIfAbort(err);
       audit.push({ step: "space-owners", outcome: "failed", detail: "could not read the space's configured owners", error: errInfo(err) });
     }
   } else {
@@ -414,22 +491,16 @@ export async function resolveOwners(input: {
   }
 
   const failedSteps = audit.filter((a) => a.outcome === "failed");
-  // The "why none" note reflects what the audit actually saw: reads failing is
-  // a fixable degradation; contributors-found-but-all-inactive is a directory
+  // The "why none" note reflects what actually happened: reads failing is a
+  // fixable degradation; candidates-found-but-all-vetoed is a directory
   // answer; genuinely empty history is a content fact — three very different
   // user actions.
-  const sawContributors = audit.some(
-    (a) =>
-      (a.step === "page-contributors" || a.step === "space-contributors") &&
-      a.outcome === "no-result" &&
-      (a.considered?.length ?? 0) > 0,
-  );
   const note = failedSteps.length
     ? `Owner resolution was DEGRADED — ${failedSteps.length} method(s) failed (${failedSteps
         .map((f) => OWNERSHIP_STEP_LABELS[f.step])
         .join("; ")}) and the remaining methods found no owner. See the audit trail, fix the failing read(s), and re-run with refresh.`
-    : sawContributors
-      ? "Contributors were found, but none passed the active-employee check — every candidate appears inactive (or the directory can't resolve them). The audit trail lists who was considered."
+    : sawVetoedCandidates
+      ? "Candidates were found, but none passed the active-employee check — every candidate appears inactive (or the directory can't resolve them). The audit trail lists who was considered."
       : "No contributor history was found on the page or in the space, so no owner could be inferred (this is not an LDAP/directory problem — even unverified resolution needs some edit history).";
   return finish({ owners: [], basis: "none", note });
 }
@@ -510,11 +581,21 @@ async function readVersionAuthors(
   const authors: TimedAuthor[] = [];
   const pageSize = 100;
   for (let start = 0; authors.length < maxVersions; start += pageSize) {
-    const res = await fetchJson<{ results?: Array<{ by?: VersionBy; when?: string }> }>(
-      `${base(source)}${prefix}/content/${enc(pageId)}/version?start=${start}&limit=${pageSize}`,
-      credential,
-      timeoutMs,
-    );
+    let res: { results?: Array<{ by?: VersionBy; when?: string }> };
+    try {
+      res = await fetchJson<{ results?: Array<{ by?: VersionBy; when?: string }> }>(
+        `${base(source)}${prefix}/content/${enc(pageId)}/version?start=${start}&limit=${pageSize}`,
+        credential,
+        timeoutMs,
+      );
+    } catch (err) {
+      // A 404 MID-pagination (permission shift, flaky intermediary) must not
+      // discard the versions already read behind a misleading "not found" —
+      // keep the partial tally. Only a first-request failure escapes to drive
+      // the cross-deployment prefix fallback.
+      if (start > 0 && classifyError(err) === "graph.notFound") break;
+      throw err;
+    }
     const results = res.results ?? [];
     for (const v of results) {
       const sam = v.by?.username ?? v.by?.publicName ?? v.by?.accountId;
@@ -538,19 +619,28 @@ async function pageVersionAuthors(
   maxVersions: number,
 ): Promise<TimedAuthor[]> {
   const prefixes = versionPrefixOrder(source);
+  let firstNon404: AppError | undefined;
   for (const prefix of prefixes) {
     try {
       const authors = await readVersionAuthors(source, credential, pageId, timeoutMs, maxVersions, prefix);
       versionPrefixMemo.set(base(source), prefix);
       return authors;
     } catch (err) {
-      // Only a NOT-FOUND falls through to the other deployment's path — any
-      // other failure (auth, throttle, network) is real and must surface.
-      if (classifyError(err) !== "graph.notFound") {
+      const kind = classifyError(err);
+      // A 404 falls through to the other deployment's path. So does a 403 —
+      // WAFs/proxies commonly block the path shape they don't expect (e.g.
+      // /rest/experimental) while the other prefix works; a GENUINE permission
+      // 403 fails on both and surfaces below. Auth rejection, throttling and
+      // network faults are systemic: surface immediately with the endpoint.
+      if (kind !== "graph.notFound" && kind !== "graph.forbidden") {
         throw withEndpoint(`GET ${prefix}/content/${pageId}/version`, err);
+      }
+      if (kind === "graph.forbidden" && !firstNon404) {
+        firstNon404 = withEndpoint(`GET ${prefix}/content/${pageId}/version`, err);
       }
     }
   }
+  if (firstNon404) throw firstNon404;
   throw new AppError(
     `Version history not found (404) for page ${pageId} — tried ${prefixes
       .map((p) => `${p}/content/${pageId}/version`)
@@ -609,22 +699,32 @@ async function spaceVersionAuthors(
   const ids = (listed.results ?? []).map((p) => String(p.id ?? "")).filter(Boolean);
   const authors: TimedAuthor[] = [];
   let readable = 0;
+  let failed = 0;
   let lastErr: unknown;
   for (const id of ids) {
     try {
       authors.push(...(await pageVersionAuthors(source, credential, id, timeoutMs, maxVersionsPerPage)));
       readable += 1;
     } catch (err) {
+      // Abort kinds are systemic by definition — stop the sweep immediately
+      // (the throw feeds the caller's breaker/backoff instead of hammering).
+      rethrowIfAbort(err);
       // One unreadable page shouldn't void the space tally…
       lastErr = err;
+      failed += 1;
+      // …but if the sweep OPENS with consecutive failures and no successes,
+      // the problem is systemic (endpoint shape, auth, proxy) — bail out
+      // instead of burning a timeout per remaining page on a sick instance.
+      if (readable === 0 && failed >= 3) break;
     }
   }
-  // …but EVERY page failing is a systemic problem (endpoint shape, auth,
-  // proxy) that must surface as a failure, not masquerade as "empty history".
-  if (ids.length > 0 && readable === 0) {
+  // EVERY attempted page failing is a systemic problem that must surface as a
+  // failure, not masquerade as "empty history".
+  if (ids.length > 0 && readable === 0 && failed > 0) {
     const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    const scope = failed === ids.length ? `the ${ids.length}` : `the first ${failed} of ${ids.length}`;
     throw new AppError(
-      `Could not read version history for any of the ${ids.length} sampled page(s) in space ${spaceKey}. Last error: ${msg}`,
+      `Could not read version history for any of ${scope} sampled page(s) in space ${spaceKey}. Last error: ${msg}`,
       classifyError(lastErr),
       lastErr instanceof AppError ? lastErr.userSummary : undefined,
     );

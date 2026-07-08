@@ -327,11 +327,11 @@ export async function fetchJson<T>(
     );
   }
   if (!res.ok) {
+    // Redacted like every other error branch — bodies can echo emails/PII,
+    // and this message can travel beyond redactError (e.g. audit trails).
     const body = await readErrorBody(res);
-    throw new AppError(
-      `Source request failed (${res.status} ${res.statusText}): ${body.slice(0, 300)}`,
-      "unknown",
-    );
+    const reason = redactText(body).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+    throw new AppError(`Source request failed (${res.status} ${res.statusText}): ${reason}`, "unknown");
   }
   const { text, truncated } = await readCappedText(res, MAX_RESPONSE_BYTES);
   if (wireEnabled()) {

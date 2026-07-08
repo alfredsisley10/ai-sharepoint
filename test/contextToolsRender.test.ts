@@ -113,6 +113,7 @@ test("renderOwners reports a directory outage as a step-down (configured but una
       owners: ["jdoe"],
       basis: "page-contributor",
       verification: "unavailable",
+      directoryFault: "LDAP connect ECONNREFUSED",
       audit: [{ step: "page-contributors", outcome: "hit", detail: "top recency-weighted contributor of 2: jdoe" }],
       degraded: ["The configured directory failed during active-employee checks (LDAP ECONNREFUSED) — owners in this run are UNVERIFIED."],
     } as never,
@@ -122,6 +123,8 @@ test("renderOwners reports a directory outage as a step-down (configured but una
   });
   assert.match(out, /CONFIGURED BUT UNAVAILABLE/);
   assert.match(out, /UNVERIFIED/);
+  // The outage's actual REASON renders (troubleshootable, not just announced).
+  assert.match(out, /LDAP connect ECONNREFUSED/);
   assert.match(out, /## Troubleshooting/);
   assert.match(out, /Test Connection/);
 });

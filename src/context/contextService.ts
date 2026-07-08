@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { ContextSourcesStore } from "./sourcesStore";
+import { redactText } from "../core/redaction";
 import { TtlCache } from "./cache";
 import {
   ContextSource,
@@ -1054,7 +1055,11 @@ export class ContextService {
       // Step 0 — probe the page itself (best-effort; only the space fallback
       // NEEDS it). Its outcome is the strongest 404 discriminator: a readable
       // page with a 404ing history read is an endpoint/path problem, while a
-      // 404 here means the pageId itself doesn't resolve.
+      // 404 here means the pageId itself doesn't resolve. A rejected
+      // credential or a throttling source aborts outright — every further
+      // read would use the same credential, and the throw is what feeds the
+      // auth-lockout breaker (ADR-0009) and throttle backoff in tracked().
+      const abortKinds = new Set(["auth.failed", "graph.throttled"]);
       let pageProbe: CachedOwnership["pageProbe"];
       let spaceKey: string | undefined;
       try {
@@ -1062,7 +1067,12 @@ export class ContextService {
         spaceKey = meta.spaceKey;
         pageProbe = { ok: true, title: meta.title, ...(meta.spaceKey ? { spaceKey: meta.spaceKey } : {}) };
       } catch (err) {
-        pageProbe = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        if (abortKinds.has(classifyError(err))) throw err;
+        pageProbe = {
+          ok: false,
+          error: redactText(err instanceof Error ? err.message : String(err)).slice(0, 400),
+          errorKind: classifyError(err),
+        };
       }
       // Read labels once (best-effort), feeding both the resolution and the
       // display; a failed read reaches resolveOwners as the audited failure.
@@ -1071,31 +1081,29 @@ export class ContextService {
       try {
         labels = await getConfluencePageLabels(source, credential, pageId, caps.timeoutMs);
       } catch (err) {
+        if (abortKinds.has(classifyError(err))) throw err;
         labelsError = err;
       }
       const resolution = await resolveOwners({
         pageLabels: labelsError ? () => Promise.reject(labelsError) : labels,
         pageContributors: () => getConfluencePageContributorsWeighted(source, credential, pageId, caps.timeoutMs, nowMs),
-        spaceContributors: () => {
-          if (spaceKey) {
-            return getConfluenceSpaceContributorsWeighted(source, credential, spaceKey, caps.timeoutMs, nowMs);
-          }
-          if (!pageProbe?.ok) {
-            return Promise.reject(
-              new AppError(
-                `could not locate the page's space — the page-metadata read failed (${pageProbe?.error ?? "unknown error"})`,
-                "graph.notFound",
-              ),
-            );
-          }
-          return Promise.resolve([]);
-        },
+        // No fabricated failures: when the space can't be swept, the audit
+        // records an honest "skipped" with the reason.
+        ...(spaceKey
+          ? { spaceContributors: () => getConfluenceSpaceContributorsWeighted(source, credential, spaceKey!, caps.timeoutMs, nowMs) }
+          : {
+              spaceSkippedReason: pageProbe.ok
+                ? "the page reports no space to sweep"
+                : "the page lookup failed, so the page's space is unknown (see Page lookup above)",
+            }),
         isActive: directory ? activeFromDirectory(directory.dir) : async () => true,
         directoryWired: Boolean(directory),
       });
       // Contact enrichment is best-effort too: a directory hiccup downgrades
-      // an owner line to the bare sam instead of failing the whole result.
+      // an owner line to the bare sam instead of failing the whole result —
+      // but it COUNTS as degraded (the line may be missing an inactive flag).
       let ownerContacts: CachedOwnership["ownerContacts"];
+      let contactLookupFailures = 0;
       if (directory && resolution.owners.length) {
         const contacts = await Promise.all(
           resolution.owners.map(async (sam) => {
@@ -1108,6 +1116,7 @@ export class ContextService {
                 active: rec?.active ?? false,
               };
             } catch {
+              contactLookupFailures += 1;
               return undefined;
             }
           }),
@@ -1122,15 +1131,17 @@ export class ContextService {
         ...(directory ? { directoryLabel: directory.label } : {}),
         ...(ownerContacts ? { ownerContacts } : {}),
         ...(pageProbe ? { pageProbe } : {}),
+        ...(contactLookupFailures > 0 ? { contactLookupFailures } : {}),
       };
     });
     // Cache only clean runs: a degraded resolution (failed steps / directory
-    // outage / unresolvable page) is a troubleshooting artifact, not a fact
-    // worth pinning for a week.
+    // outage / unresolvable page / dropped contact lookups) is a
+    // troubleshooting artifact, not a fact worth pinning for a week.
     const degradedRun =
       result.resolution.verification === "unavailable" ||
       (result.resolution.audit ?? []).some((a) => a.outcome === "failed") ||
-      result.pageProbe?.ok === false;
+      result.pageProbe?.ok === false ||
+      (result.contactLookupFailures ?? 0) > 0;
     if (!degradedRun) {
       await this.ownershipCache?.put(source.id, pageId, result);
     }
@@ -1359,7 +1370,7 @@ export class ContextService {
               // sample error: "every page failed" (an endpoint/auth problem)
               // must be distinguishable from "no page has history".
               historyReadFailures += 1;
-              historyReadSampleError ??= err instanceof Error ? err.message : String(err);
+              historyReadSampleError ??= redactText(err instanceof Error ? err.message : String(err)).slice(0, 300);
               return;
             }
             if (!tallies.length) {
@@ -1368,27 +1379,41 @@ export class ContextService {
             }
             // Prefer the first ACTIVE contributor when a directory can verify;
             // otherwise the top contributor (unverified) — better than nothing.
+            // A directory OUTAGE steps down to the unverified suggestion too:
+            // one flaky LDAP call must not abort the whole (expensive) dossier.
             let chosen = tallies[0]!;
             let active = false;
+            let rec: Awaited<ReturnType<typeof dirFn>>;
+            let dirFailed = false;
             if (directory) {
-              for (const c of tallies) {
-                const rec = await dirFn(c.sam);
-                if (rec?.active) {
-                  chosen = c;
-                  active = true;
-                  break;
+              try {
+                for (const c of tallies) {
+                  const r = await dirFn(c.sam);
+                  if (r?.active) {
+                    chosen = c;
+                    active = true;
+                    rec = r;
+                    break;
+                  }
                 }
+                if (!rec) rec = await dirFn(chosen.sam);
+              } catch {
+                dirFailed = true;
+                chosen = tallies[0]!;
+                active = false;
+                rec = undefined;
               }
             }
-            const rec = await dirFn(chosen.sam);
             p.suggestedOwner = {
               sam: chosen.sam,
               active,
               ...(contactOf(rec) ? { contact: contactOf(rec) } : {}),
               basis: directory
-                ? active
-                  ? "top active contributor"
-                  : "top contributor (none active in directory)"
+                ? dirFailed
+                  ? "top contributor (directory lookup failed — unverified)"
+                  : active
+                    ? "top active contributor"
+                    : "top contributor (none active in directory)"
                 : "top contributor (directory not wired — unverified)",
             };
             suggestedOwners += 1;

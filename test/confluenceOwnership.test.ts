@@ -15,6 +15,7 @@ import {
   ContributorTally,
 } from "../src/context/adapters/confluenceOwnership";
 import { ContextSource, ContextCredential } from "../src/context/types";
+import { AppError } from "../src/core/errors";
 
 const SRC: ContextSource = {
   id: "c1",
@@ -365,19 +366,161 @@ test("audit: a directory OUTAGE degrades to unverified (verification 'unavailabl
   assert.ok(res.degraded?.some((d) => /UNVERIFIED/.test(d) && /ECONNREFUSED/.test(d)));
 });
 
-test("audit: every method failing yields basis none with a DEGRADED note (not a throw)", async () => {
+test("audit: every method failing yields basis none with a DEGRADED note (not a throw), and the expensive space sweep is SKIPPED as systemic", async () => {
   const boom = () => Promise.reject(new Error("kaboom"));
+  let swept = false;
   const res = await resolveOwners({
     pageLabels: boom,
     pageContributors: boom,
-    spaceContributors: boom,
+    spaceContributors: () => {
+      swept = true;
+      return Promise.reject(new Error("kaboom"));
+    },
     spaceOwners: boom,
     isActive: async () => true,
   });
   assert.equal(res.basis, "none");
   assert.deepEqual(res.owners, []);
   assert.match(res.note ?? "", /DEGRADED/);
-  assert.equal(res.audit!.filter((a) => a.outcome === "failed").length, 4);
+  // Both page-level reads failed → sweeping N pages with the same failing
+  // reads is futile; the audit records an honest skip instead.
+  assert.equal(swept, false, "space sweep must not run when both page-level reads failed");
+  const space = res.audit!.find((a) => a.step === "space-contributors");
+  assert.equal(space?.outcome, "skipped");
+  assert.match(space?.detail ?? "", /systemic/);
+  assert.equal(res.audit!.filter((a) => a.outcome === "failed").length, 3);
+});
+
+test("abort kinds: a rejected credential or throttle THROWS (feeds the auth-lockout breaker) instead of stepping down", async () => {
+  await assert.rejects(
+    resolveOwners({
+      pageLabels: () => Promise.reject(new AppError("Authentication rejected (401).", "auth.failed")),
+      pageContributors: ranked(["jdoe", 3]),
+      spaceContributors: async () => [],
+      isActive: async () => true,
+    }),
+    /Authentication rejected/,
+  );
+  await assert.rejects(
+    resolveOwners({
+      pageLabels: [],
+      pageContributors: () => Promise.reject(new Error("Source is throttling requests (429).")),
+      spaceContributors: async () => [],
+      isActive: async () => true,
+    }),
+    /throttling/,
+  );
+});
+
+test("audit: a directory fault MID-walk falls back to the deterministic top contributor", async () => {
+  // jdoe (top) is verified inactive, then the directory dies on asmith: the
+  // pick must be the plain top contributor (same answer as a full outage),
+  // not whichever candidate the fault happened to land on.
+  const res = await resolveOwners({
+    pageLabels: [],
+    pageContributors: ranked(["jdoe", 9], ["asmith", 2]),
+    spaceContributors: async () => [],
+    isActive: async (sam) => {
+      if (sam === "jdoe") return false;
+      throw new Error("LDAP connection lost");
+    },
+    directoryWired: true,
+  });
+  assert.deepEqual(res.owners, ["jdoe"]);
+  assert.equal(res.verification, "unavailable");
+  assert.match(res.directoryFault ?? "", /LDAP connection lost/);
+  const page = res.audit!.find((a) => a.step === "page-contributors");
+  assert.match(page?.detail ?? "", /unverified — the directory failed/);
+});
+
+test("audit: no space sweep available renders an honest skip with the caller's reason", async () => {
+  const res = await resolveOwners({
+    pageLabels: [],
+    pageContributors: [],
+    spaceSkippedReason: "the page lookup failed, so the page's space is unknown",
+    isActive: async () => true,
+  });
+  const space = res.audit!.find((a) => a.step === "space-contributors");
+  assert.equal(space?.outcome, "skipped");
+  assert.match(space?.detail ?? "", /space is unknown/);
+  assert.equal(res.basis, "none");
+});
+
+test("audit: directory-vetoed configured space owners produce the active-check note, not 'no history'", async () => {
+  const res = await resolveOwners({
+    pageLabels: [],
+    pageContributors: [],
+    spaceContributors: async () => [],
+    spaceOwners: async () => ["ghost"],
+    isActive: async () => false,
+    directoryWired: true,
+  });
+  assert.equal(res.basis, "none");
+  assert.match(res.note ?? "", /none passed the active-employee check/);
+  assert.doesNotMatch(res.note ?? "", /No contributor history/);
+});
+
+test("audit messages are redacted (no emails/PII from server bodies)", async () => {
+  const res = await resolveOwners({
+    pageLabels: () => Promise.reject(new Error("boom body mentions dave@corp.example.com somewhere")),
+    pageContributors: ranked(["jdoe", 1]),
+    spaceContributors: async () => [],
+    isActive: async () => true,
+  });
+  const label = res.audit!.find((a) => a.step === "owner-label");
+  assert.doesNotMatch(label?.error?.message ?? "", /dave@corp\.example\.com/);
+});
+
+test("version endpoint: a 403 on the deployment's home path falls back to the other prefix (WAF path-blocking)", async () => {
+  clearVersionPrefixMemo();
+  const { result, calls } = await withFetch(
+    (url) =>
+      url.includes("/rest/experimental/")
+        ? { status: 403, body: { message: "insufficient permissions" } }
+        : { body: { results: [{ by: { username: "jdoe" } }] } },
+    () => getConfluencePageContributors(SRC, CRED, "7", 30000),
+  );
+  assert.equal(calls.length, 2);
+  assert.deepEqual(result, [{ sam: "jdoe", count: 1 }]);
+
+  // A GENUINE permission problem 403s on both — the FIRST error surfaces
+  // with its endpoint, not a misleading "not found".
+  clearVersionPrefixMemo();
+  await assert.rejects(
+    withFetch(() => ({ status: 403, body: { message: "no permission" } }), () =>
+      getConfluencePageContributors(SRC, CRED, "7", 30000),
+    ),
+    /GET \/rest\/experimental\/content\/7\/version → .*Forbidden/,
+  );
+});
+
+test("version endpoint: a mid-pagination 404 keeps the partial tally instead of a misleading 'not found'", async () => {
+  clearVersionPrefixMemo();
+  const full = Array.from({ length: 100 }, () => ({ by: { username: "jdoe" }, when: "2026-01-01T00:00:00Z" }));
+  const { result } = await withFetch(
+    (url) => (url.includes("start=0") ? { body: { results: full } } : { status: 404, body: {} }),
+    () => getConfluencePageContributors(SRC, CRED, "7", 30000),
+  );
+  assert.deepEqual(result, [{ sam: "jdoe", count: 100 }]);
+});
+
+test("space sweep: bails out after 3 consecutive opening failures instead of crawling every page", async () => {
+  clearVersionPrefixMemo();
+  const ids = Array.from({ length: 10 }, (_, i) => ({ id: String(i + 1) }));
+  let versionCalls = 0;
+  await assert.rejects(
+    withFetch(
+      (url) => {
+        if (!url.includes("/version")) return { body: { results: ids } };
+        versionCalls += 1;
+        return { status: 404, body: {} };
+      },
+      () => getConfluenceSpaceContributorsWeighted(SRC, CRED, "ENG", 30000, Date.UTC(2026, 6, 1)),
+    ),
+    /any of the first 3 of 10 sampled page\(s\) in space ENG/,
+  );
+  // 3 pages × 2 prefixes — not 10 × 2.
+  assert.equal(versionCalls, 6);
 });
 
 test("audit: contributors found but all inactive is reported as a directory answer, not missing history", async () => {
