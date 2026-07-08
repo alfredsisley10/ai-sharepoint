@@ -238,6 +238,7 @@ import { BookmarksStore } from "./context/bookmarksStore";
 import { MemoryStore } from "./context/memoryStore";
 import { PromptStore } from "./context/promptStore";
 import { newSeedPrompts } from "./context/promptSeeds";
+import { effectiveInputCap } from "./core/contextBudget";
 import { PromptsTreeProvider } from "./ui/promptsView";
 import { PromptItem, PromptScope, PromptScopeKind, normalizePromptInput } from "./context/promptLibrary";
 import { MemoryItem, MemoryScope, MemoryScopeKind, normalizeMemoryInput } from "./context/memory";
@@ -1202,15 +1203,23 @@ export function activate(context: vscode.ExtensionContext): void {
       .getConfiguration("aiSharePoint")
       .get<string>("copilot.preferredModelFamily", "");
     const pick = await vscode.window.showQuickPick(
-      models.map((m) => ({
-        label: `$(circuit-board) ${m.name}`,
-        description: `${m.badge} · ${m.tier}${m.family === preferred ? " · current default" : ""}`,
-        detail: `family ${m.family} · max input ${m.maxInputTokens.toLocaleString()} tokens`,
-        family: m.family,
-      })),
+      models.map((m) => {
+        const key = m.family || m.id;
+        const usable = effectiveInputCap(m.maxInputTokens, modelLimits.effectiveLimit(key, m.maxInputTokens));
+        const rec = modelLimits.get(key);
+        const tested = Boolean(rec && (rec.knownGood !== undefined || rec.effectiveCap !== undefined));
+        return {
+          label: `$(circuit-board) ${m.name}`,
+          description: `${m.badge} · ${m.tier}${m.family === preferred ? " · current default" : ""}`,
+          // Show the real per-turn USABLE budget (and whether it's measured), not
+          // just the advertised max — that's what decides if a big turn fits.
+          detail: `family ${m.family} · advertised ${m.maxInputTokens.toLocaleString()} · usable ~${usable.toLocaleString()} tokens ${tested ? "(tested)" : "(untested — run Probe Model Context Limit)"}`,
+          family: m.family,
+        };
+      }),
       {
         ignoreFocusOut: true,
-        title: "Copilot models — published premium-request multiplier",
+        title: "Copilot models — cost (premium multiplier) + usable context budget",
         placeHolder: "Pick a model to set it as this extension's default (Esc to just browse)",
       },
     );

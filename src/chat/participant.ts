@@ -11,6 +11,7 @@ import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
 import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
 import { looksLikeConfluenceOptimization, confluenceOptimizationSeed } from "./intent";
+import { betterModelFor } from "../copilot/modelRecommend";
 import { computeFollowups } from "./followups";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
@@ -569,6 +570,30 @@ async function answerWithModel(
 
   const joinSections = (ss: PromptSection[]) => ss.map((s) => s.text).join("\n");
 
+  // When the active model had to trim, advise a larger-budget model that would
+  // fit (the "running out of tested context — switch model" recommendation).
+  const recommendBiggerModel = async (neededTokens: number, activeUsable: number): Promise<void> => {
+    const choices = (await deps.copilot.listModels()).map((mi) => {
+      const key = mi.family || mi.id;
+      return {
+        key,
+        name: mi.name,
+        advertised: mi.maxInputTokens,
+        usable: effectiveInputCap(mi.maxInputTokens, deps.modelLimits.effectiveLimit(key, mi.maxInputTokens)),
+        multiplier: mi.multiplier,
+        tested: false,
+      };
+    });
+    const better = betterModelFor(modelKey, activeUsable, choices, neededTokens);
+    if (!better) return;
+    stream.markdown(
+      `> 💡 **${better.name}** has a larger usable budget (~${better.usable.toLocaleString()} tokens) and would fit this turn without trimming${
+        better.multiplier > 0 ? ` (premium ${better.multiplier}×)` : ""
+      }. Pick it from the model selector for large-context turns.\n\n`,
+    );
+    stream.button({ command: "aiSharePoint.listModels", title: `🔀 Compare models (try ${better.name})` });
+  };
+
   // Build the model-facing message for a given token cap: budget the sections to
   // fit, then defang avoid-terms. Reusable so the send can RE-BUDGET under a
   // tighter cap and retry if the prompt overflows the model's real context limit.
@@ -578,6 +603,7 @@ async function answerWithModel(
   const rebuildOutgoing = async (capValue: number, announce: boolean): Promise<{ outgoing: string; inputTokens: number }> => {
     let p = joinSections(sections);
     let toks = await countText(p);
+    const fullToks = toks; // pre-trim size — what a bigger model would need to fit
     if (toks > capValue) {
       const counts = new Map<PromptSection, number>();
       for (const s of sections) counts.set(s, await countText(s.text));
@@ -591,6 +617,9 @@ async function answerWithModel(
               .map((d) => d.label)
               .join(", ")} to fit — start a new chat or narrow the request to keep everything.\n\n`,
           );
+          // Recommend a bigger-budget model when one is available (the "running
+          // out of tested context — switch model" advisory).
+          await recommendBiggerModel(fullToks, capValue).catch(() => undefined);
         }
       }
     }
