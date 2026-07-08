@@ -527,8 +527,9 @@ export function registerContextTools(
         });
         if (!candidates.length) return `No other pages found discussing "${i.topic.trim()}".`;
         const lines = [
-          `# Candidate pages discussing "${i.topic.trim()}" (${candidates.length})`,
+          `# Candidate pages discussing "${i.topic.trim()}" (${candidates.length}) — Confluence`,
           "Compare each against the authoritative content (gather_authority) and flag conflicts/inaccuracies; then resolve_page_owners + track_work_item + draft_communication to action them.",
+          "This sweep covers CONFLUENCE only. To also catch inaccurate/outdated content on SHAREPOINT, run scan_site_content (or inspect_site) on the relevant SharePoint site(s) and compare those pages against the same authoritative content.",
         ];
         for (const c of candidates) lines.push(`- **${c.title}** (${c.id})${c.space ? ` · space ${c.space}` : ""} — ${c.url}${c.excerpt ? `\n  ${c.excerpt}` : ""}`);
         return lines.join("\n");
