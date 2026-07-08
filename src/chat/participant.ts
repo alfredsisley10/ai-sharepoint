@@ -604,13 +604,10 @@ async function answerWithModel(
       if (announce && r.changes.length > 0) {
         const total = r.changes.reduce((n, c) => n + c.count, 0);
         stream.progress(`🛡️ Adjusted ${total} occurrence(s) of ${r.changes.length} avoid-term(s) so a content proxy won't block this message`);
-        // Transparency: let the user open exactly what was rewritten.
-        const reportId = recordDefangReport(renderDefangReport(r.changes));
-        stream.button({
-          command: "aiSharePoint.showProxyDefangDetails",
-          title: "🛡️ See what was changed",
-          arguments: [reportId],
-        });
+        // Record the report (retrievable via "AI SharePoint: Show Proxy Rules
+        // Details") for transparency, but don't clutter the chat with a
+        // persistent button on every defanged turn.
+        recordDefangReport(renderDefangReport(r.changes));
       }
     } else if (announce && proxyMode === "warn" && proxyTerms.length > 0) {
       const hits = scanForTerms(`${request.prompt}\n${contextBlock ?? ""}`, proxyTerms);

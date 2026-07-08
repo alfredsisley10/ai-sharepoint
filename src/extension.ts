@@ -38,7 +38,7 @@ import { registerLessonsTools } from "./chat/lessonsTools";
 import { registerMemoryTools } from "./chat/memoryTools";
 import { BlockedTermsStore } from "./diagnostics/blockedTermsStore";
 import { registerProxyTools } from "./chat/proxyTools";
-import { getDefangReport } from "./chat/proxyDefangLog";
+import { getDefangReport, getLatestDefangReport } from "./chat/proxyDefangLog";
 import { InteractionCache } from "./chat/interactionCache";
 import { PROBE_MAX_STEPS } from "./core/contextProbe";
 import { runContextLimitProbe } from "./chat/contextLimitProbe";
@@ -6645,10 +6645,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // Open the "what was changed" report for a defanged chat request (invoked from
   // the button the participant renders). The report is session-scoped.
   register("aiSharePoint.showProxyDefangDetails", async (arg?: unknown) => {
-    const md = typeof arg === "string" ? getDefangReport(arg) : undefined;
+    // From a command argument (an id), show that report; from the command
+    // palette (no arg), show the most recent one.
+    const md = typeof arg === "string" ? getDefangReport(arg) : getLatestDefangReport();
     if (!md) {
       void vscode.window.showInformationMessage(
-        "Those proxy-rules details are no longer available — the report is kept only for the current session.",
+        "No proxy-rules changes to show yet — details appear here after an outgoing message is adjusted in `defang` mode (kept for the current session only).",
       );
       return;
     }
