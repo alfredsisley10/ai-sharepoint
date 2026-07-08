@@ -94,7 +94,7 @@ export function suggestReword(input: {
   if (terms.length === 0) return undefined;
   const list = terms.map((t) => `“${t}”`).join(", ");
   if (input.mode === "defang") {
-    return `Your message contains avoid-list word(s) — ${list} — and defang is already on, so they were sent obfuscated. If it still failed, the proxy may block the *topic* rather than the exact word: try rephrasing around ${list}, or add the real trigger word(s) via “Manage Proxy Avoid-List”.`;
+    return `Your message contains avoid-list word(s) — ${list} — and defang is already on, so they were sent obfuscated. If it still failed, the proxy may block the *topic* rather than the exact word: try rephrasing around ${list}, or add the real trigger word(s) via “Manage Proxy Rules”.`;
   }
   return `This may be a corporate content proxy blocking specific words. Your message contains ${list}, which the avoid-list flags — rephrase around them, or set \`aiSharePoint.proxy.mode\` to \`defang\` to send them obfuscated automatically (the model still reads the original).`;
 }
