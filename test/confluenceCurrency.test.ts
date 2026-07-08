@@ -5,6 +5,8 @@ import {
   checkLinks,
   reviewPageCurrency,
 } from "../src/context/adapters/confluenceCurrency";
+import { DnsPathProbe } from "../src/core/dnsDiagnostics";
+import { flagsFor } from "../src/context/spaceDossier";
 import { UserRecord } from "../src/context/userDirectory";
 import { ContextSource, ContextCredential, DEFAULT_CAPS } from "../src/context/types";
 
@@ -167,6 +169,191 @@ test("reviewPageCurrency with NO directory treats labeled owners as active (unve
   assert.ok(!result.issues.some((i) => /inactive owner/.test(i)), `no inactive-owner issue: ${result.issues}`);
   // No directory ⇒ no contact enrichment either.
   assert.ok(result.owners.every((o) => o.contact === undefined));
+});
+
+// --- DNS-vantage handling (Entra-joined workstation over a VPN, NRPT) --------
+
+/** The error shape Node's fetch throws on a DNS miss: a generic "fetch failed"
+ *  with the errno buried in the cause chain. */
+const dnsFailure = () =>
+  Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("getaddrinfo ENOTFOUND wiki.corp.example"), { code: "ENOTFOUND" }),
+  });
+
+/** Fetch mock whose handler may THROW (withFetch above always answers). */
+async function withThrowingFetch<T>(
+  handler: (url: string) => Response,
+  run: () => Promise<T>,
+): Promise<{ result: T; calls: string[] }> {
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: unknown) => {
+    calls.push(String(url));
+    return handler(String(url));
+  }) as typeof fetch;
+  try {
+    return { result: await run(), calls };
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+/** Injected DNS probe returning a fixed answer, counting hosts probed. */
+function fakeProbe(probe: DnsPathProbe): { fn: (host: string) => Promise<DnsPathProbe>; hosts: string[] } {
+  const hosts: string[] = [];
+  return {
+    hosts,
+    fn: async (host: string) => {
+      hosts.push(host);
+      return probe;
+    },
+  };
+}
+
+test("checkLinks: a DNS-failing link on an unresolvable name is UNVERIFIABLE, not broken", async () => {
+  const probe = fakeProbe({ osPath: false, directPath: false });
+  const { result, calls } = await withThrowingFetch(
+    () => {
+      throw dnsFailure();
+    },
+    () => checkLinks(["https://wiki.corp.example/page"], 30000, 6, undefined, probe.fn),
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].ok, false);
+  assert.equal(result[0].unverifiable, true);
+  assert.match(result[0].dnsNote ?? "", /either path/);
+  assert.deepEqual(probe.hosts, ["wiki.corp.example"]);
+  assert.equal(calls.length, 1, "no retry when the OS path cannot resolve the name");
+});
+
+test("checkLinks: OS-path-resolvable name gets ONE retry, and a success clears the link", async () => {
+  const probe = fakeProbe({ osPath: true, directPath: false }); // NRPT/VPN-routed name
+  let attempts = 0;
+  const { result, calls } = await withThrowingFetch(
+    () => {
+      attempts += 1;
+      if (attempts === 1) throw dnsFailure(); // transient resolver hiccup
+      return new Response(undefined, { status: 200 });
+    },
+    () => checkLinks(["https://wiki.corp.example/page"], 30000, 6, undefined, probe.fn),
+  );
+  assert.deepEqual(result, [{ url: "https://wiki.corp.example/page", ok: true, status: 200 }]);
+  assert.equal(calls.length, 2, "exactly one retry");
+  assert.deepEqual(probe.hosts, ["wiki.corp.example"]);
+});
+
+test("checkLinks: OS-path-resolvable name whose retry ALSO fails is unverifiable with the VPN note", async () => {
+  const probe = fakeProbe({ osPath: true, directPath: false });
+  const { result, calls } = await withThrowingFetch(
+    () => {
+      throw dnsFailure();
+    },
+    () => checkLinks(["https://wiki.corp.example/page"], 30000, 6, undefined, probe.fn),
+  );
+  assert.equal(result[0].ok, false);
+  assert.equal(result[0].unverifiable, true);
+  assert.match(result[0].dnsNote ?? "", /NRPT\/VPN path/);
+  assert.equal(calls.length, 2, "retried once, then classified");
+});
+
+test("checkLinks: direct-only (NRPT hiding the name from apps) is unverifiable WITHOUT a retry", async () => {
+  const probe = fakeProbe({ osPath: false, directPath: true });
+  const { result, calls } = await withThrowingFetch(
+    () => {
+      throw dnsFailure();
+    },
+    () => checkLinks(["https://wiki.corp.example/page"], 30000, 6, undefined, probe.fn),
+  );
+  assert.equal(result[0].unverifiable, true);
+  assert.match(result[0].dnsNote ?? "", /misconfiguration/);
+  assert.equal(calls.length, 1, "retry is pointless when the OS resolver can't see the name");
+});
+
+test("checkLinks: non-DNS failures never trigger a probe and stay plain errors", async () => {
+  const probe = fakeProbe({ osPath: true, directPath: true, addressesAgree: true });
+  const { result } = await withThrowingFetch(
+    () => {
+      throw Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("connect ECONNREFUSED 10.0.0.5:443"), { code: "ECONNREFUSED" }),
+      });
+    },
+    () => checkLinks(["https://wiki.corp.example/page"], 30000, 6, undefined, probe.fn),
+  );
+  assert.equal(result[0].ok, false);
+  assert.equal(result[0].unverifiable, undefined);
+  assert.equal(result[0].dnsNote, undefined);
+  assert.deepEqual(probe.hosts, [], "DNS probe only runs on DNS-shaped failures");
+});
+
+test("checkLinks: probes are memoized per HOST (many links, one probe)", async () => {
+  const probe = fakeProbe({ osPath: false, directPath: false });
+  const { result } = await withThrowingFetch(
+    () => {
+      throw dnsFailure();
+    },
+    () =>
+      checkLinks(
+        ["https://wiki.corp.example/a", "https://wiki.corp.example/b", "https://other.corp.example/c"],
+        30000,
+        6,
+        undefined,
+        probe.fn,
+      ),
+  );
+  assert.equal(result.filter((r) => r.unverifiable).length, 3);
+  assert.deepEqual(probe.hosts.sort(), ["other.corp.example", "wiki.corp.example"]);
+});
+
+test("reviewPageCurrency: DNS-unverifiable links are not broken, raise no issue, and do NOT flag the page", async () => {
+  const dir = async (sam: string): Promise<UserRecord | undefined> =>
+    sam === "jdoe" ? { sam: "jdoe", active: true } : undefined;
+  const probe = fakeProbe({ osPath: false, directPath: false }); // scanned off-VPN
+  const { result } = await withThrowingFetch(
+    (url) => {
+      if (url.includes("/rest/api/content/")) {
+        return new Response(
+          JSON.stringify({
+            id: "55",
+            title: "VPN Guide",
+            body: {
+              storage: {
+                value:
+                  '<p><a href="https://wiki.corp.example/runbook">intranet</a> and <a href="https://good.example/x">public</a></p>',
+              },
+            },
+            version: { when: "2026-06-01T00:00:00Z", number: 2 },
+            metadata: { labels: { results: [{ name: "owners|jdoe" }] } },
+            _links: { webui: "/p/55" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("corp.example")) throw dnsFailure();
+      return new Response(undefined, { status: 200 });
+    },
+    () => reviewPageCurrency(SRC, CRED, "55", dir, DEFAULT_CAPS, () => "2026-06-16T00:00:00Z", undefined, probe.fn),
+  );
+  assert.deepEqual(result.brokenLinks, [], "a DNS-vantage failure is not evidence the link is broken");
+  assert.equal(result.unverifiableLinks.length, 1);
+  assert.match(result.unverifiableLinks[0].url, /corp\.example/);
+  assert.match(result.unverifiableLinks[0].dnsNote ?? "", /either path/);
+  assert.equal(result.unverifiableNote, "1 link(s) unverifiable from this network vantage (DNS)");
+  assert.equal(result.workingLinks, 1, "only the genuinely reachable link counts as working");
+  assert.deepEqual(result.issues, [], "no broken-link (or any) issue from an unverifiable link");
+  // The dossier row built from this report (as contextService builds it) must
+  // carry NO data-quality flag — the off-VPN false-flagging this fixes.
+  const flags = flagsFor({
+    id: result.pageId,
+    title: result.title,
+    url: result.url,
+    owners: result.owners,
+    hasOwnerLabel: result.hasOwnerLabel,
+    ...(result.staleDays !== undefined ? { staleDays: result.staleDays } : {}),
+    brokenLinks: result.brokenLinks.length,
+    issues: result.issues,
+  });
+  assert.equal(flags.dataQuality, false);
+  assert.equal(flags.flagged, false);
 });
 
 test("reviewPageCurrency degrades a FAULTING directory to active-unverified instead of failing or flagging", async () => {

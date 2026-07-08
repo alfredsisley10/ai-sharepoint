@@ -37,7 +37,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
     private readonly copilotAvailable: () => boolean = () => true,
     private readonly modelLimits?: ModelLimitsStore,
   ) {
-    meter.onDidChange(() => this.emitter.fire());
+    this.meterListener = meter.onDidChange(() => this.emitter.fire());
     // The cost rows are derived from settings (usage.pricePerPremiumRequest and
     // the token rates), so re-render when those change — otherwise editing the
     // price leaves a stale "Est. cost this month" until the next request.
@@ -46,9 +46,11 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
     });
   }
 
+  private readonly meterListener: vscode.Disposable;
   private readonly configWatcher: vscode.Disposable;
 
   dispose(): void {
+    this.meterListener.dispose();
     this.configWatcher.dispose();
     this.emitter.dispose();
   }

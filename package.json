@@ -3249,22 +3249,22 @@
         },
         {
           "command": "aiSharePoint.editProject",
-          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "1_actions@1"
         },
         {
           "command": "aiSharePoint.manageProjectAiContext",
-          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "1_actions@2"
         },
         {
           "command": "aiSharePoint.removeProject",
-          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "2_manage@1"
         },
         {
           "command": "aiSharePoint.addPrompt",
-          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "1_actions@3"
         }
       ],
@@ -3279,27 +3279,27 @@
         },
         {
           "command": "aiSharePoint.openSiteInBrowser",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.copySiteUrl",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.changeSiteRole",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.signOutSite",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.removeSite",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.testConnection",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.configureSiteRepo",
@@ -3411,7 +3411,7 @@
         },
         {
           "command": "aiSharePoint.activateProject",
-          "when": "aiSharePoint.hasProjects"
+          "when": "false"
         },
         {
           "command": "aiSharePoint.manageProjectAiContext",

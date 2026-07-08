@@ -265,6 +265,12 @@ export function renderCurrency(r: CurrencyReport): string {
     lines.push(`- ✅ ${r.workingLinks} link(s) reachable`);
   }
   if (r.uncheckedRelativeLinks) lines.push(`- ${r.uncheckedRelativeLinks} relative link(s) not checked`);
+  // DNS-vantage outcomes are NOT broken links: an intranet-only name scanned
+  // off-VPN is unverifiable, and saying so beats a false ❌.
+  if (r.unverifiableLinks?.length) {
+    lines.push(`- ⚠ ${r.unverifiableNote ?? `${r.unverifiableLinks.length} link(s) unverifiable from this network vantage (DNS)`}`);
+    for (const u of r.unverifiableLinks) lines.push(`  - ${u.url}${u.dnsNote ? ` — ${u.dnsNote}` : ""}`);
+  }
   lines.push("", "## Ownership & age");
   lines.push(`- Owner tag: ${r.hasOwnerLabel ? r.owners.map((o) => o.sam).join(", ") : "none"}`);
   if (r.staleDays !== undefined) lines.push(`- Last updated ${r.staleDays} day(s) ago${r.staleDays > 365 ? " — **stale**" : ""}`);

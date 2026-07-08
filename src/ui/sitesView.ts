@@ -109,19 +109,27 @@ function isSiteConnection(node: ManagedNode): node is SiteConnection {
 export class SitesTreeProvider implements vscode.TreeDataProvider<ManagedNode> {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private readonly listeners: vscode.Disposable[];
 
   constructor(
     private readonly sites: SitesStore,
     private readonly sources: ContextSourcesStore,
     private readonly memory: MemoryStore,
   ) {
-    sites.onDidChange(() => this.emitter.fire());
-    sources.onDidChange(() => this.emitter.fire());
-    memory.onDidChange(() => this.emitter.fire());
+    this.listeners = [
+      sites.onDidChange(() => this.emitter.fire()),
+      sources.onDidChange(() => this.emitter.fire()),
+      memory.onDidChange(() => this.emitter.fire()),
+    ];
   }
 
   refresh(): void {
     this.emitter.fire();
+  }
+
+  dispose(): void {
+    for (const l of this.listeners) l.dispose();
+    this.emitter.dispose();
   }
 
   getTreeItem(node: ManagedNode): vscode.TreeItem {
