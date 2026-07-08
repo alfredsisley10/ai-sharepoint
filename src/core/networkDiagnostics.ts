@@ -121,11 +121,11 @@ function hasProxyHeaders(h: Record<string, string>): boolean {
 
 function tlsAdvice(vendor?: string): string {
   return [
-    `An SSL-inspecting proxy${vendor ? ` (${vendor})` : ""} is re-signing HTTPS with a certificate your machine doesn't trust — the most common cause of connection failures on a corporate network.`,
+    `An SSL-inspecting proxy${vendor ? ` (${vendor})` : ""} is re-signing HTTPS with a certificate your machine doesn't trust — the most common cause of connection failures on a corporate network. Edge/Chrome and the OS trust this CA; Node (which the extension's requests run on) does NOT by default.`,
     "Fix it by TRUSTING the proxy's root CA (never by disabling certificate validation):",
-    "• Easiest: set the NODE_EXTRA_CA_CERTS environment variable to your corporate root-CA .pem file, then relaunch VS Code.",
-    '• Or import the CA into your OS trust store and keep VS Code\'s "http.systemCertificates": true (the default).',
-    '• For LDAP / database sources, point "aiSharePoint.ldap.caCertificatesFile" at the CA bundle.',
+    '• Point "aiSharePoint.network.caCertificatesFile" at your corporate root-CA .pem — it applies to ALL of the extension\'s HTTPS (sign-in, Graph, Confluence/Jira). On newer VS Code runtimes (Node ≥ 22.15) the OS trust store is used automatically.',
+    "• Also set the NODE_EXTRA_CA_CERTS environment variable to the same .pem and relaunch VS Code, so it applies before the extension host loads (needed on the current runtime for sign-in/Graph).",
+    '• Keep VS Code\'s "http.systemCertificates": true (the default).',
     "Ask your IT/security team for the proxy's root certificate if you don't have it. See Admin Guide §3.",
   ].join("\n");
 }

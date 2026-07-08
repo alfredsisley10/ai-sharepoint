@@ -61,7 +61,7 @@ export function renderValidation(v: RenderedValidation): string {
 }
 
 export const UNVERIFIED_OWNER_NOTE =
-  "Note: no LDAP/M365 directory is configured, so active-user verification is off — owners are ranked by recency-weighted contribution, not filtered by who is still active. Add an LDAP reference source to validate active employees.";
+  "Owner(s) determined WITHOUT active-employee verification: no LDAP/Active Directory reference source is configured, so ownership was resolved from the owner label / recency-weighted contribution history but NOT filtered by who is still an active employee. This is a valid result — just less reliable (a listed owner may have left). To turn on active-employee verification, add an LDAP/Active Directory source via 'Add Context Source' (if your org already has one defined, adding it here is enough — it's used automatically); otherwise ask an admin to define one. Do not report this as a failure.";
 
 export function renderOwners(r: {
   resolution: OwnerResolution;

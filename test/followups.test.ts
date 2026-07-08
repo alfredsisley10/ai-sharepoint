@@ -9,7 +9,10 @@ test("always ends with a cost/activity option and caps at four", () => {
   const f = computeFollowups({ ...base, sourceTypes: ["confluence", "jira", "mssql"], hasSites: true });
   assert.ok(f.length <= 4);
   assert.equal(f[f.length - 1]!.label, "Check Copilot cost & activity");
-  assert.equal(f[f.length - 1]!.prompt, "/usage");
+  // A plain-language prompt, NOT the /usage slash command — a slash-command
+  // follow-up would make the next round of follow-ups inherit /usage.
+  assert.doesNotMatch(f[f.length - 1]!.prompt, /^\//);
+  assert.match(f[f.length - 1]!.prompt, /cost/i);
 });
 
 test("Confluence cleanup in flight surfaces dossier → owners → outreach", () => {

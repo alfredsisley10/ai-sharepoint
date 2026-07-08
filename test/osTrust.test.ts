@@ -5,6 +5,7 @@ import {
   splitPemBundle,
   loadTrustedCAs,
   clearTrustCache,
+  readPlatformOsCerts,
 } from "../src/context/ldap/osTrust";
 import { resolveConnectUrls } from "../src/context/ldap/ldapClient";
 
@@ -15,6 +16,35 @@ test("splitPemBundle extracts certificates and ignores surrounding noise", () =>
   const bundle = `# comment\n${CERT(1)}\njunk\n${CERT(2)}\n`;
   assert.deepEqual(splitPemBundle(bundle), [CERT(1), CERT(2)]);
   assert.deepEqual(splitPemBundle("no certs here"), []);
+});
+
+test("readPlatformOsCerts shells out to PowerShell on Windows and security on macOS", () => {
+  const winCalls: string[] = [];
+  const win = readPlatformOsCerts("win32", (cmd, args) => {
+    winCalls.push(cmd);
+    assert.match(cmd, /powershell/i);
+    assert.ok(args.some((a) => /Cert:\\LocalMachine\\Root/.test(a)), "reads the machine Root store");
+    return `${CERT(1)}\n${CERT(2)}`;
+  });
+  assert.deepEqual(win, [CERT(1), CERT(2)]);
+  assert.equal(winCalls.length, 1);
+
+  const mac = readPlatformOsCerts("darwin", (cmd, args) => {
+    assert.match(cmd, /security$/);
+    assert.ok(args.includes("find-certificate") && args.includes("-p"), "PEM export");
+    return CERT(3);
+  });
+  assert.ok(mac.includes(CERT(3)));
+
+  // Other platforms use the bundle files, not a shell-out.
+  assert.deepEqual(readPlatformOsCerts("linux", () => "should-not-be-called"), []);
+  // A failing tool degrades to [] (best-effort).
+  assert.deepEqual(
+    readPlatformOsCerts("win32", () => {
+      throw new Error("powershell blocked");
+    }),
+    [],
+  );
 });
 
 test("loadTrustedCAs appends OS-store certs ON TOP of Node's bundled roots", () => {

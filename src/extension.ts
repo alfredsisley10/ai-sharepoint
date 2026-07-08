@@ -238,6 +238,7 @@ import { BookmarksStore } from "./context/bookmarksStore";
 import { MemoryStore } from "./context/memoryStore";
 import { PromptStore } from "./context/promptStore";
 import { newSeedPrompts } from "./context/promptSeeds";
+import { installFetchTrust } from "./core/fetchTrust";
 import { effectiveInputCap } from "./core/contextBudget";
 import { progressMessage } from "./core/progress";
 import { PromptsTreeProvider } from "./ui/promptsView";
@@ -308,6 +309,27 @@ async function probeConnectivity(
 
 export function activate(context: vscode.ExtensionContext): void {
   const log = new Logger("AI SharePoint");
+
+  // Trust the OS / enterprise CA store for the extension's HTTPS (fetch + https)
+  // so a TLS-inspecting corporate proxy that the device (and Edge/Chrome) trust
+  // doesn't break Microsoft sign-in / Graph. Uses tls.setDefaultCACertificates
+  // where available (Node ≥ 22.15); a no-op on older runtimes, which fall back
+  // to NODE_EXTRA_CA_CERTS / aiSharePoint.network.caCertificatesFile. Runs
+  // before any HTTP so the first request is already trusted.
+  {
+    const caFile =
+      vscode.workspace.getConfiguration("aiSharePoint").get<string>("network.caCertificatesFile", "").trim() || undefined;
+    const trust = installFetchTrust(caFile);
+    if (trust.applied) {
+      log.info(`Network trust: applied ${trust.total} CA certificate(s) (OS store + defaults) to fetch/https.`);
+    } else if (trust.reason === "unsupported-runtime") {
+      log.info(
+        "Network trust: this runtime lacks the system-CA API (Node < 22.15); if a TLS-inspecting proxy is present, set NODE_EXTRA_CA_CERTS (and/or aiSharePoint.network.caCertificatesFile) to your corporate root CA.",
+      );
+    } else if (trust.reason === "error") {
+      log.warn(`Network trust: could not apply system CAs — ${trust.detail}`);
+    }
+  }
 
   // Release expiry (white-label time-limited builds): read the manifest baked
   // into package.json and, if past its date, gate the AI surfaces with an
@@ -6891,6 +6913,24 @@ export function activate(context: vscode.ExtensionContext): void {
     } else if (choice === "Reveal Folder") {
       await vscode.commands.executeCommand("revealInExplorer", base).then(undefined, () => undefined);
     }
+  });
+
+  register("aiSharePoint.revealProjectWorkspace", async (arg) => {
+    // From a folder/file node reveal that path; otherwise the project's
+    // workspace folder — opens Windows Explorer / macOS Finder / the Linux file
+    // manager on the OS-native browser.
+    const node = (arg ?? {}) as { uri?: unknown; project?: unknown };
+    let target = node.uri instanceof vscode.Uri ? node.uri : undefined;
+    if (!target) {
+      const project = await resolveProjectArg(node.project ?? arg);
+      if (!project) return;
+      if (!chatWorkspace.enabled(project.id)) {
+        void vscode.window.showInformationMessage(`"${project.name}" has no workspace folder yet — start a workspace first.`);
+        return;
+      }
+      target = chatWorkspace.baseUri(project);
+    }
+    await vscode.commands.executeCommand("revealFileInOS", target);
   });
 
   register("aiSharePoint.openProjectWorkspace", async (arg) => {

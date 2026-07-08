@@ -443,9 +443,19 @@ export class ContextService {
     );
   }
 
-  private dbTls(): DbTlsOptions {
+  /** A pinned CA bundle path for raw-TLS connections: the connector-specific
+   *  ldap setting, else the general network CA file (shared with fetch trust). */
+  private caBundlePath(specificKey: "ldap.caCertificatesFile"): string | undefined {
     const cfg = vscode.workspace.getConfiguration("aiSharePoint");
-    return { caBundlePath: cfg.get<string>("ldap.caCertificatesFile", "").trim() || undefined };
+    return (
+      cfg.get<string>(specificKey, "").trim() ||
+      cfg.get<string>("network.caCertificatesFile", "").trim() ||
+      undefined
+    );
+  }
+
+  private dbTls(): DbTlsOptions {
+    return { caBundlePath: this.caBundlePath("ldap.caCertificatesFile") };
   }
 
   private static readonly DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
@@ -455,7 +465,7 @@ export class ContextService {
     return {
       rejectUnauthorized: cfg.get<boolean>("ldap.tlsRejectUnauthorized", true),
       useStartTls: cfg.get<boolean>("ldap.useStartTls", false),
-      caBundlePath: cfg.get<string>("ldap.caCertificatesFile", "").trim() || undefined,
+      caBundlePath: this.caBundlePath("ldap.caCertificatesFile"),
     };
   }
 
@@ -1047,6 +1057,7 @@ export class ContextService {
             ? getConfluenceSpaceContributorsWeighted(source, credential, meta.spaceKey, caps.timeoutMs, nowMs)
             : Promise.resolve([]),
         isActive: directory ? activeFromDirectory(directory.dir) : async () => true,
+        directoryWired: Boolean(directory),
       });
       const ownerContacts = directory
         ? await Promise.all(
