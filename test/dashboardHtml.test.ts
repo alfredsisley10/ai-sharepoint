@@ -46,6 +46,26 @@ test("escapes injected model/task names", () => {
   assert.ok(html.includes("&lt;script&gt;"));
 });
 
+test("draws an estimated-cost line over the daily chart when cost is present", () => {
+  const withCost = renderDashboardHtml(
+    data({
+      daily: Array.from({ length: 30 }, (_, i) => ({
+        day: `2026-05-${String((i % 28) + 1).padStart(2, "0")}`,
+        requests: i % 3,
+        failures: 0,
+        cost: (i % 3) * 0.04,
+      })),
+      premiumCost: "$3.20",
+    }),
+    "n",
+  );
+  assert.match(withCost, /class="costline"/);
+  assert.match(withCost, /max\/day ~\$/);
+  // No cost data → no cost line.
+  const noCost = renderDashboardHtml(data(), "n");
+  assert.doesNotMatch(noCost, /class="costline"/);
+});
+
 test("renders 30 daily request bars and factual counts only", () => {
   const html = renderDashboardHtml(data(), "n");
   const bars = html.match(/class="bar/g) ?? [];

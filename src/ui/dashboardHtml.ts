@@ -17,7 +17,7 @@ export interface DashboardData {
   todayRequests: number;
   monthRequests: number;
   monthFailures: number;
-  daily: Array<{ day: string; requests: number; failures: number }>;
+  daily: Array<{ day: string; requests: number; failures: number; cost?: number }>;
   byModel: Array<{
     key: string;
     requests: number;
@@ -67,6 +67,13 @@ function barChart(daily: DashboardData["daily"], failedView: boolean): string {
   const step = plotW / n;
   const barW = Math.max(4, step - 6);
 
+  // Overlay an estimated-cost line (premium-request $/day) when cost is present
+  // and we're not in the failures view (failed requests have no per-failure cost
+  // split). Scaled to its own max so it reads against the request bars.
+  const showCostLine = !failedView && daily.some((d) => (d.cost ?? 0) > 0);
+  const maxCost = Math.max(1e-9, ...daily.map((d) => d.cost ?? 0));
+  const money = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : n > 0 ? `$${n.toFixed(3)}` : "$0");
+
   const bars = daily
     .map((d, i) => {
       const v = valueOf(d);
@@ -74,9 +81,23 @@ function barChart(daily: DashboardData["daily"], failedView: boolean): string {
       const x = padL + i * step + (step - barW) / 2;
       const y = H - padB - h;
       const cls = v > 0 ? (failedView ? "bar fail" : "bar") : "bar empty";
-      return `<rect class="${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="2"><title>${esc(d.day)}: ${v} ${noun}</title></rect>`;
+      const costTip = showCostLine ? ` · ~${money(d.cost ?? 0)} est.` : "";
+      return `<rect class="${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="2"><title>${esc(d.day)}: ${v} ${noun}${costTip}</title></rect>`;
     })
     .join("");
+
+  const costLine = showCostLine
+    ? (() => {
+        const pts = daily
+          .map((d, i) => {
+            const cx = padL + i * step + step / 2;
+            const cy = H - padB - ((d.cost ?? 0) / maxCost) * plotH;
+            return `${cx.toFixed(1)},${cy.toFixed(1)}`;
+          })
+          .join(" ");
+        return `<polyline class="costline" points="${pts}" fill="none"></polyline><text class="axis costlabel" x="${W - 8}" y="16" text-anchor="end">max/day ~${money(maxCost)}</text>`;
+      })()
+    : "";
 
   const labels = daily
     .map((d, i) =>
@@ -91,6 +112,7 @@ function barChart(daily: DashboardData["daily"], failedView: boolean): string {
   <line class="grid" x1="${padL}" y1="10" x2="${W - 8}" y2="10"></line>
   <line class="grid" x1="${padL}" y1="${H - padB}" x2="${W - 8}" y2="${H - padB}"></line>
   ${bars}
+  ${costLine}
   ${labels}
 </svg>`;
 }
@@ -192,6 +214,8 @@ export function renderDashboardHtml(
   svg .bar.empty { fill: var(--vscode-progressBar-background, #3a3d41); }
   svg .axis { fill: var(--vscode-descriptionForeground, #999); font-size: 10px; }
   svg .grid { stroke: var(--vscode-widget-border, #444); stroke-dasharray: 2 3; }
+  svg .costline { stroke: var(--vscode-charts-yellow, #e2c08d); stroke-width: 1.5; }
+  svg .costlabel { fill: var(--vscode-charts-yellow, #e2c08d); }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--vscode-widget-border, #333); }
   th { color: var(--vscode-descriptionForeground, #999); font-weight: 600; font-size: 0.9em; }

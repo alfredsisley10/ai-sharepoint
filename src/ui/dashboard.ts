@@ -113,7 +113,20 @@ export class UsageDashboard {
       todayRequests: this.meter.requestsToday(nowIso),
       monthRequests: this.meter.requestsThisMonth(nowIso),
       monthFailures: this.meter.failuresThisMonth(nowIso),
-      daily: this.meter.dailySeries(nowIso, 30),
+      daily: this.meter.dailySeries(nowIso, 30).map((d) => ({
+        day: d.day,
+        requests: d.requests,
+        failures: d.failures,
+        // Exact daily premium-request cost from the per-model breakdown.
+        ...(premiumCostEnabled(premium)
+          ? {
+              cost: Object.entries(d.byModel).reduce(
+                (sum, [k, s]) => sum + s.requests * this.costs.multiplierFor(k) * premium.pricePerRequest,
+                0,
+              ),
+            }
+          : {}),
+      })),
       byModel: byModel.map((m) => ({
         key: m.key,
         requests: m.requests,

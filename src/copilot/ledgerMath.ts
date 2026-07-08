@@ -228,8 +228,8 @@ export function dailySeries(
   ledger: LedgerV3,
   nowIso: string,
   n: number,
-): Array<{ day: string; requests: number; failures: number }> {
-  const out: Array<{ day: string; requests: number; failures: number }> = [];
+): Array<{ day: string; requests: number; failures: number; byModel: Record<string, SliceAgg> }> {
+  const out: Array<{ day: string; requests: number; failures: number; byModel: Record<string, SliceAgg> }> = [];
   const end = new Date(`${nowIso.slice(0, 10)}T00:00:00Z`).getTime();
   for (let i = n - 1; i >= 0; i--) {
     const day = new Date(end - i * 86_400_000).toISOString().slice(0, 10);
@@ -238,6 +238,8 @@ export function dailySeries(
       day,
       requests: agg?.requests ?? 0,
       failures: agg?.failures ?? 0,
+      // Per-model breakdown so callers can derive an exact per-day cost.
+      byModel: agg?.byModel ?? {},
     });
   }
   return out;
