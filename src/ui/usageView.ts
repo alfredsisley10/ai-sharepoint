@@ -38,6 +38,19 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
     private readonly modelLimits?: ModelLimitsStore,
   ) {
     meter.onDidChange(() => this.emitter.fire());
+    // The cost rows are derived from settings (usage.pricePerPremiumRequest and
+    // the token rates), so re-render when those change — otherwise editing the
+    // price leaves a stale "Est. cost this month" until the next request.
+    this.configWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("aiSharePoint.usage")) this.emitter.fire();
+    });
+  }
+
+  private readonly configWatcher: vscode.Disposable;
+
+  dispose(): void {
+    this.configWatcher.dispose();
+    this.emitter.dispose();
   }
 
   refresh(): void {
@@ -57,13 +70,13 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         label: "Model context limits",
         icon: new vscode.ThemeIcon("dashboard"),
         tooltip:
-          "Reported = the model's advertised maxInputTokens. Tested = the largest input actually proven to work (or the learned ceiling). Budget = the cap chats are actually held to. Run “Probe Model Context Limit” to measure a model's real limit.",
+          "Reported = the model's advertised maxInputTokens. Tested = the largest input actually proven to work (or the learned ceiling). Usable = the actual per-turn budget a chat is held to: the tested/reported ceiling MINUS a ~15% safety margin (for tool schemas, multi-round growth, and tokenizer drift). Run “Probe Model Context Limit” to measure a model's real limit.",
         children: rows.map((r) => {
           const tested = r.measured ? n(r.knownGood ?? r.effectiveCap) : "not tested";
           return {
             id: `limit:${r.key}`,
             label: r.key,
-            description: `reported ${n(r.advertised)} · tested ${tested}${r.cap !== undefined ? ` · budget ${n(r.cap)}` : ""}${r.drifted ? " · ⚠ advertised changed" : ""}`,
+            description: `reported ${n(r.advertised)} · tested ${tested}${r.usable !== undefined ? ` · usable ${n(r.usable)}` : ""}${r.drifted ? " · ⚠ advertised changed" : ""}`,
             icon: new vscode.ThemeIcon(r.drifted ? "warning" : "circuit-board"),
             tooltip: new vscode.MarkdownString(
               [
@@ -72,7 +85,10 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
                 `- Reported (advertised): ${n(r.advertised)}`,
                 `- Tested — largest that worked: ${n(r.knownGood)}`,
                 ...(r.effectiveCap !== undefined ? [`- Tested — learned ceiling (overflow): ${n(r.effectiveCap)}`] : []),
-                `- Budgeting cap in use: ${n(r.cap)}`,
+                `- Resolved ceiling (reported clamped by tested): ${n(r.cap)}`,
+                `- **Usable per turn** (ceiling − ~15% safety margin): **${n(r.usable)}**`,
+                "",
+                "_“Usable” is what a chat is actually budgeted to; the margin leaves room for tool schemas, multi-round tool calls, and tokenizer drift so a prompt that “fits” doesn't overflow mid-turn._",
                 ...(r.drifted ? ["", "⚠ The advertised limit changed since it was last measured — consider re-probing."] : []),
                 ...(r.measured ? [] : ["", "Not yet measured — run “Probe Model Context Limit”."]),
               ].join("\n"),
@@ -152,7 +168,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
               tooltip: new vscode.MarkdownString(
                 "Estimate at GitHub's published **$0.04 / premium request** overage rate × each model's premium-request multiplier × your local request counts.\n\nYour plan includes a monthly premium-request allowance, so the real charge may be lower — **GitHub billing is authoritative**. Click to change the rate in Settings.",
               ),
-              command: { command: "workbench.action.openSettings", title: "Edit premium-request price", arguments: ["aiSharePoint.usage.pricePerPremiumRequest"] },
+              command: { command: "workbench.action.openSettings", title: "Edit premium-request price", arguments: ["@id:aiSharePoint.usage.pricePerPremiumRequest"] },
             } as UsageNode,
           ]
         : []),
@@ -173,15 +189,29 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         label: "By model (this month)",
         icon: new vscode.ThemeIcon("circuit-board"),
         description: byModel.length === 0 ? "no requests yet" : undefined,
-        children: byModel.map((m) => ({
-          id: `model:${m.key}`,
-          label: m.key,
-          description: `${m.requests} req · ${m.inputTokens.toLocaleString()} in / ${m.outputTokens.toLocaleString()} out${
-            showCost ? ` · ${formatCost(estimateCost(m.inputTokens, m.outputTokens, rates), rates.currency)}` : ""
-          }`,
-          icon: new vscode.ThemeIcon("symbol-misc"),
-          tooltip: m.failures ? `${m.failures} failed` : undefined,
-        })),
+        children: byModel.map((m) => {
+          // Per-model premium-request cost: this model's requests × ITS published
+          // multiplier × the price. Always available (default $0.04); the
+          // token-rate cost is additional and only when a rate is configured.
+          const premiumLine = premiumCostEnabled(premium)
+            ? ` · ${formatCost(estimatePremiumCost([m], (k) => this.costs.multiplierFor(k), premium), premium.currency)} (${this.costs.badgeFor(m.key)})`
+            : "";
+          const tokenLine = showCost ? ` · ${formatCost(estimateCost(m.inputTokens, m.outputTokens, rates), rates.currency)} tokens` : "";
+          return {
+            id: `model:${m.key}`,
+            label: m.key,
+            description: `${m.requests} req · ${m.inputTokens.toLocaleString()} in / ${m.outputTokens.toLocaleString()} out${premiumLine}${tokenLine}`,
+            icon: new vscode.ThemeIcon("symbol-misc"),
+            tooltip: new vscode.MarkdownString(
+              [
+                m.failures ? `${m.failures} failed` : "",
+                premiumCostEnabled(premium)
+                  ? `Premium-request estimate: ${m.requests} req × ${this.costs.badgeFor(m.key)} × ${formatCost(premium.pricePerRequest, premium.currency)} (an estimate — GitHub billing is authoritative).`
+                  : "",
+              ].filter(Boolean).join("\n\n"),
+            ),
+          };
+        }),
       },
       ...this.contextLimitNodes(),
       {
@@ -192,8 +222,16 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         children: byLabel.map((l) => ({
           id: `label:${l.key}`,
           label: l.key,
-          description: `${l.requests} req`,
+          // Per-task premium cost isn't derivable (a task aggregates across
+          // models, and the premium multiplier is per-model), so show the
+          // token-based cost when a rate is configured; requests otherwise.
+          description: `${l.requests} req${
+            showCost ? ` · ${formatCost(estimateCost(l.inputTokens, l.outputTokens, rates), rates.currency)} tokens` : ""
+          }`,
           icon: new vscode.ThemeIcon("symbol-event"),
+          tooltip: showCost
+            ? undefined
+            : "Set a per-token rate (AI SharePoint › Usage) to see a token-cost estimate per task. Premium-request cost is shown per model (a task spans models, so its premium multiplier isn't well-defined).",
         })),
       },
     ];

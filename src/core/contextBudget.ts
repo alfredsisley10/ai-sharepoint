@@ -135,8 +135,13 @@ export interface ModelLimitDisplay {
   knownGood?: number;
   /** Learned ceiling from an overflow (tested). */
   effectiveCap?: number;
-  /** The budgeting cap actually used (advertised clamped by what we learned). */
+  /** The resolved input CEILING (advertised clamped by what we learned). This is
+   *  the raw ceiling, NOT what a turn is held to — see `usable`. */
   cap?: number;
+  /** The actual per-turn USABLE budget: `cap` minus the safety margin
+   *  (`effectiveInputCap`, ~15% headroom for tool schemas, multi-round growth,
+   *  and tokenizer drift). This is the number chats are really budgeted to. */
+  usable?: number;
   /** Advertised moved since we last measured — the cached test is stale. */
   drifted: boolean;
   /** Any tested (measured) data exists. */
@@ -165,12 +170,16 @@ export function mergeModelLimit(existing: ModelLimit | undefined, incoming: Mode
 /** Shape a stored ModelLimit for display in the Copilot Activity surfaces:
  *  the reported limit, what testing has proven, and the resulting budget cap. */
 export function describeModelLimit(row: { key: string } & ModelLimit): ModelLimitDisplay {
+  const cap = resolveLimit(row, row.advertised);
   return {
     key: row.key,
     advertised: row.advertised,
     knownGood: row.knownGood,
     effectiveCap: row.effectiveCap,
-    cap: resolveLimit(row, row.advertised),
+    cap,
+    // The real per-turn budget: the resolved ceiling with the safety margin
+    // applied — only meaningful once we know a ceiling.
+    ...(cap !== undefined ? { usable: effectiveInputCap(row.advertised, cap) } : {}),
     drifted:
       row.measuredAtAdvertised !== undefined &&
       row.advertised !== undefined &&
