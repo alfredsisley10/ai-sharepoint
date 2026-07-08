@@ -403,6 +403,30 @@ export function activate(context: vscode.ExtensionContext): void {
           void vscode.commands.executeCommand("workbench.action.reloadWindow");
         }
       });
+  } else {
+    // Not torn, but was the extension just UPDATED since the last activation?
+    // VS Code only registers new contributions (settings, commands, views) after
+    // a window reload, so a fresh update can leave the UI stale — e.g. a
+    // newly-added setting that "appears only after a restart". Advise a reload
+    // once per version so the user isn't left wondering why new features/settings
+    // aren't showing. (Skipped on first-ever install — nothing to reload for.)
+    const LAST_VERSION_KEY = "aiSharePoint.lastActivatedVersion";
+    const previous = context.globalState.get<string>(LAST_VERSION_KEY);
+    if (previous && previous !== EXTENSION_VERSION) {
+      log.info(`AI SharePoint updated ${previous} → ${EXTENSION_VERSION}.`);
+      void vscode.window
+        .showInformationMessage(
+          `AI SharePoint updated to v${EXTENSION_VERSION}. If new settings, commands, or views don't appear, reload the window so VS Code picks up the updated manifest.`,
+          "Reload Window",
+          "Dismiss",
+        )
+        .then((pick) => {
+          if (pick === "Reload Window") {
+            void vscode.commands.executeCommand("workbench.action.reloadWindow");
+          }
+        });
+    }
+    void context.globalState.update(LAST_VERSION_KEY, EXTENSION_VERSION);
   }
 
   context.subscriptions.push(
