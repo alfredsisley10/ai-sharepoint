@@ -1,6 +1,7 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson, htmlToText } from "../http";
 import type { AuthorityScope } from "./confluenceAuthority";
+import { enc, baseOf, webUrl } from "./confluenceCommon";
 
 /**
  * Confluence local content cache (ADR-0042): snapshot the essential content of
@@ -13,10 +14,6 @@ import type { AuthorityScope } from "./confluenceAuthority";
  * serializes to a plain array the caller persists (globalState / storage).
  */
 
-const enc = encodeURIComponent;
-const baseOf = (source: Pick<ContextSource, "baseUrl">): string => source.baseUrl.replace(/\/$/, "");
-const webUrl = (source: Pick<ContextSource, "baseUrl">, webui?: string): string =>
-  webui ? `${baseOf(source)}${webui}` : baseOf(source);
 
 export interface ConfluencePageCacheEntry {
   id: string;

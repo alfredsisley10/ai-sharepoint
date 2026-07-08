@@ -1,5 +1,6 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson, htmlToText } from "../http";
+import { enc, baseOf, webUrl } from "./confluenceCommon";
 
 /**
  * Confluence "authoritative source" construct (ADR-0040). Declare a **space**,
@@ -15,10 +16,6 @@ import { fetchJson, htmlToText } from "../http";
  *    excludes the authoritative scope).
  */
 
-const enc = encodeURIComponent;
-const baseOf = (source: Pick<ContextSource, "baseUrl">): string => source.baseUrl.replace(/\/$/, "");
-const webUrl = (source: Pick<ContextSource, "baseUrl">, webui?: string): string =>
-  webui ? `${baseOf(source)}${webui}` : baseOf(source);
 
 export const DEFAULT_AUTHORITY_MARKER = "authoritative";
 

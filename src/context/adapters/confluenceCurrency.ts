@@ -2,6 +2,7 @@ import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson, htmlToText } from "../http";
 import { UserDirectory, contactOf } from "../userDirectory";
 import { findOwnerLabel } from "./confluenceOwnership";
+import { enc, baseOf } from "./confluenceCommon";
 
 /**
  * Confluence page "currency" review (ADR-0043): is a page still current?
@@ -12,9 +13,6 @@ import { findOwnerLabel } from "./confluenceOwnership";
  *  - **Staleness** — how long since the page was last updated.
  * Read-only analysis; the assistant turns the report into cleanup proposals.
  */
-
-const enc = encodeURIComponent;
-const baseOf = (source: Pick<ContextSource, "baseUrl">): string => source.baseUrl.replace(/\/$/, "");
 
 const MAX_LINKS_CHECKED = 60;
 

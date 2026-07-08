@@ -1,6 +1,7 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson } from "../http";
 import { classifyError } from "../../core/errors";
+import { enc, baseOf, webUrl } from "./confluenceCommon";
 
 /**
  * Confluence page HIERARCHY & RELATIONSHIPS (ADR-0044). The connector could
@@ -22,15 +23,6 @@ import { classifyError } from "../../core/errors";
  * COMPLETE, not truncated.
  */
 
-const enc = encodeURIComponent;
-
-function baseOf(source: Pick<ContextSource, "baseUrl">): string {
-  return source.baseUrl.replace(/\/$/, "");
-}
-
-function webUrl(source: Pick<ContextSource, "baseUrl">, webui?: string): string {
-  return webui ? `${baseOf(source)}${webui}` : baseOf(source);
-}
 
 export interface PageRef {
   id: string;

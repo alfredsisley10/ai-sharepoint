@@ -1,6 +1,7 @@
 import { ContextSource, ContextCredential } from "../types";
 import { fetchJson } from "../http";
 import { CONFLUENCE_WRITE_HEADERS } from "./confluenceWrite";
+import { enc, baseOf as base } from "./confluenceCommon";
 
 /**
  * Confluence page-ownership construct (ADR-0039). Determines and manages the
@@ -21,9 +22,6 @@ import { CONFLUENCE_WRITE_HEADERS } from "./confluenceWrite";
  * Designed for Confluence Data Center, where a version author's `by.username`
  * IS the AD sAMAccountName (Cloud exposes accountId/publicName instead).
  */
-
-const enc = encodeURIComponent;
-const base = (source: Pick<ContextSource, "baseUrl">): string => source.baseUrl.replace(/\/$/, "");
 
 export const DEFAULT_OWNER_MARKER = "owners";
 
