@@ -92,10 +92,10 @@ export function describeToolCall(name: string, input: unknown): string {
     case "aisharepoint_avoid_term": {
       const a = i.action ?? (Array.isArray(i.terms) && i.terms.length ? "add" : "list");
       return a === "add"
-        ? "Adding word(s) to the proxy avoid-list…"
+        ? "Adding word(s) to the Proxy Rules list…"
         : a === "remove"
-          ? "Removing a word from the proxy avoid-list…"
-          : "Listing the proxy avoid-list…";
+          ? "Removing a word from the Proxy Rules list…"
+          : "Listing the Proxy Rules list…";
     }
     case "aisharepoint_remember_project_context":
       return "Saving a learning to the project's memory (awaiting approval)…";

@@ -6722,13 +6722,13 @@ export function activate(context: vscode.ExtensionContext): void {
         ...fromSettings.map((t) => ({ label: t, description: "aiSharePoint.proxy.blockedTerms" })),
       ];
       const pick = await vscode.window.showQuickPick(items, {
-        title: `Proxy avoid-list — mode: ${blockedTerms.mode()} (${blockedTerms.terms().length} word(s))`,
+        title: `Proxy Rules — mode: ${blockedTerms.mode()} (${blockedTerms.terms().length} word(s))`,
         placeHolder: "Words a corporate proxy may block; defang mode auto-adjusts outgoing messages. Esc to close.",
       });
       if (!pick || pick.kind === vscode.QuickPickItemKind.Separator) return;
       if (pick.label.startsWith("$(add)")) {
         const input = await vscode.window.showInputBox({
-          title: "Add word(s) to the proxy avoid-list",
+          title: "Add word(s) to the Proxy Rules list",
           prompt: "Comma-separated words/phrases the proxy tends to block.",
           ignoreFocusOut: true,
         });

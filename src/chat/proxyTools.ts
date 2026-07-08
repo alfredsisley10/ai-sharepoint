@@ -27,10 +27,10 @@ export function registerProxyTools(
           return {
             invocationMessage:
               a === "add"
-                ? "Adding word(s) to the proxy avoid-list"
+                ? "Adding word(s) to the Proxy Rules list"
                 : a === "remove"
-                  ? "Removing a word from the proxy avoid-list"
-                  : "Listing the proxy avoid-list",
+                  ? "Removing a word from the Proxy Rules list"
+                  : "Listing the Proxy Rules list",
           };
         },
         async invoke(o) {
@@ -45,8 +45,8 @@ export function registerProxyTools(
               telemetry.record("proxy.term.add", { count: added.length });
               return text(
                 added.length === 0
-                  ? `Nothing added — those word(s) are already on the avoid-list. Current mode: ${terms.mode()}.`
-                  : `Added ${added.length} word(s) to the proxy avoid-list: ${added.join(", ")}. ${
+                  ? `Nothing added — those word(s) are already on the Proxy Rules list. Current mode: ${terms.mode()}.`
+                  : `Added ${added.length} word(s) to the Proxy Rules list: ${added.join(", ")}. ${
                       terms.mode() === "defang"
                         ? "Defang mode is on, so future messages with these words are auto-adjusted to slip past the proxy."
                         : "Tip: set `aiSharePoint.proxy.mode` to `defang` to auto-adjust future messages."
@@ -59,22 +59,22 @@ export function registerProxyTools(
               for (const t of list) if (await terms.remove(t)) removed.push(t);
               return text(
                 removed.length > 0
-                  ? `Removed from the avoid-list: ${removed.join(", ")}.`
-                  : `None of those were on the learned avoid-list (config-supplied terms are edited in settings.json).`,
+                  ? `Removed from the Proxy Rules list: ${removed.join(", ")}.`
+                  : `None of those were on the learned Proxy Rules list (config-supplied terms are edited in settings.json).`,
               );
             }
             const all = terms.terms();
             const learned = new Set(terms.learned().map((t) => t.toLowerCase()));
             return text(
               all.length === 0
-                ? `The proxy avoid-list is empty. Mode: ${terms.mode()}. Add words here or in \`aiSharePoint.proxy.blockedTerms\`.`
-                : `Proxy avoid-list (mode: ${terms.mode()}) — ${all.length} word(s):\n${all
+                ? `The Proxy Rules list is empty. Mode: ${terms.mode()}. Add words here or in \`aiSharePoint.proxy.blockedTerms\`.`
+                : `Proxy Rules (mode: ${terms.mode()}) — ${all.length} word(s):\n${all
                     .map((t) => `- ${t}${learned.has(t.toLowerCase()) ? "" : " (from settings)"}`)
                     .join("\n")}`,
             );
           } catch (err) {
             errors.capture("tool:aisharepoint_avoid_term", err);
-            return text(`Could not update the avoid-list: ${redactError(err).message}`);
+            return text(`Could not update the Proxy Rules list: ${redactError(err).message}`);
           }
         },
       },

@@ -298,7 +298,7 @@ export function registerChatParticipant(deps: ChatDeps): vscode.Disposable {
       // Effective-context overflow (#3): the prompt exceeded the model's real
       // usable context (Copilot can cap below the advertised size, varying by org).
       if (looksLikeOverflow(safe.message)) {
-        advice = `This looks like the model's context limit — GitHub Copilot can cap it below the advertised size, and it varies by org. @sharepoint already retried under a tighter budget and recorded a lower ceiling for this model. Start a new chat or narrow the request to recover now, or run “Probe Model Context Limit” to measure the real limit.`;
+        advice = `This looks like the model's context limit — GitHub Copilot can cap it below the advertised size, and it varies by org. @sharepoint already retried under a tighter usable input limit and recorded a lower ceiling for this model. Start a new chat or narrow the request to recover now, or run “Probe Model Context Limit” to measure the real limit.`;
       }
       // Learn over time (#4): repeated network-level chat failures are most
       // often the corporate proxy blocking message content, not connectivity.

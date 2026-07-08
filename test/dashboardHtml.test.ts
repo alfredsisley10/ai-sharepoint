@@ -88,14 +88,14 @@ test("empty activity renders friendly empty states", () => {
   assert.ok(html.includes("No requests yet"));
 });
 
-test("model context limits render reported/tested/budget when present", () => {
+test("model context limits render reported/tested/usable when present", () => {
   const none = renderDashboardHtml(data(), "n");
   assert.ok(!none.includes("Model context limits"));
   const withLimits = renderDashboardHtml(
     data({
       modelLimits: [
-        { key: "gpt-a", reported: 128000, tested: 90000, cap: 90000, drifted: false },
-        { key: "gpt-b", reported: 200000, tested: undefined, cap: 200000, drifted: true },
+        { key: "gpt-a", reported: 128000, tested: 90000, usable: 76500, drifted: false },
+        { key: "gpt-b", reported: 200000, tested: undefined, usable: 170000, drifted: true },
       ],
     }),
     "n",
@@ -104,6 +104,12 @@ test("model context limits render reported/tested/budget when present", () => {
   assert.ok(withLimits.includes("128,000"));
   assert.ok(withLimits.includes("90,000"));
   assert.ok(withLimits.includes("not tested"));
+  // The column is the margin-adjusted USABLE value (what chats are held to),
+  // not the raw ceiling — labeled accordingly.
+  assert.ok(withLimits.includes("<th>Usable</th>"));
+  assert.ok(!withLimits.includes("<th>Budget</th>"));
+  assert.ok(withLimits.includes("76,500"));
+  assert.ok(withLimits.includes("170,000"));
   assert.ok(withLimits.includes("gpt-b ⚠")); // drift marker
 });
 

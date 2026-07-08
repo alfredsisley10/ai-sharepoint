@@ -1,23 +1,24 @@
 # AI SharePoint
 
-**Govern and explore SharePoint Online with GitHub Copilot — with metered usage, budget
-guardrails, enterprise-grade authentication, and privacy-first diagnostics.**
+**Govern and explore SharePoint Online with GitHub Copilot — with locally counted usage,
+configurable cost estimates, enterprise-grade authentication, and privacy-first diagnostics.**
 
 AI SharePoint connects Visual Studio Code to your SharePoint Online tenant and puts a
 Copilot-backed assistant next to it. Ask `@sharepoint` about your sites, get live overviews of
-lists and pages, plan site structures — while every AI request is metered against **your own
-Copilot entitlement** and capped by **your budget**, and while every credential stays in **your
-OS keychain**. Nothing this extension collects ever leaves your machine unless you explicitly
-export it.
+lists and pages, plan site structures — while every AI request runs through **your own
+Copilot entitlement** and is **counted locally** (factual usage counts, plus an optional cost
+estimate at a rate you configure — GitHub billing stays the authoritative source), and while
+every credential stays in **your OS keychain**. Nothing this extension collects ever leaves
+your machine unless you explicitly export it.
 
-> **Release 0.71.0.** Shipped: governed Copilot chat/agent surface, enterprise auth
+> Shipped: governed Copilot chat/agent surface, enterprise auth
 > (browser + device-code, custom Entra app, sovereign clouds), site-as-code **pull / write-back /
 > revert** with Git + GitHub/GHES governance (ADR-0019/0021/0005), read-only reference sources
 > (Confluence, Jira, **LDAP/Active Directory with DNS auto-discovery**, **GitHub/GHES**, databases,
 > and more), bookmarks, secret-free team config sharing, local Copilot activity metering,
 > **opt-in anonymized telemetry** (Splunk HEC / OTEL — off by default), white-label packaging,
-> and the anonymized diagnostics pipeline. The AI itself remains read-only — every SharePoint
-> write is a previewed, snapshot-guarded human command.
+> and the anonymized diagnostics pipeline. Every AI write tool is approval-gated (preview +
+> explicit confirmation) — every SharePoint write is previewed and snapshot-guarded.
 
 ---
 
@@ -27,7 +28,7 @@ export it.
 - Ask about your connected sites in natural language; the assistant reads live site context
   (silently — it never pops a sign-in window from a chat question).
 - Slash commands: `/site` (live overview), `/sites`, `/usage`, `/help`.
-- In **Copilot agent mode**, 40+ tools are available for auto-invocation or `#`-referencing.
+- In **Copilot agent mode**, 55+ tools are available for auto-invocation or `#`-referencing.
   The reads run freely — site overviews, pages, usage, reference-source search
   (`#spSiteOverview`, `#spPages`, `#spUsage`, `#spSources`, `#spSearchContext`, `#spContextItem`,
   `#spBookmarks`, …). Every **write** tool (SharePoint write-back, Confluence page edits, drafting
@@ -74,10 +75,11 @@ Confluence and Jira (Cloud/Data Center) plus **LDAP/Active Directory with DNS au
 auto-retried; 3 strikes freezes the source), cached, result-capped, and shareable with the team
 via secret-free config export/import.
 
-### 🗂 SharePoint Sites, Reference Sources, Usage, and Support views
+### 🗂 Managed Sites, Reference Sources, Copilot Activity, Projects, Prompt Library, Communications, and Support views
 A dedicated activity-bar container with connection management (test, role change, sign-out,
-remove), reference sources + bookmarks, live usage/budget breakdowns, and one-click access to
-logs, error reports, the user guide, and the privacy notice.
+remove), reference sources + bookmarks, live Copilot activity breakdowns, project scoping,
+reusable prompts, communication drafts, and one-click access to logs, error reports, the user
+guide, and the privacy notice.
 
 ---
 
@@ -86,7 +88,7 @@ logs, error reports, the user guide, and the privacy notice.
 1. Install **GitHub Copilot** (and sign in) — AI features run through your own entitlement via
    the official VS Code Language Model API.
 2. Install this extension's VSIX (`Extensions: Install from VSIX…`) or from your private gallery.
-3. Run **AI SharePoint: Connect SharePoint Site** (or use the SharePoint Sites view) — pick a role
+3. Run **AI SharePoint: Connect SharePoint Site** (or use the Managed Sites view) — pick a role
    (*managed* or read-only *reference*) and a sign-in method.
 4. Open Chat and ask `@sharepoint /site` — or just ask a question about your site.
 

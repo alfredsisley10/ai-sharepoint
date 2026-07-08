@@ -40,8 +40,10 @@ export interface DashboardData {
   /** Active view: "all" (default) or "failed" — clicking the failed/cancelled
    *  card filters the chart + tables to failures only. */
   filter?: "all" | "failed";
-  /** Per-model reported (advertised) vs. tested (measured) context limits. */
-  modelLimits?: Array<{ key: string; reported?: number; tested?: number; cap?: number; drifted: boolean }>;
+  /** Per-model reported (advertised) vs. tested (measured) context limits.
+   *  `usable` is the margin-adjusted per-turn input budget a chat is actually
+   *  held to (resolved ceiling minus the safety margin — see `effectiveInputCap`). */
+  modelLimits?: Array<{ key: string; reported?: number; tested?: number; usable?: number; drifted: boolean }>;
 }
 
 export function esc(s: string): string {
@@ -275,15 +277,15 @@ export function renderDashboardHtml(
   ${
     data.modelLimits && data.modelLimits.length > 0
       ? `<h2>Model context limits</h2>
-  <p class="muted">Reported = the model's advertised input limit. Tested = the largest input actually proven to work (or the learned ceiling). Budget = what chats are held to. Run “Probe Model Context Limit” to measure.</p>
-  <table><thead><tr><th>Model</th><th>Reported</th><th>Tested</th><th>Budget</th></tr></thead><tbody>${tableRows(
+  <p class="muted">Reported = the model's advertised input limit. Tested = the largest input actually proven to work (or the learned ceiling). Usable = the per-turn input the chat is actually held to (ceiling minus safety margin). Run “Probe Model Context Limit” to measure.</p>
+  <table><thead><tr><th>Model</th><th>Reported</th><th>Tested</th><th>Usable</th></tr></thead><tbody>${tableRows(
     data.modelLimits.map((m) => ({
       Model: `${m.key}${m.drifted ? " ⚠" : ""}`,
       Reported: m.reported?.toLocaleString() ?? "?",
       Tested: m.tested?.toLocaleString() ?? "not tested",
-      Budget: m.cap?.toLocaleString() ?? "?",
+      Usable: m.usable?.toLocaleString() ?? "?",
     })),
-    ["Model", "Reported", "Tested", "Budget"],
+    ["Model", "Reported", "Tested", "Usable"],
   )}</tbody></table>`
       : ""
   }

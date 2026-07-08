@@ -83,7 +83,7 @@ steps with illustrations.
 | **reference** | Read-only forever — chat/tool context only; sync and write-back refuse it |
 
 Pick *reference* for sites you only want the assistant to read. Roles can be changed any time
-from the SharePoint Sites view context menu.
+from the Managed Sites view context menu.
 
 **3 — Sign-in method.**
 
@@ -102,7 +102,7 @@ shared.
 
 ## The activity-bar views
 
-### SharePoint Sites
+### Managed Sites
 One row per connection — icon shows the role (cloud = managed, eye = reference) and color shows
 verification state (green = verified, yellow = not yet signed in / signed out). Hover for URL,
 account, and last-verified time. Click a row to open the site in your browser.
@@ -918,7 +918,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | 403 / “access denied” on a site | Your account lacks permission, or the tenant hasn't consented `Sites.Read.All` for the app → Admin Guide. |
 | Pages list shows “unavailable” | Some tenants restrict the Graph Pages API → lists still work; this is expected. |
 | 429 / throttled | Microsoft Graph throttling → the extension retries once automatically; wait a moment. |
-| Chat message fails to send (network error) | A corporate content proxy / DLP may be blocking a word in the message. When this is suspected, the failed turn now shows a one-click **🛡️ Enable defang** button — it sets `aiSharePoint.proxy.mode` to `defang` so future messages auto-obfuscate avoid-list words (an invisible zero-width character is inserted so the proxy can't match — the AI still reads the original). You can also open **Manage Proxy Avoid-List** to add specific trigger words. When defang rewrites a message, a **🛡️ See what was changed** button shows exactly which words were altered. |
+| Chat message fails to send (network error) | A corporate content proxy / DLP may be blocking a word in the message. When this is suspected, the failed turn now shows a one-click **🛡️ Enable defang** button — it sets `aiSharePoint.proxy.mode` to `defang` so future messages auto-obfuscate avoid-list words (an invisible zero-width character is inserted so the proxy can't match — the AI still reads the original). You can also open **Manage Proxy Rules** to add specific trigger words. When defang rewrites a message, run **Show Proxy Rules Details** from the Command Palette to see exactly which words were altered. |
 | Connection fails behind a proxy / TLS-inspection | The extension auto-diagnoses this and shows the fix inline (trust the proxy root CA via `NODE_EXTRA_CA_CERTS` / OS trust store, set `http.proxy` for a 407, or ask IT to allowlist the host). This detection now also covers **database** and **LDAP/Active Directory** TLS handshakes (a re-signing appliance is named when recognized) and **Microsoft sign-in** itself. To check proactively, run **Test Network / Proxy Connectivity** (Support & Diagnostics, or the Command Palette): it probes the sign-in and Graph endpoints and reports any proxy/filter interference with the exact remedy. Admin Guide §3. |
 | Large chats fail or silently drop context | The model's real context limit (which your org can cap below the advertised size) was hit → @sharepoint auto-retries under a tighter budget and trims lowest-value context first. Run **Probe Model Context Limit** to measure the true ceiling, or **Show Learned Model Context Limits** to see it. An interrupted turn shows a **↻ Restart this request** button. |
 | 403 “unauthorized: not authorized to use this Copilot feature” | GitHub refuses a Copilot feature for your account: lapsed subscription/seat, or an **organization policy** disables it (org admin: GitHub → Copilot → Policies). When this surfaces through our requests, the extension **pauses Copilot calls ~5 min** (failing fast locally with the explanation, and indexing runs stop) so the refusal isn't hammered — fix the entitlement, then run **Check Copilot Status** to retry immediately. If the error only appears in the *GitHub Copilot Chat* output as `[CopilotCliSession] Failed to fetch models`, that's Copilot Chat's own **CLI-sessions integration** being blocked — pilot-confirmed to occur when *Copilot CLI* is disabled by org policy. It is benign for this extension (our features use the editor Language Model API, not the CLI), and the repeated logging is an acknowledged upstream bug ([microsoft/vscode#315405](https://github.com/microsoft/vscode/issues/315405), open — no workaround setting documented yet); options are to have the admin enable the Copilot CLI policy, disable any "agent sessions" / Copilot CLI integration toggle your VS Code version exposes in Settings, or ignore the log line. |
