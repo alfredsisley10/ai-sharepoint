@@ -80,10 +80,13 @@ test("gatherAuthorityPages (page) returns the page's text", async () => {
 
 test("gatherAuthorityPages (subtree) includes the root plus its descendants", async () => {
   const { result } = await withFetch(
-    (url) =>
-      url.includes("/descendant/page")
-        ? { body: { results: [{ id: "2", title: "Child", body: { storage: { value: "<p>child</p>" } } }] } }
-        : { body: { id: "1", title: "Root", body: { storage: { value: "<p>root</p>" } } } },
+    (url) => {
+      if (!url.includes("/descendant/page")) {
+        return { body: { id: "1", title: "Root", body: { storage: { value: "<p>root</p>" } } } };
+      }
+      const start = Number(new URL(url).searchParams.get("start") ?? "0");
+      return { body: { results: start === 0 ? [{ id: "2", title: "Child", body: { storage: { value: "<p>child</p>" } } }] : [] } };
+    },
     () => gatherAuthorityPages(SRC, CRED, { topic: "vpn", kind: "subtree", pageId: "1" }, DEFAULT_CAPS),
   );
   assert.deepEqual(result.map((p) => p.id), ["1", "2"]); // root unshifted, then descendants
@@ -102,14 +105,16 @@ test("gatherAuthorityPages (space) paginates past a full first page instead of t
   const { result, calls } = await withFetch(
     (url) => {
       const start = Number(new URL(url).searchParams.get("start") ?? "0");
-      // A FULL first page (100 = the batch size) means more may follow; the
-      // second page is short, ending the walk.
-      return start === 0 ? pageOf(0, 100) : pageOf(start, 20);
+      // A FULL first page (100 = the batch size), then a SHORT second page (a
+      // clamped page size looks the same, so the walk continues), then an
+      // EMPTY page, which ends the walk.
+      return start === 0 ? pageOf(0, 100) : start === 100 ? pageOf(start, 20) : pageOf(start, 0);
     },
     () => gatherAuthorityPages(SRC, CRED, { topic: "vpn", kind: "space", spaceKey: "DEV" }, DEFAULT_CAPS, 150),
   );
-  assert.equal(calls.length, 2, "continues after a full first page");
+  assert.equal(calls.length, 3, "continues after a full first page, stops on the empty batch");
   assert.match(decodeURIComponent(calls[1].url), /start=100/);
+  assert.match(decodeURIComponent(calls[2].url), /start=120/);
   assert.equal(result.length, 120);
   assert.equal(result[119].id, "120");
 });

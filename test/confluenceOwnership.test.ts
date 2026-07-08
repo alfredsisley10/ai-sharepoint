@@ -504,7 +504,7 @@ test("version endpoint: a mid-pagination 404 keeps the partial tally instead of 
   assert.deepEqual(result, [{ sam: "jdoe", count: 100 }]);
 });
 
-test("space sweep: bails out after 3 consecutive opening failures instead of crawling every page", async () => {
+test("space sweep: bails out after an all-failure opening batch instead of crawling every page", async () => {
   clearVersionPrefixMemo();
   const ids = Array.from({ length: 10 }, (_, i) => ({ id: String(i + 1) }));
   let versionCalls = 0;
@@ -517,10 +517,13 @@ test("space sweep: bails out after 3 consecutive opening failures instead of cra
       },
       () => getConfluenceSpaceContributorsWeighted(SRC, CRED, "ENG", 30000, Date.UTC(2026, 6, 1)),
     ),
-    /any of the first 3 of 10 sampled page\(s\) in space ENG/,
+    // The sweep runs in concurrent batches of 5, so the opening batch records
+    // its 5 failures before the between-batch systemic check bails — the
+    // message stays truthful about how many pages were actually attempted.
+    /any of the first 5 of 10 sampled page\(s\) in space ENG/,
   );
-  // 3 pages × 2 prefixes — not 10 × 2.
-  assert.equal(versionCalls, 6);
+  // 5 pages × 2 prefixes (one concurrent batch) — far fewer than 10 × 2.
+  assert.equal(versionCalls, 10);
 });
 
 test("audit: contributors found but all inactive is reported as a directory answer, not missing history", async () => {

@@ -46,9 +46,15 @@ function toRef(source: ContextSource, c: ContentResult): PageRef {
 }
 
 /**
- * Fetch EVERY page of a paginated content listing by walking `start` until a
- * short page (or the hard cap) is hit. The single-`limit` calls elsewhere
- * truncate; this doesn't. `pageSize` is the per-request batch.
+ * Fetch EVERY page of a paginated content listing by walking `start` until an
+ * EMPTY batch (or the hard cap) is hit. The single-`limit` calls elsewhere
+ * truncate; this doesn't. `pageSize` is the per-request batch — but Confluence
+ * may CLAMP the effective page size below the requested `limit`, so a
+ * short-but-nonempty batch is NOT proof of the last page (stopping there
+ * silently truncated large listings to one clamped batch). `start` therefore
+ * advances by what was actually RECEIVED, and when the response exposes a
+ * top-level `_links`, the absence of `_links.next` is trusted as the server's
+ * own authoritative last-page signal (saving the trailing empty-batch read).
  */
 export async function fetchAllPages(
   credential: ContextCredential,
@@ -58,11 +64,18 @@ export async function fetchAllPages(
   pageSize = 100,
 ): Promise<ContentResult[]> {
   const out: ContentResult[] = [];
-  for (let start = 0; out.length < hardCap; start += pageSize) {
-    const res = await fetchJson<{ results?: ContentResult[] }>(url(start, pageSize), credential, caps.timeoutMs);
+  let start = 0;
+  while (out.length < hardCap) {
+    const res = await fetchJson<{ results?: ContentResult[]; _links?: { next?: string } }>(
+      url(start, pageSize),
+      credential,
+      caps.timeoutMs,
+    );
     const batch = res.results ?? [];
     out.push(...batch);
-    if (batch.length < pageSize) break;
+    if (batch.length === 0) break;
+    if (res._links && !res._links.next) break;
+    start += batch.length;
   }
   return out.slice(0, hardCap);
 }

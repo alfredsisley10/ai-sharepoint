@@ -701,21 +701,43 @@ async function spaceVersionAuthors(
   let readable = 0;
   let failed = 0;
   let lastErr: unknown;
-  for (const id of ids) {
-    try {
-      authors.push(...(await pageVersionAuthors(source, credential, id, timeoutMs, maxVersionsPerPage)));
-      readable += 1;
-    } catch (err) {
-      // Abort kinds are systemic by definition — stop the sweep immediately
-      // (the throw feeds the caller's breaker/backoff instead of hammering).
-      rethrowIfAbort(err);
-      // One unreadable page shouldn't void the space tally…
-      lastErr = err;
-      failed += 1;
-      // …but if the sweep OPENS with consecutive failures and no successes,
-      // the problem is systemic (endpoint shape, auth, proxy) — bail out
-      // instead of burning a timeout per remaining page on a sick instance.
-      if (readable === 0 && failed >= 3) break;
+  // Per-page histories are independent reads, so sweep them in BATCHES of 5
+  // concurrent reads (the dossier's bounded-concurrency batch loop) instead of
+  // one page at a time. Semantics preserved: abort kinds still rethrow per
+  // failure, and the "opened with nothing but failures → systemic, bail"
+  // check runs BETWEEN batches — so the opening batch may record up to 5
+  // failures before the check, and the failure count keeps the systemic error
+  // message truthful about how many pages were actually attempted.
+  const concurrency = 5;
+  for (let i = 0; i < ids.length && !(readable === 0 && failed >= 3); i += concurrency) {
+    const batch = ids.slice(i, i + concurrency);
+    const settled = await Promise.all(
+      batch.map(async (id) => {
+        try {
+          return {
+            ok: true as const,
+            authors: await pageVersionAuthors(source, credential, id, timeoutMs, maxVersionsPerPage),
+          };
+        } catch (err) {
+          return { ok: false as const, err };
+        }
+      }),
+    );
+    for (const s of settled) {
+      if (s.ok) {
+        authors.push(...s.authors);
+        readable += 1;
+      } else {
+        // Abort kinds are systemic by definition — stop the sweep immediately
+        // (the throw feeds the caller's breaker/backoff instead of hammering).
+        rethrowIfAbort(s.err);
+        // One unreadable page shouldn't void the space tally… but a sweep that
+        // OPENS with failures and no successes is systemic (endpoint shape,
+        // auth, proxy) — the loop condition bails before the next batch
+        // instead of burning a timeout per remaining page on a sick instance.
+        lastErr = s.err;
+        failed += 1;
+      }
     }
   }
   // EVERY attempted page failing is a systemic problem that must surface as a

@@ -109,32 +109,70 @@ test("getPageAncestors returns the ordered breadcrumb + immediate parent", async
   assert.equal(result.page.url, "https://wiki.example.com/leaf");
 });
 
-test("getChildPages paginates until a short page (no truncation)", async () => {
-  // 100 children in page 1, 30 in page 2 → 130 total, two requests.
+test("getChildPages paginates until an EMPTY batch (a short batch is not proof of the end)", async () => {
+  // 100 children at start=0, 30 at start=100, empty at start=130 → 130 total.
   const { result, calls } = await withFetch(
     (url) => {
       const start = Number(new URL(url).searchParams.get("start"));
-      const n = start === 0 ? 100 : 30;
+      const n = start === 0 ? 100 : start === 100 ? 30 : 0;
       return { body: { results: Array.from({ length: n }, (_, k) => ({ id: String(start + k), title: `c${start + k}`, _links: { webui: `/c${start + k}` } })) } };
     },
     () => getChildPages(SRC, CRED, "1", DEFAULT_CAPS),
   );
   assert.equal(result.length, 130);
-  assert.equal(calls.length, 2, "followed pagination");
+  assert.equal(calls.length, 3, "continues past the short batch; the empty one ends the walk");
   assert.match(calls[0], /\/content\/1\/child\/page\?start=0&limit=100/);
   assert.match(calls[1], /start=100&limit=100/);
+  assert.match(calls[2], /start=130&limit=100/, "start advances by what was RECEIVED");
+});
+
+test("getChildPages survives a server-CLAMPED page size (short batches keep the walk going)", async () => {
+  // The server clamps every batch to 40 despite limit=100 — 120 children total.
+  // The old `batch < pageSize → stop` rule silently truncated this to 40.
+  const { result, calls } = await withFetch(
+    (url) => {
+      const start = Number(new URL(url).searchParams.get("start"));
+      const n = start < 120 ? 40 : 0;
+      return { body: { results: Array.from({ length: n }, (_, k) => ({ id: String(start + k), title: `c${start + k}` })) } };
+    },
+    () => getChildPages(SRC, CRED, "1", DEFAULT_CAPS),
+  );
+  assert.equal(result.length, 120, "every child, not one clamped batch");
+  assert.equal(calls.length, 4);
+});
+
+test("getChildPages trusts an absent _links.next as the last-page signal (no trailing empty read)", async () => {
+  const page = (start: number, n: number, links: object) => ({
+    body: {
+      results: Array.from({ length: n }, (_, k) => ({ id: String(start + k), title: `c${start + k}` })),
+      _links: links,
+    },
+  });
+  const { result, calls } = await withFetch(
+    (url) => {
+      const start = Number(new URL(url).searchParams.get("start"));
+      return start === 0 ? page(0, 100, { next: "/rest/api/content/1/child/page?start=100" }) : page(100, 30, {});
+    },
+    () => getChildPages(SRC, CRED, "1", DEFAULT_CAPS),
+  );
+  assert.equal(result.length, 130);
+  assert.equal(calls.length, 2, "the server's own last-page signal ends the walk early");
 });
 
 test("getDescendantPages carries each node's immediate parent (last ancestor)", async () => {
   const { result } = await withFetch(
-    () => ({
-      body: {
-        results: [
-          { id: "2", title: "A", _links: { webui: "/a" }, ancestors: [{ id: "1" }] },
-          { id: "3", title: "A1", _links: { webui: "/a1" }, ancestors: [{ id: "1" }, { id: "2" }] },
-        ],
-      },
-    }),
+    (url) => {
+      const start = Number(new URL(url).searchParams.get("start") ?? "0");
+      if (start > 0) return { body: { results: [] } };
+      return {
+        body: {
+          results: [
+            { id: "2", title: "A", _links: { webui: "/a" }, ancestors: [{ id: "1" }] },
+            { id: "3", title: "A1", _links: { webui: "/a1" }, ancestors: [{ id: "1" }, { id: "2" }] },
+          ],
+        },
+      };
+    },
     () => getDescendantPages(SRC, CRED, "1", DEFAULT_CAPS),
   );
   assert.equal(result.find((p) => p.id === "2")?.parentId, "1");
@@ -154,7 +192,8 @@ test("getDescendantPages falls back to a child-page walk when descendant/page 50
     (url) => {
       if (/\/descendant\/page/.test(url)) return { status: 500, body: { message: "Internal Server Error" } };
       const m = url.match(/\/content\/(\d+)\/child\/page/);
-      const kids = (m && childrenOf[m[1]!]) || [];
+      const start = Number(new URL(url).searchParams.get("start") ?? "0");
+      const kids = (start === 0 && m && childrenOf[m[1]!]) || [];
       return { body: { results: kids.map((k) => ({ id: k.id, title: k.title, _links: { webui: `/${k.id}` } })) } };
     },
     () => getDescendantPages(SRC, CRED, "1", DEFAULT_CAPS),
@@ -190,7 +229,10 @@ test("getDescendantPages does NOT child-walk a terminal auth failure — it reth
 
 test("getSpaceRootPages hits the depth=root listing", async () => {
   const { result, calls } = await withFetch(
-    () => ({ body: { results: [{ id: "1", title: "Home", _links: { webui: "/home" } }] } }),
+    (url) => {
+      const start = Number(new URL(url).searchParams.get("start") ?? "0");
+      return { body: { results: start === 0 ? [{ id: "1", title: "Home", _links: { webui: "/home" } }] : [] } };
+    },
     () => getSpaceRootPages(SRC, CRED, "ENG", DEFAULT_CAPS),
   );
   assert.match(calls[0], /\/space\/ENG\/content\/page\?depth=root/);
@@ -198,18 +240,19 @@ test("getSpaceRootPages hits the depth=root listing", async () => {
 });
 
 test("getSpacePages sweeps the flat space listing, fully paginated", async () => {
-  // 100 pages in batch 1, 20 in batch 2 → 120 total, two requests, no tree walk.
+  // 100 pages in batch 1, 20 in batch 2, empty batch 3 → 120 total, no tree walk.
   const { result, calls } = await withFetch(
     (url) => {
       const start = Number(new URL(url).searchParams.get("start"));
-      const n = start === 0 ? 100 : 20;
+      const n = start === 0 ? 100 : start === 100 ? 20 : 0;
       return { body: { results: Array.from({ length: n }, (_, k) => ({ id: String(start + k), title: `p${start + k}`, _links: { webui: `/p${start + k}` } })) } };
     },
     () => getSpacePages(SRC, CRED, "ENG", DEFAULT_CAPS),
   );
   assert.equal(result.length, 120);
-  assert.equal(calls.length, 2, "followed pagination");
+  assert.equal(calls.length, 3, "followed pagination to the empty batch");
   assert.match(calls[0], /\/content\?spaceKey=ENG&type=page&start=0&limit=100/);
+  assert.match(calls[1], /start=100&limit=100/);
   assert.ok(!calls.some((c) => /\/child\/page|\/descendant\/page/.test(c)), "no per-node tree walk");
 });
 
@@ -219,8 +262,9 @@ test("getPageHierarchy combines ancestors + children in one view", async () => {
       if (/expand=ancestors,space/.test(url)) {
         return { body: { id: "10", title: "Leaf", space: { key: "ENG" }, ancestors: [{ id: "1", title: "Home", _links: { webui: "/home" } }], _links: { webui: "/leaf" } } };
       }
-      // child/page
-      return { body: { results: [{ id: "11", title: "Kid", _links: { webui: "/kid" } }] } };
+      // child/page (one child at start=0, empty afterwards)
+      const start = Number(new URL(url).searchParams.get("start") ?? "0");
+      return { body: { results: start === 0 ? [{ id: "11", title: "Kid", _links: { webui: "/kid" } }] : [] } };
     },
     () => getPageHierarchy(SRC, CRED, "10", DEFAULT_CAPS),
   );

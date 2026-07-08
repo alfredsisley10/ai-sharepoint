@@ -1,6 +1,9 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson } from "../http";
+import { classifyError } from "../../core/errors";
+import { redactText } from "../../core/redaction";
 import { enc, baseOf, webUrl } from "./confluenceCommon";
+import { fetchAllPages } from "./confluenceHierarchy";
 
 /**
  * Confluence space "manageability" entitlement review (ADR-0044): can the
@@ -101,8 +104,17 @@ export interface ManageabilityReport {
   spaceKey: string;
   user: string;
   checkedPages: number;
+  /** Pages whose restrictions were READ successfully and showed no gap. Pages
+   *  whose restriction check FAILED are counted in `checkFailures`, not here —
+   *  an unchecked page is unknown, not manageable. */
   manageablePages: number;
   gaps: ManageabilityGap[];
+  /** Pages whose restriction read failed (non-systemic errors only — an auth
+   *  rejection or throttle aborts the whole audit instead). When > 0 the audit
+   *  is INCOMPLETE and must not be read as an all-clear. */
+  checkFailures?: number;
+  /** One redacted sample of the failing restriction reads, for troubleshooting. */
+  checkFailureSample?: string;
 }
 
 /** Audit a space: which pages the user can't fully manage (read + write). */
@@ -114,44 +126,95 @@ export async function reviewSpaceManageability(
   caps: ReadCaps,
   maxPages = 200,
 ): Promise<ManageabilityReport> {
-  const listed = await fetchJson<{ results?: Array<{ id?: string; title?: string; _links?: { webui?: string } }> }>(
-    `${baseOf(source)}/rest/api/content?spaceKey=${enc(spaceKey)}&type=page&limit=${maxPages}`,
+  // Paginated listing (start+limit, bounded by maxPages) — a single
+  // limit=maxPages request silently truncated the audit to the server's
+  // clamped first batch, so pages beyond it were never checked at all.
+  const listed = await fetchAllPages(
     credential,
-    caps.timeoutMs,
+    (start, limit) =>
+      `${baseOf(source)}/rest/api/content?spaceKey=${enc(spaceKey)}&type=page&start=${start}&limit=${limit}`,
+    caps,
+    maxPages,
   );
-  const pages = listed.results ?? [];
+  const pages = listed
+    .map((p) => ({ id: String(p.id ?? ""), title: p.title, webui: p._links?.webui }))
+    .filter((p) => p.id);
   const gaps: ManageabilityGap[] = [];
-  for (const p of pages) {
-    const id = String(p.id ?? "");
-    if (!id) continue;
-    const restrictions = await getPageRestrictions(source, credential, id, caps.timeoutMs).catch(() => undefined);
-    if (!restrictions) continue;
-    const access = assessPageAccess(restrictions, username);
-    if (access.canRead && access.canWrite) continue;
-    const missing: Array<"read" | "write"> = [];
-    if (!access.canRead) missing.push("read");
-    if (!access.canWrite) missing.push("write");
-    gaps.push({
-      pageId: id,
-      title: p.title ?? "(untitled)",
-      url: webUrl(source, p._links?.webui),
-      missing,
-      readRestrictedTo: restrictions.read,
-      updateRestrictedTo: restrictions.update,
-    });
+  let checkFailures = 0;
+  let checkFailureSample: string | undefined;
+  // Restriction reads are independent — batches of 5 concurrent reads (the
+  // dossier's bounded-concurrency batch loop) instead of one page at a time.
+  const concurrency = 5;
+  for (let i = 0; i < pages.length; i += concurrency) {
+    const batch = pages.slice(i, i + concurrency);
+    const restrictionSets = await Promise.all(
+      batch.map(async (p) => {
+        try {
+          return await getPageRestrictions(source, credential, p.id, caps.timeoutMs);
+        } catch (err) {
+          // A rejected credential or a throttling server invalidates every
+          // remaining read with the same credential/connection — ABORT the
+          // audit (mirrors confluenceOwnership's ABORT_KINDS) rather than
+          // "completing" it having checked nothing.
+          const kind = classifyError(err);
+          if (kind === "auth.failed" || kind === "graph.throttled") throw err;
+          // Any other per-page failure is COUNTED (with one redacted sample)
+          // so the report can say the audit is INCOMPLETE — a swallowed
+          // failure used to read as "manageable", and a fully-failing
+          // restrictions endpoint produced gaps:[] — a false all-clear.
+          checkFailures += 1;
+          checkFailureSample ??= redactText(err instanceof Error ? err.message : String(err)).slice(0, 300);
+          return undefined;
+        }
+      }),
+    );
+    for (let k = 0; k < batch.length; k += 1) {
+      const restrictions = restrictionSets[k];
+      if (!restrictions) continue;
+      const p = batch[k];
+      const access = assessPageAccess(restrictions, username);
+      if (access.canRead && access.canWrite) continue;
+      const missing: Array<"read" | "write"> = [];
+      if (!access.canRead) missing.push("read");
+      if (!access.canWrite) missing.push("write");
+      gaps.push({
+        pageId: p.id,
+        title: p.title ?? "(untitled)",
+        url: webUrl(source, p.webui),
+        missing,
+        readRestrictedTo: restrictions.read,
+        updateRestrictedTo: restrictions.update,
+      });
+    }
   }
   return {
     spaceKey,
     user: username,
     checkedPages: pages.length,
-    manageablePages: pages.length - gaps.length,
+    manageablePages: pages.length - gaps.length - checkFailures,
     gaps,
+    ...(checkFailures > 0
+      ? { checkFailures, ...(checkFailureSample ? { checkFailureSample } : {}) }
+      : {}),
   };
 }
 
-/** Prepare an access-request notification to the space admins (pure). */
+/** Prepare an access-request notification to the space admins (pure). When
+ *  restriction checks FAILED (`checkFailures > 0`) the note says the audit is
+ *  INCOMPLETE — a run whose restriction reads all failed (revoked credential,
+ *  blocked endpoint, …) must never read as "you can manage everything". */
 export function prepareAccessRequestNote(report: ManageabilityReport): string {
+  const failures = report.checkFailures ?? 0;
+  const failureDetail = `the restriction check failed on ${failures} of ${report.checkedPages} page(s)${
+    report.checkFailureSample ? ` (sample error: ${report.checkFailureSample})` : ""
+  }`;
   if (!report.gaps.length) {
+    if (failures > 0) {
+      return [
+        `No confirmed access gaps for ${report.user} in space ${report.spaceKey}, but this audit is INCOMPLETE — ${failureDetail}.`,
+        `The failed pages were NOT verified — do not treat this as "${report.user} can manage everything". Fix the failing restriction reads and re-run the review.`,
+      ].join("\n");
+    }
     return `${report.user} can already manage all ${report.checkedPages} pages in space ${report.spaceKey} — no access request needed.`;
   }
   const lines = report.gaps.map(
@@ -164,5 +227,11 @@ export function prepareAccessRequestNote(report: ManageabilityReport): string {
     ...lines,
     "",
     `Please grant ${report.user} read/write on these pages (or add them to the listed restriction users/groups) so the content can be managed.`,
+    ...(failures > 0
+      ? [
+          "",
+          `Note: this audit is INCOMPLETE — ${failureDetail}. Those pages were not verified and may hide further gaps; fix the failing reads and re-run.`,
+        ]
+      : []),
   ].join("\n");
 }

@@ -101,12 +101,57 @@ test("getJiraIssue keeps a plain-string description", async () => {
   assert.equal(result.body, "just text");
 });
 
-test("listJiraProjects maps key/name and defaults name to key", async () => {
+test("getJiraIssue tolerates an absent/null description (empty body)", async () => {
   const { result } = await withFetch(
+    () => ({ body: { key: "ABC-4", fields: { summary: "S", description: null } } }),
+    () => getJiraIssue(CLOUD, CRED, "ABC-4", DEFAULT_CAPS),
+  );
+  assert.equal(result.body, "");
+});
+
+test("listJiraProjects (Data Center) maps key/name and defaults name to key", async () => {
+  const { result, calls } = await withFetch(
     () => ({ body: [{ key: "ABC", name: "Alpha" }, { key: "XYZ" }, { name: "no-key" }] }),
     () => listJiraProjects(DC, CRED, DEFAULT_CAPS),
   );
   assert.deepEqual(result, [{ key: "ABC", name: "Alpha" }, { key: "XYZ", name: "XYZ" }]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /\/rest\/api\/2\/project$/, "DC keeps the unpaged endpoint");
+});
+
+test("listJiraProjects (Cloud) pages /project/search — the unpaged /project endpoint is gone on Cloud", async () => {
+  const { result, calls } = await withFetch(
+    (url) => {
+      const startAt = Number(new URL(url).searchParams.get("startAt"));
+      return startAt === 0
+        ? { body: { values: [{ key: "A", name: "Alpha" }, { key: "B" }], isLast: false } }
+        : { body: { values: [{ key: "C" }], isLast: true } };
+    },
+    () => listJiraProjects(CLOUD, CRED, DEFAULT_CAPS),
+  );
+  assert.deepEqual(result, [
+    { key: "A", name: "Alpha" },
+    { key: "B", name: "B" },
+    { key: "C", name: "C" },
+  ]);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0], /\/rest\/api\/2\/project\/search\?startAt=0/);
+  assert.ok(
+    calls.every((c) => !/\/rest\/api\/2\/project(\?|$)/.test(c)),
+    "never calls the Cloud-removed unpaged endpoint",
+  );
+});
+
+test("listJiraProjects (Cloud) stops at caps.maxResults", async () => {
+  const { result, calls } = await withFetch(
+    (url) => {
+      const startAt = Number(new URL(url).searchParams.get("startAt"));
+      return { body: { values: Array.from({ length: 50 }, (_, i) => ({ key: `P${startAt + i}` })), isLast: false } };
+    },
+    () => listJiraProjects(CLOUD, CRED, { ...DEFAULT_CAPS, maxResults: 60 }),
+  );
+  assert.equal(result.length, 60, "capped at maxResults");
+  assert.equal(calls.length, 2, "stops paging once the cap is reached");
 });
 
 test("listAllJiraProjects pages the Cloud /project/search until isLast, honoring checkpoint", async () => {
