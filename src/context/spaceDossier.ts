@@ -36,6 +36,11 @@ export interface DossierPage {
   content?: string;
   /** Page version number at capture time (for the current-content header). */
   version?: number;
+  /** When there's no (active) owner TAG, the recency-weighted top contributor we
+   *  suggest as the TARGET owner — so ownership can be established (a "set the
+   *  owner tag" recommended update). Distinct from `owners` (the tagged owners);
+   *  `active` reflects the directory check (false/unknown when none is wired). */
+  suggestedOwner?: { sam: string; active: boolean; contact?: string; basis: string };
 }
 
 export interface SpaceDossier {
@@ -54,6 +59,19 @@ export interface SpaceDossier {
    *  (429/503). This is the important distinction: those pages aren't
    *  data-quality problems, the dossier is just INCOMPLETE — re-run it. */
   throttled?: boolean;
+  /** Diagnostics for TARGET-OWNER detection on untagged pages, so a zero-owner
+   *  result is explainable (the common cause: no directory wired, so nothing
+   *  can be active-verified). */
+  ownerDetection?: {
+    /** An LDAP/M365 directory was available to verify active employees. */
+    directoryWired: boolean;
+    /** Pages with no (active) owner tag — the candidates for suggestion. */
+    ownerlessPages: number;
+    /** How many got a suggested target owner. */
+    suggested: number;
+    /** How many had no usable contributor history to suggest from. */
+    noContributorHistory: number;
+  };
 }
 
 /** A page is "stale" past this age (matches the currency review's default). */
@@ -171,7 +189,11 @@ function flagBadges(p: DossierPage): string {
 
 function ownerLabel(p: DossierPage): string {
   const o = primaryOwner(p);
-  if (!o) return "—";
+  if (!o) {
+    // No tagged owner — show the suggested target owner so the inventory names
+    // who to establish ownership with.
+    return p.suggestedOwner ? `→ ${p.suggestedOwner.sam} (suggested)` : "—";
+  }
   return `${o.sam}${o.active ? "" : " (inactive)"}`;
 }
 
@@ -185,6 +207,20 @@ export function renderInventoryMarkdown(d: SpaceDossier): string {
       ? [
           "",
           `> ⚠ ${s.reviewFailures} page(s) could not be reviewed${s.throttled ? " because the source throttled requests (HTTP 429/503)" : ""} — this inventory is INCOMPLETE${s.throttled ? "; re-run the dossier (optionally with lower concurrency) to fill the gaps" : ""}.`,
+        ]
+      : []),
+    ...(d.ownerDetection
+      ? [
+          "",
+          `> **Owner detection:** ${d.ownerDetection.suggested}/${d.ownerDetection.ownerlessPages} untagged page(s) got a suggested target owner (recency-weighted top contributor).${
+            d.ownerDetection.noContributorHistory > 0
+              ? ` ${d.ownerDetection.noContributorHistory} had no usable contributor history.`
+              : ""
+          }${
+            d.ownerDetection.directoryWired
+              ? ""
+              : " No LDAP/M365 directory is wired, so suggestions are the top contributor **unverified** (active-employee checking is off) — add an LDAP source to confirm who's still active."
+          }`,
         ]
       : []),
     "",
@@ -275,20 +311,33 @@ export function dossierWorkItemSeeds(d: SpaceDossier, sourceLabel: string): NewW
   for (const p of d.pages) {
     const f = flagsFor(p);
     if (!f.flagged) continue;
+    const suggested = p.suggestedOwner;
     const reasons = [
       f.stale ? `stale (${p.staleDays}d since update)` : "",
-      f.ownerless ? "no active owner" : "",
+      f.ownerless
+        ? suggested
+          ? `no owner tag — suggested owner: ${suggested.sam}${suggested.active ? "" : " (activity unverified)"}`
+          : "no active owner"
+        : "",
       p.brokenLinks > 0 ? `${p.brokenLinks} broken link(s)` : "",
       ...p.issues,
     ].filter(Boolean);
-    const o = primaryOwner(p);
+    const tagged = primaryOwner(p);
+    // Attribute the work item to the tagged owner, else to the suggested target
+    // owner so there's someone to drive establishing ownership.
+    const owner =
+      tagged && tagged.sam !== "(unassigned)"
+        ? { sam: tagged.sam, ...(tagged.contact ? { contact: tagged.contact } : {}), basis: "page-contributor" as const }
+        : suggested
+          ? { sam: suggested.sam, ...(suggested.contact ? { contact: suggested.contact } : {}), basis: "page-contributor" as const }
+          : undefined;
     seeds.push({
       title: `Review: ${p.title}`.slice(0, 160),
-      finding: `Page in space ${d.spaceKey} flagged during content review — ${reasons.join("; ")}.`,
+      finding: `Page in space ${d.spaceKey} flagged during content review — ${reasons.join("; ")}.${
+        f.ownerless && suggested ? ` Recommended update: establish ownership by adding the label \`owners|${suggested.sam}\`.` : ""
+      }`,
       target: { source: sourceLabel, kind: "confluence", ref: p.id, url: p.url },
-      ...(o && o.sam !== "(unassigned)"
-        ? { owner: { sam: o.sam, ...(o.contact ? { contact: o.contact } : {}), basis: "page-contributor" } }
-        : {}),
+      ...(owner ? { owner } : {}),
       tags: [
         "space-dossier",
         d.spaceKey,
@@ -359,7 +408,11 @@ export function renderRecommendedScaffold(p: DossierPage): string {
   const f = flagsFor(p);
   const reasons = [
     f.stale ? `Stale — not updated in ${p.staleDays} days.` : "",
-    f.ownerless ? "No current (active) owner resolved." : "",
+    f.ownerless
+      ? p.suggestedOwner
+        ? `No owner tag. Suggested owner: **${p.suggestedOwner.sam}**${p.suggestedOwner.active ? "" : " (activity unverified)"} — establish ownership by adding the label \`owners|${p.suggestedOwner.sam}\`.`
+        : "No owner tag, and no contributor history was available to suggest one."
+      : "",
     p.brokenLinks > 0 ? `${p.brokenLinks} broken link(s).` : "",
     ...p.issues.map((i) => `Issue: ${i}`),
   ].filter(Boolean);
