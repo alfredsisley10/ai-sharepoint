@@ -71,6 +71,12 @@ export interface SpaceDossier {
     suggested: number;
     /** How many had no usable contributor history to suggest from. */
     noContributorHistory: number;
+    /** How many pages' HISTORY READS FAILED outright (endpoint/auth/network) —
+     *  distinct from "no history": all-failing means a systemic problem to fix,
+     *  not an empty space. */
+    historyReadFailures?: number;
+    /** A sample failure message, so the summary is directly troubleshootable. */
+    historyReadSampleError?: string;
   };
 }
 
@@ -215,6 +221,12 @@ export function renderInventoryMarkdown(d: SpaceDossier): string {
           `> **Owner detection:** ${d.ownerDetection.suggested}/${d.ownerDetection.ownerlessPages} untagged page(s) got a suggested target owner (recency-weighted top contributor).${
             d.ownerDetection.noContributorHistory > 0
               ? ` ${d.ownerDetection.noContributorHistory} had no usable contributor history.`
+              : ""
+          }${
+            (d.ownerDetection.historyReadFailures ?? 0) > 0
+              ? ` ⚠ ${d.ownerDetection.historyReadFailures} page(s) FAILED the history read${
+                  d.ownerDetection.historyReadSampleError ? ` (e.g. ${d.ownerDetection.historyReadSampleError})` : ""
+                } — fix that and re-run the dossier; those pages were left unsuggested.`
               : ""
           }${
             d.ownerDetection.directoryWired

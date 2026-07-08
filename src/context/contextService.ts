@@ -1028,7 +1028,14 @@ export class ContextService {
    *  validated against the user directory ("current & active employee"). A
    *  global READ. When an LDAP directory is configured, inactive contributors
    *  are skipped and the resolved owners' contact (email/UPN) is returned;
-   *  otherwise everyone is treated as active (reported via directoryWired). */
+   *  otherwise everyone is treated as active (reported via directoryWired).
+   *
+   *  HARDENED (fully audited): each read is isolated — the page-meta probe,
+   *  the labels read, the version-history read, the space sweep and every
+   *  directory lookup can each fail without sinking the others; failures are
+   *  recorded in the resolution's audit trail and the pipeline steps down to
+   *  the next method. Only a resolution that ran clean is cached (a degraded
+   *  run must not pin its partial answer for a week). */
   async resolveConfluenceOwners(
     source: ContextSource,
     pageId: string,
@@ -1044,24 +1051,55 @@ export class ContextService {
     const directory = this.userDirectory();
     const nowMs = Date.now();
     const result = await this.tracked(source, false, async () => {
-      const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
-      const [labels, pageContributors] = await Promise.all([
-        getConfluencePageLabels(source, credential, pageId, caps.timeoutMs),
-        getConfluencePageContributorsWeighted(source, credential, pageId, caps.timeoutMs, nowMs),
-      ]);
+      // Step 0 — probe the page itself (best-effort; only the space fallback
+      // NEEDS it). Its outcome is the strongest 404 discriminator: a readable
+      // page with a 404ing history read is an endpoint/path problem, while a
+      // 404 here means the pageId itself doesn't resolve.
+      let pageProbe: CachedOwnership["pageProbe"];
+      let spaceKey: string | undefined;
+      try {
+        const meta = await getConfluencePageMeta(source, credential, pageId, caps.timeoutMs);
+        spaceKey = meta.spaceKey;
+        pageProbe = { ok: true, title: meta.title, ...(meta.spaceKey ? { spaceKey: meta.spaceKey } : {}) };
+      } catch (err) {
+        pageProbe = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      // Read labels once (best-effort), feeding both the resolution and the
+      // display; a failed read reaches resolveOwners as the audited failure.
+      let labels: string[] = [];
+      let labelsError: unknown;
+      try {
+        labels = await getConfluencePageLabels(source, credential, pageId, caps.timeoutMs);
+      } catch (err) {
+        labelsError = err;
+      }
       const resolution = await resolveOwners({
-        pageLabels: labels,
-        pageContributors,
-        spaceContributors: () =>
-          meta.spaceKey
-            ? getConfluenceSpaceContributorsWeighted(source, credential, meta.spaceKey, caps.timeoutMs, nowMs)
-            : Promise.resolve([]),
+        pageLabels: labelsError ? () => Promise.reject(labelsError) : labels,
+        pageContributors: () => getConfluencePageContributorsWeighted(source, credential, pageId, caps.timeoutMs, nowMs),
+        spaceContributors: () => {
+          if (spaceKey) {
+            return getConfluenceSpaceContributorsWeighted(source, credential, spaceKey, caps.timeoutMs, nowMs);
+          }
+          if (!pageProbe?.ok) {
+            return Promise.reject(
+              new AppError(
+                `could not locate the page's space — the page-metadata read failed (${pageProbe?.error ?? "unknown error"})`,
+                "graph.notFound",
+              ),
+            );
+          }
+          return Promise.resolve([]);
+        },
         isActive: directory ? activeFromDirectory(directory.dir) : async () => true,
         directoryWired: Boolean(directory),
       });
-      const ownerContacts = directory
-        ? await Promise.all(
-            resolution.owners.map(async (sam) => {
+      // Contact enrichment is best-effort too: a directory hiccup downgrades
+      // an owner line to the bare sam instead of failing the whole result.
+      let ownerContacts: CachedOwnership["ownerContacts"];
+      if (directory && resolution.owners.length) {
+        const contacts = await Promise.all(
+          resolution.owners.map(async (sam) => {
+            try {
               const rec = await directory.dir(sam);
               return {
                 sam,
@@ -1069,18 +1107,33 @@ export class ContextService {
                 ...(contactOf(rec) ? { contact: contactOf(rec) } : {}),
                 active: rec?.active ?? false,
               };
-            }),
-          )
-        : undefined;
+            } catch {
+              return undefined;
+            }
+          }),
+        );
+        const usable = contacts.filter(Boolean) as NonNullable<CachedOwnership["ownerContacts"]>;
+        ownerContacts = usable.length ? usable : undefined;
+      }
       return {
         resolution,
         labels,
         directoryWired: Boolean(directory),
         ...(directory ? { directoryLabel: directory.label } : {}),
         ...(ownerContacts ? { ownerContacts } : {}),
+        ...(pageProbe ? { pageProbe } : {}),
       };
     });
-    await this.ownershipCache?.put(source.id, pageId, result);
+    // Cache only clean runs: a degraded resolution (failed steps / directory
+    // outage / unresolvable page) is a troubleshooting artifact, not a fact
+    // worth pinning for a week.
+    const degradedRun =
+      result.resolution.verification === "unavailable" ||
+      (result.resolution.audit ?? []).some((a) => a.outcome === "failed") ||
+      result.pageProbe?.ok === false;
+    if (!degradedRun) {
+      await this.ownershipCache?.put(source.id, pageId, result);
+    }
     return { ...result, cached: false };
   }
 
@@ -1291,6 +1344,8 @@ export class ContextService {
       const ownerless = pages.filter((p) => flagsFor(p).ownerless);
       let suggestedOwners = 0;
       let noContributorHistory = 0;
+      let historyReadFailures = 0;
+      let historyReadSampleError: string | undefined;
       const nowMs = Date.now();
       for (let i = 0; i < ownerless.length; i += concurrency) {
         const batch = ownerless.slice(i, i + concurrency);
@@ -1299,8 +1354,13 @@ export class ContextService {
             let tallies;
             try {
               tallies = await getConfluencePageContributorsWeighted(source, credential, p.id, caps.timeoutMs, nowMs);
-            } catch {
-              return; // history unreadable — leave unsuggested
+            } catch (err) {
+              // History unreadable — leave unsuggested, but COUNT it and keep a
+              // sample error: "every page failed" (an endpoint/auth problem)
+              // must be distinguishable from "no page has history".
+              historyReadFailures += 1;
+              historyReadSampleError ??= err instanceof Error ? err.message : String(err);
+              return;
             }
             if (!tallies.length) {
               noContributorHistory += 1;
@@ -1351,6 +1411,9 @@ export class ContextService {
                 ownerlessPages: ownerless.length,
                 suggested: suggestedOwners,
                 noContributorHistory,
+                ...(historyReadFailures > 0
+                  ? { historyReadFailures, ...(historyReadSampleError ? { historyReadSampleError } : {}) }
+                  : {}),
               },
             }
           : {}),

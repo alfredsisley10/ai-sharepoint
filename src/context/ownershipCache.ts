@@ -16,6 +16,10 @@ export interface CachedOwnership {
   directoryWired: boolean;
   directoryLabel?: string;
   ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
+  /** Step 0 of the audit: did the pageId resolve at all, and to which page?
+   *  Confirms the id/space before the method steps — the strongest 404
+   *  discriminator (page missing vs. a per-method endpoint problem). */
+  pageProbe?: { ok: boolean; title?: string; spaceKey?: string; error?: string };
 }
 
 export interface OwnershipCacheEntry {

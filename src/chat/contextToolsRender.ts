@@ -1,5 +1,5 @@
 import { catalogByCategory, CapabilityReport, RenderedValidation } from "../context/adapters/confluenceMacros";
-import { OwnerResolution } from "../context/adapters/confluenceOwnership";
+import { OwnerResolution, OwnershipAuditStep, OWNERSHIP_STEP_LABELS } from "../context/adapters/confluenceOwnership";
 import { ManageabilityReport } from "../context/adapters/confluenceEntitlements";
 import { CurrencyReport } from "../context/adapters/confluenceCurrency";
 import { PageRef, HierarchyResult, renderPageTree } from "../context/adapters/confluenceHierarchy";
@@ -63,12 +63,38 @@ export function renderValidation(v: RenderedValidation): string {
 export const UNVERIFIED_OWNER_NOTE =
   "Owner(s) determined WITHOUT active-employee verification: no LDAP/Active Directory reference source is configured, so ownership was resolved from the owner label / recency-weighted contribution history but NOT filtered by who is still an active employee. This is a valid result — just less reliable (a listed owner may have left). To turn on active-employee verification, add an LDAP/Active Directory source via 'Add Context Source' (if your org already has one defined, adding it here is enough — it's used automatically); otherwise ask an admin to define one. Do not report this as a failure.";
 
+const AUDIT_MARKS: Record<OwnershipAuditStep["outcome"], string> = {
+  hit: "✓",
+  "no-result": "·",
+  failed: "✗",
+  skipped: "↷",
+};
+
+/** Targeted troubleshooting per failure kind — rendered only for ✗ steps. */
+function ownershipFailureAdvice(kind: string): string {
+  switch (kind) {
+    case "graph.notFound":
+      return "Check the pageId is the NUMERIC content id (not a tiny-link token or a title), the base URL includes the context path the browser uses (e.g. /confluence for Data Center, /wiki for Cloud), and the connector's deployment type matches the instance.";
+    case "auth.failed":
+      return "The source rejected the stored credential for this read — re-test the connection and refresh the token.";
+    case "graph.forbidden":
+      return "The account can read the page but not this API — ask the space admin to grant it, or use an account with history access.";
+    case "graph.throttled":
+      return "The source throttled the request — wait a moment and re-run with refresh:true.";
+    case "network":
+      return "A network/proxy problem interrupted the read — check connectivity (and any TLS-inspecting proxy) and retry.";
+    default:
+      return "Re-run with refresh:true; if it persists, check the connector's Test Connection and the error above.";
+  }
+}
+
 export function renderOwners(r: {
   resolution: OwnerResolution;
   labels: string[];
   directoryWired: boolean;
   directoryLabel?: string;
   ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
+  pageProbe?: { ok: boolean; title?: string; spaceKey?: string; error?: string };
   cached?: boolean;
 }): string {
   const { resolution } = r;
@@ -91,12 +117,57 @@ export function renderOwners(r: {
         .join(", ")}`,
     );
   }
+
+  // Verification status — three states, each with its user action.
+  const verification = resolution.verification ?? (r.directoryWired ? "directory" : "off");
   lines.push(
     "",
-    r.directoryWired
+    verification === "directory"
       ? `Active-employee validation: ON via ${r.directoryLabel ?? "the configured directory"} (ranked by recency-weighted contribution; inactive contributors skipped).`
-      : UNVERIFIED_OWNER_NOTE,
+      : verification === "unavailable"
+        ? `Active-employee validation: CONFIGURED BUT UNAVAILABLE — the ${r.directoryLabel ?? "directory"} lookup failed during this run, so owners are reported UNVERIFIED (treated as active). This is a step-down, not a failure of ownership itself. Check the LDAP/Active Directory connector (Test Connection) and re-run with refresh:true to verify.`
+        : UNVERIFIED_OWNER_NOTE,
   );
+
+  // The auditable "how": page probe + every method step with its outcome.
+  const audit = resolution.audit ?? [];
+  if (audit.length || r.pageProbe) {
+    lines.push("", "## How ownership was determined");
+    if (r.pageProbe) {
+      lines.push(
+        r.pageProbe.ok
+          ? `- ✓ Page lookup: “${r.pageProbe.title ?? "(untitled)"}”${r.pageProbe.spaceKey ? ` in space ${r.pageProbe.spaceKey}` : ""}`
+          : `- ✗ Page lookup FAILED: ${r.pageProbe.error ?? "unknown error"} — the pageId itself may be wrong; everything below is best-effort.`,
+      );
+    }
+    for (const a of audit) {
+      const label = OWNERSHIP_STEP_LABELS[a.step] ?? a.step;
+      const considered = a.considered?.length
+        ? ` (considered: ${a.considered.map((c) => `${c.sam} ${c.count}×`).join(", ")})`
+        : "";
+      lines.push(
+        a.outcome === "failed"
+          ? `- ✗ ${label}: FAILED — ${a.error?.message ?? a.detail}`
+          : `- ${AUDIT_MARKS[a.outcome]} ${label}: ${a.detail}${considered}`,
+      );
+    }
+  }
+
+  // Troubleshooting — only when something actually failed.
+  const failures = audit.filter((a) => a.outcome === "failed");
+  if (failures.length || r.pageProbe?.ok === false || verification === "unavailable") {
+    lines.push("", "## Troubleshooting");
+    if (r.pageProbe?.ok === false) {
+      lines.push(`- Page lookup: ${r.pageProbe.error ?? "failed"} — ${ownershipFailureAdvice("graph.notFound")}`);
+    }
+    for (const f of failures) {
+      lines.push(`- ${OWNERSHIP_STEP_LABELS[f.step] ?? f.step}: ${f.error?.message ?? f.detail} — ${ownershipFailureAdvice(f.error?.kind ?? "unknown")}`);
+    }
+    if (verification === "unavailable") {
+      lines.push("- Directory: active-employee checks failed mid-run — verify the LDAP/Active Directory connector (Test Connection), then re-run with refresh:true.");
+    }
+    lines.push("- This degraded result was NOT cached — a re-run recomputes it from scratch.");
+  }
   return lines.join("\n");
 }
 

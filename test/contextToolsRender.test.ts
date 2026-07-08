@@ -53,6 +53,79 @@ test("renderOwners shows the unverified-directory note when no directory is wire
   assert.match(out, /Add Context Source/);
 });
 
+test("renderOwners renders the audit trail: page probe, per-method outcomes, skipped steps", () => {
+  const out = renderOwners({
+    resolution: {
+      owners: ["jdoe"],
+      basis: "page-contributor",
+      verification: "directory",
+      audit: [
+        { step: "owner-label", outcome: "no-result", detail: "the page has no labels" },
+        { step: "page-contributors", outcome: "hit", detail: "top ACTIVE recency-weighted contributor of 3: jdoe", considered: [{ sam: "jdoe", count: 4 }] },
+        { step: "space-contributors", outcome: "skipped", detail: "not attempted — an earlier method already determined the owner" },
+        { step: "space-owners", outcome: "skipped", detail: "not attempted — an earlier method already determined the owner" },
+      ],
+    } as never,
+    labels: [],
+    directoryWired: true,
+    directoryLabel: "Corp LDAP",
+    pageProbe: { ok: true, title: "Runbook", spaceKey: "ENG" },
+  });
+  assert.match(out, /## How ownership was determined/);
+  assert.match(out, /✓ Page lookup: “Runbook” in space ENG/);
+  assert.match(out, /· Owner label: the page has no labels/);
+  assert.match(out, /✓ Page contribution history: top ACTIVE.*jdoe.*considered: jdoe 4×/);
+  assert.match(out, /↷ Space contribution history/);
+  assert.doesNotMatch(out, /## Troubleshooting/, "clean run has no troubleshooting section");
+});
+
+test("renderOwners surfaces failures with targeted troubleshooting and the not-cached notice", () => {
+  const out = renderOwners({
+    resolution: {
+      owners: [],
+      basis: "none",
+      note: "Owner resolution was DEGRADED — 1 method(s) failed (Page contribution history) and the remaining methods found no owner.",
+      verification: "off",
+      audit: [
+        { step: "owner-label", outcome: "no-result", detail: "the page has no labels" },
+        {
+          step: "page-contributors",
+          outcome: "failed",
+          detail: "could not read the page's version history",
+          error: { message: "GET /rest/experimental/content/7/version → Not found (404) at the source.", kind: "graph.notFound" },
+        },
+        { step: "space-contributors", outcome: "no-result", detail: "the space's version history yielded no contributors" },
+        { step: "space-owners", outcome: "skipped", detail: "no space-owner lookup available for this source" },
+      ],
+    } as never,
+    labels: [],
+    directoryWired: false,
+  });
+  assert.match(out, /✗ Page contribution history: FAILED — GET \/rest\/experimental\/content\/7\/version/);
+  assert.match(out, /## Troubleshooting/);
+  assert.match(out, /NUMERIC content id/);
+  assert.match(out, /NOT cached/);
+});
+
+test("renderOwners reports a directory outage as a step-down (configured but unavailable)", () => {
+  const out = renderOwners({
+    resolution: {
+      owners: ["jdoe"],
+      basis: "page-contributor",
+      verification: "unavailable",
+      audit: [{ step: "page-contributors", outcome: "hit", detail: "top recency-weighted contributor of 2: jdoe" }],
+      degraded: ["The configured directory failed during active-employee checks (LDAP ECONNREFUSED) — owners in this run are UNVERIFIED."],
+    } as never,
+    labels: [],
+    directoryWired: true,
+    directoryLabel: "LDAP (Corp)",
+  });
+  assert.match(out, /CONFIGURED BUT UNAVAILABLE/);
+  assert.match(out, /UNVERIFIED/);
+  assert.match(out, /## Troubleshooting/);
+  assert.match(out, /Test Connection/);
+});
+
 test("renderOwners marks inactive contacts and reports directory-on validation", () => {
   const out = renderOwners({
     resolution: { owners: ["jdoe"], basis: "top contributor", considered: [{ sam: "jdoe", count: 4, score: 0.8 }] } as never,
