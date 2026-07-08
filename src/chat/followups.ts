@@ -75,7 +75,17 @@ export function computeFollowups(input: FollowupInput): Followup[] {
 
   // Dedup by label, keep the most relevant three, then always append a
   // cost/activity option (reflecting the dollar estimate now shown).
+  //
+  // IMPORTANT: this is a PLAIN-LANGUAGE prompt, not the `/usage` slash command.
+  // A VS Code chat follow-up inherits the CURRENT slash command when it doesn't
+  // set one, so a `/usage` follow-up would leave the chat "in /usage mode" and
+  // make the NEXT round of follow-ups (dossier, owners, …) all re-run /usage.
+  // A natural-language ask keeps every turn command-free (the model answers via
+  // the copilot_usage tool, which now includes the dollar cost).
   const seen = new Set<string>();
   const top = contextual.filter((f) => (seen.has(f.label) ? false : (seen.add(f.label), true))).slice(0, 3);
-  return [...top, { prompt: "/usage", label: "Check Copilot cost & activity" }];
+  return [
+    ...top,
+    { prompt: "How many Copilot requests have I used this month, and what's the estimated cost?", label: "Check Copilot cost & activity" },
+  ];
 }
