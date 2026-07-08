@@ -10,7 +10,7 @@ import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
 import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
-import { looksLikeConfluenceOptimization } from "./intent";
+import { looksLikeConfluenceOptimization, confluenceOptimizationSeed } from "./intent";
 import { computeFollowups } from "./followups";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
@@ -843,7 +843,21 @@ async function answerWithModel(
       stream.button(
         activeProject
           ? { command: "aiSharePoint.startProjectWorkspace", title: "📁 Track this in the project workspace", arguments: [activeProject] }
-          : { command: "aiSharePoint.createProject", title: "📁 Create a project to track this" },
+          : {
+              command: "aiSharePoint.createProject",
+              title: "📁 Create a project to track this",
+              // Pre-populate the wizard from the cleanup context: a sensible
+              // name/goals/instructions and the Confluence source(s) in scope.
+              arguments: [
+                confluenceOptimizationSeed(
+                  request.prompt,
+                  deps.projects
+                    .scope(deps.sources.list())
+                    .filter((s) => s.type === "confluence")
+                    .map((s) => s.id),
+                ),
+              ],
+            },
       );
     }
   }

@@ -3137,11 +3137,17 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // --- Projects: named scopes for sources/bookmarks/instructions -----------
-  const promptProjectDetails = async (current?: Project): Promise<Project | undefined> => {
+  const promptProjectDetails = async (
+    current?: Project,
+    /** Pre-fill values for a NEW project (e.g. a Confluence space cleanup),
+     *  so the wizard opens populated instead of blank. Ignored when editing. */
+    seed?: { name?: string; description?: string; goals?: string; instructions?: string; sourceIds?: string[] },
+  ): Promise<Project | undefined> => {
+    const pre = current ? undefined : seed;
     const name = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: current ? "Project — name" : "New project — name",
-      value: current?.name ?? "",
+      value: current?.name ?? pre?.name ?? "",
       placeHolder: "AI Automation Initiative",
       validateInput: (v) => (v.trim() ? undefined : "Enter a project name"),
     });
@@ -3149,13 +3155,13 @@ export function activate(context: vscode.ExtensionContext): void {
     const description = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "Project — description (optional, Enter to skip)",
-      value: current?.description ?? "",
+      value: current?.description ?? pre?.description ?? "",
     });
     if (description === undefined) return undefined;
     const goals = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "Project — goals / objectives (optional, Enter to skip)",
-      value: current?.goals ?? "",
+      value: current?.goals ?? pre?.goals ?? "",
       placeHolder: "e.g. Build an AI-automation knowledge base; identify owners of legacy apps.",
       prompt: `What this project is for. Shown to @sharepoint as your goals (max ${GOALS_MAX_CHARS} chars).`,
       validateInput: (v) => (v.length > GOALS_MAX_CHARS ? `Max ${GOALS_MAX_CHARS} characters.` : undefined),
@@ -3164,7 +3170,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const instructions = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "Project — instructions & reference context (optional, Enter to skip)",
-      value: current?.instructions ?? "",
+      value: current?.instructions ?? pre?.instructions ?? "",
       placeHolder: "e.g. Prefer the CMDB for application questions; cite Confluence pages; answer in German.",
       prompt: `Your baseline instructions + common reference context, prepended to every @sharepoint turn while active (max ${INSTRUCTIONS_MAX_CHARS} chars). Separate from the AI-managed context.`,
       validateInput: (v) =>
@@ -3176,7 +3182,7 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showWarningMessage("Add at least one reference source before scoping a project.");
       return undefined;
     }
-    const member = new Set(current?.sourceIds ?? []);
+    const member = new Set(current?.sourceIds ?? pre?.sourceIds ?? []);
     const picks = await vscode.window.showQuickPick(
       all.map((s) => ({
         label: s.displayName,
@@ -3203,8 +3209,14 @@ export function activate(context: vscode.ExtensionContext): void {
     };
   };
 
-  register("aiSharePoint.createProject", async () => {
-    const project = await promptProjectDetails();
+  register("aiSharePoint.createProject", async (arg) => {
+    // A caller (e.g. the chat "Create a project to track this" button for a
+    // Confluence space cleanup) may pass a seed to pre-populate the wizard.
+    const seed =
+      arg && typeof arg === "object"
+        ? (arg as { name?: string; description?: string; goals?: string; instructions?: string; sourceIds?: string[] })
+        : undefined;
+    const project = await promptProjectDetails(undefined, seed);
     if (!project) return;
     await projects.upsert(project);
     await projects.setActive(project.id);
