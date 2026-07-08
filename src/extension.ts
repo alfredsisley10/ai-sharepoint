@@ -13,6 +13,7 @@ import { estimateProbeCost } from "./copilot/premiumCost";
 import { readPremiumPricing } from "./copilot/premiumPricing";
 import { formatCost } from "./copilot/tokenCost";
 import { AuthProviderRegistry, AUTH_PROVIDERS } from "./auth/providerRegistry";
+import { DeviceCodePrompt } from "./auth/deviceCodeProvider";
 import { tenantCacheHandle } from "./auth/msalCache";
 import { isSupportedSiteUrl } from "./auth/sharePointClient";
 import { SitesStore, SiteConnection } from "./auth/sitesStore";
@@ -35,7 +36,7 @@ import { PROBE_MAX_STEPS } from "./core/contextProbe";
 import { runContextLimitProbe } from "./chat/contextLimitProbe";
 import { discoverAdvertisedLimits, maybeOfferContextProbe } from "./chat/modelLimitDiscovery";
 import { ModelLimitsStore } from "./diagnostics/modelLimitsStore";
-import { buildLessonsExport, lessonsToMarkdown } from "./diagnostics/lessons";
+import { buildLessonsExport, lessonsToMarkdown, LESSON_CATEGORIES } from "./diagnostics/lessons";
 import { SyncConfigStore, SiteSyncConfig } from "./sync/syncConfigStore";
 import { SyncEngine } from "./sync/syncEngine";
 import { openOrInitRepository } from "./sync/vscodeGit";
@@ -92,6 +93,7 @@ import {
   EXPORT_TIMEOUT_MS,
   EXPORT_DIR,
 } from "./context/exportData";
+import { ensureGitignored } from "./context/files/gitignore";
 import { deriveSplunkObsEndpoints } from "./context/adapters/splunkObservability";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
@@ -356,7 +358,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const sites = new SitesStore(context.globalState, context.workspaceState);
   const spSessions = new SharePointSessionStore(context.secrets, context.globalState);
   const registry = new AuthProviderRegistry(secrets, (info) => {
-    void showDeviceCodePrompt(info.userCode, info.verificationUri);
+    void showDeviceCodePrompt(info);
   });
   const access = new SiteAccess(sites, registry);
   const exporter = new DiagnosticsExportService(
@@ -480,6 +482,9 @@ export function activate(context: vscode.ExtensionContext): void {
     if (ws) {
       const dir = vscode.Uri.joinPath(ws.uri, EXPORT_DIR);
       await vscode.workspace.fs.createDirectory(dir);
+      // These files carry raw (unredacted) enterprise data — keep them out of
+      // the user's repo the same way the chat workspace protects itself.
+      await ensureGitignored(ws.uri, `${EXPORT_DIR}/`);
       for (const f of files) {
         await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, f.name), f.bytes);
         paths.push(`${EXPORT_DIR}/${f.name}`);
@@ -4516,6 +4521,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (ws) {
         const dir = vscode.Uri.joinPath(ws.uri, EXPORT_DIR);
         await vscode.workspace.fs.createDirectory(dir);
+        await ensureGitignored(ws.uri, `${EXPORT_DIR}/`);
         target = vscode.Uri.joinPath(dir, fileName);
         shownPath = `${EXPORT_DIR}/${fileName}`;
       } else {
@@ -6419,8 +6425,9 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     await vscode.window.showTextDocument(doc, { preview: true });
     const choice = await vscode.window.showInformationMessage(
-      `${all.length} anonymized lesson(s) captured. Nothing is transmitted — review here, then export a file to share with the developer.`,
+      `${all.length} anonymized lesson(s) captured. Nothing is transmitted — review, revise, or export here.`,
       "Export…",
+      "Edit a Lesson…",
       "Remove Entries…",
       "Clear All",
     );
@@ -6428,6 +6435,46 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.commands.executeCommand("aiSharePoint.exportLessons");
     } else if (choice === "Clear All") {
       await vscode.commands.executeCommand("aiSharePoint.clearLessons");
+    } else if (choice === "Edit a Lesson…") {
+      const pick = await vscode.window.showQuickPick(
+        all.map((l) => ({
+          label: l.lesson.slice(0, 80),
+          description: `${l.category} · ${l.count}×`,
+          detail: `When: ${l.trigger.slice(0, 100)}`,
+          id: l.id,
+        })),
+        { ignoreFocusOut: true, title: "Revise a learned heuristic", placeHolder: "Pick a lesson to edit its trigger/heuristic." },
+      );
+      if (!pick) return;
+      const current = all.find((l) => l.id === pick.id);
+      if (!current) return;
+      const trigger = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Trigger — the situation this applies to",
+        value: current.trigger,
+        prompt: "Keep it generalized/anonymized (no real names, space keys, or URLs — they're re-scrubbed on save).",
+      });
+      if (trigger === undefined) return;
+      const lesson = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Heuristic — the better action to take",
+        value: current.lesson,
+        prompt: "The reusable rule to apply when the trigger matches.",
+      });
+      if (lesson === undefined) return;
+      const category = await vscode.window.showQuickPick(
+        LESSON_CATEGORIES.map((c) => ({ label: c, picked: c === current.category })),
+        { ignoreFocusOut: true, title: "Category" },
+      );
+      const updated = await lessons.update(current.id, {
+        category: (category?.label as (typeof LESSON_CATEGORIES)[number]) ?? current.category,
+        trigger,
+        lesson,
+        ...(current.tags ? { tags: current.tags } : {}),
+      });
+      void vscode.window.showInformationMessage(
+        updated ? "Lesson revised. It applies to future @sharepoint answers immediately." : "No change — the edit was empty.",
+      );
     } else if (choice === "Remove Entries…") {
       const picks = await vscode.window.showQuickPick(
         all.map((l) => ({
@@ -7260,20 +7307,23 @@ export function deactivate(): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function showDeviceCodePrompt(
-  userCode: string,
-  verificationUri: string,
-): Promise<void> {
+async function showDeviceCodePrompt(info: DeviceCodePrompt): Promise<void> {
+  const { userCode, verificationUri } = info;
   const pick = await vscode.window.showInformationMessage(
     `Device-code sign-in: enter code ${userCode} at ${verificationUri}`,
     "Copy Code & Open Browser",
     "Copy Code",
+    "Cancel Sign-in",
   );
   if (pick === "Copy Code & Open Browser") {
     await vscode.env.clipboard.writeText(userCode);
     await vscode.env.openExternal(vscode.Uri.parse(verificationUri));
   } else if (pick === "Copy Code") {
     await vscode.env.clipboard.writeText(userCode);
+  } else if (pick === "Cancel Sign-in") {
+    // Stop MSAL's background polling instead of leaving it to run until the
+    // code expires (~15 min).
+    info.cancel();
   }
 }
 

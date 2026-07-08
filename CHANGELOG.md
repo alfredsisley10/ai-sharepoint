@@ -1,5 +1,125 @@
 # Changelog
 
+## 0.128.0 — 2026-07-08
+
+### Refactor — de-duplication (code-review remediation, batch 6, safe subset)
+- **Shared Confluence REST helpers.** `enc` / `baseOf` / `webUrl` were copy-pasted byte-for-byte across the
+  Confluence adapter family (currency, hierarchy, entitlements, authority, cache, archive, write,
+  ownership). They now live once in `confluenceCommon.ts`, removing the drift risk (one copy trimmed the
+  trailing slash differently) and the duplication. Pure motion — call sites unchanged.
+- **Unified transport handling for raw-fetch adapters.** Power BI, M365 Copilot, and Splunk each hand-rolled
+  the same fetch + timeout + transport-error try/catch. They now share `fetchWithTimeout`, which *also*
+  applies the HTTP/2-reset guidance and proxy / TLS-inspection diagnosis the main HTTP path already had — so
+  a transport failure on these connectors now yields an actionable diagnosis instead of a bare
+  "fetch failed". Each adapter keeps its own status taxonomy and body parsing.
+
+_Deferred (need a runtime-verification path or are churn-without-functional-benefit, so held for dedicated
+PRs): the `CollectionStore<T>` base for the ~20 Memento stores, splitting `contextTools.ts`, and the
+`extension.ts` decomposition._
+
+## 0.127.0 — 2026-07-07
+
+### Fixed — empty-body Graph writes (found while closing test gaps, batch 5)
+- **A successful Outlook "Send" no longer looks like a failure.** Graph's sendMail returns `202 Accepted`
+  with an EMPTY body, but the shared Graph request machinery called `res.json()` unconditionally, throwing
+  "Unexpected end of JSON input" — so a mail that was actually accepted surfaced as an error. Empty response
+  bodies are now treated as an undefined result (like `204`).
+
+### Tests — close coverage gaps (code-review remediation, batch 5)
+- Added a dedicated **Jira adapter** test suite (the one connector adapter without direct tests): verify,
+  free-text-vs-raw-JQL search with the quote-escaping injection guard, ADF-vs-plain description flattening,
+  project/filter listing, Cloud paging with checkpoint abort, and JSM queue enumeration + not-a-JSM notes.
+- Added **CommsClient** tests over the Graph payload shaping: recipient resolution + fallback, oneOnOne vs
+  group Teams chat creation, mail-draft composition (nothing sent), and the send endpoint — the test that
+  surfaced the empty-202 bug above.
+
+## 0.126.0 — 2026-07-07
+
+### Security & compatibility — code-review remediation (batch 4)
+- **Prompt-injection containment for fetched content.** Everything a tool returns (page/document bodies,
+  search snippets, list items, tickets) is other people's data and can carry text crafted to hijack the
+  assistant. Search results, fetched items, and whole-site content scans are now fenced in an
+  `<<<UNTRUSTED … >>>` block (embedded markers are neutralized so content can't forge the boundary), and
+  the system prompt instructs the model to treat anything a tool returns as data, never as instructions —
+  and to refuse and report embedded directives while continuing the user's original request.
+- **Windows reserved device names are escaped in generated paths.** A project slug or page-folder name that
+  landed on a DOS device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9) — or ended in a dot/space — was
+  unwritable on Windows while fine on macOS/Linux. Such names are now minimally escaped, shared by the
+  workspace slug and the dossier page-folder logic.
+- **Runtime compatibility pinned to VS Code's Node.** `@types/node` is pinned to `~20` (VS Code 1.95 runs
+  Node 20 via Electron) instead of `^26`, so code can't typecheck against Node APIs that don't exist at
+  runtime; `engines.node` now declares `>=20`.
+- **Microsoft correlation IDs are captured for support.** Graph/SharePoint failures now include the
+  server's `request-id` / `client-request-id` trace tokens — exactly what Microsoft support asks for — in a
+  labeled form that is exempt from GUID redaction (every other GUID stays redacted).
+- **The diagnostics Markdown companion is leak-scanned too.** The export gate scanned only the JSON; it now
+  scans the human-readable `.md` (which reshapes fields) with the same block-severity abort, since it's
+  written to disk as well.
+
+## 0.125.0 — 2026-07-07
+
+### Reliability — code-review remediation (batch 3)
+- **HTTP responses are size-capped while STREAMING, not after buffering.** The read wrapper previously
+  pulled the entire response body into memory with `res.text()` and only then checked it against the 2 MB
+  read cap (ADR-0012) — so a source streaming far more than the cap (a runaway export, a misbehaving or
+  hostile endpoint, a huge HTML block page) was fully materialized before the cap could fire. It now reads
+  incrementally and cancels the transfer the moment the accumulated bytes cross the cap. Error/diagnostic
+  bodies are read through the same bounded path.
+- **The read-through cache de-duplicates in-flight loads.** `TtlCache.getOrLoad` no longer lets concurrent
+  misses for the same key each fire their own load (thundering herd) — the second caller joins the first's
+  pending load. A rejected load isn't cached and clears the slot so the next call retries; invalidation
+  drops in-flight slots so a post-write read starts fresh.
+- **The space dossier reports when it's INCOMPLETE.** Pages that couldn't be reviewed are now counted, and a
+  throttle (HTTP 429/503) is called out distinctly — the inventory header says how many pages are missing
+  and, when throttled, that re-running (optionally at lower concurrency) should recover them. Previously a
+  throttled sweep silently produced a partial inventory that looked complete.
+- **Device-code sign-in is cancellable.** MSAL polls the token endpoint for up to ~15 minutes; the sign-in
+  prompt now offers **"Cancel Sign-in"**, which stops the poll instead of leaving it running in the
+  background until the code expires.
+
+## 0.124.0 — 2026-07-07
+
+### Performance — Confluence space dossier (code-review remediation, batch 2)
+- **One HTTP check per distinct outbound link across the whole space, not per page.** A dossier of a
+  large space where hundreds of pages link the same handful of intranet hosts previously re-checked each
+  URL once per page (thousands of live-link probes); a shared per-URL link cache collapses this to
+  one check per distinct URL for the entire sweep.
+- **Single flat space enumeration instead of a per-node subtree walk.** The dossier now discovers the
+  space's pages with one paginated `content?spaceKey=` sweep (`total/pageSize` requests) rather than
+  enumerating root pages and recursively materializing each root's subtree (one request per interior
+  node, with overlapping re-materialization). The dossier reviews each page independently, so the tree
+  *shape* the walk recovered wasn't needed.
+- **Flagged-page bodies are reused, not re-fetched.** The currency review already fetches each page's
+  body; it now returns that text (and version), so caching the current content of flagged pages no longer
+  issues a second `getConfluencePage` fetch per flagged page. Byte-for-byte identical content
+  (both paths run the same `htmlToText`).
+
+## 0.123.0 — 2026-07-07
+
+### Fixed / hardened — code-review remediation (batch 1)
+- **Reliability:** `ContextSourcesStore` now **serializes every Memento write**, closing a read-modify-write
+  race where a concurrent operation on a source could clobber the ADR-0009 auth-failure counter (making the
+  account-protection lockout trip late or never) or the source list (a removed source resurrected / an added
+  one dropped).
+- **Supportability:** the diagnostics bundle now reports the **compiled** `EXTENSION_VERSION` (with the
+  manifest version and a **⚠ TORN INSTALL** marker when they disagree) — previously it reported only the
+  manifest version, which *concealed* the torn-install failures the bundle exists to help triage.
+- **Security:** the `ai-sharepoint-exports/` folder (which holds raw, unredacted data exports) is now
+  **git-ignored** automatically, matching the chat-workspace protection, so exports aren't committed by
+  accident. The gitignore logic is now a single shared helper.
+- **Correctness:** fixed a chat-tool reference collision (`aisharepoint_sp_manage_page` and
+  `aisharepoint_list_pages` both claimed `#spPages`; the session tool is now `#spSessionPages`).
+- **Cleanup:** removed four verified-dead exports.
+
+## 0.122.0 — 2026-07-07
+
+### Added — revise learned lessons in place
+- **Learned heuristics are now fully revisable, not just prune-able.** *Review Lessons Learned* gains
+  an **"Edit a Lesson…"** action: pick a captured lesson and edit its trigger, heuristic, and category
+  in place (re-scrubbed/normalized on save, id and observation count preserved; an edit that collides
+  with another lesson merges them). A revised lesson applies to future @sharepoint answers
+  immediately — completing inspect / export / **revise** for the memory the assistant learns.
+
 ## 0.121.0 — 2026-07-07
 
 ### Added — learned heuristics now improve future answers (closed the self-improvement loop)

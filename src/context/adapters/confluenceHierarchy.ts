@@ -1,6 +1,7 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson } from "../http";
 import { classifyError } from "../../core/errors";
+import { enc, baseOf, webUrl } from "./confluenceCommon";
 
 /**
  * Confluence page HIERARCHY & RELATIONSHIPS (ADR-0044). The connector could
@@ -22,15 +23,6 @@ import { classifyError } from "../../core/errors";
  * COMPLETE, not truncated.
  */
 
-const enc = encodeURIComponent;
-
-function baseOf(source: Pick<ContextSource, "baseUrl">): string {
-  return source.baseUrl.replace(/\/$/, "");
-}
-
-function webUrl(source: Pick<ContextSource, "baseUrl">, webui?: string): string {
-  return webui ? `${baseOf(source)}${webui}` : baseOf(source);
-}
 
 export interface PageRef {
   id: string;
@@ -213,6 +205,31 @@ export async function walkDescendantsByChildren(
     frontier = next;
   }
   return out.slice(0, hardCap);
+}
+
+/** EVERY page in a space, flat and fully paginated, in a single sweep.
+ *
+ *  For a whole-space pass (the dossier), enumerating root pages and then
+ *  recursively walking each root's subtree issues one request per interior
+ *  node and re-materializes overlapping subtrees; the flat `content?spaceKey=`
+ *  listing returns the same set in `total/pageSize` requests with no per-node
+ *  tree walk. Tree *shape* is lost (no parentId), which the dossier doesn't
+ *  need — it reviews each page independently. */
+export async function getSpacePages(
+  source: ContextSource,
+  credential: ContextCredential,
+  spaceKey: string,
+  caps: ReadCaps,
+  hardCap = 2000,
+): Promise<PageRef[]> {
+  const results = await fetchAllPages(
+    credential,
+    (start, limit) =>
+      `${baseOf(source)}/rest/api/content?spaceKey=${enc(spaceKey)}&type=page&start=${start}&limit=${limit}`,
+    caps,
+    hardCap,
+  );
+  return results.map((c) => toRef(source, c)).filter((p) => p.id);
 }
 
 /** A space's ROOT pages (the top of its tree), fully paginated. */

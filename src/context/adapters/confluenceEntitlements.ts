@@ -1,5 +1,6 @@
 import { ContextSource, ContextCredential, ReadCaps } from "../types";
 import { fetchJson } from "../http";
+import { enc, baseOf, webUrl } from "./confluenceCommon";
 
 /**
  * Confluence space "manageability" entitlement review (ADR-0044): can the
@@ -12,11 +13,6 @@ import { fetchJson } from "../http";
  * the user belongs to is conservatively reported as a gap (the restriction's
  * groups are included so an admin can verify). Read-only audit.
  */
-
-const enc = encodeURIComponent;
-const baseOf = (source: Pick<ContextSource, "baseUrl">): string => source.baseUrl.replace(/\/$/, "");
-const webUrl = (source: Pick<ContextSource, "baseUrl">, webui?: string): string =>
-  webui ? `${baseOf(source)}${webui}` : baseOf(source);
 
 export interface RestrictionSet {
   users: string[];

@@ -16,6 +16,11 @@ export interface DeviceCodePrompt {
   verificationUri: string;
   message: string;
   expiresInSeconds: number;
+  /** Abandon the sign-in: stops MSAL's ~15-minute polling of the token
+   *  endpoint. Wired to a "Cancel sign-in" affordance so a user who can't (or
+   *  decides not to) complete the flow isn't left with a request polling in the
+   *  background until the code expires. Idempotent. */
+  cancel: () => void;
 }
 
 /**
@@ -57,6 +62,13 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
       return silent;
     }
 
+    // MSAL polls the token endpoint until the user authenticates OR the code
+    // expires (~15 min). Setting `request.cancel = true` stops that loop on its
+    // next tick; we expose it as a `cancel()` on the prompt so the UI can offer
+    // an explicit "Cancel sign-in" instead of leaving a poll running in the
+    // background. A cancelled poll resolves to `null`, so we distinguish it
+    // from a genuine no-token result to give the user the right message.
+    let cancelled = false;
     const request: DeviceCodeRequest = {
       scopes,
       deviceCodeCallback: (info) =>
@@ -65,6 +77,10 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
           verificationUri: info.verificationUri,
           message: info.message,
           expiresInSeconds: info.expiresIn,
+          cancel: () => {
+            cancelled = true;
+            request.cancel = true;
+          },
         }),
     };
     let result;
@@ -74,6 +90,13 @@ export class DeviceCodeProvider implements SharePointAuthProvider {
       // The code-poll loop is HTTPS to the token endpoint — name a proxy/
       // TLS-inspection/content-filter cause when the failure carries one.
       throw describeSignInFailure(err, this.authority);
+    }
+    if (cancelled) {
+      throw new AppError(
+        "Device-code sign-in was cancelled.",
+        "auth.failed",
+        "You cancelled the sign-in before it completed.",
+      );
     }
     if (!result) {
       throw new AppError("Device-code sign-in returned no token.", "auth.failed");

@@ -30,6 +30,7 @@ import {
   pageFolderName,
 } from "./spaceDossier";
 import { buildXlsx } from "./files/xlsxWrite";
+import { ensureGitignored } from "./files/gitignore";
 
 /**
  * Filesystem + redaction layer for project chat workspaces (ADR-0048). Writes
@@ -319,17 +320,7 @@ export class ChatWorkspaceStore {
   /** Append `.ai-sharepoint/` to the workspace root .gitignore (idempotent) so
    *  chat content isn't committed by accident. No-op without a workspace folder. */
   private async ensureGitignored(): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-    if (!folder) return;
-    const gi = vscode.Uri.joinPath(folder, ".gitignore");
-    const cur = await this.readText(gi);
-    if (cur === undefined) {
-      await this.writeText(gi, `${GITIGNORE_LINE}\n`).catch(() => undefined);
-      return;
-    }
-    if (cur.split(/\r?\n/).some((l) => l.trim() === GITIGNORE_LINE || l.trim() === ".ai-sharepoint")) return;
-    const sep = cur.endsWith("\n") ? "" : "\n";
-    await this.writeText(gi, `${cur}${sep}${GITIGNORE_LINE}\n`).catch(() => undefined);
+    await ensureGitignored(vscode.workspace.workspaceFolders?.[0]?.uri, GITIGNORE_LINE);
   }
 
   dispose(): void {

@@ -8,6 +8,7 @@ import {
   ConfluenceWriteResult,
   CONFLUENCE_WRITE_HEADERS,
 } from "./confluenceWrite";
+import { enc, baseOf } from "./confluenceCommon";
 
 /**
  * Confluence content-lifecycle constructs (ADR-0039) — the compliance-friendly
@@ -26,8 +27,6 @@ import {
  * (notify the resolved owner before archiving / removing).
  */
 
-const enc = encodeURIComponent;
-const baseOf = (source: Pick<ContextSource, "baseUrl">): string => source.baseUrl.replace(/\/$/, "");
 
 export const ARCHIVE_ROOT_TITLE = "Archive";
 

@@ -1,5 +1,6 @@
 import { ContextSource, ContextSearchHit, ReadCaps } from "../types";
 import { AppError } from "../../core/errors";
+import { fetchWithTimeout } from "../http";
 import { wireEnabled, emitWire, safeJson, safeUrl } from "../../core/wireLog";
 
 /**
@@ -273,9 +274,9 @@ async function graphFetch<T>(path: string, token: string, timeoutMs: number, bod
       `Authorization: Bearer ***${body !== undefined ? `\n${safeJson(body)}` : ""}`,
     );
   }
-  let res: Response;
-  try {
-    res = await fetch(`${GRAPH_BASE}${path}`, {
+  const res = await fetchWithTimeout(
+    `${GRAPH_BASE}${path}`,
+    {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -283,19 +284,10 @@ async function graphFetch<T>(path: string, token: string, timeoutMs: number, bod
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    emitWire(
-      "m365copilot",
-      "✗",
-      `${method} ${safeUrl(path)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`,
-    );
-    throw new AppError(
-      `Microsoft 365 request failed: ${err instanceof Error ? err.message : String(err)}`,
-      "network",
-    );
-  }
+    },
+    timeoutMs,
+    "m365copilot",
+  );
   if (!res.ok) {
     emitWire("m365copilot", "✗", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
   }

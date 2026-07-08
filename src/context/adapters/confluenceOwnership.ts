@@ -1,6 +1,7 @@
 import { ContextSource, ContextCredential } from "../types";
 import { fetchJson } from "../http";
 import { CONFLUENCE_WRITE_HEADERS } from "./confluenceWrite";
+import { enc, baseOf as base } from "./confluenceCommon";
 
 /**
  * Confluence page-ownership construct (ADR-0039). Determines and manages the
@@ -21,9 +22,6 @@ import { CONFLUENCE_WRITE_HEADERS } from "./confluenceWrite";
  * Designed for Confluence Data Center, where a version author's `by.username`
  * IS the AD sAMAccountName (Cloud exposes accountId/publicName instead).
  */
-
-const enc = encodeURIComponent;
-const base = (source: Pick<ContextSource, "baseUrl">): string => source.baseUrl.replace(/\/$/, "");
 
 export const DEFAULT_OWNER_MARKER = "owners";
 
@@ -299,20 +297,6 @@ async function spaceVersionAuthors(
     }
   }
   return authors;
-}
-
-/** Most prolific contributors for a SPACE — bounded: tally version authors
- *  across the space's pages (capped). An approximation, not a full crawl. */
-export async function getConfluenceSpaceContributors(
-  source: ContextSource,
-  credential: ContextCredential,
-  spaceKey: string,
-  timeoutMs: number,
-  maxPages = 25,
-  maxVersionsPerPage = 100,
-): Promise<ContributorTally[]> {
-  const authors = await spaceVersionAuthors(source, credential, spaceKey, timeoutMs, maxPages, maxVersionsPerPage);
-  return tallyContributors(authors.map((a) => a.sam));
 }
 
 /** Space contributors ranked by RECENCY-WEIGHTED activity. */

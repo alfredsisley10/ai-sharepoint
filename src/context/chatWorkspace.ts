@@ -13,6 +13,8 @@
  * unit-tested; chatWorkspaceStore.ts layers the filesystem + redaction on top.
  */
 
+import { avoidReservedName } from "./files/safeName";
+
 export interface ToolResultRef {
   name: string;
   /** Bounded, redacted result text captured for reuse. */
@@ -68,14 +70,15 @@ export const OUTLINE_ITEM_MAX = 140;
 export const OUTLINE_CAP = 100;
 const TITLE_MAX = 80;
 
-/** Filesystem-safe slug for a project name (folder name). Never empty. */
+/** Filesystem-safe slug for a project name (folder name). Never empty, and
+ *  never a Windows reserved device name (CON/NUL/COM1…). */
 export function slugify(name: string): string {
   const s = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
-  return s || "project";
+  return avoidReservedName(s || "project");
 }
 
 /** One-line snippet of a longer text (collapse whitespace, cap length). */

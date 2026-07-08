@@ -3,6 +3,7 @@ import { fetchJson } from "../http";
 import { AppError } from "../../core/errors";
 import { EXTENSION_VERSION } from "../../core/version";
 import { codeBlock, taskList, horizontalRule, tableOfContents } from "./confluenceMacros";
+import { enc, baseOf as base, webUrl } from "./confluenceCommon";
 
 /**
  * Confluence write client (ADR-0038): create / update / delete pages in a
@@ -16,8 +17,6 @@ import { codeBlock, taskList, horizontalRule, tableOfContents } from "./confluen
  * with version-bumped updates and storage-format bodies) rather than the
  * SharePoint-shaped PushWriter (lists/columns/canvas).
  */
-
-const enc = encodeURIComponent;
 
 /**
  * Build the body of the confirmation a user must approve before ANY Confluence
@@ -98,13 +97,6 @@ export const CONFLUENCE_WRITE_HEADERS: Record<string, string> = {
   "User-Agent": `ai-toolkit-confluence/${EXTENSION_VERSION}`,
 };
 
-function base(source: Pick<ContextSource, "baseUrl">): string {
-  return source.baseUrl.replace(/\/$/, "");
-}
-
-function webUrl(source: Pick<ContextSource, "baseUrl">, webui?: string): string {
-  return webui ? `${base(source)}${webui}` : base(source);
-}
 
 export interface ConfluencePageWrite {
   spaceKey: string;

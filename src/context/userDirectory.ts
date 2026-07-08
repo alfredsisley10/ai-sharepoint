@@ -1,4 +1,4 @@
-import { ContextSource, ContextCredential, ReadCaps } from "./types";
+import { ContextCredential, ReadCaps } from "./types";
 import { fetchJson } from "./http";
 
 /**
@@ -143,6 +143,3 @@ export function ldapUserDirectoryByEmail(
     return entry ? parseLdapUser(entry) : undefined;
   };
 }
-
-// Keep the ContextSource import meaningful for callers wiring real sources.
-export type DirectorySource = Pick<ContextSource, "id" | "type" | "baseUrl">;

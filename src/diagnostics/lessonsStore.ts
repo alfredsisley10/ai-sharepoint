@@ -94,6 +94,30 @@ export class LessonsStore {
     return this.state.lessons.length;
   }
 
+  /** Revise a lesson in place: re-normalize + scrub the edited fields and store
+   *  them on the existing entry (id/count/timestamps preserved). Returns the
+   *  updated lesson, or undefined if the id is unknown or the edit is empty. If
+   *  the edit collides with another existing lesson's key, the two are merged
+   *  (the edited one wins content) and the duplicate removed. */
+  async update(id: string, input: Partial<LessonInput>): Promise<Lesson | undefined> {
+    const idx = this.state.lessons.findIndex((l) => l.id === id);
+    if (idx < 0) return undefined;
+    const clean = normalizeLesson(input);
+    if (!clean) return undefined;
+    const revised: Lesson = { ...this.state.lessons[idx], ...clean };
+    // If the revision now matches a DIFFERENT lesson's key, fold them together.
+    const key = lessonKey(revised);
+    const dupIdx = this.state.lessons.findIndex((l, i) => i !== idx && lessonKey(l) === key);
+    this.state.lessons[idx] = revised;
+    if (dupIdx >= 0) {
+      revised.count += this.state.lessons[dupIdx].count;
+      this.state.lessons.splice(dupIdx, 1);
+    }
+    await this.memento.update(KEY, this.state);
+    this.emitter.fire();
+    return revised;
+  }
+
   async remove(ids: string[]): Promise<void> {
     const drop = new Set(ids);
     this.state.lessons = this.state.lessons.filter((l) => !drop.has(l.id));

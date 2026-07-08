@@ -6,6 +6,7 @@ import {
 } from "../types";
 import { rowsToHits } from "../db/readSafe";
 import { AppError } from "../../core/errors";
+import { fetchWithTimeout } from "../http";
 import { wireEnabled, emitWire, safeJson, safeUrl } from "../../core/wireLog";
 
 /**
@@ -172,9 +173,9 @@ async function pbiFetch<T>(
       `Authorization: Bearer ***${init?.body !== undefined ? `\n${safeJson(init.body)}` : ""}`,
     );
   }
-  let res: Response;
-  try {
-    res = await fetch(`${POWERBI_BASE}${path}`, {
+  const res = await fetchWithTimeout(
+    `${POWERBI_BASE}${path}`,
+    {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -182,19 +183,10 @@ async function pbiFetch<T>(
         ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    emitWire(
-      "powerbi",
-      "✗",
-      `${method} ${safeUrl(path)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`,
-    );
-    throw new AppError(
-      `Power BI request failed: ${err instanceof Error ? err.message : String(err)}`,
-      "network",
-    );
-  }
+    },
+    timeoutMs,
+    "powerbi",
+  );
   if (!res.ok) {
     emitWire("powerbi", "✗", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
   }

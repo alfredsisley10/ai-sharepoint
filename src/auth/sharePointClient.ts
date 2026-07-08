@@ -1,5 +1,6 @@
 import { SharePointAuthProvider } from "./types";
 import { AppError } from "../core/errors";
+import { msCorrelationSuffix } from "../core/msCorrelation";
 import { detectProxyInterference, detectProxyFromError, hostOf } from "../core/networkDiagnostics";
 import { wireEnabled, emitWire, capDetail, safeJson, safeUrl } from "../core/wireLog";
 import { SpEditor, fetchSharePointPageEditors } from "./sharePointOwnership";
@@ -388,7 +389,7 @@ export class SharePointClient {
                 ? "graph.throttled"
                 : "graph.error";
       throw new AppError(
-        `Graph request failed (${res.status} ${res.statusText}): ${errBody.slice(0, 500)}`,
+        `Graph request failed (${res.status} ${res.statusText}): ${errBody.slice(0, 500)}${msCorrelationSuffix(res.headers)}`,
         code,
       );
     }
@@ -396,7 +397,16 @@ export class SharePointClient {
       emitWire("graph", "←", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
       return undefined as T;
     }
-    const parsed = (await res.json()) as T;
+    // Some accepted writes reply with NO body — Graph's sendMail answers 202
+    // Accepted and empty, so an unconditional res.json() throws "Unexpected end
+    // of JSON input" and a successful send surfaces as a failure. Treat an empty
+    // body as an undefined result.
+    const raw = await res.text();
+    if (!raw) {
+      emitWire("graph", "←", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
+      return undefined as T;
+    }
+    const parsed = JSON.parse(raw) as T;
     if (wireEnabled()) {
       emitWire(
         "graph",

@@ -76,6 +76,38 @@ test("ttl cache: hit before expiry, miss after, read-through loads once", async 
   assert.deepEqual(await cache.getOrLoad(key, 1000, load), { v: 2 });
 });
 
+test("ttl cache: concurrent misses share one in-flight load (no thundering herd)", async () => {
+  const cache = new TtlCache(() => 0);
+  let loads = 0;
+  let release: (v: { v: number }) => void = () => {};
+  const gate = new Promise<{ v: number }>((r) => (release = r));
+  const load = () => {
+    loads++;
+    return gate;
+  };
+  const key = TtlCache.key("s1", "search", "q");
+  const a = cache.getOrLoad(key, 1000, load);
+  const b = cache.getOrLoad(key, 1000, load);
+  release({ v: 42 });
+  assert.deepEqual(await a, { v: 42 });
+  assert.deepEqual(await b, { v: 42 });
+  assert.equal(loads, 1, "both callers shared a single load");
+});
+
+test("ttl cache: a rejected load is not cached and clears the in-flight slot", async () => {
+  const cache = new TtlCache(() => 0);
+  let attempt = 0;
+  const load = async () => {
+    attempt++;
+    if (attempt === 1) throw new Error("boom");
+    return { v: attempt };
+  };
+  const key = TtlCache.key("s1", "search", "q");
+  await assert.rejects(() => cache.getOrLoad(key, 1000, load), /boom/);
+  // The failure wasn't memoized — a retry loads fresh and succeeds.
+  assert.deepEqual(await cache.getOrLoad(key, 1000, load), { v: 2 });
+});
+
 test("invalidateSource clears only that source's entries", () => {
   const cache = new TtlCache(() => 0);
   cache.set(TtlCache.key("s1", "search", "a"), 1, 1000);

@@ -14,6 +14,7 @@ import { ErrorReportStore } from "./errorReports";
 import { UsageMeter } from "../copilot/meter";
 import { SitesStore } from "../auth/sitesStore";
 import { anonHost, anonToken } from "../core/anonymize";
+import { EXTENSION_VERSION } from "../core/version";
 import { GRAPH_POWERSHELL_CLIENT_ID } from "../auth/authConfig";
 import { Logger } from "../core/log";
 
@@ -69,8 +70,12 @@ export class DiagnosticsExportService {
     const json = JSON.stringify(bundle, null, 2);
     const markdown = bundleToMarkdown(bundle);
 
-    // Defense-in-depth gate: refuse to export anything secret-shaped.
-    const findings = scanForLeaks(json, [bundle.anonymousInstallId]);
+    // Defense-in-depth gate: refuse to export anything secret-shaped. Scan
+    // BOTH artifacts — the JSON AND the Markdown companion — since the renderer
+    // reshapes fields (unescaping, concatenation, headings) and could surface a
+    // secret-shaped string the raw JSON structure obscured; the .md is written
+    // to disk too, so it must pass the same bar.
+    const findings = scanForLeaks(`${json}\n${markdown}`, [bundle.anonymousInstallId]);
     const blockers = findings.filter((f) => f.severity === "block");
     if (blockers.length > 0) {
       this.log.error(
@@ -156,7 +161,11 @@ export class DiagnosticsExportService {
       scope,
       anonymousInstallId: identity.id,
       environment: {
-        extensionVersion: String(this.ctx.extension.packageJSON.version ?? "0.0.0"),
+        // The COMPILED version is authoritative; the manifest version can lag in
+        // a torn install (the exact failure this bundle should help triage).
+        extensionVersion: EXTENSION_VERSION,
+        manifestVersion: String(this.ctx.extension.packageJSON.version ?? "0.0.0"),
+        torn: String(this.ctx.extension.packageJSON.version ?? "") !== EXTENSION_VERSION,
         vscodeVersion: vscode.version,
         platform: `${process.platform}-${process.arch}`,
         uiKind: vscode.env.uiKind === vscode.UIKind.Web ? "web" : "desktop",

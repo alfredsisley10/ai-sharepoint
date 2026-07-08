@@ -26,6 +26,7 @@ import { OwnerResolution } from "../context/adapters/confluenceOwnership";
 import { ManageabilityReport } from "../context/adapters/confluenceEntitlements";
 import { CurrencyReport } from "../context/adapters/confluenceCurrency";
 import { PageRef, HierarchyResult, renderPageTree } from "../context/adapters/confluenceHierarchy";
+import { wrapUntrusted } from "./untrusted";
 
 const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
 
@@ -991,7 +992,7 @@ export function registerContextTools(
           if (hits.length === 0) {
             return `No results in "${source.displayName}" for that query. (Confluence accepts raw CQL, Jira raw JQL, or plain text.)`;
           }
-          return JSON.stringify(hits, null, 2);
+          return wrapUntrusted(`search results from "${source.displayName}"`, JSON.stringify(hits, null, 2));
         },
       ),
     ),
@@ -1003,7 +1004,7 @@ export function registerContextTools(
         async (input) => {
           const source = resolveOrExplain(input.source);
           const item = await service.getItem(source, input.id);
-          return JSON.stringify(item, null, 2);
+          return wrapUntrusted(`item ${input.id} from "${source.displayName}"`, JSON.stringify(item, null, 2));
         },
       ),
     ),

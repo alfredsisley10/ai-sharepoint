@@ -36,10 +36,14 @@ const PATTERNS: Array<{ re: RegExp; replace: string }> = [
     re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
     replace: "[redacted:email]",
   },
-  // GUIDs (tenant ids, site ids, request ids). Full redaction in logs;
-  // diagnostics bundles use salted short-hashes instead (anonymize.ts).
+  // GUIDs (tenant ids, site ids). Full redaction in logs; diagnostics bundles
+  // use salted short-hashes instead (anonymize.ts). EXEMPTION: a GUID written
+  // as `request-id=…` / `client-request-id=…` is a Microsoft server-side
+  // correlation token — NOT identifying, and exactly what Microsoft support
+  // asks for to trace a failure — so the negative lookbehind preserves it while
+  // every other GUID is still redacted.
   {
-    re: /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
+    re: /(?<!request-id=)\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
     replace: "[redacted:guid]",
   },
   // SharePoint tenant hostnames across commercial + sovereign clouds.

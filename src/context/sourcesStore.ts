@@ -22,12 +22,26 @@ const credentialHandle = (sourceId: string) => `context:${sourceId}:credential`;
 export class ContextSourcesStore {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.emitter.event;
+  /** Serializes every Memento mutation so a read-modify-write can't be clobbered
+   *  by a concurrent one — the ADR-0009 lockout counter and the source list both
+   *  read the current state, mutate, then `await update`, and that await is a real
+   *  yield point (a tree refresh, a dossier, or a keep-alive can overlap). Without
+   *  this the failure count under-counts and the account-protection breaker trips
+   *  late or never. Each queued op re-reads state so it always builds on the
+   *  previous write's result. */
+  private writeChain: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly state: vscode.Memento,
     private readonly secrets: SecretStore,
     private readonly now: () => string,
   ) {}
+
+  private serialize<T>(op: () => Promise<T>): Promise<T> {
+    const next = this.writeChain.catch(() => undefined).then(op);
+    this.writeChain = next;
+    return next;
+  }
 
   list(): ContextSource[] {
     return this.state.get<ContextSource[]>(SOURCES_KEY) ?? [];
@@ -44,6 +58,11 @@ export class ContextSourcesStore {
   }
 
   async upsert(source: ContextSource): Promise<void> {
+    return this.serialize(() => this._upsert(source));
+  }
+
+  /** Unserialized upsert body — call only from within a serialized op. */
+  private async _upsert(source: ContextSource): Promise<void> {
     const all = this.list().filter((s) => s.id !== source.id);
     all.push(source);
     all.sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -52,16 +71,18 @@ export class ContextSourcesStore {
   }
 
   async remove(id: string): Promise<void> {
-    await this.state.update(
-      SOURCES_KEY,
-      this.list().filter((s) => s.id !== id),
-    );
-    await this.secrets.delete(credentialHandle(id));
-    const failures = this.failures();
-    if (failures[id]) {
-      await this.state.update(FAILURES_KEY, recordSuccess(failures, id));
-    }
-    this.emitter.fire();
+    return this.serialize(async () => {
+      await this.state.update(
+        SOURCES_KEY,
+        this.list().filter((s) => s.id !== id),
+      );
+      await this.secrets.delete(credentialHandle(id));
+      const failures = this.failures();
+      if (failures[id]) {
+        await this.state.update(FAILURES_KEY, recordSuccess(failures, id));
+      }
+      this.emitter.fire();
+    });
   }
 
   // --- credentials (keychain only) ---------------------------------------
@@ -91,24 +112,30 @@ export class ContextSourcesStore {
   }
 
   async noteAuthFailure(id: string): Promise<void> {
-    await this.state.update(
-      FAILURES_KEY,
-      recordAuthFailure(this.failures(), id, this.now()),
-    );
-    this.emitter.fire();
+    return this.serialize(async () => {
+      await this.state.update(
+        FAILURES_KEY,
+        recordAuthFailure(this.failures(), id, this.now()),
+      );
+      this.emitter.fire();
+    });
   }
 
   async noteSuccess(id: string): Promise<void> {
-    await this.state.update(FAILURES_KEY, recordSuccess(this.failures(), id));
-    const source = this.get(id);
-    if (source) {
-      await this.upsert({ ...source, lastVerifiedAt: this.now() });
-    }
+    return this.serialize(async () => {
+      await this.state.update(FAILURES_KEY, recordSuccess(this.failures(), id));
+      const source = this.get(id);
+      if (source) {
+        await this._upsert({ ...source, lastVerifiedAt: this.now() });
+      }
+    });
   }
 
   async resetLockout(id: string): Promise<void> {
-    await this.state.update(FAILURES_KEY, recordSuccess(this.failures(), id));
-    this.emitter.fire();
+    return this.serialize(async () => {
+      await this.state.update(FAILURES_KEY, recordSuccess(this.failures(), id));
+      this.emitter.fire();
+    });
   }
 
   isLockedOut(id: string): boolean {

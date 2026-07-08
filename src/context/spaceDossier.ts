@@ -1,4 +1,5 @@
 import { Sheet } from "./files/sheet";
+import { avoidReservedName } from "./files/safeName";
 import { NewWorkItem } from "./workItems";
 
 /**
@@ -45,6 +46,14 @@ export interface SpaceDossier {
   totalPages: number;
   /** True when enumeration hit the page cap and the dossier is a partial view. */
   truncated: boolean;
+  /** Pages that could not be reviewed at all (a fetch/review error). They still
+   *  appear in `pages` with a "could not review" issue, but this counts them so
+   *  the dossier can say plainly how complete it is. */
+  reviewFailures?: number;
+  /** True when at least one review failed because the source THROTTLED us
+   *  (429/503). This is the important distinction: those pages aren't
+   *  data-quality problems, the dossier is just INCOMPLETE — re-run it. */
+  throttled?: boolean;
 }
 
 /** A page is "stale" past this age (matches the currency review's default). */
@@ -53,7 +62,7 @@ export const STALE_DAYS = 180;
 /** Filesystem-safe folder name for a page id — the SINGLE definition shared by
  *  the on-disk writer and the outreach link so their paths never diverge. */
 export function pageFolderName(id: string): string {
-  return id.replace(/[^A-Za-z0-9._-]/g, "-") || "page";
+  return avoidReservedName(id.replace(/[^A-Za-z0-9._-]/g, "-") || "page");
 }
 
 export interface PageFlags {
@@ -86,6 +95,11 @@ export interface DossierSummary {
   ownerless: number;
   dataQuality: number;
   owners: number;
+  /** Pages that failed to review (subset of `captured`). */
+  reviewFailures: number;
+  /** A throttle (429/503) caused at least one failure — the dossier is
+   *  incomplete for a transient reason; re-running should recover it. */
+  throttled: boolean;
 }
 
 export function summarizeDossier(d: SpaceDossier): DossierSummary {
@@ -112,6 +126,8 @@ export function summarizeDossier(d: SpaceDossier): DossierSummary {
     ownerless,
     dataQuality,
     owners: owners.size,
+    reviewFailures: d.reviewFailures ?? 0,
+    throttled: d.throttled ?? false,
   };
 }
 
@@ -165,6 +181,12 @@ export function renderInventoryMarkdown(d: SpaceDossier): string {
     `# Space ${d.spaceKey} — content inventory`,
     "",
     `_Generated ${d.generatedAt} · ${s.captured} of ${s.totalPages} page(s)${d.truncated ? " (capped)" : ""} · ${s.flagged} flagged (${s.stale} stale · ${s.ownerless} no active owner · ${s.dataQuality} data-quality)._`,
+    ...(s.reviewFailures > 0
+      ? [
+          "",
+          `> ⚠ ${s.reviewFailures} page(s) could not be reviewed${s.throttled ? " because the source throttled requests (HTTP 429/503)" : ""} — this inventory is INCOMPLETE${s.throttled ? "; re-run the dossier (optionally with lower concurrency) to fill the gaps" : ""}.`,
+        ]
+      : []),
     "",
     "| Page | Owner | Updated | Stale (days) | Broken links | Flags |",
     "| --- | --- | --- | ---: | ---: | --- |",

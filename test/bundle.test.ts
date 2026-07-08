@@ -79,6 +79,19 @@ test("markdown rendering covers every section and the notice", () => {
   }
 });
 
+test("markdown surfaces a TORN INSTALL warning only when manifest ≠ compiled version", () => {
+  const clean = bundleToMarkdown(buildBundle(inputs()));
+  assert.ok(!clean.includes("TORN INSTALL"));
+  const torn = bundleToMarkdown(
+    buildBundle({
+      ...inputs(),
+      environment: { ...inputs().environment, extensionVersion: "0.122.0", manifestVersion: "0.110.0", torn: true },
+    }),
+  );
+  assert.ok(torn.includes("0.122.0"));
+  assert.ok(/TORN INSTALL.*0\.110\.0/.test(torn));
+});
+
 test("a clean bundle passes the leak scan (install id allowlisted)", () => {
   const bundle = buildBundle(inputs());
   const json = JSON.stringify(bundle);
