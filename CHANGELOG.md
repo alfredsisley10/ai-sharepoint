@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.130.0 — 2026-07-08
+
+### Copilot cost & model transparency
+- **Cost is now shown everywhere it's counted**: per-model and per-task lines in the Copilot Activity tree,
+  a cost line overlaid on the daily activity chart, and in the "Check Copilot cost & activity" chat tool —
+  all at the **configured** premium-request price (the dashboard no longer hardcodes `$0.04`), and the tree +
+  dashboard **refresh live** when you edit the price or token rates.
+- **Model context limits are clearer and honest**: the misleading "budget" is relabeled **"usable"** (the
+  real per-turn budget = the tested/reported ceiling minus the ~15% reserve for tool schemas and
+  multi-round growth), with an accurate tooltip. The probe prompt already showed a dollar estimate.
+- **Model recommendation**: when a turn is trimmed because it exceeds the active model's usable budget, the
+  assistant advises a larger-budget model that would fit and offers a "Compare models" button; the model
+  picker now shows each model's **usable** budget and whether it's tested, not just the advertised max.
+
+### Confluence cleanup workflow
+- **Target-owner detection**: pages with no owner tag now get a suggested owner (recency-weighted top
+  contributor), with **diagnostics** that explain a zero-owner result (usually: no directory wired, so no
+  one can be active-verified). Work items are attributed to the suggested owner and recommend adding the
+  `owners|<sam>` label.
+- **Authoritative cross-source sweep**: after a cleanup you can declare a space authoritative and hunt the
+  stale/inaccurate copies that confuse users across **both** Confluence *and* SharePoint — now spelled out
+  as a guided workflow over the existing mark/gather/find-conflicts + scan_site_content tools.
+- **Project wizard pre-population** for a Confluence cleanup; the **space dossier** now also exports
+  **pages.csv / owners.csv** beside `dossier.xlsx`, and reports **count/percent/ETA** progress.
+
+### Projects tab
+- **Browse the project workspace** in the Projects view: the dossier (inventory, owners, xlsx/csv,
+  recommended-revision scaffolds, per-owner outreach) and chat transcripts are now expandable and open on
+  click.
+
+### Prompt Library & onboarding
+- **Seeded starter prompts** for the flagship flows (space cleanup, dossier, authoritative cross-check,
+  owner outreach, SharePoint content review) — idempotent by id.
+- **Update advisory**: after an extension update, a one-time prompt offers a window reload so new settings,
+  commands, and views register (they only appear after a reload).
+
+### Fixes & polish
+- Rebranded **"Proxy Avoidance" → "Proxy Rules"**; removed the persistent "See what was changed" chat button
+  (the report is still reachable via the command palette); clearer long-op status lines in chat; premium-price
+  node deep-links to the exact setting.
+
 ## 0.129.0 — 2026-07-08
 
 ### Refactor — structural decomposition (previously-deferred batch-6 items)
