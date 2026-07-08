@@ -106,14 +106,16 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<Row> {
       return item;
     }
     if (row.kind === "dir") {
+      // Plain tree item (not resourceUri-backed) so it renders with uniform
+      // indentation/indent-guides like the rest of the Projects tree.
       const item = new vscode.TreeItem(row.name, vscode.TreeItemCollapsibleState.Collapsed);
-      item.resourceUri = row.uri; // native folder icon + theming
+      item.iconPath = vscode.ThemeIcon.Folder;
       item.contextValue = "project-file-dir";
       return item;
     }
     if (row.kind === "file") {
       const item = new vscode.TreeItem(row.name, vscode.TreeItemCollapsibleState.None);
-      item.resourceUri = row.uri; // native per-extension file icon
+      item.iconPath = vscode.ThemeIcon.File;
       item.contextValue = "project-file";
       item.tooltip = row.uri.fsPath;
       // Open on click — text files in an editor tab; xlsx and other binaries in
