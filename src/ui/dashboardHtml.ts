@@ -34,6 +34,9 @@ export interface DashboardData {
   monthCost?: string;
   /** Formatted estimated premium-request cost this month (default $0.04/request). */
   premiumCost?: string;
+  /** Formatted per-premium-request rate in force (from the configured setting),
+   *  shown in the card label so it reflects an enterprise-specific price. */
+  premiumRate?: string;
   /** Active view: "all" (default) or "failed" — clicking the failed/cancelled
    *  card filters the chart + tables to failures only. */
   filter?: "all" | "failed";
@@ -222,7 +225,7 @@ export function renderDashboardHtml(
     <div class="card${failedView ? " active" : ""}" data-filter="all" role="button" tabindex="0" title="Show all activity"><span class="k">${data.monthRequests}</span><span class="s">requests this month${failedView ? " — click to show all" : ""}</span></div>
     <div class="card" data-filter="all"><span class="k">${data.todayRequests}</span><span class="s">requests today</span></div>
     ${data.monthFailures > 0 ? `<div class="card fail${failedView ? " active" : ""}" data-filter="failed" role="button" tabindex="0" title="Filter to failed / cancelled"><span class="k">${data.monthFailures}</span><span class="s">failed / cancelled — click to ${failedView ? "keep" : "filter"} (still billed by GitHub)</span></div>` : ""}
-    ${data.premiumCost !== undefined ? `<div class="card"><span class="k">${esc(data.premiumCost)}</span><span class="s">est. cost this month (premium requests @ $0.04)</span></div>` : ""}
+    ${data.premiumCost !== undefined ? `<div class="card"><span class="k">${esc(data.premiumCost)}</span><span class="s">est. cost this month (premium requests @ ${esc(data.premiumRate ?? "$0.04")}/req)</span></div>` : ""}
     ${data.monthCost !== undefined ? `<div class="card"><span class="k">${esc(data.monthCost)}</span><span class="s">est. token cost this month (your rate)</span></div>` : ""}
   </div>
 

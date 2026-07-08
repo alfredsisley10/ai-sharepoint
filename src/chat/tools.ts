@@ -8,6 +8,10 @@ import { redactError } from "../core/redaction";
 import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { describeColumn, summarizeCanvas, summarizePageContent, PageContentSummary } from "./siteInspect";
 import { wrapUntrusted } from "./untrusted";
+import { premiumCostEnabled, estimatePremiumCost } from "../copilot/premiumCost";
+import { readPremiumPricing } from "../copilot/premiumPricing";
+import { ModelCostTable } from "../copilot/modelCosts";
+import { formatCost } from "../copilot/tokenCost";
 import { resolveSharePointOwners } from "../auth/sharePointOwnership";
 import { UserDirectory, activeFromDirectory, contactOf } from "../context/userDirectory";
 
@@ -400,14 +404,33 @@ export function registerLanguageModelTools(
       guarded<Record<string, never>>("aisharepoint_copilot_usage", "Checking Copilot activity", async () => {
         // One clock read so all figures come from the same month/day window.
         const at = now();
+        const byModel = meter.byModelThisMonth(at);
+        const costs = new ModelCostTable();
+        const premium = readPremiumPricing();
+        const priced = premiumCostEnabled(premium);
+        const money = (n: number) => formatCost(n, premium.currency);
         return JSON.stringify(
           {
             disclaimer:
-              "Factual local counts of the requests this extension made. Premium-request consumption against the user's plan is NOT tracked (no authoritative local source) — the GitHub billing/plan page is.",
+              "Factual local counts of the requests this extension made, plus an ESTIMATED dollar cost at the configured premium-request rate (requests × each model's published multiplier × the rate). It is an estimate — your plan's allowance may make the real charge lower; GitHub billing is authoritative.",
             requestsThisMonth: meter.requestsThisMonth(at),
             failuresThisMonth: meter.failuresThisMonth(at),
             requestsToday: meter.requestsToday(at),
-            byModel: meter.byModelThisMonth(at),
+            ...(priced
+              ? {
+                  pricePerPremiumRequest: money(premium.pricePerRequest),
+                  estimatedPremiumCostThisMonth: money(estimatePremiumCost(byModel, (k) => costs.multiplierFor(k), premium)),
+                }
+              : {}),
+            byModel: byModel.map((m) => ({
+              ...m,
+              ...(priced
+                ? {
+                    premiumMultiplier: costs.badgeFor(m.key),
+                    estimatedPremiumCost: money(estimatePremiumCost([m], (k) => costs.multiplierFor(k), premium)),
+                  }
+                : {}),
+            })),
           },
           null,
           2,

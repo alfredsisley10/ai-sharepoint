@@ -74,6 +74,14 @@ export class UsageDashboard {
           this.render();
         }
       }),
+      // Cost rows derive from settings (premium price / token rates), so
+      // re-render when those change — otherwise the dashboard keeps showing the
+      // old price until the next request.
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration("aiSharePoint.usage") && this.panel?.visible) {
+          this.render();
+        }
+      }),
       this.panel.onDidChangeViewState((e) => {
         if (e.webviewPanel.visible) {
           this.render();
@@ -120,7 +128,9 @@ export class UsageDashboard {
         failures: l.failures,
       })),
       ...(showCost ? { monthCost: formatCost(monthTotal, rates.currency) } : {}),
-      ...(premiumCost !== undefined ? { premiumCost } : {}),
+      ...(premiumCost !== undefined
+        ? { premiumCost, premiumRate: formatCost(premium.pricePerRequest, premium.currency) }
+        : {}),
       filter: this.filter,
       modelLimits: (this.modelLimits?.list() ?? [])
         .map(describeModelLimit)
