@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { ContextSource, Project, rememberNote, forgetNotes, listNotes } from "./types";
+import { MementoListStore } from "./mementoListStore";
 
 export type { Project } from "./types";
 export {
@@ -17,16 +18,13 @@ const PROJECTS_KEY = "aiSharePoint.projects";
 const ACTIVE_KEY = "aiSharePoint.activeProjectId";
 
 
-export class ProjectsStore {
-  private readonly emitter = new vscode.EventEmitter<void>();
-  readonly onDidChange = this.emitter.event;
-
-  constructor(private readonly state: vscode.Memento) {}
+export class ProjectsStore extends MementoListStore<Project> {
+  constructor(state: vscode.Memento) {
+    super(state, PROJECTS_KEY);
+  }
 
   list(): Project[] {
-    return [...(this.state.get<Project[]>(PROJECTS_KEY) ?? [])].sort((a, b) =>
-      a.name.localeCompare(b.name),
-    );
+    return [...this.all()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
   get(id: string): Project | undefined {
@@ -36,14 +34,12 @@ export class ProjectsStore {
   async upsert(project: Project): Promise<void> {
     const next = this.list().filter((p) => p.id !== project.id);
     next.push(project);
-    await this.state.update(PROJECTS_KEY, next);
-    this.emitter.fire();
+    await this.persist(next);
   }
 
   async remove(id: string): Promise<void> {
-    await this.state.update(PROJECTS_KEY, this.list().filter((p) => p.id !== id));
+    await this.persist(this.list().filter((p) => p.id !== id));
     if (this.activeId() === id) await this.setActive(undefined);
-    this.emitter.fire();
   }
 
   activeId(): string | undefined {
@@ -57,7 +53,7 @@ export class ProjectsStore {
 
   async setActive(id: string | undefined): Promise<void> {
     await this.state.update(ACTIVE_KEY, id ?? "");
-    this.emitter.fire();
+    this.notify();
   }
 
   /** Scope a source list to the active project (no project = everything). */
@@ -114,12 +110,7 @@ export class ProjectsStore {
       return { ...p, sourceIds: p.sourceIds.filter((x) => x !== sourceId) };
     });
     if (changed) {
-      await this.state.update(PROJECTS_KEY, next);
-      this.emitter.fire();
+      await this.persist(next);
     }
-  }
-
-  dispose(): void {
-    this.emitter.dispose();
   }
 }

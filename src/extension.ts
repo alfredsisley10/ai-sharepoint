@@ -13,7 +13,15 @@ import { estimateProbeCost } from "./copilot/premiumCost";
 import { readPremiumPricing } from "./copilot/premiumPricing";
 import { formatCost } from "./copilot/tokenCost";
 import { AuthProviderRegistry, AUTH_PROVIDERS } from "./auth/providerRegistry";
-import { DeviceCodePrompt } from "./auth/deviceCodeProvider";
+import {
+  showDeviceCodePrompt,
+  resolveConnArg,
+  resolveSourceArg,
+  bookmarkLocatorIssue,
+  promptSourceAliasAndDescription,
+  renderPullPreview,
+  openBundledDoc,
+} from "./extensionHelpers";
 import { tenantCacheHandle } from "./auth/msalCache";
 import { isSupportedSiteUrl } from "./auth/sharePointClient";
 import { SitesStore, SiteConnection } from "./auth/sitesStore";
@@ -51,7 +59,6 @@ import {
   isBlocked,
   hasChanges,
   commitMessageFor,
-  ChangeReport,
 } from "./sync/changeReport";
 import { parseDesiredState } from "./sync/desiredState";
 import { buildPushPlan, renderPushPlan, hasWork } from "./sync/pushPlan";
@@ -84,7 +91,7 @@ import {
 import { summarizeProbe, summarizeFunctionalityProbe } from "./context/adapters/confluenceProbe";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport, planMemoryImport, planPromptImport, exportLeakBlockers } from "./context/referenceExport";
-import { aliasIssue, normalizeAlias, resolveSourceRef, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
+import { resolveSourceRef } from "./context/sourceRef";
 import {
   rowsToCsv,
   exportFileName,
@@ -123,7 +130,6 @@ import {
   ER_EXHAUSTIVE_PAIR_CAP,
   ER_STATUS_REFRESH_MS,
 } from "./context/db/erDiagram";
-import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { CatalogStore } from "./context/catalogStore";
 import {
   buildCatalog,
@@ -7307,65 +7313,6 @@ export function deactivate(): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function showDeviceCodePrompt(info: DeviceCodePrompt): Promise<void> {
-  const { userCode, verificationUri } = info;
-  const pick = await vscode.window.showInformationMessage(
-    `Device-code sign-in: enter code ${userCode} at ${verificationUri}`,
-    "Copy Code & Open Browser",
-    "Copy Code",
-    "Cancel Sign-in",
-  );
-  if (pick === "Copy Code & Open Browser") {
-    await vscode.env.clipboard.writeText(userCode);
-    await vscode.env.openExternal(vscode.Uri.parse(verificationUri));
-  } else if (pick === "Copy Code") {
-    await vscode.env.clipboard.writeText(userCode);
-  } else if (pick === "Cancel Sign-in") {
-    // Stop MSAL's background polling instead of leaving it to run until the
-    // code expires (~15 min).
-    info.cancel();
-  }
-}
-
-async function resolveConnArg(
-  arg: unknown,
-  sites: SitesStore,
-  title: string,
-): Promise<SiteConnection | undefined> {
-  if (
-    arg &&
-    typeof arg === "object" &&
-    "siteUrl" in arg &&
-    typeof (arg as SiteConnection).siteUrl === "string"
-  ) {
-    return sites.get((arg as SiteConnection).siteUrl) ?? (arg as SiteConnection);
-  }
-  const all = sites.list();
-  if (all.length === 0) {
-    const connect = await vscode.window.showInformationMessage(
-      "No SharePoint connections yet.",
-      "Connect a Site",
-    );
-    if (connect) {
-      await vscode.commands.executeCommand("aiSharePoint.connectSite");
-    }
-    return undefined;
-  }
-  if (all.length === 1) {
-    return all[0];
-  }
-  const pick = await vscode.window.showQuickPick(
-    all.map((c) => ({
-      label: c.displayName,
-      description: c.role,
-      detail: c.siteUrl,
-      conn: c,
-    })),
-    { title },
-  );
-  return pick?.conn;
-}
-
 /** ServiceNow browser sign-in: PKCE auth-code over a loopback redirect —
  *  the browser (and its existing SSO session) does the authenticating;
  *  we only ever see the one-time code and the resulting tokens. */
@@ -7436,96 +7383,6 @@ async function snowBrowserSignIn(
     Date.now(),
   );
   return { method: "snow-oauth", secret: JSON.stringify(tokens) };
-}
-
-/** Validate a bookmark locator at edit/save time. SQL bookmarks must stay
- *  read-only SELECTs (the runtime guard re-checks — this is early feedback);
- *  MongoDB bookmarks must be a valid query spec. */
-function bookmarkLocatorIssue(
-  type: ContextSourceType | undefined,
-  kind: ContextBookmark["kind"],
-  value: string,
-): string | undefined {
-  if (!value.trim()) return "Enter a locator";
-  if (kind !== "query") return undefined;
-  if (type === "mssql" || type === "postgres" || type === "mysql") {
-    const verdict = assertReadOnlySql(value);
-    return verdict.ok ? undefined : verdict.reason;
-  }
-  if (type === "mongodb") {
-    try {
-      parseMongoSpec(value);
-      return undefined;
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err);
-    }
-  }
-  return undefined;
-}
-
-/** Shared by add + edit: optional chat alias (unique, validated) and
- *  description. Enter on an empty box skips/clears; Esc cancels the flow. */
-async function promptSourceAliasAndDescription(
-  existing: ContextSource[],
-  current?: { id?: string; alias?: string; description?: string },
-): Promise<{ alias?: string; description?: string } | undefined> {
-  const aliasRaw = await vscode.window.showInputBox({
-    ignoreFocusOut: true,
-    title: "Chat alias (optional)",
-    value: current?.alias ?? "",
-    placeHolder: 'CMDB — short handle for @sharepoint chat ("…in the CMDB database")',
-    prompt: current?.alias
-      ? "Press Enter to keep/change, or clear the box to remove the alias."
-      : "Press Enter to skip. You can set it later via right-click → Edit Alias & Description.",
-    validateInput: (v) => (v.trim() ? aliasIssue(v, existing, current?.id) : undefined),
-  });
-  if (aliasRaw === undefined) return undefined;
-  const descriptionRaw = await vscode.window.showInputBox({
-    ignoreFocusOut: true,
-    title: "Description (optional)",
-    value: current?.description ?? "",
-    placeHolder: "What's in it — e.g. ServiceNow CMDB replica: application & service inventory",
-    prompt: "Shown to Copilot so it picks the right source for a question. Press Enter to skip.",
-    validateInput: (v) =>
-      v.trim().length > DESCRIPTION_MAX_LENGTH
-        ? `Keep it under ${DESCRIPTION_MAX_LENGTH} characters.`
-        : undefined,
-  });
-  if (descriptionRaw === undefined) return undefined;
-  return {
-    alias: aliasRaw.trim() ? normalizeAlias(aliasRaw) : undefined,
-    description: descriptionRaw.trim() ? descriptionRaw.trim().slice(0, DESCRIPTION_MAX_LENGTH) : undefined,
-  };
-}
-
-async function resolveSourceArg(
-  arg: unknown,
-  store: ContextSourcesStore,
-): Promise<ContextSource | undefined> {
-  if (arg && typeof arg === "object" && "id" in arg && "baseUrl" in arg) {
-    return store.get((arg as ContextSource).id) ?? (arg as ContextSource);
-  }
-  const all = store.list();
-  if (all.length === 0) {
-    const add = await vscode.window.showInformationMessage(
-      "No reference sources configured yet.",
-      "Add Context Source",
-    );
-    if (add) {
-      await vscode.commands.executeCommand("aiSharePoint.addContextSource");
-    }
-    return undefined;
-  }
-  if (all.length === 1) return all[0];
-  const pick = await vscode.window.showQuickPick(
-    all.map((s) => ({
-      label: s.displayName,
-      description: `${s.alias ? `“${s.alias}” · ` : ""}${s.type} · ${s.deployment}`,
-      source: s,
-    })),
-    { ignoreFocusOut: true, title: "Which source?" },
-  );
-  return pick?.source;
 }
 
 interface LdapEndpoint {
@@ -8204,44 +8061,3 @@ async function promptContextCredential(
   return { method, username, secret };
 }
 
-function renderPullPreview(
-  siteName: string,
-  config: SiteSyncConfig,
-  report: ChangeReport,
-): string {
-  const list = (title: string, items: string[]) =>
-    items.length
-      ? [`**${title} (${items.length}):**`, ...items.slice(0, 50).map((f) => `- \`${f}\``),
-         ...(items.length > 50 ? [`- _…and ${items.length - 50} more_`] : []), ""]
-      : [];
-  return [
-    `# Pull preview — ${siteName}`,
-    "",
-    `Target: \`${config.folder}\` · review gate: **${config.reviewGate}**`,
-    "",
-    "> Nothing has been written yet. Confirm in the dialog to apply these changes and commit.",
-    "",
-    ...list("Added", report.added),
-    ...list("Updated", report.updated),
-    ...list("Removed", report.removed),
-    `${report.unchanged} file(s) unchanged.`,
-    "",
-    ...(report.large.length
-      ? [`⚠️ Large files (≥50 MB): ${report.large.join(", ")} — consider excluding before pushing.`, ""]
-      : []),
-    "_Not yet synced (roadmap): navigation, theme, list items/documents, permissions._",
-  ].join("\n");
-}
-
-async function openBundledDoc(
-  context: vscode.ExtensionContext,
-  name: string,
-): Promise<void> {
-  const uri = vscode.Uri.joinPath(context.extensionUri, "docs", name);
-  try {
-    await vscode.commands.executeCommand("markdown.showPreview", uri);
-  } catch {
-    const doc = await vscode.workspace.openTextDocument(uri);
-    await vscode.window.showTextDocument(doc, { preview: true });
-  }
-}

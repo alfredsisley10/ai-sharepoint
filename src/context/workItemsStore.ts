@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { randomUUID } from "crypto";
+import { MementoListStore } from "./mementoListStore";
 import {
   WorkItem,
   WorkItemEvent,
@@ -25,31 +26,25 @@ const KEY = "aiSharePoint.workItems";
  * goes through the pure event log in `workItems.ts`; this wrapper adds ids,
  * timestamps, persistence, and export/import.
  */
-export class WorkItemsStore {
-  private readonly emitter = new vscode.EventEmitter<void>();
-  readonly onDidChange = this.emitter.event;
-
+export class WorkItemsStore extends MementoListStore<WorkItem> {
   constructor(
-    private readonly state: vscode.Memento,
+    state: vscode.Memento,
     private readonly now: () => string = () => new Date().toISOString(),
-  ) {}
+  ) {
+    super(state, KEY);
+  }
 
   list(): WorkItem[] {
-    return this.state.get<WorkItem[]>(KEY) ?? [];
+    return this.all();
   }
 
   get(id: string): WorkItem | undefined {
     return this.list().find((i) => i.id === id);
   }
 
-  private async save(next: WorkItem[]): Promise<void> {
-    await this.state.update(KEY, next);
-    this.emitter.fire();
-  }
-
   private async put(item: WorkItem): Promise<WorkItem> {
     const others = this.list().filter((i) => i.id !== item.id);
-    await this.save([...others, item]);
+    await this.persist([...others, item]);
     return item;
   }
 
@@ -138,7 +133,7 @@ export class WorkItemsStore {
   }
 
   async remove(id: string): Promise<void> {
-    await this.save(this.list().filter((i) => i.id !== id));
+    await this.persist(this.list().filter((i) => i.id !== id));
   }
 
   /** Follow-ups due as of now. */
@@ -159,7 +154,7 @@ export class WorkItemsStore {
   async import(rawJson: string, mode: "replace" | "merge"): Promise<WorkItemsImportResult> {
     const parsed = JSON.parse(rawJson) as unknown;
     const result = importWorkItems(parsed, this.list(), mode);
-    await this.save(result.items);
+    await this.persist(result.items);
     return result;
   }
 }

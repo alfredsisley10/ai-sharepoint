@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.129.0 — 2026-07-08
+
+### Refactor — structural decomposition (previously-deferred batch-6 items)
+- **`contextTools.ts` split.** The Confluence tool renderers (capabilities, validation, owners,
+  manageability, hierarchy, currency) moved to `contextToolsRender.ts` — pure motion that also made them
+  unit-testable for the first time (7 new renderer tests). `contextTools.ts` drops from 1,176 → ~1,020 lines.
+- **`MementoListStore<T>` base.** Bookmarks, projects, work items, prompts, and learned-memory stores shared
+  the same Memento shell (an emitter fired on write, `get<T[]>(KEY) ?? []`, `update`+fire, `dispose`).
+  Extracted once; each store keeps only its domain methods over `all()`/`persist()`. Behavior-preserving —
+  and it gives `WorkItemsStore` the `dispose()` it was missing.
+- **`extension.ts` helper extraction.** The self-contained (non-`activate`-scoped) UI/resolver helpers moved
+  to `extensionHelpers.ts`, trimming the entrypoint by ~184 lines and establishing a home for further
+  command-group extraction. The large auth flows and the `activate()` body itself are left for a follow-up
+  done against a running extension (they have no runtime-verification path in CI).
+
+_All three were held from 0.128.0 pending a safe, verifiable path; this lands the portions that typecheck +
+esbuild bundle + the full test suite fully validate. The `activate()` decomposition proper remains a
+runtime-verified follow-up._
+
 ## 0.128.0 — 2026-07-08
 
 ### Refactor — de-duplication (code-review remediation, batch 6, safe subset)

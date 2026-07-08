@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { MementoListStore } from "./mementoListStore";
 import {
   MemoryItem,
   MemoryScope,
@@ -16,14 +17,13 @@ const KEY = "aiSharePoint.memoryItems";
  * managed site). Global state so it survives folder switches, like the other
  * user-level resources. Pure logic lives in memory.ts; this is the vscode wrapper.
  */
-export class MemoryStore {
-  private readonly emitter = new vscode.EventEmitter<void>();
-  readonly onDidChange = this.emitter.event;
-
-  constructor(private readonly state: vscode.Memento) {}
+export class MemoryStore extends MementoListStore<MemoryItem> {
+  constructor(state: vscode.Memento) {
+    super(state, KEY);
+  }
 
   list(): MemoryItem[] {
-    return this.state.get<MemoryItem[]>(KEY) ?? [];
+    return this.all();
   }
 
   listForScope(scope: MemoryScope): MemoryItem[] {
@@ -34,28 +34,19 @@ export class MemoryStore {
     return this.list().find((m) => m.id === id);
   }
 
-  private async save(next: MemoryItem[]): Promise<void> {
-    await this.state.update(KEY, next);
-    this.emitter.fire();
-  }
-
   add(item: MemoryItem): Promise<void> {
-    return this.save(withMemory(this.list(), item));
+    return this.persist(withMemory(this.list(), item));
   }
 
   update(item: MemoryItem): Promise<void> {
-    return this.save(withUpdatedMemory(this.list(), item));
+    return this.persist(withUpdatedMemory(this.list(), item));
   }
 
   remove(id: string): Promise<void> {
-    return this.save(withoutMemory(this.list(), id));
+    return this.persist(withoutMemory(this.list(), id));
   }
 
   removeForScope(scope: MemoryScope): Promise<void> {
-    return this.save(withoutScope(this.list(), scope));
-  }
-
-  dispose(): void {
-    this.emitter.dispose();
+    return this.persist(withoutScope(this.list(), scope));
   }
 }

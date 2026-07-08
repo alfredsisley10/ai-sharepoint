@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { MementoListStore } from "./mementoListStore";
 import {
   PromptItem,
   PromptScope,
@@ -17,14 +18,13 @@ const KEY = "aiSharePoint.promptItems";
  * other user-level resources. Pure logic lives in promptLibrary.ts; this is the
  * vscode wrapper.
  */
-export class PromptStore {
-  private readonly emitter = new vscode.EventEmitter<void>();
-  readonly onDidChange = this.emitter.event;
-
-  constructor(private readonly state: vscode.Memento) {}
+export class PromptStore extends MementoListStore<PromptItem> {
+  constructor(state: vscode.Memento) {
+    super(state, KEY);
+  }
 
   list(): PromptItem[] {
-    return this.state.get<PromptItem[]>(KEY) ?? [];
+    return this.all();
   }
 
   listForScope(scope: PromptScope): PromptItem[] {
@@ -35,28 +35,19 @@ export class PromptStore {
     return this.list().find((p) => p.id === id);
   }
 
-  private async save(next: PromptItem[]): Promise<void> {
-    await this.state.update(KEY, next);
-    this.emitter.fire();
-  }
-
   add(item: PromptItem): Promise<void> {
-    return this.save(withPrompt(this.list(), item));
+    return this.persist(withPrompt(this.list(), item));
   }
 
   update(item: PromptItem): Promise<void> {
-    return this.save(withUpdatedPrompt(this.list(), item));
+    return this.persist(withUpdatedPrompt(this.list(), item));
   }
 
   remove(id: string): Promise<void> {
-    return this.save(withoutPrompt(this.list(), id));
+    return this.persist(withoutPrompt(this.list(), id));
   }
 
   removeForScope(scope: PromptScope): Promise<void> {
-    return this.save(withoutPromptScope(this.list(), scope));
-  }
-
-  dispose(): void {
-    this.emitter.dispose();
+    return this.persist(withoutPromptScope(this.list(), scope));
   }
 }
