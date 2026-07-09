@@ -11,9 +11,11 @@ import { ContextSource } from "../types";
 /** `encodeURIComponent`, aliased for terse URL construction. */
 export const enc = encodeURIComponent;
 
-/** Base URL with any trailing slash trimmed. */
+/** Base URL with any trailing slashes trimmed (ALL of them — a configured
+ *  `https://host//` would otherwise leave one behind and double the slash in
+ *  every REST URL built on top). */
 export function baseOf(source: Pick<ContextSource, "baseUrl">): string {
-  return source.baseUrl.replace(/\/$/, "");
+  return source.baseUrl.replace(/\/+$/, "");
 }
 
 /** Absolute web URL for a Confluence `_links.webui` path (base when absent). */

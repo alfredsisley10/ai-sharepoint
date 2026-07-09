@@ -1,5 +1,5 @@
 import { catalogByCategory, CapabilityReport, RenderedValidation } from "../context/adapters/confluenceMacros";
-import { OwnerResolution } from "../context/adapters/confluenceOwnership";
+import { OwnerResolution, OwnershipAuditStep, OWNERSHIP_STEP_LABELS } from "../context/adapters/confluenceOwnership";
 import { ManageabilityReport } from "../context/adapters/confluenceEntitlements";
 import { CurrencyReport } from "../context/adapters/confluenceCurrency";
 import { PageRef, HierarchyResult, renderPageTree } from "../context/adapters/confluenceHierarchy";
@@ -63,12 +63,45 @@ export function renderValidation(v: RenderedValidation): string {
 export const UNVERIFIED_OWNER_NOTE =
   "Owner(s) determined WITHOUT active-employee verification: no LDAP/Active Directory reference source is configured, so ownership was resolved from the owner label / recency-weighted contribution history but NOT filtered by who is still an active employee. This is a valid result — just less reliable (a listed owner may have left). To turn on active-employee verification, add an LDAP/Active Directory source via 'Add Context Source' (if your org already has one defined, adding it here is enough — it's used automatically); otherwise ask an admin to define one. Do not report this as a failure.";
 
+const AUDIT_MARKS: Record<OwnershipAuditStep["outcome"], string> = {
+  hit: "✓",
+  "no-result": "·",
+  failed: "✗",
+  skipped: "↷",
+};
+
+/** Targeted troubleshooting per failure kind — rendered only for ✗ steps. */
+function ownershipFailureAdvice(kind: string): string {
+  switch (kind) {
+    case "graph.notFound":
+      return "Check the pageId is the NUMERIC content id (not a tiny-link token or a title), the base URL includes the context path the browser uses (e.g. /confluence for Data Center, /wiki for Cloud), and the connector's deployment type matches the instance.";
+    case "auth.failed":
+      return "The source rejected the stored credential for this read — re-test the connection and refresh the token.";
+    case "graph.forbidden":
+      return "The account can read the page but not this API — ask the space admin to grant it, or use an account with history access.";
+    case "graph.throttled":
+      return "The source throttled the request — wait a moment and re-run with refresh:true.";
+    case "network":
+      return "A network/proxy problem interrupted the read — check connectivity (and any TLS-inspecting proxy) and retry.";
+    default:
+      return "Re-run with refresh:true; if it persists, check the connector's Test Connection and the error above.";
+  }
+}
+
+/** Diagnostics can carry multi-paragraph proxy advice — keep each audit bullet
+ *  on one line so the list stays attached to its ✓/✗ marker. */
+function oneLine(s: string): string {
+  return s.replace(/\s*\n+\s*/g, " ").trim();
+}
+
 export function renderOwners(r: {
   resolution: OwnerResolution;
   labels: string[];
   directoryWired: boolean;
   directoryLabel?: string;
   ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
+  pageProbe?: { ok: boolean; title?: string; spaceKey?: string; error?: string; errorKind?: string };
+  contactLookupFailures?: number;
   cached?: boolean;
 }): string {
   const { resolution } = r;
@@ -91,12 +124,80 @@ export function renderOwners(r: {
         .join(", ")}`,
     );
   }
+
+  // Verification status — three states, each with its user action.
+  const verification = resolution.verification ?? (r.directoryWired ? "directory" : "off");
   lines.push(
     "",
-    r.directoryWired
+    verification === "directory"
       ? `Active-employee validation: ON via ${r.directoryLabel ?? "the configured directory"} (ranked by recency-weighted contribution; inactive contributors skipped).`
-      : UNVERIFIED_OWNER_NOTE,
+      : verification === "unavailable"
+        ? `Active-employee validation: CONFIGURED BUT UNAVAILABLE — the ${r.directoryLabel ?? "directory"} lookup failed during this run${
+            resolution.directoryFault ? ` (${oneLine(resolution.directoryFault)})` : ""
+          }, so owners are reported UNVERIFIED (treated as active). This is a step-down, not a failure of ownership itself. Check the LDAP/Active Directory connector (Test Connection) and re-run with refresh:true to verify.`
+        : UNVERIFIED_OWNER_NOTE,
   );
+
+  // The auditable "how": page probe + every method step with its outcome.
+  const audit = resolution.audit ?? [];
+  const resolved = resolution.owners.length > 0;
+  if (audit.length || r.pageProbe) {
+    lines.push("", "## How ownership was determined");
+    if (r.pageProbe) {
+      lines.push(
+        r.pageProbe.ok
+          ? `- ✓ Page lookup: “${r.pageProbe.title ?? "(untitled)"}”${r.pageProbe.spaceKey ? ` in space ${r.pageProbe.spaceKey}` : ""}`
+          : resolved
+            ? `- ✗ Page lookup failed (${oneLine(r.pageProbe.error ?? "unknown error")}) — page metadata unavailable (limits the space fallback); the methods below still answered.`
+            : `- ✗ Page lookup FAILED: ${oneLine(r.pageProbe.error ?? "unknown error")}${
+                r.pageProbe.errorKind === "graph.notFound" ? " — the pageId itself may be wrong; everything below is best-effort." : ""
+              }`,
+      );
+    }
+    for (const a of audit) {
+      const label = OWNERSHIP_STEP_LABELS[a.step] ?? a.step;
+      const considered = a.considered?.length
+        ? ` (considered: ${a.considered.map((c) => `${c.sam} ${c.count}×`).join(", ")})`
+        : "";
+      lines.push(
+        a.outcome === "failed"
+          ? `- ✗ ${label}: FAILED — ${oneLine(a.error?.message ?? a.detail)}`
+          : `- ${AUDIT_MARKS[a.outcome]} ${label}: ${a.detail}${considered}`,
+      );
+    }
+  }
+
+  // Troubleshooting — only when something actually failed or was dropped.
+  const failures = audit.filter((a) => a.outcome === "failed");
+  const contactDrops = r.contactLookupFailures ?? 0;
+  if (failures.length || r.pageProbe?.ok === false || verification === "unavailable" || contactDrops > 0) {
+    lines.push("", "## Troubleshooting");
+    if (r.pageProbe?.ok === false) {
+      lines.push(
+        `- Page lookup: ${oneLine(r.pageProbe.error ?? "failed")} — ${ownershipFailureAdvice(r.pageProbe.errorKind ?? "unknown")}`,
+      );
+    }
+    for (const f of failures) {
+      lines.push(
+        `- ${OWNERSHIP_STEP_LABELS[f.step] ?? f.step}: ${oneLine(f.error?.message ?? f.detail)} — ${ownershipFailureAdvice(f.error?.kind ?? "unknown")}`,
+      );
+    }
+    if (verification === "unavailable") {
+      lines.push(
+        `- Directory: active-employee checks failed mid-run${
+          resolution.directoryFault ? ` (${oneLine(resolution.directoryFault)})` : ""
+        } — verify the LDAP/Active Directory connector (Test Connection), then re-run with refresh:true.`,
+      );
+    }
+    if (contactDrops > 0) {
+      lines.push(
+        `- Contact lookup failed for ${contactDrops} owner(s) — shown as bare account name(s), possibly missing an inactive flag; re-run with refresh:true once the directory recovers.`,
+      );
+    }
+    lines.push(
+      "- This degraded result was NOT cached. After fixing the issue, re-run with refresh:true to recompute (a plain re-run may serve an older cached answer).",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -164,6 +265,12 @@ export function renderCurrency(r: CurrencyReport): string {
     lines.push(`- ✅ ${r.workingLinks} link(s) reachable`);
   }
   if (r.uncheckedRelativeLinks) lines.push(`- ${r.uncheckedRelativeLinks} relative link(s) not checked`);
+  // DNS-vantage outcomes are NOT broken links: an intranet-only name scanned
+  // off-VPN is unverifiable, and saying so beats a false ❌.
+  if (r.unverifiableLinks?.length) {
+    lines.push(`- ⚠ ${r.unverifiableNote ?? `${r.unverifiableLinks.length} link(s) unverifiable from this network vantage (DNS)`}`);
+    for (const u of r.unverifiableLinks) lines.push(`  - ${u.url}${u.dnsNote ? ` — ${u.dnsNote}` : ""}`);
+  }
   lines.push("", "## Ownership & age");
   lines.push(`- Owner tag: ${r.hasOwnerLabel ? r.owners.map((o) => o.sam).join(", ") : "none"}`);
   if (r.staleDays !== undefined) lines.push(`- Last updated ${r.staleDays} day(s) ago${r.staleDays > 365 ? " — **stale**" : ""}`);

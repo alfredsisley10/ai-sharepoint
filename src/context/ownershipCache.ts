@@ -16,6 +16,14 @@ export interface CachedOwnership {
   directoryWired: boolean;
   directoryLabel?: string;
   ownerContacts?: Array<{ sam: string; displayName?: string; contact?: string; active?: boolean }>;
+  /** Step 0 of the audit: did the pageId resolve at all, and to which page?
+   *  Confirms the id/space before the method steps — the strongest 404
+   *  discriminator (page missing vs. a per-method endpoint problem).
+   *  `errorKind` is the classified ErrorCode so advice matches the failure. */
+  pageProbe?: { ok: boolean; title?: string; spaceKey?: string; error?: string; errorKind?: string };
+  /** Owner contact lookups that failed (owners render as bare sams, possibly
+   *  missing an inactive flag) — counts as a degraded run: never cached. */
+  contactLookupFailures?: number;
 }
 
 export interface OwnershipCacheEntry {

@@ -9,6 +9,7 @@ import { UsageMeter } from "../copilot/meter";
  */
 export class UsageStatusBar {
   private readonly item: vscode.StatusBarItem;
+  private readonly meterListener: vscode.Disposable;
 
   constructor(
     private readonly meter: UsageMeter,
@@ -23,7 +24,7 @@ export class UsageStatusBar {
     this.item.command = "aiSharePoint.showUsage";
     this.refresh();
     this.item.show();
-    meter.onDidChange(() => this.refresh());
+    this.meterListener = meter.onDidChange(() => this.refresh());
   }
 
   refresh(): void {
@@ -50,6 +51,7 @@ export class UsageStatusBar {
   }
 
   dispose(): void {
+    this.meterListener.dispose();
     this.item.dispose();
   }
 }

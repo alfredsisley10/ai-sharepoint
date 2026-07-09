@@ -31,14 +31,15 @@ export interface DossierDeps {
 
 /** Build a dossier for a space, write it into the project workspace, and open a
  *  (de-duplicated) work item per flagged page. Shared by the command and the
- *  chat tool. Returns the dossier, its folder, and how many work items opened. */
+ *  chat tool. Returns the dossier, its folder, and how many work items opened
+ *  (`created` counts actual successes; `failed` counts saves that errored). */
 export async function buildDossierInto(
   project: Project,
   source: ContextSource,
   spaceKey: string,
   deps: DossierDeps,
   onProgress?: (done: number, total: number) => void,
-): Promise<{ dir: vscode.Uri; flagged: number; created: number; total: number; captured: number; truncated: boolean }> {
+): Promise<{ dir: vscode.Uri; flagged: number; created: number; failed: number; total: number; captured: number; truncated: boolean }> {
   const dossier = await deps.contextService.buildConfluenceSpaceDossier(source, spaceKey, { ...(onProgress ? { onProgress } : {}) });
   const dir = await deps.chatWorkspace.writeDossier(project, dossier, { outreach: true });
   const existingRefs = new Set(
@@ -48,9 +49,18 @@ export async function buildDossierInto(
       .map((w) => w.target.ref),
   );
   const seeds = dossierWorkItemSeeds(dossier, source.alias ?? source.displayName).filter((s) => !existingRefs.has(s.target.ref));
-  for (const seed of seeds) await deps.workItems.create(seed).catch(() => undefined);
+  let created = 0;
+  let failed = 0;
+  for (const seed of seeds) {
+    try {
+      await deps.workItems.create(seed);
+      created++;
+    } catch {
+      failed++;
+    }
+  }
   const s = summarizeDossier(dossier);
-  return { dir, flagged: s.flagged, created: seeds.length, total: s.totalPages, captured: s.captured, truncated: s.truncated };
+  return { dir, flagged: s.flagged, created, failed, total: s.totalPages, captured: s.captured, truncated: s.truncated };
 }
 
 export function registerDossierTools(
@@ -112,7 +122,7 @@ export function registerDossierTools(
         telemetry.record("project.dossier", { space: "redacted" });
         return [
           `Built a content dossier for Confluence space ${i.spaceKey.trim()} into the "${project.name}" workspace (${r.dir.fsPath}).`,
-          `Reviewed ${r.captured}/${r.total} page(s)${r.truncated ? " (capped)" : ""}; ${r.flagged} flagged (stale / no active owner / data-quality). Opened ${r.created} new remediation work item(s).`,
+          `Reviewed ${r.captured}/${r.total} page(s)${r.truncated ? " (capped)" : ""}; ${r.flagged} flagged (stale / no active owner / data-quality). Opened ${r.created} new remediation work item(s)${r.failed > 0 ? ` (${r.failed} failed to save — retry via the Work Items view)` : ""}.`,
           `Artifacts: inventory.md (+ .json), owners.md (grouped by owner), dossier.xlsx, and per-owner outreach drafts under outreach/. Recommended-revision scaffolds are under pages/<id>/.`,
           `Next: use list_work_items to see the backlog, resolve_page_owners / review_page_currency for detail, recommend_page_revision to propose fixes, and draft_communication to reach owners.`,
           `Once the space is cleaned up, you can declare it AUTHORITATIVE (mark_authority) and sweep the rest of Confluence (find_conflicts) AND your SharePoint sites (scan_site_content) for stale/inaccurate pages that contradict it — then recommend corrections on the non-authoritative side.`,

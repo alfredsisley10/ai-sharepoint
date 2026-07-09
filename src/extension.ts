@@ -9,7 +9,7 @@ import { redactError } from "./core/redaction";
 import { UsageMeter } from "./copilot/meter";
 import { CopilotService } from "./copilot/copilotService";
 import { ModelCostTable } from "./copilot/modelCosts";
-import { estimateProbeCost } from "./copilot/premiumCost";
+import { estimateProbeCost, DEFAULT_PRICE_PER_REQUEST } from "./copilot/premiumCost";
 import { readPremiumPricing } from "./copilot/premiumPricing";
 import { formatCost } from "./copilot/tokenCost";
 import { AuthProviderRegistry, AUTH_PROVIDERS } from "./auth/providerRegistry";
@@ -873,6 +873,9 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   syncCommsBadge();
   context.subscriptions.push(
+    sitesProvider,
+    sourcesProvider,
+    usageProvider,
     supportProvider,
     outbox,
     commsProvider,
@@ -933,6 +936,12 @@ export function activate(context: vscode.ExtensionContext): void {
     // this only hides them when the relevant collection is empty).
     const setKey = (key: string, value: boolean) =>
       void vscode.commands.executeCommand("setContext", key, value);
+    // Unlike hasSites (managed targets only), hasConnections is true when ANY
+    // site connection exists — including reference/read-only ones — so palette
+    // commands that are valid for a reference connection (open in browser, copy
+    // URL, test, sign out, remove, change role) aren't hidden from
+    // reference-only users.
+    setKey("aiSharePoint.hasConnections", sites.list().length > 0);
     setKey("aiSharePoint.hasSources", contextSources.list().length > 0);
     setKey("aiSharePoint.hasProjects", projects.list().length > 0);
     setKey("aiSharePoint.hasBookmarks", bookmarks.list().length > 0);
@@ -3322,40 +3331,65 @@ export function activate(context: vscode.ExtensionContext): void {
     telemetry.record("project.switch");
   });
 
-  register("aiSharePoint.editProject", async () => {
-    const all = projects.list();
-    if (all.length === 0) {
-      void vscode.window.showInformationMessage("No projects yet — run “Projects: Create Project”.");
-      return;
+  // Right-click commands on the Projects view receive its Row element
+  // ({ kind: "project", project }); palette/programmatic callers may pass a
+  // Project itself. Unwrap either shape — undefined when the arg is neither,
+  // so callers can fall back to their picker instead of silently acting on
+  // the active project.
+  const projectFromArg = (arg: unknown): Project | undefined => {
+    const nested = arg && typeof arg === "object" ? (arg as { project?: unknown }).project : undefined;
+    for (const candidate of [nested, arg]) {
+      if (candidate && typeof candidate === "object" && "id" in candidate && "sourceIds" in candidate) {
+        return projects.get((candidate as Project).id) ?? (candidate as Project);
+      }
     }
-    const pick = await vscode.window.showQuickPick(
-      all.map((pr) => ({ label: pr.name, description: `${pr.sourceIds.length} source(s)`, pr })),
-      { ignoreFocusOut: true, title: "Edit which project?" },
-    );
-    if (!pick) return;
-    const edited = await promptProjectDetails(pick.pr);
+    return undefined;
+  };
+
+  register("aiSharePoint.editProject", async (arg) => {
+    // From a project's context menu the arg names the project; from the
+    // Command Palette (no arg) fall back to the which-project picker.
+    let project = projectFromArg(arg);
+    if (!project) {
+      const all = projects.list();
+      if (all.length === 0) {
+        void vscode.window.showInformationMessage("No projects yet — run “Projects: Create Project”.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        all.map((pr) => ({ label: pr.name, description: `${pr.sourceIds.length} source(s)`, pr })),
+        { ignoreFocusOut: true, title: "Edit which project?" },
+      );
+      if (!pick) return;
+      project = pick.pr;
+    }
+    const edited = await promptProjectDetails(project);
     if (!edited) return;
     await projects.upsert(edited);
     void vscode.window.showInformationMessage(`Project "${edited.name}" updated.`);
   });
 
-  register("aiSharePoint.removeProject", async () => {
-    const all = projects.list();
-    if (all.length === 0) return;
-    const pick = await vscode.window.showQuickPick(
-      all.map((pr) => ({ label: pr.name, pr })),
-      { ignoreFocusOut: true, title: "Remove which project? (sources/bookmarks are NOT deleted)" },
-    );
-    if (!pick) return;
+  register("aiSharePoint.removeProject", async (arg) => {
+    let project = projectFromArg(arg);
+    if (!project) {
+      const all = projects.list();
+      if (all.length === 0) return;
+      const pick = await vscode.window.showQuickPick(
+        all.map((pr) => ({ label: pr.name, pr })),
+        { ignoreFocusOut: true, title: "Remove which project? (sources/bookmarks are NOT deleted)" },
+      );
+      if (!pick) return;
+      project = pick.pr;
+    }
     const confirm = await vscode.window.showWarningMessage(
-      `Remove project "${pick.pr.name}"? Its sources, bookmarks, and indexes remain — only the scope/instructions bundle is deleted.`,
+      `Remove project "${project.name}"? Its sources, bookmarks, and indexes remain — only the scope/instructions bundle is deleted.`,
       { modal: true },
       "Remove Project",
     );
     if (confirm !== "Remove Project") return;
-    await projects.remove(pick.pr.id);
+    await projects.remove(project.id);
     // Prompts scoped to this project would otherwise orphan in the library.
-    await prompts.removeForScope({ kind: "project", key: pick.pr.id });
+    await prompts.removeForScope({ kind: "project", key: project.id });
   });
 
   // Click-to-activate from the Projects view (arg = project id).
@@ -3382,7 +3416,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const id =
       typeof arg === "string"
         ? arg
-        : (arg as Project | undefined)?.id ?? projects.active()?.id;
+        : projectFromArg(arg)?.id ?? projects.active()?.id;
     let project = id ? projects.get(id) : undefined;
     if (!project) {
       const all = projects.list();
@@ -4764,7 +4798,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const inMil = pricingCfg.get<number>("usage.tokenCostInputPerMillion", 0);
     const outMil = pricingCfg.get<number>("usage.tokenCostOutputPerMillion", 0);
     const pricingExport = {
-      pricePerPremiumRequest: pricingCfg.get<number>("usage.pricePerPremiumRequest", 0.04),
+      pricePerPremiumRequest: pricingCfg.get<number>("usage.pricePerPremiumRequest", DEFAULT_PRICE_PER_REQUEST),
       ...(inMil > 0 ? { tokenCostInputPerMillion: inMil } : {}),
       ...(outMil > 0 ? { tokenCostOutputPerMillion: outMil } : {}),
       currencySymbol: pricingCfg.get<string>("usage.currencySymbol", "$"),
@@ -6688,13 +6722,13 @@ export function activate(context: vscode.ExtensionContext): void {
         ...fromSettings.map((t) => ({ label: t, description: "aiSharePoint.proxy.blockedTerms" })),
       ];
       const pick = await vscode.window.showQuickPick(items, {
-        title: `Proxy avoid-list — mode: ${blockedTerms.mode()} (${blockedTerms.terms().length} word(s))`,
+        title: `Proxy Rules — mode: ${blockedTerms.mode()} (${blockedTerms.terms().length} word(s))`,
         placeHolder: "Words a corporate proxy may block; defang mode auto-adjusts outgoing messages. Esc to close.",
       });
       if (!pick || pick.kind === vscode.QuickPickItemKind.Separator) return;
       if (pick.label.startsWith("$(add)")) {
         const input = await vscode.window.showInputBox({
-          title: "Add word(s) to the proxy avoid-list",
+          title: "Add word(s) to the Proxy Rules list",
           prompt: "Comma-separated words/phrases the proxy tends to block.",
           ignoreFocusOut: true,
         });
@@ -6737,7 +6771,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // aiSharePoint.proxy.mode setting / Manage Proxy Rules.
   register("aiSharePoint.enableProxyDefang", async () => {
     const cfg = vscode.workspace.getConfiguration("aiSharePoint");
-    if (cfg.get<string>("proxy.mode", "off") === "defang") {
+    // Fallback matches the package.json default for aiSharePoint.proxy.mode
+    // ("warn") — keep the two in sync.
+    if (cfg.get<string>("proxy.mode", "warn") === "defang") {
       void vscode.window.showInformationMessage(
         "Proxy defang is already on — outgoing chat messages auto-obfuscate avoid-list words so a content proxy can't match them (the AI still reads the original).",
       );
@@ -6873,9 +6909,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // (often corporate-clamped) context window — follow along, reuse gathered
   // context, and restart a starved conversation from the saved summary.
   const resolveProjectArg = async (arg: unknown): Promise<Project | undefined> => {
-    if (arg && typeof arg === "object" && "id" in arg && "sourceIds" in arg) {
-      return projects.get((arg as Project).id) ?? (arg as Project);
-    }
+    // Handles the Projects-view Row element ({ kind: "project", project }) as
+    // well as a bare Project — right-clicking project B must not fall through
+    // to the active project A.
+    const fromArg = projectFromArg(arg);
+    if (fromArg) return fromArg;
     const active = projects.active();
     if (active) return active;
     const all = projects.list();

@@ -2,7 +2,7 @@
 
 **Self-service first:** the [User Guide](docs/USER_GUIDE.md) has a
 [troubleshooting table](docs/USER_GUIDE.md#troubleshooting) covering sign-in, permissions,
-proxy, budget, and Copilot issues. In VS Code, the **Support & Diagnostics** view gives you
+proxy, cost-estimate, and Copilot issues. In VS Code, the **Support & Diagnostics** view gives you
 logs, error reports, and the guides offline.
 
 **Found a bug?** Run **AI SharePoint: Export Diagnostics Bundle**, review the preview, and

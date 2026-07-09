@@ -52,7 +52,11 @@ const TEAMS_CHANNEL_READ_SCOPES = [
   "https://graph.microsoft.com/Channel.ReadBasic.All",
   "https://graph.microsoft.com/ChannelMessage.Read.All",
 ];
-const GRAPH_V1 = "https://graph.microsoft.com/v1.0";
+/** Byte cap on drive-item downloads (files read as chat/tool context). The
+ *  whole body is buffered into memory, so an unbounded read of a runaway or
+ *  hostile stream could balloon the extension host — 16 MB is generous for
+ *  the documents this feature targets while keeping memory bounded. */
+const MAX_DOWNLOAD_BYTES = 16 * 1024 * 1024;
 
 export interface MailFolderRef {
   id: string;
@@ -278,16 +282,17 @@ export class CommsClient extends SharePointClient {
     return (res.value ?? []).map((v) => driveItemToRef(v)).filter((r): r is DriveItemRef => Boolean(r));
   }
 
-  /** Download a drive item's raw bytes (read-only). Uses an authenticated fetch
-   *  because the content endpoint returns binary, not JSON. */
-  async downloadDriveItem(driveId: string, itemId: string): Promise<Buffer> {
-    const token = await this.acquire(FILES_READ_SCOPES);
-    const url = `${GRAPH_V1}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/content`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, redirect: "follow" });
-    if (!res.ok) {
-      throw new AppError(`Microsoft Graph returned ${res.status} downloading the file.`, res.status === 403 ? "graph.forbidden" : "graph.error");
-    }
-    return Buffer.from(await res.arrayBuffer());
+  /** Download a drive item's raw bytes (read-only). The content endpoint
+   *  returns binary, not JSON, so this rides the shared binary request
+   *  machinery: timeout (body read included), one 401 re-mint, one 429/503
+   *  retry, and the MAX_DOWNLOAD_BYTES cap (a classified "config" AppError
+   *  past it) instead of an unbounded buffer. */
+  downloadDriveItem(driveId: string, itemId: string): Promise<Buffer> {
+    return this.requestBinary(
+      `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/content`,
+      FILES_READ_SCOPES,
+      MAX_DOWNLOAD_BYTES,
+    );
   }
 
   // --- Read-only, scoped Teams messages (ADR-0025 extension) ---------------

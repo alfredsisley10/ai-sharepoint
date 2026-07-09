@@ -134,6 +134,36 @@ test("an 'XSRF check failed' 403 gets the CSRF-specific guidance", async () => {
   assert.match((err as AppError).userSummary ?? "", /Keep "http\.electronFetch" ENABLED/);
 });
 
+test("a snow-session rejection redacts server-echoed PII (emails) at both diagnosis sites", async () => {
+  const cred: ContextCredential = {
+    method: "snow-session",
+    secret: "JSESSIONID=abc; glide_user_route=x",
+  };
+  // 401/403 path: the server's JSON error envelope carries an email.
+  const rejected = await withFetchResponse(
+    401,
+    JSON.stringify({
+      error: { message: "User Not Authenticated", detail: "session for jdoe@corp.example.com is invalid" },
+    }),
+    () => fetchJson("https://instance.service-now.com/api/now/table/incident", cred, 5000),
+  );
+  assert.ok(rejected instanceof AppError);
+  assert.equal((rejected as AppError).code, "auth.failed");
+  assert.match((rejected as AppError).message, /User Not Authenticated/);
+  assert.doesNotMatch((rejected as AppError).message, /jdoe@corp\.example\.com/);
+  assert.match((rejected as AppError).message, /\[redacted:email\]/);
+
+  // 200-non-JSON path: the HTML page's <title> carries an email.
+  const page = await withFetchResponse(
+    200,
+    "<html><title>Sign in — jdoe@corp.example.com</title><body>login</body></html>",
+    () => fetchJson("https://instance.service-now.com/api/now/table/incident", cred, 5000),
+  );
+  assert.ok(page instanceof AppError);
+  assert.doesNotMatch((page as AppError).message, /jdoe@corp\.example\.com/);
+  assert.match((page as AppError).message, /\[redacted:email\]/);
+});
+
 test("an over-cap response is rejected without buffering the whole stream", async () => {
   // The body streams 8 chunks of 1 MB (8 MB total) but the reader must stop
   // and reject once it crosses the 2 MB cap — never accumulating all 8 MB.

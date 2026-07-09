@@ -8,6 +8,7 @@ import { redactError } from "../core/redaction";
 import { releaseExpired, expiredNotice } from "../branding/releaseExpiry";
 import { describeColumn, summarizeCanvas, summarizePageContent, PageContentSummary } from "./siteInspect";
 import { wrapUntrusted } from "./untrusted";
+import { UNVERIFIED_OWNER_NOTE } from "./contextToolsRender";
 import { premiumCostEnabled, estimatePremiumCost } from "../copilot/premiumCost";
 import { readPremiumPricing } from "../copilot/premiumPricing";
 import { ModelCostTable } from "../copilot/modelCosts";
@@ -189,32 +190,48 @@ export function registerLanguageModelTools(
           }
           const client = access.clientFor(conn, { silent: true });
           const site = await client.getSite(conn.siteUrl);
-          const editors = await client.getPageEditors(site.id, input.pageId?.trim() ?? input.itemId!.trim(), input.itemId?.trim());
-          if (!editors.length) {
-            return "Couldn't read this page's version history (the Site Pages library or the versions endpoint may be restricted, or the id isn't a Site Pages list-item id — try passing the numeric itemId). No owner resolved.";
-          }
+          const read = await client.getPageEditors(site.id, input.pageId?.trim() ?? input.itemId!.trim(), input.itemId?.trim());
           const directory = emailDirectory?.();
           const resolution = await resolveSharePointOwners(
-            editors,
+            read.editors,
             directory ? activeFromDirectory(directory.dir) : async () => true,
-            { nowMs: Date.parse(now()) },
+            {
+              nowMs: Date.parse(now()),
+              directoryWired: Boolean(directory),
+              ...(read.readError ? { readError: read.readError } : {}),
+            },
           );
           const lines = ["# SharePoint page owner"];
+          // Contact enrichment is best-effort: a directory hiccup downgrades
+          // the owner line to the bare identity instead of failing the tool
+          // AFTER ownership already resolved.
+          let ownerLine: string | undefined;
           if (resolution.owners.length && directory) {
-            const rec = await directory.dir(resolution.owners[0]);
-            lines.push(`- Owner: ${rec?.displayName ?? resolution.owners[0]}${contactOf(rec) ? ` <${contactOf(rec)}>` : ` <${resolution.owners[0]}>`}${rec?.sam ? ` (${rec.sam})` : ""}`);
-          } else {
-            lines.push(`- Owner: ${resolution.owners[0] ?? "(none determined)"}`);
+            try {
+              const rec = await directory.dir(resolution.owners[0]);
+              ownerLine = `- Owner: ${rec?.displayName ?? resolution.owners[0]}${contactOf(rec) ? ` <${contactOf(rec)}>` : ` <${resolution.owners[0]}>`}${rec?.sam ? ` (${rec.sam})` : ""}`;
+            } catch {
+              ownerLine = `- Owner: ${resolution.owners[0]} (contact lookup failed — shown as bare identity; re-run once the directory recovers)`;
+            }
           }
+          lines.push(ownerLine ?? `- Owner: ${resolution.owners[0] ?? "(none determined)"}`);
           lines.push(`- Basis: ${resolution.basis}${resolution.note ? ` — ${resolution.note}` : ""}`);
           if (resolution.considered?.length) {
             lines.push(`- Top recent editors: ${resolution.considered.slice(0, 5).map((c) => `${c.sam} (${c.count}×)`).join(", ")}`);
           }
+          if (read.readError) {
+            lines.push(
+              `- ⚠ Versions read FAILED (${read.readError.message}) — this is a read failure, not "no editors"; the Site Pages library or versions endpoint may be restricted, or the id isn't a Site Pages list-item id (try the numeric itemId).`,
+            );
+          }
+          const verification = resolution.verification ?? (directory ? "directory" : "off");
           lines.push(
             "",
-            directory
-              ? `Active-employee validation: ON via ${directory.label} (email-keyed; ranked by recency-weighted edits).`
-              : "No LDAP directory configured — ranked by recency-weighted edits, not filtered by who is still active.",
+            verification === "directory"
+              ? `Active-employee validation: ON via ${directory?.label ?? "the configured directory"} (email-keyed; ranked by recency-weighted edits).`
+              : verification === "unavailable"
+                ? `Active-employee validation: CONFIGURED BUT UNAVAILABLE — the ${directory?.label ?? "directory"} lookup failed during this run${resolution.directoryFault ? ` (${resolution.directoryFault})` : ""}, so the owner is reported UNVERIFIED (treated as active). This is a step-down, not a failure of ownership itself. Check the LDAP/Active Directory connector (Test Connection) and re-run to verify.`
+                : UNVERIFIED_OWNER_NOTE,
           );
           return lines.join("\n");
         },

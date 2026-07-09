@@ -31,7 +31,9 @@ function issueUrl(source: ContextSource, key: string): string {
   return `${source.baseUrl.replace(/\/$/, "")}/browse/${key}`;
 }
 
-function plainDescription(d: Issue["fields"] extends infer F ? (F extends { description?: infer D } ? D : never) : never, max: number): string {
+/** Flatten an issue description — a plain string (REST v2), an ADF document
+ *  object (Cloud on some endpoints), or absent — to bounded plain text. */
+function plainDescription(d: string | { content?: unknown } | null | undefined, max: number): string {
   if (typeof d === "string") {
     return d.length > max ? `${d.slice(0, max)}…` : d;
   }
@@ -103,7 +105,7 @@ export async function getJiraIssue(
   return {
     title: `${issue.key}: ${issue.fields?.summary ?? ""}`.trim(),
     url: issueUrl(source, issue.key),
-    body: plainDescription(issue.fields?.description as never, caps.maxBodyChars),
+    body: plainDescription(issue.fields?.description, caps.maxBodyChars),
     meta: {
       status: issue.fields?.status?.name ?? "",
       type: issue.fields?.issuetype?.name ?? "",
@@ -173,20 +175,44 @@ export async function listAllJiraProjects(
   return { projects, complete: false };
 }
 
+/** Capped project listing. Branches on deployment exactly like
+ *  `listAllJiraProjects`: the unpaged `GET /rest/api/2/project` only exists on
+ *  Data Center/Server — Cloud removed it, so Cloud pages `/project/search`
+ *  (50/page) until the cap or the last page. */
 export async function listJiraProjects(
   source: ContextSource,
   credential: ContextCredential,
   caps: ReadCaps,
 ): Promise<JiraProjectInfo[]> {
-  const res = await fetchJson<Array<{ key?: string; name?: string }>>(
-    `${source.baseUrl.replace(/\/$/, "")}/rest/api/2/project`,
-    credential,
-    caps.timeoutMs,
-  );
-  return (Array.isArray(res) ? res : [])
-    .filter((p) => p.key)
-    .slice(0, caps.maxResults)
-    .map((p) => ({ key: p.key!, name: p.name ?? p.key! }));
+  const base = source.baseUrl.replace(/\/$/, "");
+  if (source.deployment !== "cloud") {
+    const res = await fetchJson<Array<{ key?: string; name?: string }>>(
+      `${base}/rest/api/2/project`,
+      credential,
+      caps.timeoutMs,
+    );
+    return (Array.isArray(res) ? res : [])
+      .filter((p) => p.key)
+      .slice(0, caps.maxResults)
+      .map((p) => ({ key: p.key!, name: p.name ?? p.key! }));
+  }
+  const pageSize = 50;
+  const projects: JiraProjectInfo[] = [];
+  for (let startAt = 0; projects.length < caps.maxResults; startAt += pageSize) {
+    const res = await fetchJson<{
+      values?: Array<{ key?: string; name?: string }>;
+      isLast?: boolean;
+    }>(
+      `${base}/rest/api/2/project/search?startAt=${startAt}&maxResults=${pageSize}`,
+      credential,
+      caps.timeoutMs,
+    );
+    for (const p of res.values ?? []) {
+      if (p.key) projects.push({ key: p.key, name: p.name ?? p.key });
+    }
+    if (res.isLast !== false || (res.values ?? []).length === 0) break;
+  }
+  return projects.slice(0, caps.maxResults);
 }
 
 /** The user's favourite saved filters — name + ready-made JQL. */

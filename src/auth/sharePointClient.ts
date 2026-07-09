@@ -3,7 +3,7 @@ import { AppError } from "../core/errors";
 import { msCorrelationSuffix } from "../core/msCorrelation";
 import { detectProxyInterference, detectProxyFromError, hostOf } from "../core/networkDiagnostics";
 import { wireEnabled, emitWire, capDetail, safeJson, safeUrl } from "../core/wireLog";
-import { SpEditor, fetchSharePointPageEditors } from "./sharePointOwnership";
+import { SpEditorsRead, captureSpReadError, fetchSharePointPageEditors } from "./sharePointOwnership";
 
 /** Microsoft Graph delegated scope to read sites. */
 const SITES_READ_SCOPE = "https://graph.microsoft.com/Sites.Read.All";
@@ -12,7 +12,11 @@ const SITES_READ_SCOPE = "https://graph.microsoft.com/Sites.Read.All";
  *  admin guide — configurable in a future release if demanded). */
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
-const REQUEST_TIMEOUT_MS = 30_000;
+/** Per-request timeout shared by Graph reads/writes and MSAL token traffic
+ *  (msalNetwork imports this — one constant, not two drifting copies). Applied
+ *  via AbortSignal.timeout so it bounds the BODY read too, not just the
+ *  headers: a stalled body stream aborts instead of hanging forever. */
+export const REQUEST_TIMEOUT_MS = 30_000;
 
 /** Max @odata pages to follow before declaring a collection truncated.
  *  200 pages × $top=100 ≈ 20k items — far beyond any real site, so normal
@@ -186,15 +190,31 @@ export class SharePointClient {
 
   /**
    * A modern page's editors from its list-item version history (for ownership).
-   * Best-effort and non-fatal: returns [] when the Site Pages list can't be
-   * found or the versions endpoint is restricted, so ownership degrades to
-   * "no owner" rather than failing. `itemId` defaults to the page id (the
-   * Site Pages list-item id for Graph sitePages); pass an explicit numeric
-   * list-item id if the page id doesn't resolve.
+   * Degrades instead of failing: when the Site Pages list can't be found or
+   * the versions endpoint is restricted, the failure comes back as a captured
+   * `readError` so callers can say "the read failed" rather than the
+   * misleading "no version history" — EXCEPT auth.failed / graph.throttled,
+   * which are rethrown (they feed the auth-lockout breaker and throttle
+   * backoff). `itemId` defaults to the page id (the Site Pages list-item id
+   * for Graph sitePages); pass an explicit numeric list-item id if the page
+   * id doesn't resolve.
    */
-  async getPageEditors(siteId: string, pageId: string, itemId?: string): Promise<SpEditor[]> {
-    const listId = await this.getSitePagesListId(siteId).catch(() => undefined);
-    if (!listId) return [];
+  async getPageEditors(siteId: string, pageId: string, itemId?: string): Promise<SpEditorsRead> {
+    let listId: string | undefined;
+    try {
+      listId = await this.getSitePagesListId(siteId);
+    } catch (err) {
+      return { editors: [], readError: captureSpReadError(err) };
+    }
+    if (!listId) {
+      return {
+        editors: [],
+        readError: {
+          message: "The Site Pages library was not found on this site (modern pages live there), so no version history could be read.",
+          kind: "graph.notFound",
+        },
+      };
+    }
     return fetchSharePointPageEditors((path) => this.get(path), siteId, listId, itemId ?? pageId);
   }
 
@@ -313,8 +333,6 @@ export class SharePointClient {
         ].join("\n"),
       );
     }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     let res: Response;
     // `path` is normally a GRAPH_BASE-relative path, but pagination passes the
     // absolute @odata.nextLink straight through — use it as-is when absolute.
@@ -327,7 +345,10 @@ export class SharePointClient {
           ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
+        // AbortSignal.timeout (not a manual timer cleared at headers-time) so
+        // the body reads below are bounded too — a stalled body stream aborts
+        // instead of hanging the Graph op forever.
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       emitWire(
@@ -344,8 +365,6 @@ export class SharePointClient {
         `Graph request failed: ${err instanceof Error ? err.message : String(err)}`,
         "network",
       );
-    } finally {
-      clearTimeout(timer);
     }
 
     if ((res.status === 429 || res.status === 503) && !retried) {
@@ -401,7 +420,17 @@ export class SharePointClient {
     // Accepted and empty, so an unconditional res.json() throws "Unexpected end
     // of JSON input" and a successful send surfaces as a failure. Treat an empty
     // body as an undefined result.
-    const raw = await res.text();
+    let raw: string;
+    try {
+      raw = await res.text();
+    } catch (err) {
+      // The body read shares the request's timeout signal — a stalled stream
+      // aborts here and must surface as a classified error, not a raw abort.
+      throw new AppError(
+        `Graph response body read failed: ${err instanceof Error ? err.message : String(err)}`,
+        "network",
+      );
+    }
     if (!raw) {
       emitWire("graph", "←", `${method} ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`);
       return undefined as T;
@@ -416,5 +445,122 @@ export class SharePointClient {
       );
     }
     return parsed;
+  }
+
+  /**
+   * Binary-mode sibling of `request` for content endpoints that answer raw
+   * bytes, not JSON (e.g. drive-item downloads). Same resilience semantics:
+   * AbortSignal.timeout (bounds the body stream too), one 429/503 retry
+   * honoring Retry-After, one 401 forced-refresh retry, error taxonomy —
+   * plus a byte cap: the body is read incrementally and the transfer is
+   * cancelled the moment it exceeds `maxBytes` (a runaway or hostile stream
+   * must not be buffered whole before anyone can check its size), throwing a
+   * classified "config" AppError that explains the limit.
+   */
+  protected async requestBinary(
+    path: string,
+    scopes: string[],
+    maxBytes: number,
+    retried = false,
+    authRetried = false,
+  ): Promise<Buffer> {
+    const token = await this.acquire(scopes, authRetried);
+    const started = Date.now();
+    const url = /^https?:\/\//i.test(path) ? path : `${GRAPH_BASE}${path}`;
+    if (wireEnabled() && !retried) {
+      emitWire("graph", "→", `GET ${safeUrl(path)} (binary)`, "Authorization: Bearer ***");
+    }
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        redirect: "follow",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      emitWire(
+        "graph",
+        "✗",
+        `GET ${safeUrl(path)} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`,
+      );
+      const proxy = detectProxyFromError(err, url);
+      if (proxy) throw new AppError(`${proxy.message}\n\n${proxy.summary}`, "network", proxy.summary);
+      throw new AppError(
+        `Graph request failed: ${err instanceof Error ? err.message : String(err)}`,
+        "network",
+      );
+    }
+
+    if ((res.status === 429 || res.status === 503) && !retried) {
+      const retryAfter = Math.min(5, Number(res.headers.get("Retry-After")) || 2);
+      await new Promise((r) => setTimeout(r, retryAfter * 1000));
+      return this.requestBinary(path, scopes, maxBytes, true, authRetried);
+    }
+    if (res.status === 401 && !authRetried) {
+      return this.requestBinary(path, scopes, maxBytes, retried, true);
+    }
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      emitWire(
+        "graph",
+        "✗",
+        `GET ${safeUrl(path)} ${res.status} (${Date.now() - started}ms)`,
+        wireEnabled() ? capDetail(errBody) : undefined,
+      );
+      const code =
+        res.status === 401
+          ? "auth.failed"
+          : res.status === 403
+            ? "graph.forbidden"
+            : res.status === 404
+              ? "graph.notFound"
+              : res.status === 429 || res.status === 503
+                ? "graph.throttled"
+                : "graph.error";
+      throw new AppError(
+        `Graph request failed (${res.status} ${res.statusText}): ${errBody.slice(0, 500)}${msCorrelationSuffix(res.headers)}`,
+        code,
+      );
+    }
+
+    const capError = () =>
+      new AppError(
+        `The file exceeds this extension's ${Math.round(maxBytes / (1024 * 1024))} MB download cap, so it was not read.`,
+        "config",
+        `Files larger than ${Math.round(maxBytes / (1024 * 1024))} MB are not downloaded as context. Use a smaller file or open it directly in Microsoft 365.`,
+      );
+    const body = res.body;
+    if (!body) {
+      // No readable stream (empty body, or a polyfill): buffer, then bound.
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > maxBytes) throw capError();
+      emitWire("graph", "←", `GET ${safeUrl(path)} ${res.status} · ${buf.byteLength} bytes (${Date.now() - started}ms)`);
+      return buf;
+    }
+    // Incremental capped read (see context/http readCappedText): count wire
+    // bytes as they arrive and cancel the transfer the moment the cap trips.
+    const reader = body.getReader();
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > maxBytes) throw capError();
+        chunks.push(Buffer.from(value));
+      }
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new AppError(
+        `Graph download body read failed: ${err instanceof Error ? err.message : String(err)}`,
+        "network",
+      );
+    } finally {
+      // Abort the underlying transfer — we've read enough (or all of it).
+      await reader.cancel().catch(() => undefined);
+    }
+    emitWire("graph", "←", `GET ${safeUrl(path)} ${res.status} · ${bytes} bytes (${Date.now() - started}ms)`);
+    return Buffer.concat(chunks);
   }
 }

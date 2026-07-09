@@ -9,11 +9,11 @@ _Audience: security reviewers and engineers. Companions:
 ┌─ VS Code ────────────────────────────────────────────────────────────┐
 │  AI SharePoint extension (pure JS, no native deps, no servers)       │
 │                                                                      │
-│   Chat/@sharepoint ── LM tools (read-only) ──┐                       │
+│   Chat/@sharepoint ── LM tools (gated writes) ──┐                    │
 │   Commands / views / dashboard (CSP-locked)  │                       │
 │        │                                     │                       │
 │   CopilotService ──── vscode.lm ────────► GitHub Copilot (user's     │
-│        │   (metered, budget-capped)          own entitlement)        │
+│        │   (metered, cost-estimated)         own entitlement)        │
 │        │                                                             │
 │   SharePointClient ── fetch ────────────► graph.microsoft.com        │
 │        │                 (Bearer, Sites.Read.All delegated)          │
@@ -52,21 +52,24 @@ _Audience: security reviewers and engineers. Companions:
   `capabilities.untrustedWorkspaces.restrictedConfigurations`.
 - **Least privilege:** reads use a single delegated scope — `Sites.Read.All`; users can never read
   more than their own SharePoint permissions allow. Optional **write-back** (ADR-0021) is the only
-  write path and is **human-driven, not AI-driven**: it requests a write scope only on the first
+  SharePoint write path and is **human-approved**: it requests a write scope only on the first
   write — `Sites.Selected` by default (an admin grants the app each target site) or, when an org
   configures it, tenant-wide `Sites.ReadWrite.All`/`Sites.Manage.All` — and every change is
-  previewed, drift-checked, and snapshot-guarded before it is applied. The chat/agent surface holds
-  no write tools (see *AI surface*).
+  previewed, drift-checked, and snapshot-guarded before it is applied. Chat/agent write tools
+  route through the same previewed, explicitly-confirmed pipeline (see *AI surface*).
 
 ## AI surface
 
 - Copilot consumption is exclusively via `vscode.lm` (ADR-0001) — the user's own entitlement,
   no API keys held by the extension, organization Copilot policies apply unchanged.
-- Chat context and LM tools are **read-only** and use **silent auth only** — an agent loop can
-  enumerate site metadata the user can already read, but can never trigger interactive sign-in,
-  escalate scopes, or mutate SharePoint.
-- Budget enforcement (soft warn / hard block with explicit override) bounds the financial
-  blast radius of any runaway loop.
+- Chat context and LM tools use **silent auth only** — an agent loop can enumerate metadata the
+  user can already read, but can never trigger interactive sign-in or escalate scopes. Reads
+  dominate the tool surface; the write tools that exist (SharePoint write-back, Confluence page
+  edits, drafting Teams/Outlook messages, …) are **approval-gated** — each one produces a preview
+  and acts only on the user's explicit confirmation, so the agent loop can never write unattended.
+- Copilot consumption is **counted locally** — factual request/token counts, plus an optional
+  cost estimate at a rate the user configures. There is no budget enforcement; the bound on a
+  runaway loop is the user's own Copilot entitlement and their organization's Copilot policy.
 
 ## Webview (Copilot Activity Dashboard)
 

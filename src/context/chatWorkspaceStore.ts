@@ -19,6 +19,8 @@ import {
   SpaceDossier,
   DossierPage,
   groupByOwner,
+  groupBySuggestedOwner,
+  renderSuggestedOwnerOutreachDraft,
   renderInventoryJson,
   renderInventoryMarkdown,
   renderOwnersMarkdown,
@@ -214,8 +216,10 @@ export class ChatWorkspaceStore {
 
   /**
    * Write a Confluence space dossier into the project workspace: the inventory
-   * (markdown + JSON), the by-owner view, an .xlsx workbook, and (optionally) a
-   * per-owner outreach draft for every owner with flagged pages. Ensures the
+   * (markdown + JSON), the by-owner view, an .xlsx workbook, and (optionally)
+   * outreach drafts — one per owner with flagged pages, plus one per SUGGESTED
+   * target owner (pages with no owner tag whose owner detection proposed a
+   * contributor, so ownership can be established). Ensures the
    * workspace exists first. Returns the dossier folder. Content is derived from
    * the user's own Confluence read — not redacted (owner emails are needed for
    * coordination).
@@ -265,6 +269,17 @@ export class ChatWorkspaceStore {
           await this.writeText(
             vscode.Uri.joinPath(outreachDir, file),
             renderOutreachDraft(group, dossier.spaceKey, dossier.generatedAt),
+          );
+        }
+        // SUGGESTED target owners get their own drafts (establish-ownership
+        // asks, distinct from the fix-your-pages asks above). The `-suggested`
+        // suffix keeps them from colliding with an assigned-owner draft for
+        // the same person.
+        for (const group of groupBySuggestedOwner(dossier)) {
+          const file = `${group.sam.replace(/[^A-Za-z0-9._-]/g, "-") || "owner"}-suggested.md`;
+          await this.writeText(
+            vscode.Uri.joinPath(outreachDir, file),
+            renderSuggestedOwnerOutreachDraft(group, dossier.spaceKey, dossier.generatedAt),
           );
         }
       }

@@ -20,6 +20,7 @@ const palette = pkg.contributes.menus.commandPalette ?? [];
 // typo can't silently leave a command ungated or permanently hidden.
 const KNOWN_KEYS = new Set([
   "aiSharePoint.hasSites",
+  "aiSharePoint.hasConnections",
   "aiSharePoint.hasSources",
   "aiSharePoint.hasProjects",
   "aiSharePoint.hasBookmarks",

@@ -51,11 +51,28 @@ test("ntlm with an unparseable account degrades to empty domain rather than fail
 });
 
 test("parseMssqlParams: named instance, encryption, certificate trust", () => {
-  const p = parseMssqlParams(new URLSearchParams("instance=PROD&trustServerCertificate=true"));
+  // ?trustServerCertificate=true takes effect only with the machine-scoped allowance.
+  const p = parseMssqlParams(new URLSearchParams("instance=PROD&trustServerCertificate=true"), true);
   assert.deepEqual(p, { instanceName: "PROD", encrypt: true, trustServerCertificate: true });
   const defaults = parseMssqlParams(new URLSearchParams(""));
   assert.deepEqual(defaults, { encrypt: true, trustServerCertificate: false });
   assert.equal(parseMssqlParams(new URLSearchParams("encrypt=false")).encrypt, false);
+});
+
+test("parseMssqlParams: ?trustServerCertificate=true is IGNORED without the machine-scoped allowance", () => {
+  // The one place TLS validation can be switched off must not be reachable
+  // from a per-source URL alone (aiSharePoint.db.allowTrustServerCertificate).
+  const denied = parseMssqlParams(new URLSearchParams("trustServerCertificate=true"));
+  assert.equal(denied.trustServerCertificate, false);
+  assert.equal(denied.trustServerCertificateIgnored, true);
+  // Allowed → honored, and no "ignored" flag.
+  const allowed = parseMssqlParams(new URLSearchParams("trustServerCertificate=true"), true);
+  assert.equal(allowed.trustServerCertificate, true);
+  assert.equal(allowed.trustServerCertificateIgnored, undefined);
+  // The allowance alone never turns trust ON — the URL must still ask for it.
+  const unasked = parseMssqlParams(new URLSearchParams(""), true);
+  assert.equal(unasked.trustServerCertificate, false);
+  assert.equal(unasked.trustServerCertificateIgnored, undefined);
 });
 
 test("alternate ports flow through the connection URL (enterprise non-1433 instances)", () => {

@@ -1,6 +1,6 @@
 # AI SharePoint — Enterprise Administration Guide
 
-For IT administrators deploying release **0.4.x** into managed environments. Companion
+For IT administrators deploying this extension into managed environments. Companion
 documents: [SECURITY.md](SECURITY.md) (threat model / data flows) and [PRIVACY.md](PRIVACY.md)
 (data handling, exports).
 
@@ -12,7 +12,9 @@ A VS Code extension that lets users connect to SharePoint Online sites they alre
 to (delegated — their own permissions, never more) and ask a GitHub-Copilot-backed assistant
 about them, with local counting of the requests it makes (no estimated billing — GitHub is the
 authoritative usage source). Site changes are
-human-approved commands only (previewed, drift-checked, snapshot-guarded); the AI cannot write. It runs entirely client-side: **no
+human-approved (previewed, drift-checked, snapshot-guarded); the AI's write tools are
+approval-gated — each produces a preview and acts only on the user's explicit confirmation,
+so nothing writes unattended. It runs entirely client-side: **no
 vendor service and no stored server-side state**, and **no telemetry endpoint of our own**.
 Credentials live in the OS keychain via VS Code SecretStorage; diagnostics never leave the machine
 except by explicit, previewed, leak-scanned user export. The only optional egress an admin can turn

@@ -60,8 +60,8 @@ test("resolveSharePointOwners: no editors → none with a helpful note", async (
   assert.match(r.note ?? "", /No version history/);
 });
 
-test("fetchSharePointPageEditors: parses the injected Graph payload; degrades to [] on error", async () => {
-  const eds = await fetchSharePointPageEditors(
+test("fetchSharePointPageEditors: parses the injected Graph payload; a failed read is CAPTURED, not silent", async () => {
+  const read = await fetchSharePointPageEditors(
     async (path) => {
       assert.match(path, /\/sites\/S\/lists\/L\/items\/7\/versions/);
       return versions({ email: "a@x.com", when: new Date(NOW).toISOString() });
@@ -70,12 +70,64 @@ test("fetchSharePointPageEditors: parses the injected Graph payload; degrades to
     "L",
     "7",
   );
-  assert.equal(eds[0].identity, "a@x.com");
+  assert.equal(read.editors[0].identity, "a@x.com");
+  assert.equal(read.readError, undefined);
 
-  const none = await fetchSharePointPageEditors(async () => {
-    throw new Error("403 restricted");
+  // A non-abort failure degrades to a captured readError — distinguishable
+  // from a genuinely empty history — with the message redacted.
+  const failed = await fetchSharePointPageEditors(async () => {
+    throw new Error("403 restricted for dave@corp.example.com");
   }, "S", "L", "7");
-  assert.deepEqual(none, []); // best-effort
+  assert.deepEqual(failed.editors, []);
+  assert.match(failed.readError?.message ?? "", /403 restricted/);
+  assert.doesNotMatch(failed.readError?.message ?? "", /dave@corp\.example\.com/);
+  assert.equal(failed.readError?.kind, "graph.forbidden");
+});
+
+test("fetchSharePointPageEditors: auth rejection and throttling RETHROW (breaker integrity)", async () => {
+  const { AppError } = await import("../src/core/errors");
+  await assert.rejects(
+    fetchSharePointPageEditors(async () => {
+      throw new AppError("Authentication rejected (401).", "auth.failed");
+    }, "S", "L", "7"),
+    /Authentication rejected/,
+  );
+  await assert.rejects(
+    fetchSharePointPageEditors(async () => {
+      throw new AppError("Source is throttling requests (429).", "graph.throttled");
+    }, "S", "L", "7"),
+    /throttling/,
+  );
+});
+
+test("resolveSharePointOwners: a directory OUTAGE degrades to the deterministic unverified top pick", async () => {
+  const eds = [
+    { identity: "top@x.com", whenMs: NOW - 1 * 86_400_000 },
+    { identity: "second@x.com", whenMs: NOW - 2 * 86_400_000 },
+  ];
+  const r = await resolveSharePointOwners(
+    eds,
+    async (id) => {
+      if (id === "top@x.com") return false; // verified inactive…
+      throw new Error("LDAP connect ECONNREFUSED"); // …then the directory dies
+    },
+    { nowMs: NOW, directoryWired: true },
+  );
+  assert.deepEqual(r.owners, ["top@x.com"], "deterministic top pick, not fault-timing dependent");
+  assert.equal(r.verification, "unavailable");
+  assert.match(r.directoryFault ?? "", /ECONNREFUSED/);
+});
+
+test("resolveSharePointOwners: a threaded readError changes the 'none' note from 'no history' to 'read failed'", async () => {
+  const r = await resolveSharePointOwners([], async () => true, {
+    nowMs: NOW,
+    directoryWired: false,
+    readError: { message: "GET /sites/... → Forbidden (403)", kind: "graph.forbidden" },
+  });
+  assert.equal(r.basis, "none");
+  assert.match(r.note ?? "", /could not be READ/i);
+  assert.doesNotMatch(r.note ?? "", /No version history \/ editors available/);
+  assert.equal(r.readError?.kind, "graph.forbidden");
 });
 
 test("ldapUserFilterByEmail: matches mail/upn/proxyAddress and escapes injection", () => {

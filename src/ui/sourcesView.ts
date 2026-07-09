@@ -64,6 +64,7 @@ function isFileSource(node: Node): node is FileSource {
 export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private readonly listeners: vscode.Disposable[];
 
   constructor(
     private readonly sources: ContextSourcesStore,
@@ -76,17 +77,24 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly scope: (all: ContextSource[]) => ContextSource[] = (all) => all,
   ) {
-    sources.onDidChange(() => this.emitter.fire());
-    sites.onDidChange(() => this.emitter.fire());
-    bookmarks.onDidChange(() => this.emitter.fire());
-    schemas.onDidChange(() => this.emitter.fire());
-    catalogs.onDidChange(() => this.emitter.fire());
-    memory.onDidChange(() => this.emitter.fire());
-    files.onDidChange(() => this.emitter.fire());
+    this.listeners = [
+      sources.onDidChange(() => this.emitter.fire()),
+      sites.onDidChange(() => this.emitter.fire()),
+      bookmarks.onDidChange(() => this.emitter.fire()),
+      schemas.onDidChange(() => this.emitter.fire()),
+      catalogs.onDidChange(() => this.emitter.fire()),
+      memory.onDidChange(() => this.emitter.fire()),
+      files.onDidChange(() => this.emitter.fire()),
+    ];
   }
 
   refresh(): void {
     this.emitter.fire();
+  }
+
+  dispose(): void {
+    for (const l of this.listeners) l.dispose();
+    this.emitter.dispose();
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
@@ -139,7 +147,9 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
     item.id = node.id;
     item.iconPath = new vscode.ThemeIcon(node.icon);
-    item.contextValue = "context-source-group";
+    // NOT "context-source-…": the unanchored /^context-source/ menu regexes in
+    // package.json target individual sources and must not match a group header.
+    item.contextValue = "source-group";
     return item;
   }
 

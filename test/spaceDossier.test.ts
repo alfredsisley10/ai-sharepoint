@@ -7,6 +7,8 @@ import {
   primaryOwner,
   summarizeDossier,
   groupByOwner,
+  groupBySuggestedOwner,
+  renderSuggestedOwnerOutreachDraft,
   renderInventoryMarkdown,
   renderInventoryJson,
   renderOwnersMarkdown,
@@ -138,6 +140,57 @@ test("dossierSheets yields Pages + Owners sheets with headers", () => {
   assert.equal(sheets[1]!.rows[0]![0], "Owner");
 });
 
+test("dossierSheets carries the suggested TARGET owner in its own machine-readable columns", () => {
+  const suggested = { sam: "asmith", active: false, contact: "a@c.com", basis: "top contributor (directory not wired — unverified)" };
+  const sheets = dossierSheets(
+    dossier([
+      page({ id: "1", title: "Tagged" }), // assigned owner, no suggestion
+      page({ id: "9", title: "Orphan", owners: [], suggestedOwner: suggested }),
+    ]),
+  );
+  const [header, tagged, orphan] = sheets[0]!.rows as [string[], string[], string[]];
+  const col = (name: string) => header.indexOf(name);
+  // Distinct columns — never blended into the assigned-owner column.
+  assert.ok(col("Target owner (suggested)") > col("Owner"), "target-owner column exists");
+  assert.ok(col("Target owner contact") > 0);
+  assert.ok(col("Target owner basis") > 0);
+  assert.equal(orphan[col("Owner")], "");
+  assert.equal(orphan[col("Target owner (suggested)")], "asmith");
+  assert.equal(orphan[col("Target owner contact")], "a@c.com");
+  assert.equal(orphan[col("Target owner basis")], suggested.basis);
+  assert.equal(tagged[col("Owner")], "jdoe");
+  assert.equal(tagged[col("Target owner (suggested)")], "");
+});
+
+test("dossierSheets Owners sheet includes suggested-owner rows (Role column) for export-only outreach", () => {
+  const sheets = dossierSheets(
+    dossier([
+      page({ id: "1", owners: [{ sam: "jdoe", active: true, contact: "j@c.com" }] }),
+      page({
+        id: "9",
+        owners: [],
+        staleDays: 400,
+        suggestedOwner: { sam: "asmith", active: false, contact: "a@c.com", basis: "top contributor (directory not wired — unverified)" },
+      }),
+    ]),
+  );
+  const rows = sheets[1]!.rows;
+  const header = rows[0]!;
+  assert.ok(header.includes("Role") && header.includes("Basis"));
+  const role = header.indexOf("Role");
+  const active = header.indexOf("Active");
+  const assigned = rows.find((r) => r[0] === "jdoe")!;
+  assert.equal(assigned[role], "assigned");
+  const sug = rows.find((r) => r[0] === "asmith")!;
+  assert.equal(sug[role], "suggested");
+  // Unverified must not be reported as a hard "no".
+  assert.equal(sug[active], "unverified");
+  assert.equal(sug[header.indexOf("Contact")], "a@c.com");
+  assert.equal(sug[header.indexOf("Pages")], "1");
+  assert.equal(sug[header.indexOf("Stale")], "1");
+  assert.match(sug[header.indexOf("Basis")]!, /directory not wired/);
+});
+
 test("dossierWorkItemSeeds only seeds flagged pages, carrying owner + tags", () => {
   const d = dossier([
     page({ id: "1", title: "Clean page" }), // not flagged
@@ -170,15 +223,28 @@ test("suggestedOwner drives the work item, scaffold, and inventory for untagged 
   assert.equal(seeds[0]!.owner?.sam, "asmith");
   assert.match(seeds[0]!.finding, /suggested owner: asmith/);
   assert.match(seeds[0]!.finding, /adding the label `owners\|asmith`/);
-  // Scaffold names the suggested owner + the label to add.
+  // Scaffold names the suggested target owner (with its basis) + the label to add.
   const scaffold = renderRecommendedScaffold(d.pages[0]!);
-  assert.match(scaffold, /Suggested owner: \*\*asmith\*\*/);
-  assert.match(scaffold, /activity unverified/);
-  // Inventory owner cell + the no-directory diagnostic note.
+  assert.match(scaffold, /Suggested target owner: \*\*asmith\*\*/);
+  assert.match(scaffold, /suggested — unverified/);
+  assert.match(scaffold, /directory not wired/);
+  // Inventory owner cell (human-clear trust level) + the no-directory note.
   const inv = renderInventoryMarkdown(d);
-  assert.match(inv, /→ asmith \(suggested\)/);
+  assert.match(inv, /→ asmith \(suggested — unverified\)/);
   assert.match(inv, /Owner detection:/);
   assert.match(inv, /No LDAP\/M365 directory is wired/);
+});
+
+test("inventory owner cell shows the suggestion next to an INACTIVE tagged owner", () => {
+  const d = dossier([
+    page({
+      id: "7",
+      owners: [{ sam: "gone", active: false }], // tagged but inactive → still ownerless
+      suggestedOwner: { sam: "asmith", active: true, basis: "top active contributor" },
+    }),
+  ]);
+  const inv = renderInventoryMarkdown(d);
+  assert.match(inv, /gone \(inactive\) · → asmith \(suggested\)/);
 });
 
 test("renderOutreachDraft addresses the owner and lists their flagged pages", () => {
@@ -229,4 +295,81 @@ test("renderRecommendedScaffold lists why-flagged, a revision slot, and quoted c
   assert.match(md, /2 broken link\(s\)/);
   assert.match(md, /## Recommended revision/);
   assert.match(md, /> old content/); // current content quoted for reference
+});
+
+// --- suggested TARGET owners across the export surfaces (FIX: outreach can
+// --- proceed from the export alone) ------------------------------------------
+
+const suggestedFixture = () =>
+  dossier([
+    page({
+      id: "9",
+      title: "Orphan",
+      owners: [],
+      staleDays: 400,
+      content: "body",
+      suggestedOwner: { sam: "asmith", active: false, contact: "a@c.com", basis: "top contributor (directory not wired — unverified)" },
+    }),
+    page({
+      id: "10",
+      title: "Orphan 2",
+      owners: [],
+      brokenLinks: 1,
+      suggestedOwner: { sam: "asmith", active: false, contact: "a@c.com", basis: "top contributor (directory not wired — unverified)" },
+    }),
+    page({ id: "1", title: "Tagged" }),
+  ]);
+
+test("groupBySuggestedOwner groups untagged pages by suggested owner with flag counts", () => {
+  const groups = groupBySuggestedOwner(suggestedFixture());
+  assert.equal(groups.length, 1);
+  const g = groups[0]!;
+  assert.equal(g.sam, "asmith");
+  assert.equal(g.contact, "a@c.com");
+  assert.equal(g.pages.length, 2);
+  assert.equal(g.stale, 1);
+  assert.equal(g.dataQuality, 1);
+  assert.match(g.basis, /directory not wired/);
+});
+
+test("renderOwnersMarkdown adds a suggested-target-owners section, separate from assigned owners", () => {
+  const md = renderOwnersMarkdown(suggestedFixture());
+  assert.match(md, /## jdoe/); // assigned rollup intact
+  assert.match(md, /## Suggested target owners/);
+  assert.match(md, /### → asmith · a@c\.com · _suggested — unverified_/);
+  assert.match(md, /basis: top contributor \(directory not wired — unverified\)/);
+  assert.match(md, /\[Orphan\]\(https:\/\/wiki\/1\)/);
+  assert.match(md, /owners\|<sam>/); // the how-to-establish instruction
+  // No suggestions → no section.
+  assert.doesNotMatch(renderOwnersMarkdown(dossier([page()])), /Suggested target owners/);
+});
+
+test("renderSuggestedOwnerOutreachDraft asks the suggested owner to accept ownership", () => {
+  const g = groupBySuggestedOwner(suggestedFixture())[0]!;
+  const md = renderSuggestedOwnerOutreachDraft(g, "ENG", "2026-07-07T00:00:00.000Z");
+  assert.match(md, /# Outreach draft — asmith \(suggested target owner\)/);
+  assert.match(md, /To: a@c\.com/);
+  assert.match(md, /SUGGESTED owner \(top contributor \(directory not wired — unverified\)\)/);
+  assert.match(md, /Hi asmith/);
+  assert.match(md, /\[Orphan\]\(https:\/\/wiki\/1\)/);
+  assert.match(md, /owners\|asmith/); // the label that establishes ownership
+  // Cached content links its recommended revision, like the assigned-owner draft.
+  assert.match(md, /\(\.\.\/pages\/9\/recommended\.md\)/);
+  // Without a contact, the draft addresses the sam.
+  const noContact = { ...g, contact: undefined };
+  assert.match(renderSuggestedOwnerOutreachDraft(noContact, "ENG", "t"), /To: asmith/);
+});
+
+test("renderOutreachDraft names the target owner for ownerless pages under an inactive tagged owner", () => {
+  const d = dossier([
+    page({
+      id: "7",
+      title: "Adrift",
+      staleDays: 400,
+      owners: [{ sam: "gone", active: false, contact: "g@c.com" }],
+      suggestedOwner: { sam: "asmith", active: true, contact: "a@c.com", basis: "top active contributor" },
+    }),
+  ]);
+  const md = renderOutreachDraft(groupByOwner(d)[0]!, "ENG", "t");
+  assert.match(md, /no active owner tag — target owner asmith \(suggested\)/);
 });

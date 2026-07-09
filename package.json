@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.131.0",
+  "version": "0.133.0",
   "release": {
     "channel": "standard"
   },
@@ -50,6 +50,7 @@
         "aiSharePoint.ldap.tlsRejectUnauthorized",
         "aiSharePoint.ldap.useStartTls",
         "aiSharePoint.ldap.allowRawFilters",
+        "aiSharePoint.db.allowTrustServerCertificate",
         "aiSharePoint.servicenow.oauthClientId"
       ]
     }
@@ -3248,22 +3249,22 @@
         },
         {
           "command": "aiSharePoint.editProject",
-          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "1_actions@1"
         },
         {
           "command": "aiSharePoint.manageProjectAiContext",
-          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "1_actions@2"
         },
         {
           "command": "aiSharePoint.removeProject",
-          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "2_manage@1"
         },
         {
           "command": "aiSharePoint.addPrompt",
-          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project/",
+          "when": "view == aiSharePoint.projectsView && viewItem =~ /^project(-active)?$/",
           "group": "1_actions@3"
         }
       ],
@@ -3278,27 +3279,27 @@
         },
         {
           "command": "aiSharePoint.openSiteInBrowser",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.copySiteUrl",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.changeSiteRole",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.signOutSite",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.removeSite",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.testConnection",
-          "when": "aiSharePoint.hasSites"
+          "when": "aiSharePoint.hasConnections"
         },
         {
           "command": "aiSharePoint.configureSiteRepo",
@@ -3410,7 +3411,7 @@
         },
         {
           "command": "aiSharePoint.activateProject",
-          "when": "aiSharePoint.hasProjects"
+          "when": "false"
         },
         {
           "command": "aiSharePoint.manageProjectAiContext",
@@ -3767,6 +3768,13 @@
           "scope": "machine",
           "order": 17,
           "markdownDescription": "%config.aiSharePoint.ldap.allowRawFilters.markdownDescription%"
+        },
+        "aiSharePoint.db.allowTrustServerCertificate": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "order": 17,
+          "markdownDescription": "%config.aiSharePoint.db.allowTrustServerCertificate.markdownDescription%"
         },
         "aiSharePoint.logging.verboseWire": {
           "type": "boolean",

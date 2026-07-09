@@ -117,6 +117,35 @@ test("invalidateSource clears only that source's entries", () => {
   assert.equal(cache.get(TtlCache.key("s2", "search", "a")), 2);
 });
 
+test("ttl cache: invalidation mid-flight discards the stale load and spares a newer one", async () => {
+  const cache = new TtlCache(() => 0);
+  const key = TtlCache.key("s1", "search", "q");
+  let release1: (v: { v: number }) => void = () => {};
+  const gate1 = new Promise<{ v: number }>((r) => (release1 = r));
+  const first = cache.getOrLoad(key, 1000, () => gate1);
+  cache.invalidateSource("s1"); // e.g. a write landed while the read was in flight
+  // A caller after the invalidation starts a FRESH load (doesn't join the stale one)…
+  let loads2 = 0;
+  let release2: (v: { v: number }) => void = () => {};
+  const gate2 = new Promise<{ v: number }>((r) => (release2 = r));
+  const second = cache.getOrLoad(key, 1000, () => {
+    loads2++;
+    return gate2;
+  });
+  assert.equal(loads2, 1, "post-invalidation caller started a fresh load");
+  // …and when the STALE load finally resolves, its caller still gets the value,
+  // but the pre-invalidation result must NOT be cached (it would be stale-forever
+  // until TTL) and must not evict the newer in-flight load.
+  release1({ v: 1 });
+  assert.deepEqual(await first, { v: 1 });
+  assert.equal(cache.get(key), undefined, "stale in-flight result was not cached");
+  release2({ v: 2 });
+  assert.deepEqual(await second, { v: 2 });
+  // The second load's in-flight slot survived the first load's cleanup, so its
+  // (post-invalidation) result cached normally.
+  assert.deepEqual(cache.get(key), { v: 2 });
+});
+
 test("read → write → read sees fresh data after the write invalidates the source cache", async () => {
   // Contract enforced by ContextService.trackedWrite: a write drops the
   // source's cached reads, so the next read reflects the change (within-TTL).
@@ -351,6 +380,30 @@ test("listAllConfluenceSpaces pages until a short page; checkpoint stop keeps a 
   );
   assert.equal(partial.complete, false);
   assert.equal(partial.spaces.length, 100); // stopped before page 3
+});
+
+test("listAllConfluenceSpaces keeps paging past a full page containing a keyless entry", async () => {
+  // End-of-sweep must be judged on the UNFILTERED page length: one malformed
+  // (keyless) entry in a full 50-item page must not truncate the catalog and
+  // persist it as complete.
+  const page = (start: number, n: number) => ({
+    body: {
+      results: Array.from({ length: n }, (_, i) => ({
+        ...(start + i === 10 ? {} : { key: `S${start + i}` }), // entry 10 has no key
+        name: `Space ${start + i}`,
+        _links: { webui: `/s/${start + i}` },
+      })),
+    },
+  });
+  const swept = await withFetch(
+    (url) => {
+      const start = Number(new URL(url).searchParams.get("start") ?? 0);
+      return page(start, start < 50 ? 50 : 20); // full first page, short second
+    },
+    () => listAllConfluenceSpaces(SRC, CRED, DEFAULT_CAPS, async () => true),
+  );
+  assert.equal(swept.complete, true);
+  assert.equal(swept.spaces.length, 69, "continued to page 2 despite the filtered short count (49 keyed + 20)");
 });
 
 test("listAllJiraProjects: cloud pages via project/search; DC fetches once", async () => {
