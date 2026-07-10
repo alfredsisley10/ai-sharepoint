@@ -18,7 +18,9 @@ import {
   resolveConnArg,
   resolveSourceArg,
   bookmarkLocatorIssue,
-  promptSourceAliasAndDescription,
+  buildSourceIdentitySeed,
+  promptSourceIdentity,
+  SourceIdentityExtras,
   renderPullPreview,
   openBundledDoc,
 } from "./extensionHelpers";
@@ -2413,6 +2415,9 @@ export function activate(context: vscode.ExtensionContext): void {
     let jiraWriteScope: JiraWriteScope | undefined;
     // Jira can opt INTO managed mid-wizard (Confluence arrives via preset).
     let roleOverride: "managed" | "reference" | undefined;
+    // Branch-collected facts that seed the ONE identity prompt at the end
+    // (suggested name/alias/description) — see buildSourceIdentitySeed.
+    let identityExtras: SourceIdentityExtras = {};
 
     const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
     if (typePick.value === "ldap") {
@@ -2499,6 +2504,7 @@ export function activate(context: vscode.ExtensionContext): void {
         database: database.trim(),
         trustServerCertificate: certPick.value,
       });
+      identityExtras = { host, database: database.trim() };
     } else if (typePick.value === "servicenow") {
       deployment = "cloud";
       const url = await vscode.window.showInputBox({
@@ -2546,7 +2552,10 @@ export function activate(context: vscode.ExtensionContext): void {
           },
         );
         if (!pick) return;
-        if (pick.name) baseUrl += `?table=${encodeURIComponent(pick.name)}`;
+        if (pick.name) {
+          baseUrl += `?table=${encodeURIComponent(pick.name)}`;
+          identityExtras = { defaultTable: pick.name };
+        }
       } else {
         const table = await vscode.window.showInputBox({
           ignoreFocusOut: true,
@@ -2556,13 +2565,16 @@ export function activate(context: vscode.ExtensionContext): void {
           validateInput: (v) => (!v.trim() || /^[a-z0-9_]+$/.test(v.trim()) ? undefined : "Table names are lowercase_with_underscores"),
         });
         if (table === undefined) return;
-        if (table.trim()) baseUrl += `?table=${encodeURIComponent(table.trim())}`;
+        if (table.trim()) {
+          baseUrl += `?table=${encodeURIComponent(table.trim())}`;
+          identityExtras = { defaultTable: table.trim() };
+        }
       }
     } else if (typePick.value === "splunk") {
       deployment = "datacenter";
       const url = await vscode.window.showInputBox({
         ignoreFocusOut: true,
-        title: "Splunk — the URL you open in your browser (1/3)",
+        title: "Splunk — the URL you open in your browser",
         placeHolder: "https://acme.splunkcloud.com — the management API address is derived and verified for you",
         validateInput: (v) => {
           try {
@@ -2684,37 +2696,42 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         }
       }
-      // The browser URL doubles as the deep-link target.
-      const autoWeb = !webEntry.includes(":8089") ? webEntry : "";
       const index = await vscode.window.showInputBox({
         ignoreFocusOut: true,
-        title: "Splunk — default index (2/3, optional)",
+        title: "Splunk — default index (optional)",
         placeHolder: "main — free-text chat questions search this index (Enter to skip)",
         validateInput: (v) =>
           !v.trim() || /^[A-Za-z0-9_-]+$/.test(v.trim()) ? undefined : "Index names: letters/digits/_/-",
       });
       if (index === undefined) return;
-      const web = await vscode.window.showInputBox({
-        ignoreFocusOut: true,
-        title: "Splunk — Splunk Web URL for deep links (3/3)",
-        value: autoWeb,
-        placeHolder: "https://acme.splunkcloud.com — pre-filled from what you entered (Enter to accept)",
-        validateInput: (v) => {
-          if (!v.trim()) return undefined;
-          try {
-            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
-          } catch {
-            return "Enter a valid https:// URL (or leave empty)";
-          }
-        },
-      });
-      if (web === undefined) return;
+      // The browser URL the user already typed doubles as the deep-link
+      // target — reuse it silently; ask only when nothing usable was entered
+      // (they pasted the :8089 management address directly).
+      let web = !webEntry.includes(":8089") ? webEntry : "";
+      if (!web) {
+        const manualWeb = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Splunk — Splunk Web URL for deep links (optional)",
+          placeHolder: "https://acme.splunkcloud.com (Enter to skip)",
+          validateInput: (v) => {
+            if (!v.trim()) return undefined;
+            try {
+              return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+            } catch {
+              return "Enter a valid https:// URL (or leave empty)";
+            }
+          },
+        });
+        if (manualWeb === undefined) return;
+        web = manualWeb.trim();
+      }
       const params = new URLSearchParams();
       if (selectedApp) params.set("app", selectedApp);
       if (index.trim()) params.set("index", index.trim());
       if (web.trim()) params.set("web", web.trim().replace(/\/+$/, ""));
       const qs = params.toString();
       if (qs) baseUrl += `?${qs}`;
+      identityExtras = { app: selectedApp, index: index.trim() || undefined };
     } else if (typePick.value === "splunkobs") {
       deployment = "cloud";
       // Users know the app URL (or just the realm) — both API and app
@@ -2784,23 +2801,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!presetCredential) return;
     } else if (typePick.value === "powerbi") {
       deployment = "cloud";
-      // Pilot: users only know app.powerbi.com — confirm the portal, sign in
-      // with the existing Microsoft 365 session, then ENUMERATE what they can
-      // access instead of asking for dataset names/GUIDs.
-      const portal = await vscode.window.showInputBox({
-        ignoreFocusOut: true,
-        title: "Power BI — portal URL (just confirm)",
-        value: "https://app.powerbi.com",
-        prompt: "The connector talks to the Power BI API with the sign-in you pick next; this is only a confirmation of which Power BI you use.",
-        validateInput: (v) => {
-          try {
-            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
-          } catch {
-            return "Enter a valid https:// URL";
-          }
-        },
-      });
-      if (!portal) return;
+      // Pilot: users only know app.powerbi.com — sign in with the existing
+      // Microsoft 365 session, then ENUMERATE what they can access instead of
+      // asking for dataset names/GUIDs.
       baseUrl = "https://api.powerbi.com/v1.0/myorg";
       presetCredential = await pickAadCredential();
       if (!presetCredential) return;
@@ -2817,11 +2820,15 @@ export function activate(context: vscode.ExtensionContext): void {
                 label: "$(list-unordered) No default — pick a dataset per question",
                 description: "chat can still target any dataset by name",
                 id: undefined as string | undefined,
+                name: undefined as string | undefined,
+                workspace: undefined as string | undefined,
               },
               ...datasets.map((d) => ({
                 label: d.name,
                 description: `${d.workspace}`,
                 id: d.id as string | undefined,
+                name: d.name as string | undefined,
+                workspace: d.workspace as string | undefined,
               })),
             ],
             {
@@ -2831,7 +2838,10 @@ export function activate(context: vscode.ExtensionContext): void {
             },
           );
           if (!pick) return;
-          if (pick.id) baseUrl += `?dataset=${encodeURIComponent(pick.id)}`;
+          if (pick.id) {
+            baseUrl += `?dataset=${encodeURIComponent(pick.id)}`;
+            identityExtras = { datasetName: pick.name, workspaceName: pick.workspace };
+          }
         } else {
           void vscode.window.showInformationMessage(
             "No datasets are visible to this account yet — the source still connects; datasets appear in Browse & Bookmark once you're granted access.",
@@ -2869,6 +2879,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!surfacePicks || surfacePicks.length === 0) return;
       const surfaces = surfacePicks.map((p) => p.value);
       baseUrl = `https://graph.microsoft.com/v1.0/copilot/retrieval?surfaces=${surfaces.join(",")}`;
+      identityExtras = { surfaces };
 
       // Same Microsoft Entra / Graph sign-in the reconnect "plug" path uses, so
       // adding and later reconnecting an m365copilot source prompt identically.
@@ -2945,6 +2956,11 @@ export function activate(context: vscode.ExtensionContext): void {
         const parsed = parseConfluenceUrl(url.trim());
         if (parsed) {
           baseUrl = parsed.baseUrl;
+          // A space key in the pasted URL seeds the suggested name/alias even
+          // for a read-only reference; the managed write scope refines it below.
+          if (parsed.scope.kind !== "instance" && parsed.scope.spaceKey) {
+            identityExtras = { spaceKey: parsed.scope.spaceKey };
+          }
           if (managedConfluence) {
             writeScope = writeScopeFromParsed(parsed, url.trim());
             // A bare instance URL gives no write boundary — let the user narrow
@@ -3087,30 +3103,32 @@ export function activate(context: vscode.ExtensionContext): void {
     const credential =
       presetCredential ?? (await promptCredentialFor(typePick.value, deployment, undefined, defaultUpn));
     if (!credential) return;
-    const hostLabel = (() => {
-      try {
-        return new URL(baseUrl).hostname;
-      } catch {
-        return baseUrl;
-      }
-    })();
-    const displayName =
-      (await vscode.window.showInputBox({
-      ignoreFocusOut: true,
-        title: "Add Context Source — display name",
-        value: `${hostLabel} (${typePick.value})`,
-      })) ?? "";
-    if (!displayName) return;
 
-    const details = await promptSourceAliasAndDescription(contextSources.list());
-    if (!details) return;
+    // ONE identity prompt: the suggested name (space/project/database/dataset
+    // + type) with Enter-to-accept; alias and description defaults ride along
+    // silently and stay editable via Edit Name, Alias & Description.
+    const identity = await promptSourceIdentity(
+      contextSources.list(),
+      buildSourceIdentitySeed(typePick.value, baseUrl, {
+        ...identityExtras,
+        ...(writeScope && writeScope.kind !== "instance" && writeScope.spaceKey
+          ? { spaceKey: writeScope.spaceKey }
+          : {}),
+        ...(jiraWriteScope?.kind === "project" && jiraWriteScope.projectKey
+          ? { projectKey: jiraWriteScope.projectKey }
+          : {}),
+        ...(baseDn ? { baseDn } : {}),
+        deployment,
+      }),
+    );
+    if (!identity) return;
 
     const source: ContextSource = {
       id: crypto.randomUUID(),
       type: typePick.value,
-      displayName: displayName.trim(),
-      alias: details.alias,
-      description: details.description,
+      displayName: identity.displayName,
+      alias: identity.alias,
+      description: identity.description,
       baseUrl,
       baseDn,
       deployment,
@@ -3125,16 +3143,25 @@ export function activate(context: vscode.ExtensionContext): void {
         { location: vscode.ProgressLocation.Notification, title: "Verifying source…" },
         () => contextService.verify(source, credential, true),
       );
-      await contextSources.upsert({ ...source, account, lastVerifiedAt: nowIso() });
+      const saved: ContextSource = { ...source, account, lastVerifiedAt: nowIso() };
+      await contextSources.upsert(saved);
       await contextSources.setCredential(source.id, credential);
       telemetry.record("context.add", { type: source.type, deployment: source.deployment, method: credential.method, ...(source.role === "managed" ? { role: "managed" } : {}) });
-      void vscode.window.showInformationMessage(
-        source.role === "managed"
-          ? source.type === "jira"
-            ? `Connected "${source.displayName}" as ${account} — managed: approval-gated ticket updates are bounded to ${describeJiraWriteScope(jiraWriteScope)}; reads and JQL search span all of Jira.`
-            : `Connected "${source.displayName}" as ${account} — managed: writes are bounded to ${describeWriteScope(writeScope)}; reads span all of Confluence.`
-          : `Connected "${source.displayName}" as ${account} (read-only).`,
-      );
+      const editIdentity = "Edit Name, Alias & Description";
+      void vscode.window
+        .showInformationMessage(
+          source.role === "managed"
+            ? source.type === "jira"
+              ? `Connected "${source.displayName}" as ${account} — managed: approval-gated ticket updates are bounded to ${describeJiraWriteScope(jiraWriteScope)}; reads and JQL search span all of Jira.`
+              : `Connected "${source.displayName}" as ${account} — managed: writes are bounded to ${describeWriteScope(writeScope)}; reads span all of Confluence.`
+            : `Connected "${source.displayName}" as ${account} (read-only).`,
+          editIdentity,
+        )
+        .then((pick) => {
+          if (pick === editIdentity) {
+            void vscode.commands.executeCommand("aiSharePoint.editSourceAlias", saved);
+          }
+        });
       if (DB_TYPES.has(source.type)) {
         // First use of a database source: preload the schema catalog, then
         // offer the Copilot semantic indexing (consent-gated, ADR-0024).
@@ -3151,7 +3178,7 @@ export function activate(context: vscode.ExtensionContext): void {
           "Skip",
         );
         if (run === "Run Write Test") {
-          await vscode.commands.executeCommand("aiSharePoint.testWriteAccess", { ...source, account, lastVerifiedAt: nowIso() });
+          await vscode.commands.executeCommand("aiSharePoint.testWriteAccess", saved);
         }
       }
     } catch (err) {
@@ -3431,18 +3458,27 @@ export function activate(context: vscode.ExtensionContext): void {
   register("aiSharePoint.editSourceAlias", async (arg) => {
     const source = await resolveSourceArg(arg, contextSources);
     if (!source) return;
-    const details = await promptSourceAliasAndDescription(contextSources.list(), source);
+    const details = await promptSourceIdentity(
+      contextSources.list(),
+      buildSourceIdentitySeed(source.type, source.baseUrl),
+      source,
+    );
     if (!details) return;
     const stored = contextSources.get(source.id) ?? source;
-    await contextSources.upsert({ ...stored, alias: details.alias, description: details.description });
+    await contextSources.upsert({
+      ...stored,
+      displayName: details.displayName,
+      alias: details.alias,
+      description: details.description,
+    });
     telemetry.record("context.alias", {
       alias: details.alias ? "set" : "cleared",
       description: details.description ? "set" : "cleared",
     });
     void vscode.window.showInformationMessage(
       details.alias
-        ? `"${source.displayName}" answers to "${details.alias}" now — e.g. @sharepoint find … in the ${details.alias} database.`
-        : `Alias cleared for "${source.displayName}".`,
+        ? `"${details.displayName}" answers to "${details.alias}" now — e.g. @sharepoint find … in the ${details.alias} database.`
+        : `Saved "${details.displayName}" — no chat alias set.`,
     );
   });
 

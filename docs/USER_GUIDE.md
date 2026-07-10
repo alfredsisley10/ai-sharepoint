@@ -298,6 +298,11 @@ Jira, Cloud or Data Center (more source types are roadmap).
   credential — Cloud uses your **email + API token** (create one at id.atlassian.com →
   Security → API tokens); Data Center offers a **personal access token** or username+password.
   The credential is stored only in your OS keychain and verified with a **single** read.
+  Finally, **one identity prompt**: a suggested name built from what you connected (the space,
+  project, database, or dataset — e.g. `ENG · Confluence`, `Sales @ sqlserver.corp.example`) —
+  press **Enter to accept** or type your own. A matching **chat alias** and **description** are
+  set automatically at the same time; change any of them later via right-click →
+  **Edit Name, Alias & Description**.
 - **Use in chat / agent mode**: `#spSources` lists sources, `#spSearchContext` searches (plain
   text, or raw **CQL**/**JQL** for precision), `#spContextItem` fetches a page (by id) or issue
   (by key, e.g. `ENG-42`). Example: *“Using #spSearchContext, find Confluence pages about our
@@ -328,8 +333,9 @@ Jira, Cloud or Data Center (more source types are roadmap).
 
 ### Aliases & descriptions: name sources the way you talk about them
 
-Give any source a short **chat alias** and a one-line **description** — optional steps when
-adding, or any time via right-click → **Edit Alias & Description**:
+Every source gets a short **chat alias** and a one-line **description** — suggested
+automatically when adding, and editable any time via right-click →
+**Edit Name, Alias & Description**:
 
 - **Alias** (e.g. `CMDB`): the handle you use in chat — *"@sharepoint find information about
   application X in the **CMDB** database"* goes straight to that connection. Aliases are
@@ -867,7 +873,7 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | Apply Repository to SharePoint (write-back)… | Write repo changes to the live site — previewed, freshness-checked, snapshot-guarded |
 | Revert Site to Commit… | Make the live site match an earlier snapshot commit (ADR-0005) |
 | Export / Import Reference Config | Share sources + bookmarks with the team, secret-free (ADR-0013) |
-| Add / Test / Remove Context Source · Edit Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases/Power BI/ServiceNow) |
+| Add / Test / Remove Context Source · Edit Name, Alias & Description · Reset Source Auth Lockout · Clear Reference-Source Cache | Read-only reference sources (Confluence/Jira/LDAP/databases/Power BI/ServiceNow) |
 | Load/Refresh / Index / View Database Schema · Pre-cache Source Catalog | Schema understanding (ADR-0024) and catalog pre-cache per source |
 | Draft Teams Message / Draft Outlook Email · Review & Send / Edit / Discard Communication Draft | Approval-gated communications (ADR-0025) |
 | Configure Teams Webhook (no admin consent)… | Add/remove channel Incoming Webhooks so Teams drafts can post without `Chat.ReadWrite` |

@@ -2,7 +2,12 @@ import * as vscode from "vscode";
 import { DeviceCodePrompt } from "./auth/deviceCodeProvider";
 import { SitesStore, SiteConnection } from "./auth/sitesStore";
 import { ContextSourcesStore } from "./context/sourcesStore";
-import { ContextSource, ContextSourceType, ContextBookmark } from "./context/types";
+import {
+  ContextSource,
+  ContextSourceType,
+  ContextDeployment,
+  ContextBookmark,
+} from "./context/types";
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { aliasIssue, normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
 import { SiteSyncConfig } from "./sync/syncConfigStore";
@@ -102,27 +107,304 @@ export function bookmarkLocatorIssue(
   return undefined;
 }
 
-/** Shared by add + edit: optional chat alias (unique, validated) and
- *  description. Enter on an empty box skips/clears; Esc cancels the flow. */
-export async function promptSourceAliasAndDescription(
+/** Wizard-scoped facts an add-flow branch already collected, threaded into
+ *  the identity seed so the suggested name/alias/description reflect what was
+ *  actually connected instead of a bare hostname. All optional — the seed
+ *  degrades to host/type when a fact is unknown. */
+export interface SourceIdentityExtras {
+  /** Confluence: the space key (from the write scope or the pasted URL). */
+  spaceKey?: string;
+  /** Managed Jira: the write-scope project key. */
+  projectKey?: string;
+  /** SQL Server wizard fields (its mssql:// URL carries instance/port noise). */
+  host?: string;
+  database?: string;
+  /** ServiceNow: the default table chosen during onboarding. */
+  defaultTable?: string;
+  /** Splunk: the search app and default index chosen during onboarding. */
+  app?: string;
+  index?: string;
+  /** Power BI: the picked default dataset and its workspace. */
+  datasetName?: string;
+  workspaceName?: string;
+  /** Microsoft 365 Copilot: the surfaces enabled for grounding. */
+  surfaces?: string[];
+  /** LDAP: the directory base DN. */
+  baseDn?: string;
+  /** Cloud vs Data Center — colors the GitHub/Grafana description. */
+  deployment?: ContextDeployment;
+}
+
+/** The smart identity defaults for one source: shown as ONE editable name
+ *  prompt on add, with the alias/description applied silently. */
+export interface SourceIdentitySeed {
+  typeLabel: string;
+  displayName: string;
+  aliasSuggestion?: string;
+  description?: string;
+}
+
+const SOURCE_TYPE_LABELS: Record<ContextSourceType, string> = {
+  confluence: "Confluence",
+  jira: "Jira",
+  github: "GitHub",
+  ldap: "LDAP / Active Directory",
+  mssql: "SQL Server",
+  postgres: "PostgreSQL",
+  mysql: "MySQL",
+  mongodb: "MongoDB",
+  powerbi: "Power BI",
+  servicenow: "ServiceNow",
+  splunk: "Splunk",
+  splunkobs: "Splunk Observability Cloud",
+  grafana: "Grafana",
+  m365copilot: "Microsoft 365 Copilot",
+};
+
+const hostnameOf = (baseUrl: string): string => {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return "";
+  }
+};
+
+/** First path segment of a connection URL — the database name for the
+ *  postgres/mysql/mongodb/mssql URL shapes. */
+const dbNameOf = (baseUrl: string): string => {
+  try {
+    const u = new URL(baseUrl);
+    return decodeURIComponent(u.pathname.replace(/^\/+/, "").split("/")[0] ?? "");
+  } catch {
+    return "";
+  }
+};
+
+/** A query param riding on the stored baseUrl (?table=…, ?app=…, ?index=…). */
+const paramOf = (baseUrl: string, key: string): string | undefined => {
+  try {
+    return new URL(baseUrl).searchParams.get(key) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Join description fragments with " · ", capped at the persisted limit. */
+const composeDescription = (...parts: Array<string | undefined>): string | undefined => {
+  const text = parts
+    .map((p) => p?.trim())
+    .filter((p): p is string => !!p)
+    .join(" · ");
+  return text ? text.slice(0, DESCRIPTION_MAX_LENGTH) : undefined;
+};
+
+/** An alias is only suggested when the token would survive the same
+ *  validation the manual alias box applies (uniqueness against the live
+ *  source list is re-checked at prompt time). */
+const aliasCandidate = (token: string | undefined): string | undefined => {
+  const t = token?.trim();
+  return t && !aliasIssue(t, []) ? normalizeAlias(t) : undefined;
+};
+
+/**
+ * Smart identity defaults for the add/edit flows — the space/project/database/
+ * dataset the user just connected becomes the name and alias suggestion, and
+ * the description tells Copilot what the source is. Pure.
+ */
+export function buildSourceIdentitySeed(
+  type: ContextSourceType,
+  baseUrl: string,
+  extras: SourceIdentityExtras = {},
+): SourceIdentitySeed {
+  const typeLabel = SOURCE_TYPE_LABELS[type];
+  const host = hostnameOf(baseUrl);
+  const at = host ? ` at ${host}` : "";
+  /** `<token> · <Type>`, falling back to the host, then the bare type. */
+  const named = (token?: string): string => {
+    const t = token?.trim();
+    return t ? `${t} · ${typeLabel}` : host ? `${host} · ${typeLabel}` : typeLabel;
+  };
+
+  switch (type) {
+    case "confluence": {
+      const space = extras.spaceKey?.trim();
+      return {
+        typeLabel,
+        displayName: named(space),
+        aliasSuggestion: aliasCandidate(space),
+        description: composeDescription(space ? `Confluence space ${space}${at}` : `Confluence${at}`),
+      };
+    }
+    case "jira": {
+      const project = extras.projectKey?.trim();
+      return {
+        typeLabel,
+        displayName: named(project),
+        aliasSuggestion: aliasCandidate(project),
+        description: composeDescription(project ? `Jira project ${project}${at}` : `Jira${at}`),
+      };
+    }
+    case "mssql":
+    case "postgres":
+    case "mysql":
+    case "mongodb": {
+      const db = extras.database?.trim() || dbNameOf(baseUrl);
+      const dbHost = extras.host?.trim() || host;
+      return {
+        typeLabel,
+        displayName: db && dbHost ? `${db} @ ${dbHost}` : named(db),
+        aliasSuggestion: aliasCandidate(db),
+        description: composeDescription(
+          db ? `${typeLabel} database ${db}${dbHost ? ` on ${dbHost}` : ""}` : `${typeLabel}${at}`,
+        ),
+      };
+    }
+    case "servicenow": {
+      const instance = host.split(".")[0] || undefined;
+      const table = extras.defaultTable?.trim() || paramOf(baseUrl, "table");
+      return {
+        typeLabel,
+        displayName: named(instance),
+        description: composeDescription(
+          `ServiceNow instance${at}`,
+          table ? `default table: ${table}` : undefined,
+        ),
+      };
+    }
+    case "splunk": {
+      const app = extras.app?.trim() || paramOf(baseUrl, "app");
+      const index = extras.index?.trim() || paramOf(baseUrl, "index");
+      return {
+        typeLabel,
+        displayName: named(undefined),
+        description: composeDescription(
+          `Splunk${at}`,
+          app ? `app: ${app}` : undefined,
+          index ? `default index: ${index}` : undefined,
+        ),
+      };
+    }
+    case "powerbi": {
+      const dataset = extras.datasetName?.trim();
+      const workspace = extras.workspaceName?.trim();
+      return {
+        typeLabel,
+        displayName: dataset ? `${dataset}${workspace ? ` (${workspace})` : ""} · Power BI` : typeLabel,
+        aliasSuggestion: aliasCandidate(dataset),
+        description: dataset
+          ? composeDescription(
+              `Power BI dataset "${dataset}"${workspace ? ` in workspace "${workspace}"` : ""}`,
+            )
+          : undefined,
+      };
+    }
+    case "splunkobs": {
+      const realm = host.match(/^api\.([a-z]{2}\d+)\./i)?.[1]?.toLowerCase();
+      return {
+        typeLabel,
+        displayName: named(realm),
+        description: composeDescription(realm ? `Splunk Observability Cloud realm ${realm}` : undefined),
+      };
+    }
+    case "m365copilot": {
+      const surfaces = extras.surfaces ?? paramOf(baseUrl, "surfaces")?.split(",").filter((s) => s);
+      return {
+        typeLabel,
+        displayName: typeLabel,
+        description: composeDescription(
+          "Microsoft 365 Copilot retrieval",
+          surfaces?.length ? `surfaces: ${surfaces.join(", ")}` : undefined,
+        ),
+      };
+    }
+    case "github":
+      return {
+        typeLabel,
+        displayName: named(undefined),
+        description: composeDescription(
+          `${extras.deployment === "datacenter" ? "GitHub Enterprise Server" : "GitHub"}${at}`,
+        ),
+      };
+    case "grafana":
+      return {
+        typeLabel,
+        displayName: named(undefined),
+        description: composeDescription(
+          `${extras.deployment === "cloud" ? "Grafana Cloud" : extras.deployment === "datacenter" ? "Self-hosted Grafana" : "Grafana"}${at}`,
+        ),
+      };
+    case "ldap": {
+      // The directory's DNS domain reads better than an SRV-lookup hostname
+      // (_gc._tcp.corp.example) — derive it from the base DN's DC parts.
+      const dcDomain = (extras.baseDn ?? "")
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => /^dc=/i.test(p))
+        .map((p) => p.slice(3))
+        .join(".");
+      const domain = dcDomain || host.replace(/^(_[a-z]+\._tcp\.)+/i, "") || undefined;
+      return {
+        typeLabel,
+        displayName: named(domain),
+        description: composeDescription(
+          domain ? `Active Directory / LDAP directory ${domain}` : `Active Directory / LDAP directory${at}`,
+          extras.baseDn?.trim() ? `base DN: ${extras.baseDn.trim()}` : undefined,
+        ),
+      };
+    }
+  }
+}
+
+/** The single identity step shared by add + edit.
+ *
+ *  ADD (no `current`): ONE input box — the seed's suggested name, Enter to
+ *  accept — while the alias/description defaults apply silently (a suggested
+ *  alias that would collide with an existing source is dropped, never blocks).
+ *  EDIT: name (required), then the alias and description boxes prefilled with
+ *  the stored values. Enter on an empty box skips/clears; Esc cancels. */
+export async function promptSourceIdentity(
   existing: ContextSource[],
-  current?: { id?: string; alias?: string; description?: string },
-): Promise<{ alias?: string; description?: string } | undefined> {
+  seed: SourceIdentitySeed,
+  current?: { id?: string; displayName?: string; alias?: string; description?: string },
+): Promise<{ displayName: string; alias?: string; description?: string } | undefined> {
+  if (!current) {
+    const alias =
+      seed.aliasSuggestion && !aliasIssue(seed.aliasSuggestion, existing)
+        ? normalizeAlias(seed.aliasSuggestion)
+        : undefined;
+    const name = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: `${seed.typeLabel} — name (Enter to accept)`,
+      value: seed.displayName,
+      prompt:
+        "The chat alias and description are set automatically from what you connected — change any of them later via right-click → Edit Name, Alias & Description.",
+      validateInput: (v) => (v.trim() ? undefined : "Enter a name"),
+    });
+    if (!name) return undefined;
+    return { displayName: name.trim(), alias, description: seed.description };
+  }
+  const name = await vscode.window.showInputBox({
+    ignoreFocusOut: true,
+    title: `${seed.typeLabel} — name`,
+    value: current.displayName ?? seed.displayName,
+    validateInput: (v) => (v.trim() ? undefined : "Enter a name"),
+  });
+  if (!name) return undefined;
   const aliasRaw = await vscode.window.showInputBox({
     ignoreFocusOut: true,
     title: "Chat alias (optional)",
-    value: current?.alias ?? "",
+    value: current.alias ?? "",
     placeHolder: 'CMDB — short handle for @sharepoint chat ("…in the CMDB database")',
-    prompt: current?.alias
+    prompt: current.alias
       ? "Press Enter to keep/change, or clear the box to remove the alias."
-      : "Press Enter to skip. You can set it later via right-click → Edit Alias & Description.",
-    validateInput: (v) => (v.trim() ? aliasIssue(v, existing, current?.id) : undefined),
+      : "Press Enter to skip. You can set it later via right-click → Edit Name, Alias & Description.",
+    validateInput: (v) => (v.trim() ? aliasIssue(v, existing, current.id) : undefined),
   });
   if (aliasRaw === undefined) return undefined;
   const descriptionRaw = await vscode.window.showInputBox({
     ignoreFocusOut: true,
     title: "Description (optional)",
-    value: current?.description ?? "",
+    value: current.description ?? "",
     placeHolder: "What's in it — e.g. ServiceNow CMDB replica: application & service inventory",
     prompt: "Shown to Copilot so it picks the right source for a question. Press Enter to skip.",
     validateInput: (v) =>
@@ -132,6 +414,7 @@ export async function promptSourceAliasAndDescription(
   });
   if (descriptionRaw === undefined) return undefined;
   return {
+    displayName: name.trim(),
     alias: aliasRaw.trim() ? normalizeAlias(aliasRaw) : undefined,
     description: descriptionRaw.trim() ? descriptionRaw.trim().slice(0, DESCRIPTION_MAX_LENGTH) : undefined,
   };
