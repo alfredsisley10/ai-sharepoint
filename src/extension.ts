@@ -2099,12 +2099,68 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // --- Reference context sources (Track A — PLAN §9) -------------------------
+  /** Keychain handle for the standalone "Sign in to Microsoft 365 now" session
+   *  minted by the context-source pickers below (no SharePoint site involved).
+   *  `tenantCacheHandle` derives purely from its host string, so a fixed
+   *  pseudo-host yields a STABLE handle — repeated standalone sign-ins share
+   *  one MSAL session — that can never collide with a real site handle (site
+   *  tenant hosts are always *.sharepoint.<com|us|cn>). */
+  const STANDALONE_M365_CACHE_HANDLE = tenantCacheHandle("graph.microsoft.com");
+
+  /** Standalone Microsoft 365 sign-in for context sources. The original
+   *  "shared with SharePoint" option only BORROWED a connected site's MSAL
+   *  session — a dead end with zero sites: the add-source flow aborted with
+   *  "connect a SharePoint site first". This mints its own session the same
+   *  way `connectSite` does (method pick → registry.create → interactive
+   *  acquisition) and returns the same { providerId, cacheHandle } shape that
+   *  `aadBroker` consumes. `seedScopes` is acquired once to seed the keychain
+   *  cache; the source's real scopes are requested at verify time. */
+  const signInToM365Standalone = async (
+    title: string,
+    seedScopes: string[],
+  ): Promise<ContextCredential | undefined> => {
+    const method = await vscode.window.showQuickPick(
+      AUTH_PROVIDERS.map((p) => ({
+        label: p.id === "msal-public-interactive" ? `$(globe) ${p.label}` : `$(device-mobile) ${p.label}`,
+        detail: p.detail,
+        id: p.id,
+      })),
+      { ignoreFocusOut: true, title },
+    );
+    if (!method) return undefined;
+    const provider = registry.create(method.id, STANDALONE_M365_CACHE_HANDLE);
+    try {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Signing in to Microsoft 365…" },
+        () => provider.acquireToken(seedScopes),
+      );
+    } catch (err) {
+      // Abort cleanly — nothing has been persisted for this source yet.
+      if (classifyError(err) !== "auth.cancelled") {
+        log.error("Standalone Microsoft 365 sign-in failed", err);
+        void vscode.window.showErrorMessage(
+          `Microsoft 365 sign-in failed: ${redactError(err).message.slice(0, 200)}`,
+        );
+      }
+      return undefined;
+    }
+    return {
+      method: "aad-sso",
+      secret: JSON.stringify({ providerId: method.id, cacheHandle: STANDALONE_M365_CACHE_HANDLE }),
+    };
+  };
+
   /** Power BI sign-in (ADR-0027 amendment). Azure CLI SSO leads: the shared
    *  Microsoft 365 sign-in app ("Microsoft Graph Command Line Tools") needs
    *  tenant admin approval for Power BI scopes, which pilots can't get — the
    *  Azure CLI is a Microsoft first-party app already authorized for the
    *  Power BI service, so `az login` works with no per-app approval. */
   const pickAadCredential = async (): Promise<ContextCredential | undefined> => {
+    // Offer the borrow-a-site option only when there IS a site to borrow —
+    // with zero connected sites it was a dead end ("connect a SharePoint site
+    // first") that aborted the add-source flow; the standalone sign-in below
+    // covers that case (and "use a different account") without a site.
+    const connected = sites.list();
     const mode = await vscode.window.showQuickPick(
       [
         {
@@ -2117,10 +2173,19 @@ export function activate(context: vscode.ExtensionContext): void {
           description: "uses your existing `az login`; tokens never stored — same consent posture as above",
           value: "az" as const,
         },
+        ...(connected.length > 0
+          ? [
+              {
+                label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
+                description: "may require tenant admin approval of the sign-in app for Power BI scopes",
+                value: "aad" as const,
+              },
+            ]
+          : []),
         {
-          label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
-          description: "may require tenant admin approval of the sign-in app for Power BI scopes",
-          value: "aad" as const,
+          label: "$(sign-in) Sign in to Microsoft 365 now",
+          description: "new sign-in — no SharePoint site needed / use a different account",
+          value: "signin" as const,
         },
         {
           label: "$(key) Paste an access token",
@@ -2154,6 +2219,12 @@ export function activate(context: vscode.ExtensionContext): void {
       // Marker only — nothing secret is stored; every call asks the CLI.
       return { method: "az-sso", secret: "az-cli-session" };
     }
+    if (mode.value === "signin") {
+      return signInToM365Standalone(
+        "Power BI Microsoft 365 sign-in — browser or device code?",
+        POWERBI_SCOPES,
+      );
+    }
     if (mode.value === "pat") {
       const token = await vscode.window.showInputBox({
         ignoreFocusOut: true,
@@ -2165,15 +2236,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!token?.trim()) return undefined;
       return { method: "pat", secret: token.trim() };
     }
-    const all = sites.list();
-    if (all.length === 0) {
-      const add = await vscode.window.showInformationMessage(
-        "This option reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it (or pick “Microsoft sign-in — nothing to install” instead).",
-        "Connect Site",
-      );
-      if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
-      return undefined;
-    }
+    // "aad" is only offered when at least one site exists, so no zero-site
+    // dead end here anymore.
+    const all = connected;
     let conn = all.length === 1 ? all[0] : undefined;
     if (!conn) {
       const pick = await vscode.window.showQuickPick(
@@ -2201,12 +2266,26 @@ export function activate(context: vscode.ExtensionContext): void {
    *  Microsoft Entra rather than falling through to `promptContextCredential`'s
    *  Atlassian Cloud credential prompt ("Atlassian account email"). */
   const pickM365GraphCredential = async (): Promise<ContextCredential | undefined> => {
+    // Offer the borrow-a-site option only when there IS a site to borrow —
+    // with zero connected sites it was a dead end ("connect a SharePoint site
+    // first") that aborted the add-source flow; the standalone sign-in below
+    // covers that case (and "use a different account") without a site.
+    const connected = sites.list();
     const signIn = await vscode.window.showQuickPick(
       [
+        ...(connected.length > 0
+          ? [
+              {
+                label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
+                description: "reuses a connected site's sign-in — recommended",
+                value: "aad" as const,
+              },
+            ]
+          : []),
         {
-          label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
-          description: "reuses a connected site's sign-in — recommended",
-          value: "aad" as const,
+          label: "$(sign-in) Sign in to Microsoft 365 now",
+          description: "new sign-in — no SharePoint site needed / use a different account",
+          value: "signin" as const,
         },
         {
           label: "$(key) Paste a Graph access token",
@@ -2217,6 +2296,15 @@ export function activate(context: vscode.ExtensionContext): void {
       { ignoreFocusOut: true, title: "Microsoft 365 Copilot sign-in" },
     );
     if (!signIn) return undefined;
+    if (signIn.value === "signin") {
+      // Seed with a basic Graph scope only — the source's real surface scopes
+      // (documents/email/calendar/…) are requested by the verify step that
+      // follows source creation.
+      return signInToM365Standalone(
+        "Microsoft 365 sign-in — browser or device code?",
+        ["https://graph.microsoft.com/User.Read"],
+      );
+    }
     if (signIn.value === "pat") {
       const token = await vscode.window.showInputBox({
         ignoreFocusOut: true,
@@ -2228,15 +2316,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!token?.trim()) return undefined;
       return { method: "pat", secret: token.trim() };
     }
-    const all = sites.list();
-    if (all.length === 0) {
-      const add = await vscode.window.showInformationMessage(
-        "This reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
-        "Connect Site",
-      );
-      if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
-      return undefined;
-    }
+    // "aad" is only offered when at least one site exists, so no zero-site
+    // dead end here anymore.
+    const all = connected;
     let conn = all.length === 1 ? all[0] : undefined;
     if (!conn) {
       const pick = await vscode.window.showQuickPick(
@@ -3299,20 +3381,41 @@ export function activate(context: vscode.ExtensionContext): void {
       "Remove Source",
     );
     if (confirm === "Remove Source") {
-      // The Power BI no-install sign-in keeps its MSAL refresh-token cache in
-      // a source-private keychain entry — wipe it with the source.
+      // aad-sso sources keep an MSAL refresh-token cache in the keychain.
+      // Capture the handle BEFORE removal (remove() wipes the credential),
+      // then clean up AFTER so the removed source doesn't count itself. The
+      // Power BI no-install cache is source-private (always wiped); other
+      // handles (standalone "Sign in to Microsoft 365 now" sessions, borrowed
+      // site sign-ins) can be SHARED, so mirror sitesStore.remove's refcount
+      // cleanup: wipe only when NO site connection and NO remaining source
+      // still references the handle. Never delete a handle a site still uses.
       const cred = await contextSources.getCredential(source.id).catch(() => undefined);
+      await contextSources.remove(source.id);
       if (cred?.method === "aad-sso") {
         try {
-          const handles = JSON.parse(cred.secret) as { cacheHandle?: string };
-          if (handles.cacheHandle?.startsWith(POWERBI_AZCLI_CACHE_PREFIX)) {
-            await secrets.delete(handles.cacheHandle);
+          const handle = (JSON.parse(cred.secret) as { cacheHandle?: string }).cacheHandle;
+          if (handle?.startsWith(POWERBI_AZCLI_CACHE_PREFIX)) {
+            await secrets.delete(handle);
+          } else if (handle && !sites.list().some((c) => c.cacheHandle === handle)) {
+            let shared = false;
+            for (const other of contextSources.list()) {
+              const otherCred = await contextSources.getCredential(other.id).catch(() => undefined);
+              if (otherCred?.method !== "aad-sso") continue;
+              try {
+                if ((JSON.parse(otherCred.secret) as { cacheHandle?: string }).cacheHandle === handle) {
+                  shared = true;
+                  break;
+                }
+              } catch {
+                // unreadable secret on another source — can't prove sharing; skip it
+              }
+            }
+            if (!shared) await secrets.delete(handle); // best-effort offboarding
           }
         } catch {
           // unreadable secret — nothing more to clean
         }
       }
-      await contextSources.remove(source.id);
       await bookmarks.removeForSource(source.id);
       await schemas.remove(source.id);
       await catalogs.remove(source.id);
