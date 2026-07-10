@@ -10,7 +10,7 @@ import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
 import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
-import { looksLikeConfluenceOptimization, confluenceOptimizationSeed } from "./intent";
+import { looksLikeConfluenceOptimization, confluenceOptimizationSeed, hasConfluenceSignal } from "./intent";
 import { betterModelFor } from "../copilot/modelRecommend";
 import { computeFollowups } from "./followups";
 import { TelemetryService } from "../diagnostics/telemetry";
@@ -1005,13 +1005,18 @@ async function buildSiteContext(
   }
 
   const urlInPrompt = deps.access.extractSiteUrl(request.prompt);
-  const promptLc = request.prompt.toLowerCase();
+  const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const namedConn = all.find(
-    (c) => c.displayName.length > 2 && promptLc.includes(c.displayName.toLowerCase()),
+    (c) =>
+      c.displayName.length > 2 &&
+      new RegExp(`\\b${escapeRegExp(c.displayName)}\\b`, "i").test(request.prompt),
   );
   // A site the user explicitly pointed at (URL or name) vs. the sole-connection
-  // fallback — only the former forces a read.
-  const explicitConn = deps.access.resolve(urlInPrompt) ?? namedConn;
+  // fallback — only the former forces a read. NOTE: resolve(undefined) falls
+  // back to the sole connection, so only consult it when a URL was actually
+  // present; otherwise a single connected site made explicitConn always truthy
+  // and the skip below dead code (every turn read SharePoint live).
+  const explicitConn = (urlInPrompt ? deps.access.resolve(urlInPrompt) : undefined) ?? namedConn;
   const conn = explicitConn ?? (all.length === 1 ? all[0] : undefined);
 
   const inventory = all
@@ -1036,10 +1041,17 @@ async function buildSiteContext(
     /\b(sharepoint|site|sites|subsite|web ?parts?|site ?(?:map|nav)|navigation|home ?page|landing ?page|librar(?:y|ies))\b/i.test(
       request.prompt,
     );
-  if (!explicitConn && !siteVocab) {
+  // Even when site vocabulary matched, a Confluence-flavored prompt ("our wiki
+  // navigation", "the DOCS space") or a project scoped to Confluence sources
+  // is almost certainly about the reference source, not a SharePoint site —
+  // skip the speculative read unless the user explicitly named a site.
+  const confluenceScoped = referenceSources.some((s) => s.type === "confluence");
+  const skipSpeculativeRead =
+    !explicitConn && (!siteVocab || hasConfluenceSignal(request.prompt) || confluenceScoped);
+  if (skipSpeculativeRead) {
     return [
       referenceBlock,
-      `Configured SharePoint connections (not read live — call site_overview / list_pages if the question turns out to concern a site):\n${inventory}`,
+      `Configured SharePoint connections (not read live — use search_context / the Confluence tools for reference-source questions; call site_overview / list_pages only if the question concerns a SharePoint site):\n${inventory}`,
     ]
       .filter(Boolean)
       .join("\n");

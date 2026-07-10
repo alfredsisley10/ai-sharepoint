@@ -932,7 +932,7 @@
         "tags": [
           "sharepoint"
         ],
-        "modelDescription": "Get a live, read-only overview of a connected SharePoint site: title, description, lists/libraries, and modern pages. Pass the site URL or display name; omit it if only one connection exists.",
+        "modelDescription": "Get a live, read-only overview of a connected SharePoint site: title, description, lists/libraries, and modern pages. Pass the site URL or display name; omit it if only one connection exists. SharePoint sites only — for Confluence spaces/pages use search_context.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1028,7 +1028,7 @@
         "tags": [
           "sharepoint"
         ],
-        "modelDescription": "List the modern pages of a connected SharePoint site (title, URL, last modified). Read-only. Pass the site URL or display name; omit it if only one connection exists.",
+        "modelDescription": "List the modern pages of a connected SharePoint site (title, URL, last modified). Read-only. Pass the site URL or display name; omit it if only one connection exists. SharePoint sites only — for Confluence spaces/pages use search_context.",
         "inputSchema": {
           "type": "object",
           "properties": {
