@@ -1132,6 +1132,114 @@
         }
       },
       {
+        "name": "aisharepoint_update_jira_issue",
+        "displayName": "Update Jira Issue",
+        "toolReferenceName": "spUpdateJiraIssue",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "tags": [
+          "sharepoint",
+          "jira"
+        ],
+        "modelDescription": "UPDATE fields of a Jira issue — summary, description, and/or labels — using the Jira source's own API token (no admin consent). Requires the Jira connector to be onboarded as MANAGED: mutations are bounded to the connector's write scope (a single project, or the whole instance) and the issue's REAL current project is checked live before anything changes; a read-only connector refuses. Approval-gated: the user confirms an old → new preview before anything is written. ONLY the fields you pass are changed — never send a field the user didn't ask to change. The description is plain text / Jira wiki markup (REST v2 on Cloud and Data Center), NOT Markdown and NOT ADF JSON. Find the issue's key via search_context on that source first. Args: source (Jira source name/alias; optional if one), issueKey (required), summary, description, labels (full replacement array). Use ONLY for a change the user explicitly asked to make.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Jira source name/alias (optional when only one Jira source is configured)."
+            },
+            "issueKey": {
+              "type": "string",
+              "description": "The issue to update, e.g. ENG-42 (required) — find it via search_context."
+            },
+            "summary": {
+              "type": "string",
+              "description": "New summary (omit to leave unchanged)."
+            },
+            "description": {
+              "type": "string",
+              "description": "New description — plain text / Jira wiki markup, replaces the whole description (omit to leave unchanged)."
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "New FULL label set — replaces the issue's labels (omit to leave unchanged)."
+            }
+          },
+          "required": [
+            "issueKey"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_comment_jira_issue",
+        "displayName": "Comment on Jira Issue",
+        "toolReferenceName": "spCommentJiraIssue",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(comment)",
+        "tags": [
+          "sharepoint",
+          "jira"
+        ],
+        "modelDescription": "Add a COMMENT to a Jira issue using the Jira source's own API token. Requires a MANAGED Jira connector: the write is bounded to the connector's write scope (project or instance, checked against the issue's real current project); a read-only connector refuses. Approval-gated: the user sees the issue and the comment text before it posts. The body is plain text / Jira wiki markup (REST v2), not Markdown/ADF. Find the issue via search_context first. Args: source (optional if one Jira source), issueKey (required), body (required). Use ONLY when the user asked to comment.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Jira source name/alias (optional when only one Jira source is configured)."
+            },
+            "issueKey": {
+              "type": "string",
+              "description": "The issue to comment on, e.g. ENG-42 (required)."
+            },
+            "body": {
+              "type": "string",
+              "description": "The comment text — plain text / Jira wiki markup (required)."
+            }
+          },
+          "required": [
+            "issueKey",
+            "body"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_transition_jira_issue",
+        "displayName": "Transition Jira Issue",
+        "toolReferenceName": "spTransitionJiraIssue",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(arrow-right)",
+        "tags": [
+          "sharepoint",
+          "jira"
+        ],
+        "modelDescription": "Move a Jira issue through its WORKFLOW (e.g. To Do → In Progress → Done). TWO modes: (1) WITHOUT 'transition' this is a READ — it returns the issue's current status and the transitions available to this account right now (no approval needed); call this FIRST when unsure what's allowed. (2) WITH 'transition' (a transition name, target status name, or id from mode 1) it APPLIES the transition — approval-gated, requires a MANAGED Jira connector, and bounded to the connector's write scope (checked against the issue's real current project); an unavailable transition is refused, never forced. Args: source (optional if one Jira source), issueKey (required), transition (omit to list). Use ONLY when the user asked to move/close/reopen/start a ticket.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Jira source name/alias (optional when only one Jira source is configured)."
+            },
+            "issueKey": {
+              "type": "string",
+              "description": "The issue to transition, e.g. ENG-42 (required)."
+            },
+            "transition": {
+              "type": "string",
+              "description": "The transition to apply — its name, the target status name, or the id returned by the list mode. OMIT to list what's available (a read, no approval)."
+            }
+          },
+          "required": [
+            "issueKey"
+          ]
+        }
+      },
+      {
         "name": "aisharepoint_confluence_capabilities",
         "displayName": "Confluence Content Capabilities",
         "toolReferenceName": "spConfluenceCapabilities",

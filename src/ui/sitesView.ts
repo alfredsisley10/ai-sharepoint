@@ -3,6 +3,7 @@ import { SitesStore, SiteConnection } from "../auth/sitesStore";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { ContextSource } from "../context/types";
 import { describeWriteScope } from "../context/adapters/confluenceScope";
+import { describeJiraWriteScope } from "../context/adapters/jiraWrite";
 import { MemoryStore } from "../context/memoryStore";
 import { MemoryItem } from "../context/memory";
 import {
@@ -61,12 +62,15 @@ export function managedSourceItem(source: ContextSource): vscode.TreeItem {
   item.id = `managed-source:${source.id}`;
   item.description = `managed · ${source.type}`;
   item.iconPath = new vscode.ThemeIcon(
-    source.type === "confluence" ? "book" : "cloud",
+    source.type === "confluence" ? "book" : source.type === "jira" ? "issues" : "cloud",
     source.lastVerifiedAt ? new vscode.ThemeColor("charts.green") : new vscode.ThemeColor("charts.yellow"),
   );
   item.contextValue = `managed-source-${source.type}`;
   if (source.writeScope && source.writeScope.kind !== "instance") {
     item.description += ` · ${source.writeScope.kind === "space" ? source.writeScope.spaceKey : `page ${source.writeScope.pageId}`}`;
+  }
+  if (source.jiraWriteScope?.kind === "project" && source.jiraWriteScope.projectKey) {
+    item.description += ` · ${source.jiraWriteScope.projectKey}`;
   }
   item.tooltip = new vscode.MarkdownString(
     [
@@ -80,6 +84,12 @@ export function managedSourceItem(source: ContextSource): vscode.TreeItem {
         ? [
             `| Write scope | ${describeWriteScope(source.writeScope)} |`,
             `| Reads | all of Confluence (ownership & notifications too) |`,
+          ]
+        : []),
+      ...(source.type === "jira"
+        ? [
+            `| Write scope | ${describeJiraWriteScope(source.jiraWriteScope)} |`,
+            `| Reads | all of Jira (search & JQL unaffected) |`,
           ]
         : []),
       `| Account | ${source.account ?? "_not verified yet_"} |`,

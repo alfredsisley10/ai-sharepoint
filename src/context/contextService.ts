@@ -62,6 +62,18 @@ import {
   ConfluenceWriteResult,
 } from "./adapters/confluenceWrite";
 import {
+  getJiraIssueProject,
+  assertIssueInWriteScope,
+  updateJiraIssueFields,
+  addJiraComment,
+  listJiraTransitions,
+  matchTransition,
+  transitionJiraIssueTo,
+  JiraIssueSnapshot,
+  JiraIssueFieldUpdate,
+  JiraTransition,
+} from "./adapters/jiraWrite";
+import {
   getConfluencePageLabels,
   getConfluencePageContributorsWeighted,
   getConfluenceSpaceContributorsWeighted,
@@ -842,6 +854,141 @@ export class ContextService {
         ...(meta.title ? { title: meta.title } : {}),
       };
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Managed Jira writes (the Confluence-write sibling). Every mutation runs
+  // through trackedWrite (breaker accounting + read-cache invalidation) and is
+  // scope-gated BEFORE the mutation: the issue's REAL project is resolved live
+  // (issues move between projects — the key prefix is never trusted) and
+  // checked against the connector's jiraWriteScope, which fails closed when
+  // absent. Reads/search stay global (ADR-0040 parity). The callers (the
+  // approval-gated chat tools) gate on explicit user confirmation first.
+  // -------------------------------------------------------------------------
+
+  private assertJiraSource(source: ContextSource, what: string): void {
+    if (source.type !== "jira") {
+      throw new AppError(`${what} targets a Jira source.`, "config");
+    }
+  }
+
+  /** Resolve an issue's current project/summary/status (a global READ) — used
+   *  by the write tools to preview old → new before the user approves.
+   *  Lockout-gated; never cached so the preview reflects the live issue. */
+  async peekJiraIssue(source: ContextSource, issueKey: string): Promise<JiraIssueSnapshot> {
+    this.assertJiraSource(source, "Issue lookup");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      getJiraIssueProject(source, credential, issueKey, caps.timeoutMs),
+    );
+  }
+
+  /** Scope gate shared by every Jira mutation: resolve where the issue REALLY
+   *  lives, then enforce the connector's write boundary (fail closed). Returns
+   *  the pre-write snapshot so results can narrate old → new. */
+  private async gateJiraWrite(
+    source: ContextSource,
+    credential: ContextCredential,
+    issueKey: string,
+    timeoutMs: number,
+  ): Promise<JiraIssueSnapshot> {
+    const before = await getJiraIssueProject(source, credential, issueKey, timeoutMs);
+    assertIssueInWriteScope(source.jiraWriteScope, before.projectKey);
+    return before;
+  }
+
+  /** Update an issue's summary/description/labels — only the provided fields
+   *  are sent, so nothing else is clobbered. Approval-gated by the caller. */
+  async updateJiraIssue(
+    source: ContextSource,
+    op: { issueKey: string } & JiraIssueFieldUpdate,
+  ): Promise<{ issueKey: string; url: string; before: JiraIssueSnapshot }> {
+    this.assertJiraSource(source, "Issue updates");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.trackedWrite(source, async () => {
+      const before = await this.gateJiraWrite(source, credential, op.issueKey, caps.timeoutMs);
+      await updateJiraIssueFields(
+        source,
+        credential,
+        op.issueKey,
+        {
+          ...(op.summary !== undefined ? { summary: op.summary } : {}),
+          ...(op.description !== undefined ? { description: op.description } : {}),
+          ...(op.labels !== undefined ? { labels: op.labels } : {}),
+        },
+        caps.timeoutMs,
+      );
+      return { issueKey: op.issueKey.trim(), url: this.jiraIssueUrl(source, op.issueKey), before };
+    });
+  }
+
+  /** Add a comment to an issue. Approval-gated by the caller. */
+  async commentJiraIssue(
+    source: ContextSource,
+    op: { issueKey: string; body: string },
+  ): Promise<{ issueKey: string; url: string; commentId: string; before: JiraIssueSnapshot }> {
+    this.assertJiraSource(source, "Issue comments");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.trackedWrite(source, async () => {
+      const before = await this.gateJiraWrite(source, credential, op.issueKey, caps.timeoutMs);
+      const { id } = await addJiraComment(source, credential, op.issueKey, op.body, caps.timeoutMs);
+      return {
+        issueKey: op.issueKey.trim(),
+        url: this.jiraIssueUrl(source, op.issueKey),
+        commentId: id,
+        before,
+      };
+    });
+  }
+
+  /**
+   * Workflow transition, list + apply. Without `transition` this is a READ:
+   * it returns the transitions available right now (no scope gate — reads are
+   * global). With one, the scope gate runs, the reference is matched against
+   * the live list (id, transition name, or target status name), and the
+   * transition is applied.
+   */
+  async transitionJiraIssue(
+    source: ContextSource,
+    op: { issueKey: string; transition?: string },
+  ): Promise<
+    | { kind: "transitions"; issueKey: string; url: string; before: JiraIssueSnapshot; transitions: JiraTransition[] }
+    | { kind: "transitioned"; issueKey: string; url: string; before: JiraIssueSnapshot; applied: JiraTransition }
+  > {
+    this.assertJiraSource(source, "Issue transitions");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const url = this.jiraIssueUrl(source, op.issueKey);
+    if (!op.transition?.trim()) {
+      return this.tracked(source, false, async () => {
+        const before = await getJiraIssueProject(source, credential, op.issueKey, caps.timeoutMs);
+        const transitions = await listJiraTransitions(source, credential, op.issueKey, caps.timeoutMs);
+        return { kind: "transitions" as const, issueKey: op.issueKey.trim(), url, before, transitions };
+      });
+    }
+    const ref = op.transition.trim();
+    return this.trackedWrite(source, async () => {
+      const before = await this.gateJiraWrite(source, credential, op.issueKey, caps.timeoutMs);
+      const transitions = await listJiraTransitions(source, credential, op.issueKey, caps.timeoutMs);
+      const match = matchTransition(transitions, ref);
+      if (!match) {
+        throw new AppError(
+          `No transition "${ref}" is available on ${op.issueKey.trim()} (current status: ${before.statusName || "unknown"}). Available: ${
+            transitions.length ? transitions.map((t) => `"${t.name}" → ${t.toName}`).join(", ") : "none for this account"
+          }.`,
+          "config",
+        );
+      }
+      await transitionJiraIssueTo(source, credential, op.issueKey, match.id, caps.timeoutMs);
+      return { kind: "transitioned" as const, issueKey: op.issueKey.trim(), url, before, applied: match };
+    });
+  }
+
+  private jiraIssueUrl(source: ContextSource, issueKey: string): string {
+    return `${source.baseUrl.replace(/\/+$/, "")}/browse/${issueKey.trim()}`;
   }
 
   /** Non-destructive write-access probe for a managed Confluence connector:

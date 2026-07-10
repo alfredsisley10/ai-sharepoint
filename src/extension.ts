@@ -81,6 +81,7 @@ import {
   ContextDeployment,
   ContextSourceType,
   ConfluenceWriteScope,
+  JiraWriteScope,
   contextCredentialUi,
 } from "./context/types";
 import {
@@ -88,6 +89,11 @@ import {
   writeScopeFromParsed,
   describeWriteScope,
 } from "./context/adapters/confluenceScope";
+import {
+  getJiraProject,
+  probeJiraWritePermissions,
+  describeJiraWriteScope,
+} from "./context/adapters/jiraWrite";
 import { summarizeProbe, summarizeFunctionalityProbe } from "./context/adapters/confluenceProbe";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport, planMemoryImport, planPromptImport, exportLeakBlockers } from "./context/referenceExport";
@@ -2319,6 +2325,11 @@ export function activate(context: vscode.ExtensionContext): void {
     let defaultUpn: string | undefined;
     // Managed Confluence: the write boundary derived from the onboarding URL.
     let writeScope: ConfluenceWriteScope | undefined;
+    // Managed Jira: the write boundary chosen during onboarding (instance or
+    // one project) — bounds mutations only; reads/JQL stay global (ADR-0040).
+    let jiraWriteScope: JiraWriteScope | undefined;
+    // Jira can opt INTO managed mid-wizard (Confluence arrives via preset).
+    let roleOverride: "managed" | "reference" | undefined;
 
     const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
     if (typePick.value === "ldap") {
@@ -2879,6 +2890,115 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         }
       }
+
+      if (typePick.value === "jira") {
+        // MANAGED JIRA (the managed-Confluence sibling): a managed connector
+        // unlocks the approval-gated ticket-update tools, bounded to a write
+        // scope. Default stays read-only reference.
+        const rolePick = preset?.role
+          ? { value: preset.role }
+          : await vscode.window.showQuickPick(
+              [
+                {
+                  label: "$(eye) Read-only reference",
+                  description: "search & read issues — nothing is ever written (default)",
+                  value: "reference" as const,
+                },
+                {
+                  label: "$(edit) Managed",
+                  description: "also enables approval-gated ticket updates (fields, comments, transitions) within a write scope",
+                  value: "managed" as const,
+                },
+              ],
+              { ignoreFocusOut: true, title: "Jira connector — read-only reference, or managed?" },
+            );
+        if (!rolePick) return;
+        if (rolePick.value === "managed") {
+          roleOverride = "managed";
+          // Credentials now: the write-boundary steps (project validation +
+          // permission probe) need a live sign-in before the source is saved.
+          presetCredential = await promptContextCredential("jira", deployment, undefined, baseUrl);
+          if (!presetCredential) return;
+          const jiraCred = presetCredential;
+          const timeoutMs = contextService.caps().timeoutMs;
+          const scopePick = await vscode.window.showQuickPick(
+            [
+              {
+                label: "$(project) Scope to a single project",
+                description: "enter a project key — recommended",
+                value: "project" as const,
+              },
+              {
+                label: "$(globe) Manage the entire instance",
+                description: "no write boundary — any issue anywhere",
+                value: "instance" as const,
+              },
+            ],
+            { ignoreFocusOut: true, title: "Managed Jira — write boundary (reads & JQL search stay global regardless)" },
+          );
+          if (!scopePick) return;
+          if (scopePick.value === "project") {
+            for (;;) {
+              const key = await vscode.window.showInputBox({
+                ignoreFocusOut: true,
+                title: "Managed Jira — project key",
+                placeHolder: "ENG",
+                prompt: "Ticket updates are limited to issues in this project (checked live against each issue's real project).",
+                validateInput: (v) => (v.trim() ? undefined : "Enter a project key"),
+              });
+              if (!key) return;
+              try {
+                const project = await vscode.window.withProgress(
+                  { location: vscode.ProgressLocation.Notification, title: `Checking Jira project "${key.trim()}"…` },
+                  () => getJiraProject({ baseUrl }, jiraCred, key.trim(), timeoutMs),
+                );
+                jiraWriteScope = { kind: "project", projectKey: project.key, url: baseUrl };
+                break;
+              } catch (err) {
+                if (classifyError(err) === "graph.notFound") {
+                  const again = await vscode.window.showWarningMessage(
+                    `Jira has no project "${key.trim()}" visible to this account. Check the key (Projects → the short key next to the name).`,
+                    "Re-enter Key",
+                  );
+                  if (again !== "Re-enter Key") return;
+                  continue;
+                }
+                // Validation is a convenience — never block onboarding on it.
+                log.warn(`Jira project validation failed: ${err instanceof Error ? err.message : String(err)}`);
+                void vscode.window.showWarningMessage(
+                  `Couldn't validate project "${key.trim()}" right now — keeping it as typed; writes will still verify each issue's project live.`,
+                );
+                jiraWriteScope = { kind: "project", projectKey: key.trim().toUpperCase(), url: baseUrl };
+                break;
+              }
+            }
+          } else {
+            jiraWriteScope = { kind: "instance", url: baseUrl };
+          }
+          // Best-effort write-permission probe (Cloud REQUIRES the permissions
+          // query param; DC tolerates it). Warn on gaps — never block: the
+          // probe itself can be unavailable, and reads are unaffected anyway.
+          try {
+            const { missing } = await vscode.window.withProgress(
+              { location: vscode.ProgressLocation.Notification, title: "Checking your Jira write permissions…" },
+              () =>
+                probeJiraWritePermissions(
+                  { baseUrl },
+                  jiraCred,
+                  jiraWriteScope?.kind === "project" ? jiraWriteScope.projectKey : undefined,
+                  timeoutMs,
+                ),
+            );
+            if (missing.length > 0) {
+              void vscode.window.showWarningMessage(
+                `Heads-up: this account appears to lack ${missing.join(", ")} in ${describeJiraWriteScope(jiraWriteScope)} — Jira may refuse ticket updates. The connector still connects, and reads/search are unaffected.`,
+              );
+            }
+          } catch (err) {
+            log.warn(`Jira write-permission probe failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
     }
 
     const credential =
@@ -2913,8 +3033,9 @@ export function activate(context: vscode.ExtensionContext): void {
       deployment,
       authMethod: credential.method,
       addedAt: nowIso(),
-      role: preset?.role ?? "reference",
+      role: roleOverride ?? preset?.role ?? "reference",
       ...(writeScope ? { writeScope } : {}),
+      ...(jiraWriteScope ? { jiraWriteScope } : {}),
     };
     try {
       const { account } = await vscode.window.withProgress(
@@ -2926,7 +3047,9 @@ export function activate(context: vscode.ExtensionContext): void {
       telemetry.record("context.add", { type: source.type, deployment: source.deployment, method: credential.method, ...(source.role === "managed" ? { role: "managed" } : {}) });
       void vscode.window.showInformationMessage(
         source.role === "managed"
-          ? `Connected "${source.displayName}" as ${account} — managed: writes are bounded to ${describeWriteScope(writeScope)}; reads span all of Confluence.`
+          ? source.type === "jira"
+            ? `Connected "${source.displayName}" as ${account} — managed: approval-gated ticket updates are bounded to ${describeJiraWriteScope(jiraWriteScope)}; reads and JQL search span all of Jira.`
+            : `Connected "${source.displayName}" as ${account} — managed: writes are bounded to ${describeWriteScope(writeScope)}; reads span all of Confluence.`
           : `Connected "${source.displayName}" as ${account} (read-only).`,
       );
       if (DB_TYPES.has(source.type)) {
@@ -2962,6 +3085,7 @@ export function activate(context: vscode.ExtensionContext): void {
       [
         { label: "$(cloud) SharePoint site", description: "Microsoft 365 sign-in; managed or reference", value: "sharepoint" as const },
         { label: "$(book) Confluence space", description: "read/write with your own API token — no admin consent", value: "confluence" as const },
+        { label: "$(issues) Jira project", description: "approval-gated ticket updates with your own API token — no admin consent", value: "jira" as const },
       ],
       { ignoreFocusOut: true, title: "Add a managed target" },
     );
@@ -2969,7 +3093,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (pick.value === "sharepoint") {
       await vscode.commands.executeCommand("aiSharePoint.connectSite");
     } else {
-      await vscode.commands.executeCommand("aiSharePoint.addContextSource", { type: "confluence", role: "managed" });
+      await vscode.commands.executeCommand("aiSharePoint.addContextSource", { type: pick.value, role: "managed" });
     }
   });
 

@@ -81,6 +81,25 @@ test("Confluence governance tools get input-aware status lines", () => {
   );
 });
 
+test("managed-Jira write tools get input-aware status lines", () => {
+  assert.equal(
+    describeToolCall("aisharepoint_update_jira_issue", { issueKey: "ENG-42" }),
+    "Updating Jira issue ENG-42 (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_comment_jira_issue", { issueKey: "ENG-42" }),
+    "Commenting on Jira issue ENG-42 (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_transition_jira_issue", { issueKey: "ENG-42", transition: "Done" }),
+    "Transitioning Jira issue ENG-42 via “Done” (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_transition_jira_issue", { issueKey: "ENG-42" }),
+    "Listing transitions of Jira issue ENG-42…",
+  );
+});
+
 test("long queries are truncated so the status line stays short", () => {
   const out = describeToolCall("aisharepoint_search_context", { query: "x".repeat(200) });
   assert.ok(out.length < 100, out);  // bounded, not the full 200-char query
