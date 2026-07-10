@@ -88,7 +88,7 @@ test("empty activity renders friendly empty states", () => {
   assert.ok(html.includes("No requests yet"));
 });
 
-test("model context limits render reported/tested/usable when present", () => {
+test("model context limits render reported/tested with a plain-language headroom caption", () => {
   const none = renderDashboardHtml(data(), "n");
   assert.ok(!none.includes("Model context limits"));
   const withLimits = renderDashboardHtml(
@@ -102,15 +102,37 @@ test("model context limits render reported/tested/usable when present", () => {
   );
   assert.ok(withLimits.includes("Model context limits"));
   assert.ok(withLimits.includes("128,000"));
-  assert.ok(withLimits.includes("90,000"));
   assert.ok(withLimits.includes("not tested"));
-  // The column is the margin-adjusted USABLE value (what chats are held to),
-  // not the raw ceiling — labeled accordingly.
-  assert.ok(withLimits.includes("<th>Usable</th>"));
-  assert.ok(!withLimits.includes("<th>Budget</th>"));
-  assert.ok(withLimits.includes("76,500"));
-  assert.ok(withLimits.includes("170,000"));
+  // Columns are Reported + Tested only — no abstract "Usable" column; the
+  // tested value, when present, is marked as the limit in effect (bold + ✓).
+  assert.ok(withLimits.includes("<th>Reported</th>"));
+  assert.ok(withLimits.includes("<th>Tested</th>"));
+  assert.ok(!withLimits.includes("<th>Usable</th>"));
+  assert.ok(withLimits.includes("<strong>90,000 ✓</strong>"));
+  // The margin lives in a caption sentence, not a column: it explains the
+  // ~15% headroom and quotes the concrete applied per-turn numbers there.
+  assert.match(withLimits, /minus ~15% headroom for the system prompt, tool schemas and chat history/);
+  assert.match(withLimits, /here gpt-a 76,500 · gpt-b 170,000 tokens per turn/);
   assert.ok(withLimits.includes("gpt-b ⚠")); // drift marker
+});
+
+test("model limits caption omits applied numbers when none are known", () => {
+  const html = renderDashboardHtml(
+    data({ modelLimits: [{ key: "gpt-x", reported: undefined, tested: undefined, usable: undefined, drifted: false }] }),
+    "n",
+  );
+  assert.ok(html.includes("Model context limits"));
+  assert.match(html, /minus ~15% headroom[^—]*\.<\/p>/, "caption ends without a — here … clause");
+  assert.ok(!html.includes("here gpt-x"));
+});
+
+test("model limits escape injected model names in table and caption", () => {
+  const html = renderDashboardHtml(
+    data({ modelLimits: [{ key: "<img src=x>", reported: 1000, tested: 900, usable: 765, drifted: false }] }),
+    "n",
+  );
+  assert.ok(!html.includes("<img src=x>"));
+  assert.ok(html.includes("&lt;img src=x&gt;"));
 });
 
 test("failed filter switches the chart + tables to failures and offers a way back", () => {
