@@ -248,7 +248,7 @@ import { MemoryStore } from "./context/memoryStore";
 import { PromptStore } from "./context/promptStore";
 import { newSeedPrompts } from "./context/promptSeeds";
 import { installFetchTrust } from "./core/fetchTrust";
-import { effectiveInputCap } from "./core/contextBudget";
+import { effectiveInputCap, findModelByKey, modelKey } from "./core/contextBudget";
 import { progressMessage } from "./core/progress";
 import { PromptsTreeProvider } from "./ui/promptsView";
 import { PromptItem, PromptScope, PromptScopeKind, normalizePromptInput } from "./context/promptLibrary";
@@ -7084,13 +7084,51 @@ export function activate(context: vscode.ExtensionContext): void {
   // Actively measure a model's REAL input-context limit. Copilot can deliver less
   // than the advertised maxInputTokens (varies by org), so this binary-searches
   // the accept/reject boundary with filler prompts and records it for budgeting.
-  register("aiSharePoint.probeModelContextLimit", async () => {
-    const model = await copilot.pickDefaultModel().catch(() => undefined);
-    if (!model) {
+  register("aiSharePoint.probeModelContextLimit", async (...args: unknown[]) => {
+    // The Copilot Activity tree passes the clicked row's model KEY as the first
+    // argument; the command palette passes nothing. A key must resolve to
+    // EXACTLY that model — never fall back to the default model, which would
+    // silently probe (and record a limit for) a different model than the one
+    // the user clicked. With no key, ask which model to measure.
+    const requestedKey = typeof args[0] === "string" && args[0].length > 0 ? args[0] : undefined;
+    copilot.ensureEntitled();
+    let available: vscode.LanguageModelChat[] = [];
+    try {
+      available = await vscode.lm.selectChatModels({ vendor: "copilot" });
+    } catch {
+      /* handled below via the empty list */
+    }
+    if (available.length === 0) {
       void vscode.window.showErrorMessage("No GitHub Copilot model is available — sign in to Copilot and retry.");
       return;
     }
-    const est = estimateProbeCost(modelCosts.multiplierFor(model.family || model.id), PROBE_MAX_STEPS, readPremiumPricing().pricePerRequest);
+    let model: vscode.LanguageModelChat | undefined;
+    if (requestedKey) {
+      model = findModelByKey(available, requestedKey);
+      if (!model) {
+        void vscode.window.showErrorMessage(
+          `The model “${requestedKey}” is not currently available from Copilot (it may have been renamed or removed), so its context limit can't be probed. Run “Probe Model Context Limit” from the Command Palette to pick a current model.`,
+        );
+        return;
+      }
+    } else {
+      const picked = await vscode.window.showQuickPick(
+        available.map((m) => ({
+          label: m.name,
+          description: modelKey(m),
+          detail: `advertised ${m.maxInputTokens?.toLocaleString() ?? "unknown"} tokens`,
+          model: m,
+        })),
+        {
+          title: "Probe Model Context Limit",
+          placeHolder: "Which Copilot model should be measured?",
+          ignoreFocusOut: true,
+        },
+      );
+      if (!picked) return;
+      model = picked.model;
+    }
+    const est = estimateProbeCost(modelCosts.multiplierFor(modelKey(model)), PROBE_MAX_STEPS, readPremiumPricing().pricePerRequest);
     const costPhrase =
       est.cost > 0
         ? ` Estimated cost up to ~${formatCost(est.cost, readPremiumPricing().currency)} (≤${est.premiumRequests} premium request(s) at your configured rate).`
@@ -7101,7 +7139,7 @@ export function activate(context: vscode.ExtensionContext): void {
       "Probe",
     );
     if (proceed !== "Probe") return;
-    const key = model.family || model.id;
+    const key = modelKey(model);
     const advertised = model.maxInputTokens;
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Measuring the real context limit for ${model.name}…`, cancellable: true },

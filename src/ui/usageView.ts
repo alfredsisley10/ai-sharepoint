@@ -101,7 +101,13 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
                 ...(r.measured ? [] : ["", "Not yet measured — run “Probe Model Context Limit”."]),
               ].join("\n"),
             ),
-            command: { command: "aiSharePoint.probeModelContextLimit", title: "Probe Model Context Limit" },
+            // Pass THIS row's model key so the probe tests the clicked model —
+            // without it the command falls back to picking a model itself.
+            command: {
+              command: "aiSharePoint.probeModelContextLimit",
+              title: "Probe Model Context Limit",
+              arguments: [r.key],
+            },
           };
         }),
       },

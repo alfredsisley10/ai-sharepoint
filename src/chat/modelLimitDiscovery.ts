@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { ModelLimitsStore } from "../diagnostics/modelLimitsStore";
-import { needsEffectiveProbe } from "../core/contextBudget";
+import { modelKey, needsEffectiveProbe } from "../core/contextBudget";
 import { runContextLimitProbe } from "./contextLimitProbe";
 import { PROBE_MAX_STEPS } from "../core/contextProbe";
 import { ModelCostTable } from "../copilot/modelCosts";
@@ -46,10 +46,6 @@ export interface DiscoveryResult {
   recorded: number;
   /** Models worth offering an effective-limit probe for (new or drifted). */
   candidates: ProbeCandidate[];
-}
-
-function modelKey(m: vscode.LanguageModelChat): string {
-  return m.family || m.id;
 }
 
 /**
