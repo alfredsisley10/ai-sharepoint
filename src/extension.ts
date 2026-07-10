@@ -158,6 +158,7 @@ import {
 import { ProjectsTreeProvider } from "./ui/projectsView";
 import { ChatWorkspaceStore } from "./context/chatWorkspaceStore";
 import { registerDossierTools, buildDossierInto } from "./chat/dossierTools";
+import { spaceScopeSuffix } from "./context/spaceDossier";
 import { registerPageRevisionTool } from "./chat/pageRevisionTool";
 import { registerProjectTools } from "./chat/projectTools";
 import {
@@ -7288,12 +7289,40 @@ export function activate(context: vscode.ExtensionContext): void {
     )?.trim();
     if (!spaceKey) return;
 
+    // Scope: the whole space, or just one AREA of it (the subtree under a
+    // parent page) — users often own an area, not the space.
+    const scopeChoice = await vscode.window.showQuickPick(
+      [
+        { label: "Whole space", description: `Every page in ${spaceKey}`, area: false },
+        { label: "Just an area", description: "One parent page and everything under it", area: true },
+      ],
+      { title: "Dossier scope", ignoreFocusOut: true },
+    );
+    if (!scopeChoice) return;
+    let rootPageId: string | undefined;
+    if (scopeChoice.area) {
+      rootPageId = (
+        await vscode.window.showInputBox({
+          title: "Area root page id",
+          placeHolder: "e.g. 123456789",
+          prompt: "The numeric id of the parent page whose subtree to aggregate (visible in the page URL as pageId=…).",
+          ignoreFocusOut: true,
+          validateInput: (v) => (/^\d+$/.test(v.trim()) ? undefined : "Enter the numeric page id."),
+        })
+      )?.trim();
+      if (!rootPageId) return;
+    }
+
     const dossierStarted = Date.now();
     let lastDone = 0;
     const r = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Building dossier for ${spaceKey}…`, cancellable: false },
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: rootPageId ? `Building dossier for the area under page ${rootPageId} (${spaceKey})…` : `Building dossier for ${spaceKey}…`,
+        cancellable: false,
+      },
       (progress) =>
-        buildDossierInto(project, source, spaceKey, { contextService, chatWorkspace, workItems }, (done, total) => {
+        buildDossierInto(project, source, { spaceKey, ...(rootPageId ? { rootPageId } : {}) }, { contextService, chatWorkspace, workItems }, (done, total) => {
           const increment = total > 0 ? ((done - lastDone) / total) * 100 : 0;
           lastDone = done;
           progress.report({
@@ -7306,7 +7335,7 @@ export function activate(context: vscode.ExtensionContext): void {
     telemetry.record("project.dossier", { space: "redacted" });
 
     const choice = await vscode.window.showInformationMessage(
-      `Dossier for ${spaceKey}: ${r.captured}/${r.total} page(s) reviewed${r.truncated ? " (capped)" : ""} — ${r.flagged} flagged. Opened ${r.created} new work item(s). Saved to the "${project.name}" workspace.`,
+      `Dossier for ${r.spaceKey}${spaceScopeSuffix(r)}: ${r.captured}/${r.total} page(s) reviewed${r.truncated ? " (capped)" : ""} — ${r.flagged} flagged. Opened ${r.created} new work item(s). Saved to the "${project.name}" workspace.`,
       "Open Inventory",
       "Open Owners",
     );

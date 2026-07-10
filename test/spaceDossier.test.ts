@@ -18,6 +18,7 @@ import {
   renderCurrentContent,
   renderRecommendedScaffold,
   pageFolderName,
+  spaceScopeSuffix,
   STALE_DAYS,
 } from "../src/context/spaceDossier";
 
@@ -251,7 +252,7 @@ test("renderOutreachDraft addresses the owner and lists their flagged pages", ()
   const group = groupByOwner(
     dossier([page({ title: "Old", staleDays: 400, owners: [{ sam: "jdoe", active: true, contact: "j@c.com" }] })]),
   )[0]!;
-  const md = renderOutreachDraft(group, "ENG", "2026-07-07T00:00:00.000Z");
+  const md = renderOutreachDraft(group, { spaceKey: "ENG", generatedAt: "2026-07-07T00:00:00.000Z" });
   assert.match(md, /To: j@c\.com/);
   assert.match(md, /Hi jdoe/);
   assert.match(md, /not updated in 400 days/);
@@ -268,16 +269,16 @@ test("renderOutreachDraft links the recommended revision when content was cached
   const withContent = groupByOwner(
     dossier([page({ id: "42", title: "Old", staleDays: 400, content: "current body", owners: [{ sam: "jdoe", active: true }] })]),
   )[0]!;
-  assert.match(renderOutreachDraft(withContent, "ENG", "t"), /\(\.\.\/pages\/42\/recommended\.md\)/);
+  assert.match(renderOutreachDraft(withContent, { spaceKey: "ENG", generatedAt: "t" }), /\(\.\.\/pages\/42\/recommended\.md\)/);
   // A non-numeric id links through the sanitized folder name, matching disk.
   const oddId = groupByOwner(
     dossier([page({ id: "a b/c", title: "Odd", staleDays: 400, content: "x", owners: [{ sam: "jdoe", active: true }] })]),
   )[0]!;
-  assert.match(renderOutreachDraft(oddId, "ENG", "t"), /\(\.\.\/pages\/a-b-c\/recommended\.md\)/);
+  assert.match(renderOutreachDraft(oddId, { spaceKey: "ENG", generatedAt: "t" }), /\(\.\.\/pages\/a-b-c\/recommended\.md\)/);
   const noContent = groupByOwner(
     dossier([page({ id: "42", title: "Old", staleDays: 400, owners: [{ sam: "jdoe", active: true }] })]),
   )[0]!;
-  assert.doesNotMatch(renderOutreachDraft(noContent, "ENG", "t"), /recommended\.md/);
+  assert.doesNotMatch(renderOutreachDraft(noContent, { spaceKey: "ENG", generatedAt: "t" }), /recommended\.md/);
 });
 
 test("renderCurrentContent shows the header and body", () => {
@@ -346,7 +347,7 @@ test("renderOwnersMarkdown adds a suggested-target-owners section, separate from
 
 test("renderSuggestedOwnerOutreachDraft asks the suggested owner to accept ownership", () => {
   const g = groupBySuggestedOwner(suggestedFixture())[0]!;
-  const md = renderSuggestedOwnerOutreachDraft(g, "ENG", "2026-07-07T00:00:00.000Z");
+  const md = renderSuggestedOwnerOutreachDraft(g, { spaceKey: "ENG", generatedAt: "2026-07-07T00:00:00.000Z" });
   assert.match(md, /# Outreach draft — asmith \(suggested target owner\)/);
   assert.match(md, /To: a@c\.com/);
   assert.match(md, /SUGGESTED owner \(top contributor \(directory not wired — unverified\)\)/);
@@ -357,7 +358,7 @@ test("renderSuggestedOwnerOutreachDraft asks the suggested owner to accept owner
   assert.match(md, /\(\.\.\/pages\/9\/recommended\.md\)/);
   // Without a contact, the draft addresses the sam.
   const noContact = { ...g, contact: undefined };
-  assert.match(renderSuggestedOwnerOutreachDraft(noContact, "ENG", "t"), /To: asmith/);
+  assert.match(renderSuggestedOwnerOutreachDraft(noContact, { spaceKey: "ENG", generatedAt: "t" }), /To: asmith/);
 });
 
 test("renderOutreachDraft names the target owner for ownerless pages under an inactive tagged owner", () => {
@@ -370,6 +371,75 @@ test("renderOutreachDraft names the target owner for ownerless pages under an in
       suggestedOwner: { sam: "asmith", active: true, contact: "a@c.com", basis: "top active contributor" },
     }),
   ]);
-  const md = renderOutreachDraft(groupByOwner(d)[0]!, "ENG", "t");
+  const md = renderOutreachDraft(groupByOwner(d)[0]!, { spaceKey: "ENG", generatedAt: "t" });
   assert.match(md, /no active owner tag — target owner asmith \(suggested\)/);
+});
+
+// --- AREA-scoped dossiers (page hierarchies): every "Space X" surface names
+// --- the area, and parent/depth travel into the exports --------------------
+
+const AREA = { rootPageId: "100", rootTitle: "Team Handbook" };
+
+test("spaceScopeSuffix: empty for a whole space, names the area when scoped", () => {
+  assert.equal(spaceScopeSuffix({}), "");
+  assert.equal(spaceScopeSuffix({ area: AREA }), " — area “Team Handbook”");
+});
+
+test("area-scoped inventory + owners headings name the area", () => {
+  const d = dossier([page()], { area: AREA });
+  assert.match(renderInventoryMarkdown(d), /^# Space ENG — area “Team Handbook” — content inventory/);
+  assert.match(renderOwnersMarkdown(d), /^# Space ENG — area “Team Handbook” — by owner/);
+  // A whole-space dossier is untouched.
+  assert.match(renderInventoryMarkdown(dossier([page()])), /^# Space ENG — content inventory/);
+});
+
+test("inventory indents titles by hierarchy depth (non-breaking — table cells collapse plain spaces)", () => {
+  const d = dossier(
+    [
+      page({ id: "100", title: "Root", depth: 0 }),
+      page({ id: "101", title: "Child", parentId: "100", depth: 1 }),
+      page({ id: "102", title: "Grandchild", parentId: "101", depth: 2 }),
+    ],
+    { area: AREA },
+  );
+  const md = renderInventoryMarkdown(d);
+  assert.match(md, /\| \[Root\]/, "root (depth 0) gets no indent");
+  assert.match(md, /\| &nbsp;&nbsp;\[Child\]/);
+  assert.match(md, /\| &nbsp;&nbsp;&nbsp;&nbsp;\[Grandchild\]/);
+  // Flat whole-space pages (no depth) are never indented.
+  assert.match(renderInventoryMarkdown(dossier([page({ title: "Flat" })])), /\| \[Flat\]/);
+});
+
+test("dossierSheets Pages sheet carries Parent ID + Depth for pivoting by area", () => {
+  const sheets = dossierSheets(
+    dossier([page({ id: "100", title: "Root", depth: 0 }), page({ id: "101", title: "Child", parentId: "100", depth: 1 }), page({ id: "9", title: "Flat" })]),
+  );
+  const [header, root, child, flat] = sheets[0]!.rows as [string[], string[], string[], string[]];
+  const col = (name: string) => header.indexOf(name);
+  assert.ok(col("Parent ID") > 0 && col("Depth") > 0);
+  assert.equal(root[col("Parent ID")], "");
+  assert.equal(root[col("Depth")], "0");
+  assert.equal(child[col("Parent ID")], "100");
+  assert.equal(child[col("Depth")], "1");
+  // Flat enumeration leaves both blank (not "0" — depth was never measured).
+  assert.equal(flat[col("Parent ID")], "");
+  assert.equal(flat[col("Depth")], "");
+});
+
+test("area travels into the JSON export and the work-item findings", () => {
+  const d = dossier([page({ staleDays: 400 })], { area: AREA });
+  const json = JSON.parse(renderInventoryJson(d));
+  assert.deepEqual(json.area, AREA);
+  const seeds = dossierWorkItemSeeds(d, "wiki");
+  assert.match(seeds[0]!.finding, /space ENG — area “Team Handbook” flagged during content review/);
+});
+
+test("outreach drafts name the area of an area-scoped review", () => {
+  const scoped = { spaceKey: "ENG", area: AREA, generatedAt: "t" };
+  const owned = groupByOwner(dossier([page({ staleDays: 400 })]))[0]!;
+  const md = renderOutreachDraft(owned, scoped);
+  assert.match(md, /space ENG — area “Team Handbook” · drafted t/);
+  assert.match(md, /\*\*ENG\*\* Confluence space — area “Team Handbook”/);
+  const sug = groupBySuggestedOwner(suggestedFixture())[0]!;
+  assert.match(renderSuggestedOwnerOutreachDraft(sug, scoped), /\*\*ENG\*\* Confluence space — area “Team Handbook”/);
 });

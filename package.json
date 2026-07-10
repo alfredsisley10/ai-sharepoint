@@ -814,22 +814,23 @@
           "sharepoint",
           "confluence"
         ],
-        "modelDescription": "Aggregate a whole Confluence space into a durable dossier in the active project's workspace, for content cleanup. For every page it resolves the owner (recency-weighted contributor, LDAP active-employee checked), staleness, and data-quality flags (broken links, currency issues), then writes inventory.md/.json, owners.md, dossier.xlsx, per-owner outreach drafts, and per-page recommended-revision scaffolds, and opens a de-duplicated remediation work item for every flagged page. Requires an active project (the dossier is saved into its workspace). Use when the user asks to optimize/clean up/audit a Confluence space. It reads the whole space (can be many requests) but uses no Copilot premium requests. Args: spaceKey (required), optional source (the Confluence source alias/name if the project has more than one).",
+        "modelDescription": "Aggregate a whole Confluence space — or one AREA of it (the subtree under a parent page, when the user owns an area rather than the space) — into a durable dossier in the active project's workspace, for content cleanup. For every page it resolves the owner (recency-weighted contributor, LDAP active-employee checked), staleness, and data-quality flags (broken links, currency issues), then writes inventory.md/.json, owners.md, dossier.xlsx, per-owner outreach drafts, and per-page recommended-revision scaffolds, and opens a de-duplicated remediation work item for every flagged page. Requires an active project (the dossier is saved into its workspace). Use when the user asks to optimize/clean up/audit a Confluence space or their area of one. It reads every page in scope (can be many requests) but uses no Copilot premium requests. Args: spaceKey (whole space) and/or rootPageId (area — spaceKey is then derived from the page), optional source (the Confluence source alias/name if the project has more than one).",
         "inputSchema": {
           "type": "object",
           "properties": {
             "spaceKey": {
               "type": "string",
-              "description": "The Confluence space key to aggregate (Space Settings → Space Details → Key)."
+              "description": "The Confluence space key to aggregate (Space Settings → Space Details → Key). May be omitted when rootPageId is given (it is derived from the page)."
+            },
+            "rootPageId": {
+              "type": "string",
+              "description": "Optional: the NUMERIC id of a parent page — scopes the dossier to that page's AREA (the page plus all of its descendants) instead of the whole space. Not a URL or tiny-link; find the id via search_context or confluence_page_tree."
             },
             "source": {
               "type": "string",
               "description": "Optional: the Confluence source alias or name, if the project has more than one."
             }
-          },
-          "required": [
-            "spaceKey"
-          ]
+          }
         }
       },
       {

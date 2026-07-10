@@ -316,6 +316,32 @@ export function countTreeNodes(node: PageNode): number {
   return node.children.reduce((sum, c) => sum + 1 + countTreeNodes(c), 0);
 }
 
+/** Flatten a tree back to a list in DFS (parent-before-children) order, each
+ *  node carrying its immediate `parentId` and `depth` (root = 0). The
+ *  area-scoped dossier enumerates in this order so an inventory indented by
+ *  depth reads as the tree; orphans buildPageTree re-parented to the root come
+ *  out at depth 1 like any other direct child. Pure. */
+export function flattenPageTree(root: PageNode): Array<PageRef & { parentId?: string; depth: number }> {
+  const out: Array<PageRef & { parentId?: string; depth: number }> = [];
+  const walk = (n: PageNode, depth: number, parentId?: string) => {
+    out.push({ id: n.id, title: n.title, url: n.url, depth, ...(parentId ? { parentId } : {}) });
+    for (const c of n.children) walk(c, depth + 1, n.id);
+  };
+  walk(root, 0);
+  return out;
+}
+
+/** The views of the page tree that are cached read-through (TtlCache). */
+export type HierarchyCacheView = "ancestors" | "children" | "descendants" | "roots";
+
+/** Cache locator for a NAVIGATION read — the single key shape shared by the
+ *  hierarchy tool and the dossier's area walk, so a subtree explored moments
+ *  ago is reused by the dossier (and vice versa) instead of re-walked. Pure;
+ *  contextService prefixes it with the source id via TtlCache.key. */
+export function hierarchyCacheLocator(view: HierarchyCacheView, target: string): string {
+  return `${view}:${target}`;
+}
+
 /** Render a tree as an indented outline for the model. Pure. */
 export function renderPageTree(node: PageNode, maxDepth = 8): string {
   const lines: string[] = [];

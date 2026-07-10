@@ -222,7 +222,9 @@ export class ChatWorkspaceStore {
    * contributor, so ownership can be established). Ensures the
    * workspace exists first. Returns the dossier folder. Content is derived from
    * the user's own Confluence read — not redacted (owner emails are needed for
-   * coordination).
+   * coordination). An AREA-scoped dossier lands in the same `space/<KEY>/`
+   * folder (its artifacts name the area in every heading and in the JSON), so
+   * per-page scaffolds and recommendedRevisionUri keep working across scopes.
    */
   async writeDossier(
     project: Project,
@@ -268,7 +270,7 @@ export class ChatWorkspaceStore {
           const file = `${group.owner.sam.replace(/[^A-Za-z0-9._-]/g, "-") || "owner"}.md`;
           await this.writeText(
             vscode.Uri.joinPath(outreachDir, file),
-            renderOutreachDraft(group, dossier.spaceKey, dossier.generatedAt),
+            renderOutreachDraft(group, dossier),
           );
         }
         // SUGGESTED target owners get their own drafts (establish-ownership
@@ -279,7 +281,7 @@ export class ChatWorkspaceStore {
           const file = `${group.sam.replace(/[^A-Za-z0-9._-]/g, "-") || "owner"}-suggested.md`;
           await this.writeText(
             vscode.Uri.joinPath(outreachDir, file),
-            renderSuggestedOwnerOutreachDraft(group, dossier.spaceKey, dossier.generatedAt),
+            renderSuggestedOwnerOutreachDraft(group, dossier),
           );
         }
       }

@@ -138,7 +138,9 @@ export function describeToolCall(name: string, input: unknown): string {
     case "aisharepoint_resolve_page_owners":
       return `Resolving the owner(s) of Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""}…`;
     case "aisharepoint_build_space_dossier":
-      return `Building the dossier for ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"} — reviewing every page (owners, staleness, links); this can take a while…`;
+      return str(i.rootPageId)
+        ? `Building the dossier for the area under page ${String(i.rootPageId).trim()}${str(i.spaceKey) ? ` (space ${String(i.spaceKey)})` : ""} — reviewing every page in the subtree (owners, staleness, links); this can take a while…`
+        : `Building the dossier for ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"} — reviewing every page (owners, staleness, links); this can take a while…`;
     case "aisharepoint_review_space_manageability":
       return `Auditing read/write access across ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"} — checking every page; this can take a while…`;
     case "aisharepoint_review_page_currency":

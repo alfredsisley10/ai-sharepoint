@@ -5,7 +5,7 @@ import { ContextService } from "../context/contextService";
 import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
 import { WorkItemsStore } from "../context/workItemsStore";
 import { ContextSource, Project } from "../context/types";
-import { summarizeDossier, dossierWorkItemSeeds } from "../context/spaceDossier";
+import { SpaceDossier, summarizeDossier, dossierWorkItemSeeds, spaceScopeSuffix } from "../context/spaceDossier";
 import { TelemetryService } from "../diagnostics/telemetry";
 import { ErrorReportStore } from "../diagnostics/errorReports";
 import { redactError } from "../core/redaction";
@@ -29,23 +29,38 @@ export interface DossierDeps {
   workItems: WorkItemsStore;
 }
 
-/** Build a dossier for a space, write it into the project workspace, and open a
- *  (de-duplicated) work item per flagged page. Shared by the command and the
- *  chat tool. Returns the dossier, its folder, and how many work items opened
- *  (`created` counts actual successes; `failed` counts saves that errored). */
+/** Build a dossier for a space — or, with `rootPageId`, just the AREA under
+ *  that page — write it into the project workspace, and open a (de-duplicated)
+ *  work item per flagged page. Shared by the command and the chat tool. Returns
+ *  the dossier's scope (spaceKey may have been derived from the root page),
+ *  its folder, and how many work items opened (`created` counts actual
+ *  successes; `failed` counts saves that errored). */
 export async function buildDossierInto(
   project: Project,
   source: ContextSource,
-  spaceKey: string,
+  scope: { spaceKey?: string; rootPageId?: string },
   deps: DossierDeps,
   onProgress?: (done: number, total: number) => void,
-): Promise<{ dir: vscode.Uri; flagged: number; created: number; failed: number; total: number; captured: number; truncated: boolean }> {
-  const dossier = await deps.contextService.buildConfluenceSpaceDossier(source, spaceKey, { ...(onProgress ? { onProgress } : {}) });
+): Promise<{
+  dir: vscode.Uri;
+  flagged: number;
+  created: number;
+  failed: number;
+  total: number;
+  captured: number;
+  truncated: boolean;
+  spaceKey: string;
+  area?: SpaceDossier["area"];
+}> {
+  const dossier = await deps.contextService.buildConfluenceSpaceDossier(source, scope.spaceKey, {
+    ...(scope.rootPageId ? { rootPageId: scope.rootPageId } : {}),
+    ...(onProgress ? { onProgress } : {}),
+  });
   const dir = await deps.chatWorkspace.writeDossier(project, dossier, { outreach: true });
   const existingRefs = new Set(
     deps.workItems
       .list()
-      .filter((w) => w.tags?.includes(spaceKey) && w.target.ref)
+      .filter((w) => w.tags?.includes(dossier.spaceKey) && w.target.ref)
       .map((w) => w.target.ref),
   );
   const seeds = dossierWorkItemSeeds(dossier, source.alias ?? source.displayName).filter((s) => !existingRefs.has(s.target.ref));
@@ -60,7 +75,17 @@ export async function buildDossierInto(
     }
   }
   const s = summarizeDossier(dossier);
-  return { dir, flagged: s.flagged, created, failed, total: s.totalPages, captured: s.captured, truncated: s.truncated };
+  return {
+    dir,
+    flagged: s.flagged,
+    created,
+    failed,
+    total: s.totalPages,
+    captured: s.captured,
+    truncated: s.truncated,
+    spaceKey: dossier.spaceKey,
+    ...(dossier.area ? { area: dossier.area } : {}),
+  };
 }
 
 export function registerDossierTools(
@@ -110,18 +135,27 @@ export function registerDossierTools(
       }),
     ),
 
-    vscode.lm.registerTool<{ spaceKey: string; source?: string }>(
+    vscode.lm.registerTool<{ spaceKey?: string; rootPageId?: string; source?: string }>(
       "aisharepoint_build_space_dossier",
       guard("aisharepoint_build_space_dossier", async (i) => {
         const project = projects.active();
         if (!project) return "No active project — the dossier is saved into a project workspace, so create/activate one first (Projects view), then retry.";
-        if (!i.spaceKey?.trim()) return "A Confluence spaceKey is required (Space Settings → Space Details → Key).";
+        const spaceKey = i.spaceKey?.trim();
+        const rootPageId = i.rootPageId?.trim();
+        if (!spaceKey && !rootPageId) {
+          return "A Confluence spaceKey (Space Settings → Space Details → Key) or a rootPageId (the numeric parent page id of the area to review) is required.";
+        }
         const source = confluenceInProject(i.source);
         if (!source) return "No Confluence source is available in this project — add one (Add Context Source) and include it in the project.";
-        const r = await buildDossierInto(project, source, i.spaceKey.trim(), { contextService, chatWorkspace, workItems });
+        const r = await buildDossierInto(
+          project,
+          source,
+          { ...(spaceKey ? { spaceKey } : {}), ...(rootPageId ? { rootPageId } : {}) },
+          { contextService, chatWorkspace, workItems },
+        );
         telemetry.record("project.dossier", { space: "redacted" });
         return [
-          `Built a content dossier for Confluence space ${i.spaceKey.trim()} into the "${project.name}" workspace (${r.dir.fsPath}).`,
+          `Built a content dossier for Confluence space ${r.spaceKey}${spaceScopeSuffix(r)} into the "${project.name}" workspace (${r.dir.fsPath}).`,
           `Reviewed ${r.captured}/${r.total} page(s)${r.truncated ? " (capped)" : ""}; ${r.flagged} flagged (stale / no active owner / data-quality). Opened ${r.created} new remediation work item(s)${r.failed > 0 ? ` (${r.failed} failed to save — retry via the Work Items view)` : ""}.`,
           `Artifacts: inventory.md (+ .json), owners.md (grouped by owner), dossier.xlsx, and per-owner outreach drafts under outreach/. Recommended-revision scaffolds are under pages/<id>/.`,
           `Next: use list_work_items to see the backlog, resolve_page_owners / review_page_currency for detail, recommend_page_revision to propose fixes, and draft_communication to reach owners.`,

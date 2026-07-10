@@ -24,6 +24,11 @@ export interface DossierPage {
   id: string;
   title: string;
   url: string;
+  /** Immediate parent page id — set by the hierarchy (area) walk so exports can
+   *  pivot by subtree; the flat whole-space enumeration leaves it unset. */
+  parentId?: string;
+  /** Depth below the dossier root (root = 0), from the hierarchy walk. */
+  depth?: number;
   owners: DossierOwner[];
   hasOwnerLabel: boolean;
   lastUpdated?: string;
@@ -45,6 +50,11 @@ export interface DossierPage {
 
 export interface SpaceDossier {
   spaceKey: string;
+  /** Set when the dossier is scoped to an AREA — the subtree rooted at one
+   *  parent page — rather than the whole space (users often own one area, not
+   *  the space). Every human-facing "Space X" line then reads
+   *  "Space X — area “Root Title”" (see spaceScopeSuffix). */
+  area?: { rootPageId: string; rootTitle: string };
   generatedAt: string;
   pages: DossierPage[];
   /** Pages discovered in the space (may exceed `pages.length` if capped). */
@@ -84,6 +94,17 @@ export interface SpaceDossier {
 
 /** A page is "stale" past this age (matches the currency review's default). */
 export const STALE_DAYS = 180;
+
+/** The dossier's scope for a human-facing line: `spaceKey` plus, when the
+ *  dossier is AREA-scoped, the root page. */
+export type DossierScope = Pick<SpaceDossier, "spaceKey" | "area">;
+
+/** The scope tail appended to every human-facing "Space X" / "space X" line:
+ *  empty for a whole-space dossier, ` — area “Root Title”` when area-scoped —
+ *  the ONE wording shared by the renderers, tool replies, and command toasts. */
+export function spaceScopeSuffix(d: Pick<SpaceDossier, "area">): string {
+  return d.area ? ` — area “${d.area.rootTitle}”` : "";
+}
 
 /** Filesystem-safe folder name for a page id — the SINGLE definition shared by
  *  the on-disk writer and the outreach link so their paths never diverge. */
@@ -272,10 +293,18 @@ function ownerLabel(p: DossierPage): string {
   return !o.active && suggested ? `${tagged} · ${suggested}` : tagged;
 }
 
+/** Indent a page's title cell by its hierarchy depth. Markdown collapses plain
+ *  leading spaces inside a table cell, so the indent is non-breaking spaces
+ *  (capped — pathological nesting must not push the table off-screen). Depthless
+ *  pages (flat whole-space enumeration) get no indent. */
+function depthIndent(p: DossierPage): string {
+  return p.depth ? "&nbsp;&nbsp;".repeat(Math.min(p.depth, 8)) : "";
+}
+
 export function renderInventoryMarkdown(d: SpaceDossier): string {
   const s = summarizeDossier(d);
   const lines: string[] = [
-    `# Space ${d.spaceKey} — content inventory`,
+    `# Space ${d.spaceKey}${spaceScopeSuffix(d)} — content inventory`,
     "",
     `_Generated ${d.generatedAt} · ${s.captured} of ${s.totalPages} page(s)${d.truncated ? " (capped)" : ""} · ${s.flagged} flagged (${s.stale} stale · ${s.ownerless} no active owner · ${s.dataQuality} data-quality)._`,
     ...(s.reviewFailures > 0
@@ -310,7 +339,7 @@ export function renderInventoryMarkdown(d: SpaceDossier): string {
   ];
   for (const p of d.pages) {
     lines.push(
-      `| [${escapePipe(p.title)}](${p.url}) | ${escapePipe(ownerLabel(p))} | ${p.lastUpdated?.slice(0, 10) ?? "—"} | ${p.staleDays ?? "—"} | ${p.brokenLinks} | ${flagBadges(p)} |`,
+      `| ${depthIndent(p)}[${escapePipe(p.title)}](${p.url}) | ${escapePipe(ownerLabel(p))} | ${p.lastUpdated?.slice(0, 10) ?? "—"} | ${p.staleDays ?? "—"} | ${p.brokenLinks} | ${flagBadges(p)} |`,
     );
   }
   lines.push("");
@@ -335,7 +364,7 @@ export function renderInventoryJson(d: SpaceDossier): string {
 
 export function renderOwnersMarkdown(d: SpaceDossier): string {
   const groups = groupByOwner(d);
-  const lines: string[] = [`# Space ${d.spaceKey} — by owner`, "", `_Generated ${d.generatedAt}._`, ""];
+  const lines: string[] = [`# Space ${d.spaceKey}${spaceScopeSuffix(d)} — by owner`, "", `_Generated ${d.generatedAt}._`, ""];
   for (const g of groups) {
     const contact = "contact" in g.owner && g.owner.contact ? ` · ${g.owner.contact}` : "";
     const active = g.owner.active ? "" : " · _inactive/unresolved_";
@@ -387,6 +416,10 @@ export function dossierSheets(d: SpaceDossier): Sheet[] {
     [
       "Page",
       "URL",
+      // Hierarchy columns (from the area walk; blank on a flat whole-space
+      // enumeration) so users can pivot the export by area/subtree.
+      "Parent ID",
+      "Depth",
       "Owner",
       "Owner active",
       "Contact",
@@ -406,6 +439,8 @@ export function dossierSheets(d: SpaceDossier): Sheet[] {
     pages.push([
       p.title,
       p.url,
+      p.parentId ?? "",
+      p.depth !== undefined ? String(p.depth) : "",
       o?.sam ?? "",
       o ? (o.active ? "yes" : "no") : "",
       o?.contact ?? "",
@@ -480,7 +515,7 @@ export function dossierWorkItemSeeds(d: SpaceDossier, sourceLabel: string): NewW
           : undefined;
     seeds.push({
       title: `Review: ${p.title}`.slice(0, 160),
-      finding: `Page in space ${d.spaceKey} flagged during content review — ${reasons.join("; ")}.${
+      finding: `Page in space ${d.spaceKey}${spaceScopeSuffix(d)} flagged during content review — ${reasons.join("; ")}.${
         f.ownerless && suggested ? ` Recommended update: establish ownership by adding the label \`owners|${suggested.sam}\`.` : ""
       }`,
       target: { source: sourceLabel, kind: "confluence", ref: p.id, url: p.url },
@@ -500,18 +535,19 @@ export function dossierWorkItemSeeds(d: SpaceDossier, sourceLabel: string): NewW
 /** A per-owner outreach draft (markdown) listing their flagged pages — the
  *  starting point for coordinating communications + follow-ups. Links to each
  *  page's cached recommended revision (relative to the `outreach/` folder) so the
- *  owner can be shown exactly what changes are proposed. */
-export function renderOutreachDraft(group: OwnerGroup, spaceKey: string, generatedAt: string): string {
+ *  owner can be shown exactly what changes are proposed. Takes the dossier's
+ *  scope (not a bare spaceKey) so an area-scoped review names its area. */
+export function renderOutreachDraft(group: OwnerGroup, d: DossierScope & Pick<SpaceDossier, "generatedAt">): string {
   const flagged = group.pages.filter((p) => flagsFor(p).flagged);
   const to = "contact" in group.owner && group.owner.contact ? group.owner.contact : group.owner.sam;
   const lines: string[] = [
     `# Outreach draft — ${group.owner.sam}`,
     "",
-    `_To: ${to} · space ${spaceKey} · drafted ${generatedAt}_`,
+    `_To: ${to} · space ${d.spaceKey}${spaceScopeSuffix(d)} · drafted ${d.generatedAt}_`,
     "",
     `Hi ${group.owner.sam},`,
     "",
-    `As part of a content review of the **${spaceKey}** Confluence space, the following ${flagged.length} page(s) you own look like they need attention:`,
+    `As part of a content review of the **${d.spaceKey}** Confluence space${spaceScopeSuffix(d)}, the following ${flagged.length} page(s) you own look like they need attention:`,
     "",
   ];
   for (const p of flagged) {
@@ -545,20 +581,19 @@ export function renderOutreachDraft(group: OwnerGroup, spaceKey: string, generat
  *  renderOutreachDraft, so outreach can proceed straight from the export. */
 export function renderSuggestedOwnerOutreachDraft(
   group: SuggestedOwnerGroup,
-  spaceKey: string,
-  generatedAt: string,
+  d: DossierScope & Pick<SpaceDossier, "generatedAt">,
 ): string {
   const to = group.contact ?? group.sam;
   const lines: string[] = [
     `# Outreach draft — ${group.sam} (suggested target owner)`,
     "",
-    `_To: ${to} · space ${spaceKey} · drafted ${generatedAt}_`,
+    `_To: ${to} · space ${d.spaceKey}${spaceScopeSuffix(d)} · drafted ${d.generatedAt}_`,
     "",
     `_${group.sam} is the SUGGESTED owner (${group.basis}) — these pages have no active \`owners|\` tag yet. Confirm before setting the label._`,
     "",
     `Hi ${group.sam},`,
     "",
-    `During a content review of the **${spaceKey}** Confluence space, the following ${group.pages.length} page(s) turned up without an (active) owner. Based on the pages' contribution history, you look like the best owner for them:`,
+    `During a content review of the **${d.spaceKey}** Confluence space${spaceScopeSuffix(d)}, the following ${group.pages.length} page(s) turned up without an (active) owner. Based on the pages' contribution history, you look like the best owner for them:`,
     "",
   ];
   for (const p of group.pages) {

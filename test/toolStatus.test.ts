@@ -71,6 +71,15 @@ test("Confluence governance tools get input-aware status lines", () => {
     describeToolCall("aisharepoint_build_space_dossier", { spaceKey: "ENG" }),
     /Building the dossier for space ENG/,
   );
+  // Area-scoped: the status names the subtree being reviewed, not the space alone.
+  assert.match(
+    describeToolCall("aisharepoint_build_space_dossier", { rootPageId: "123", spaceKey: "ENG" }),
+    /Building the dossier for the area under page 123 \(space ENG\)/,
+  );
+  assert.match(
+    describeToolCall("aisharepoint_build_space_dossier", { rootPageId: "123" }),
+    /Building the dossier for the area under page 123 —/,
+  );
   assert.equal(
     describeToolCall("aisharepoint_move_confluence_page", { pageId: "1", parentId: "2" }),
     "Re-parenting Confluence page 1 (awaiting approval)…",
