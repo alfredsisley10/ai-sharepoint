@@ -12,6 +12,8 @@ import {
   needsEffectiveProbe,
   describeModelLimit,
   mergeModelLimit,
+  modelKey,
+  findModelByKey,
 } from "../src/core/contextBudget";
 
 const sec = (label: string, priority: number, tokens: number, required = false): PromptSection & { tokens: number } =>
@@ -203,4 +205,29 @@ test("needsEffectiveProbe: offer when unmeasured or advertised drifted, not once
   assert.equal(needsEffectiveProbe({ effectiveCap: 80000, measuredAtAdvertised: 128000 }, 128000), false);
   // Provider moved the advertised ceiling since we measured → re-offer.
   assert.equal(needsEffectiveProbe({ knownGood: 90000, measuredAtAdvertised: 128000 }, 200000), true);
+});
+
+// --- modelKey / findModelByKey ----------------------------------------------
+
+test("modelKey: family when present, id otherwise", () => {
+  assert.equal(modelKey({ id: "gpt-4o-2024-11-20", family: "gpt-4o" }), "gpt-4o");
+  assert.equal(modelKey({ id: "o3-mini", family: "" }), "o3-mini");
+});
+
+test("findModelByKey resolves the ledger key back to exactly that model", () => {
+  const models = [
+    { id: "gpt-4o-2024-11-20", family: "gpt-4o", name: "GPT-4o" },
+    { id: "claude-sonnet-4", family: "claude-sonnet-4", name: "Claude Sonnet 4" },
+    { id: "o3-mini-2025-01-31", family: "o3-mini", name: "o3-mini" },
+  ];
+  // Canonical key (family) → that model, not the first in the list.
+  assert.equal(findModelByKey(models, "o3-mini")?.id, "o3-mini-2025-01-31");
+  assert.equal(findModelByKey(models, "claude-sonnet-4")?.name, "Claude Sonnet 4");
+  // A key recorded from the raw id still resolves (fallback match).
+  assert.equal(findModelByKey(models, "gpt-4o-2024-11-20")?.family, "gpt-4o");
+  // Round-trip: every model's own key resolves back to itself.
+  for (const m of models) assert.equal(findModelByKey(models, modelKey(m)), m);
+  // Unknown key → undefined (callers must NOT substitute another model).
+  assert.equal(findModelByKey(models, "gpt-5"), undefined);
+  assert.equal(findModelByKey([], "gpt-4o"), undefined);
 });

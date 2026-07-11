@@ -188,6 +188,29 @@ export function describeModelLimit(row: { key: string } & ModelLimit): ModelLimi
   };
 }
 
+/** The identity fields of a chat model that determine its ledger/limits key. */
+export interface ModelIdentity {
+  id: string;
+  family: string;
+}
+
+/** The single definition of how a chat model maps to the key used by the usage
+ *  ledger and the model-limits store: the family when present (stable across
+ *  point releases), else the id. */
+export function modelKey(m: ModelIdentity): string {
+  return m.family || m.id;
+}
+
+/** Resolve a stored model KEY back to one of the currently available models —
+ *  the inverse of `modelKey`. Prefers the canonical key match, then falls back
+ *  to a raw id/family match so keys recorded under either form still resolve.
+ *  Returns undefined when no model matches; callers must surface that rather
+ *  than substitute another model (a probe against the wrong model records its
+ *  measurement under the wrong key). */
+export function findModelByKey<T extends ModelIdentity>(models: readonly T[], key: string): T | undefined {
+  return models.find((m) => modelKey(m) === key) ?? models.find((m) => m.id === key || m.family === key);
+}
+
 /** Fold a successful send into the record (raise the known-good high-water mark). */
 export function onSuccess(
   rec: ModelLimit | undefined,

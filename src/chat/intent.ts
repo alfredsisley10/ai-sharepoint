@@ -18,6 +18,17 @@ export function looksLikeConfluenceOptimization(prompt: string): boolean {
   return subject && action;
 }
 
+/**
+ * Does this prompt point at Confluence-flavored content (spaces, wiki pages,
+ * CQL, a knowledge base)? Used to suppress the speculative live SharePoint
+ * read on turns that are really about the reference sources — an explicit
+ * site URL or site name still forces the read, so cross-source asks work.
+ * Pure + unit-tested.
+ */
+export function hasConfluenceSignal(prompt: string): boolean {
+  return /(confluence|wiki|knowledge base|\bspaces?\b|\bcql\b)/i.test(prompt);
+}
+
 const SPACE_KEY_STOPWORDS = new Set([
   "THE", "THIS", "THAT", "OUR", "MY", "AN", "EACH", "EVERY", "WHOLE", "ENTIRE",
   "CONFLUENCE", "WIKI", "KNOWLEDGE", "MAIN", "SAME", "ONE", "ANY", "SOME",

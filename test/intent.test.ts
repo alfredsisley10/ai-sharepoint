@@ -1,6 +1,20 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { looksLikeConfluenceOptimization, extractSpaceKey, confluenceOptimizationSeed } from "../src/chat/intent";
+import { looksLikeConfluenceOptimization, extractSpaceKey, confluenceOptimizationSeed, hasConfluenceSignal } from "../src/chat/intent";
+
+test("hasConfluenceSignal detects Confluence-flavored prompts", () => {
+  for (const p of [
+    "review our Confluence site for stale pages",
+    "clean up the DOCS space",
+    "our wiki navigation",
+  ]) {
+    assert.equal(hasConfluenceSignal(p), true, p);
+  }
+});
+
+test("hasConfluenceSignal ignores plain SharePoint asks", () => {
+  assert.equal(hasConfluenceSignal("what's on my site's home page"), false);
+});
 
 test("detects Confluence optimization/cleanup intent", () => {
   for (const p of [

@@ -152,7 +152,8 @@ export class UsageDashboard {
           key: r.key,
           reported: r.advertised,
           tested: r.measured ? r.knownGood ?? r.effectiveCap : undefined,
-          // Margin-adjusted per-turn budget (mirrors the Usage view's "usable").
+          // Margin-adjusted per-turn budget — quoted inside the headroom
+          // caption under the limits table (not shown as its own column).
           usable: r.usable,
           drifted: r.drifted,
         })),

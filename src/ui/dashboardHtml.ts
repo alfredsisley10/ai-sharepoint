@@ -42,7 +42,8 @@ export interface DashboardData {
   filter?: "all" | "failed";
   /** Per-model reported (advertised) vs. tested (measured) context limits.
    *  `usable` is the margin-adjusted per-turn input budget a chat is actually
-   *  held to (resolved ceiling minus the safety margin — see `effectiveInputCap`). */
+   *  held to (see `effectiveInputCap`) — quoted only inside the headroom
+   *  caption under the table, never as a column of its own. */
   modelLimits?: Array<{ key: string; reported?: number; tested?: number; usable?: number; drifted: boolean }>;
 }
 
@@ -131,6 +132,31 @@ function tableRows(
           .join("")}</tr>`,
     )
     .join("");
+}
+
+/** Model context limits: Reported vs. Tested per model (the tested value, when
+ *  present, is the one in effect — marked bold + ✓), with the safety margin
+ *  explained in plain language in a caption under the table rather than shown
+ *  as an abstract "Usable" column. Custom row markup (not `tableRows`) because
+ *  the in-effect value carries <strong> styling. */
+function modelLimitsSection(limits: NonNullable<DashboardData["modelLimits"]>): string {
+  const rows = limits
+    .map((m) => {
+      const reported = m.reported?.toLocaleString() ?? "?";
+      const tested =
+        m.tested !== undefined
+          ? `<strong>${esc(m.tested.toLocaleString())} ✓</strong>`
+          : `<span class="muted">not tested</span>`;
+      return `<tr><td>${esc(`${m.key}${m.drifted ? " ⚠" : ""}`)}</td><td class="num">${esc(reported)}</td><td class="num">${tested}</td></tr>`;
+    })
+    .join("");
+  const applied = limits
+    .flatMap((m) => (m.usable !== undefined ? [`${esc(m.key)} ${m.usable.toLocaleString()}`] : []))
+    .join(" · ");
+  return `<h2>Model context limits</h2>
+  <p class="muted">Reported = the model's advertised input limit. Tested = the largest input actually proven to work (or the learned ceiling) — <strong>✓ marks the limit in effect</strong>. Run “Probe Model Context Limit” to measure.</p>
+  <table><thead><tr><th>Model</th><th>Reported</th><th>Tested</th></tr></thead><tbody>${rows}</tbody></table>
+  <p class="muted">Chats use the tested limit when available (else reported), minus ~15% headroom for the system prompt, tool schemas and chat history${applied ? ` — here ${applied} tokens per turn` : ""}.</p>`;
 }
 
 export function renderDashboardHtml(
@@ -274,21 +300,7 @@ export function renderDashboardHtml(
       : `<div class="empty">${failedView ? "No failed or cancelled task activity this month." : "No task activity recorded yet."}</div>`
   }
 
-  ${
-    data.modelLimits && data.modelLimits.length > 0
-      ? `<h2>Model context limits</h2>
-  <p class="muted">Reported = the model's advertised input limit. Tested = the largest input actually proven to work (or the learned ceiling). Usable = the per-turn input the chat is actually held to (ceiling minus safety margin). Run “Probe Model Context Limit” to measure.</p>
-  <table><thead><tr><th>Model</th><th>Reported</th><th>Tested</th><th>Usable</th></tr></thead><tbody>${tableRows(
-    data.modelLimits.map((m) => ({
-      Model: `${m.key}${m.drifted ? " ⚠" : ""}`,
-      Reported: m.reported?.toLocaleString() ?? "?",
-      Tested: m.tested?.toLocaleString() ?? "not tested",
-      Usable: m.usable?.toLocaleString() ?? "?",
-    })),
-    ["Model", "Reported", "Tested", "Usable"],
-  )}</tbody></table>`
-      : ""
-  }
+  ${data.modelLimits && data.modelLimits.length > 0 ? modelLimitsSection(data.modelLimits) : ""}
 
   <div class="actions">
     <button id="btn-export">Export diagnostics bundle…</button>

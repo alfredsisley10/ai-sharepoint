@@ -18,7 +18,9 @@ import {
   resolveConnArg,
   resolveSourceArg,
   bookmarkLocatorIssue,
-  promptSourceAliasAndDescription,
+  buildSourceIdentitySeed,
+  promptSourceIdentity,
+  SourceIdentityExtras,
   renderPullPreview,
   openBundledDoc,
 } from "./extensionHelpers";
@@ -81,6 +83,7 @@ import {
   ContextDeployment,
   ContextSourceType,
   ConfluenceWriteScope,
+  JiraWriteScope,
   contextCredentialUi,
 } from "./context/types";
 import {
@@ -88,6 +91,11 @@ import {
   writeScopeFromParsed,
   describeWriteScope,
 } from "./context/adapters/confluenceScope";
+import {
+  getJiraProject,
+  probeJiraWritePermissions,
+  describeJiraWriteScope,
+} from "./context/adapters/jiraWrite";
 import { summarizeProbe, summarizeFunctionalityProbe } from "./context/adapters/confluenceProbe";
 import { registerContextTools } from "./chat/contextTools";
 import { buildReferenceExport, parseReferenceImport, planMemoryImport, planPromptImport, exportLeakBlockers } from "./context/referenceExport";
@@ -152,6 +160,7 @@ import {
 import { ProjectsTreeProvider } from "./ui/projectsView";
 import { ChatWorkspaceStore } from "./context/chatWorkspaceStore";
 import { registerDossierTools, buildDossierInto } from "./chat/dossierTools";
+import { spaceScopeSuffix } from "./context/spaceDossier";
 import { registerPageRevisionTool } from "./chat/pageRevisionTool";
 import { registerProjectTools } from "./chat/projectTools";
 import {
@@ -239,7 +248,7 @@ import { MemoryStore } from "./context/memoryStore";
 import { PromptStore } from "./context/promptStore";
 import { newSeedPrompts } from "./context/promptSeeds";
 import { installFetchTrust } from "./core/fetchTrust";
-import { effectiveInputCap } from "./core/contextBudget";
+import { effectiveInputCap, findModelByKey, modelKey } from "./core/contextBudget";
 import { progressMessage } from "./core/progress";
 import { PromptsTreeProvider } from "./ui/promptsView";
 import { PromptItem, PromptScope, PromptScopeKind, normalizePromptInput } from "./context/promptLibrary";
@@ -2093,12 +2102,68 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // --- Reference context sources (Track A — PLAN §9) -------------------------
+  /** Keychain handle for the standalone "Sign in to Microsoft 365 now" session
+   *  minted by the context-source pickers below (no SharePoint site involved).
+   *  `tenantCacheHandle` derives purely from its host string, so a fixed
+   *  pseudo-host yields a STABLE handle — repeated standalone sign-ins share
+   *  one MSAL session — that can never collide with a real site handle (site
+   *  tenant hosts are always *.sharepoint.<com|us|cn>). */
+  const STANDALONE_M365_CACHE_HANDLE = tenantCacheHandle("graph.microsoft.com");
+
+  /** Standalone Microsoft 365 sign-in for context sources. The original
+   *  "shared with SharePoint" option only BORROWED a connected site's MSAL
+   *  session — a dead end with zero sites: the add-source flow aborted with
+   *  "connect a SharePoint site first". This mints its own session the same
+   *  way `connectSite` does (method pick → registry.create → interactive
+   *  acquisition) and returns the same { providerId, cacheHandle } shape that
+   *  `aadBroker` consumes. `seedScopes` is acquired once to seed the keychain
+   *  cache; the source's real scopes are requested at verify time. */
+  const signInToM365Standalone = async (
+    title: string,
+    seedScopes: string[],
+  ): Promise<ContextCredential | undefined> => {
+    const method = await vscode.window.showQuickPick(
+      AUTH_PROVIDERS.map((p) => ({
+        label: p.id === "msal-public-interactive" ? `$(globe) ${p.label}` : `$(device-mobile) ${p.label}`,
+        detail: p.detail,
+        id: p.id,
+      })),
+      { ignoreFocusOut: true, title },
+    );
+    if (!method) return undefined;
+    const provider = registry.create(method.id, STANDALONE_M365_CACHE_HANDLE);
+    try {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Signing in to Microsoft 365…" },
+        () => provider.acquireToken(seedScopes),
+      );
+    } catch (err) {
+      // Abort cleanly — nothing has been persisted for this source yet.
+      if (classifyError(err) !== "auth.cancelled") {
+        log.error("Standalone Microsoft 365 sign-in failed", err);
+        void vscode.window.showErrorMessage(
+          `Microsoft 365 sign-in failed: ${redactError(err).message.slice(0, 200)}`,
+        );
+      }
+      return undefined;
+    }
+    return {
+      method: "aad-sso",
+      secret: JSON.stringify({ providerId: method.id, cacheHandle: STANDALONE_M365_CACHE_HANDLE }),
+    };
+  };
+
   /** Power BI sign-in (ADR-0027 amendment). Azure CLI SSO leads: the shared
    *  Microsoft 365 sign-in app ("Microsoft Graph Command Line Tools") needs
    *  tenant admin approval for Power BI scopes, which pilots can't get — the
    *  Azure CLI is a Microsoft first-party app already authorized for the
    *  Power BI service, so `az login` works with no per-app approval. */
   const pickAadCredential = async (): Promise<ContextCredential | undefined> => {
+    // Offer the borrow-a-site option only when there IS a site to borrow —
+    // with zero connected sites it was a dead end ("connect a SharePoint site
+    // first") that aborted the add-source flow; the standalone sign-in below
+    // covers that case (and "use a different account") without a site.
+    const connected = sites.list();
     const mode = await vscode.window.showQuickPick(
       [
         {
@@ -2111,10 +2176,19 @@ export function activate(context: vscode.ExtensionContext): void {
           description: "uses your existing `az login`; tokens never stored — same consent posture as above",
           value: "az" as const,
         },
+        ...(connected.length > 0
+          ? [
+              {
+                label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
+                description: "may require tenant admin approval of the sign-in app for Power BI scopes",
+                value: "aad" as const,
+              },
+            ]
+          : []),
         {
-          label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
-          description: "may require tenant admin approval of the sign-in app for Power BI scopes",
-          value: "aad" as const,
+          label: "$(sign-in) Sign in to Microsoft 365 now",
+          description: "new sign-in — no SharePoint site needed / use a different account",
+          value: "signin" as const,
         },
         {
           label: "$(key) Paste an access token",
@@ -2148,6 +2222,12 @@ export function activate(context: vscode.ExtensionContext): void {
       // Marker only — nothing secret is stored; every call asks the CLI.
       return { method: "az-sso", secret: "az-cli-session" };
     }
+    if (mode.value === "signin") {
+      return signInToM365Standalone(
+        "Power BI Microsoft 365 sign-in — browser or device code?",
+        POWERBI_SCOPES,
+      );
+    }
     if (mode.value === "pat") {
       const token = await vscode.window.showInputBox({
         ignoreFocusOut: true,
@@ -2159,15 +2239,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!token?.trim()) return undefined;
       return { method: "pat", secret: token.trim() };
     }
-    const all = sites.list();
-    if (all.length === 0) {
-      const add = await vscode.window.showInformationMessage(
-        "This option reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it (or pick “Microsoft sign-in — nothing to install” instead).",
-        "Connect Site",
-      );
-      if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
-      return undefined;
-    }
+    // "aad" is only offered when at least one site exists, so no zero-site
+    // dead end here anymore.
+    const all = connected;
     let conn = all.length === 1 ? all[0] : undefined;
     if (!conn) {
       const pick = await vscode.window.showQuickPick(
@@ -2195,12 +2269,26 @@ export function activate(context: vscode.ExtensionContext): void {
    *  Microsoft Entra rather than falling through to `promptContextCredential`'s
    *  Atlassian Cloud credential prompt ("Atlassian account email"). */
   const pickM365GraphCredential = async (): Promise<ContextCredential | undefined> => {
+    // Offer the borrow-a-site option only when there IS a site to borrow —
+    // with zero connected sites it was a dead end ("connect a SharePoint site
+    // first") that aborted the add-source flow; the standalone sign-in below
+    // covers that case (and "use a different account") without a site.
+    const connected = sites.list();
     const signIn = await vscode.window.showQuickPick(
       [
+        ...(connected.length > 0
+          ? [
+              {
+                label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
+                description: "reuses a connected site's sign-in — recommended",
+                value: "aad" as const,
+              },
+            ]
+          : []),
         {
-          label: "$(organization) Microsoft 365 sign-in (shared with SharePoint)",
-          description: "reuses a connected site's sign-in — recommended",
-          value: "aad" as const,
+          label: "$(sign-in) Sign in to Microsoft 365 now",
+          description: "new sign-in — no SharePoint site needed / use a different account",
+          value: "signin" as const,
         },
         {
           label: "$(key) Paste a Graph access token",
@@ -2211,6 +2299,15 @@ export function activate(context: vscode.ExtensionContext): void {
       { ignoreFocusOut: true, title: "Microsoft 365 Copilot sign-in" },
     );
     if (!signIn) return undefined;
+    if (signIn.value === "signin") {
+      // Seed with a basic Graph scope only — the source's real surface scopes
+      // (documents/email/calendar/…) are requested by the verify step that
+      // follows source creation.
+      return signInToM365Standalone(
+        "Microsoft 365 sign-in — browser or device code?",
+        ["https://graph.microsoft.com/User.Read"],
+      );
+    }
     if (signIn.value === "pat") {
       const token = await vscode.window.showInputBox({
         ignoreFocusOut: true,
@@ -2222,15 +2319,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!token?.trim()) return undefined;
       return { method: "pat", secret: token.trim() };
     }
-    const all = sites.list();
-    if (all.length === 0) {
-      const add = await vscode.window.showInformationMessage(
-        "This reuses your Microsoft 365 sign-in — connect a SharePoint site first to establish it.",
-        "Connect Site",
-      );
-      if (add) await vscode.commands.executeCommand("aiSharePoint.connectSite");
-      return undefined;
-    }
+    // "aad" is only offered when at least one site exists, so no zero-site
+    // dead end here anymore.
+    const all = connected;
     let conn = all.length === 1 ? all[0] : undefined;
     if (!conn) {
       const pick = await vscode.window.showQuickPick(
@@ -2319,6 +2410,14 @@ export function activate(context: vscode.ExtensionContext): void {
     let defaultUpn: string | undefined;
     // Managed Confluence: the write boundary derived from the onboarding URL.
     let writeScope: ConfluenceWriteScope | undefined;
+    // Managed Jira: the write boundary chosen during onboarding (instance or
+    // one project) — bounds mutations only; reads/JQL stay global (ADR-0040).
+    let jiraWriteScope: JiraWriteScope | undefined;
+    // Jira can opt INTO managed mid-wizard (Confluence arrives via preset).
+    let roleOverride: "managed" | "reference" | undefined;
+    // Branch-collected facts that seed the ONE identity prompt at the end
+    // (suggested name/alias/description) — see buildSourceIdentitySeed.
+    let identityExtras: SourceIdentityExtras = {};
 
     const DB_TYPES = new Set(["mssql", "postgres", "mysql", "mongodb"]);
     if (typePick.value === "ldap") {
@@ -2405,6 +2504,7 @@ export function activate(context: vscode.ExtensionContext): void {
         database: database.trim(),
         trustServerCertificate: certPick.value,
       });
+      identityExtras = { host, database: database.trim() };
     } else if (typePick.value === "servicenow") {
       deployment = "cloud";
       const url = await vscode.window.showInputBox({
@@ -2452,7 +2552,10 @@ export function activate(context: vscode.ExtensionContext): void {
           },
         );
         if (!pick) return;
-        if (pick.name) baseUrl += `?table=${encodeURIComponent(pick.name)}`;
+        if (pick.name) {
+          baseUrl += `?table=${encodeURIComponent(pick.name)}`;
+          identityExtras = { defaultTable: pick.name };
+        }
       } else {
         const table = await vscode.window.showInputBox({
           ignoreFocusOut: true,
@@ -2462,13 +2565,16 @@ export function activate(context: vscode.ExtensionContext): void {
           validateInput: (v) => (!v.trim() || /^[a-z0-9_]+$/.test(v.trim()) ? undefined : "Table names are lowercase_with_underscores"),
         });
         if (table === undefined) return;
-        if (table.trim()) baseUrl += `?table=${encodeURIComponent(table.trim())}`;
+        if (table.trim()) {
+          baseUrl += `?table=${encodeURIComponent(table.trim())}`;
+          identityExtras = { defaultTable: table.trim() };
+        }
       }
     } else if (typePick.value === "splunk") {
       deployment = "datacenter";
       const url = await vscode.window.showInputBox({
         ignoreFocusOut: true,
-        title: "Splunk — the URL you open in your browser (1/3)",
+        title: "Splunk — the URL you open in your browser",
         placeHolder: "https://acme.splunkcloud.com — the management API address is derived and verified for you",
         validateInput: (v) => {
           try {
@@ -2590,37 +2696,42 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         }
       }
-      // The browser URL doubles as the deep-link target.
-      const autoWeb = !webEntry.includes(":8089") ? webEntry : "";
       const index = await vscode.window.showInputBox({
         ignoreFocusOut: true,
-        title: "Splunk — default index (2/3, optional)",
+        title: "Splunk — default index (optional)",
         placeHolder: "main — free-text chat questions search this index (Enter to skip)",
         validateInput: (v) =>
           !v.trim() || /^[A-Za-z0-9_-]+$/.test(v.trim()) ? undefined : "Index names: letters/digits/_/-",
       });
       if (index === undefined) return;
-      const web = await vscode.window.showInputBox({
-        ignoreFocusOut: true,
-        title: "Splunk — Splunk Web URL for deep links (3/3)",
-        value: autoWeb,
-        placeHolder: "https://acme.splunkcloud.com — pre-filled from what you entered (Enter to accept)",
-        validateInput: (v) => {
-          if (!v.trim()) return undefined;
-          try {
-            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
-          } catch {
-            return "Enter a valid https:// URL (or leave empty)";
-          }
-        },
-      });
-      if (web === undefined) return;
+      // The browser URL the user already typed doubles as the deep-link
+      // target — reuse it silently; ask only when nothing usable was entered
+      // (they pasted the :8089 management address directly).
+      let web = !webEntry.includes(":8089") ? webEntry : "";
+      if (!web) {
+        const manualWeb = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Splunk — Splunk Web URL for deep links (optional)",
+          placeHolder: "https://acme.splunkcloud.com (Enter to skip)",
+          validateInput: (v) => {
+            if (!v.trim()) return undefined;
+            try {
+              return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
+            } catch {
+              return "Enter a valid https:// URL (or leave empty)";
+            }
+          },
+        });
+        if (manualWeb === undefined) return;
+        web = manualWeb.trim();
+      }
       const params = new URLSearchParams();
       if (selectedApp) params.set("app", selectedApp);
       if (index.trim()) params.set("index", index.trim());
       if (web.trim()) params.set("web", web.trim().replace(/\/+$/, ""));
       const qs = params.toString();
       if (qs) baseUrl += `?${qs}`;
+      identityExtras = { app: selectedApp, index: index.trim() || undefined };
     } else if (typePick.value === "splunkobs") {
       deployment = "cloud";
       // Users know the app URL (or just the realm) — both API and app
@@ -2690,23 +2801,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!presetCredential) return;
     } else if (typePick.value === "powerbi") {
       deployment = "cloud";
-      // Pilot: users only know app.powerbi.com — confirm the portal, sign in
-      // with the existing Microsoft 365 session, then ENUMERATE what they can
-      // access instead of asking for dataset names/GUIDs.
-      const portal = await vscode.window.showInputBox({
-        ignoreFocusOut: true,
-        title: "Power BI — portal URL (just confirm)",
-        value: "https://app.powerbi.com",
-        prompt: "The connector talks to the Power BI API with the sign-in you pick next; this is only a confirmation of which Power BI you use.",
-        validateInput: (v) => {
-          try {
-            return new URL(v.trim()).protocol === "https:" ? undefined : "HTTPS URLs only";
-          } catch {
-            return "Enter a valid https:// URL";
-          }
-        },
-      });
-      if (!portal) return;
+      // Pilot: users only know app.powerbi.com — sign in with the existing
+      // Microsoft 365 session, then ENUMERATE what they can access instead of
+      // asking for dataset names/GUIDs.
       baseUrl = "https://api.powerbi.com/v1.0/myorg";
       presetCredential = await pickAadCredential();
       if (!presetCredential) return;
@@ -2723,11 +2820,15 @@ export function activate(context: vscode.ExtensionContext): void {
                 label: "$(list-unordered) No default — pick a dataset per question",
                 description: "chat can still target any dataset by name",
                 id: undefined as string | undefined,
+                name: undefined as string | undefined,
+                workspace: undefined as string | undefined,
               },
               ...datasets.map((d) => ({
                 label: d.name,
                 description: `${d.workspace}`,
                 id: d.id as string | undefined,
+                name: d.name as string | undefined,
+                workspace: d.workspace as string | undefined,
               })),
             ],
             {
@@ -2737,7 +2838,10 @@ export function activate(context: vscode.ExtensionContext): void {
             },
           );
           if (!pick) return;
-          if (pick.id) baseUrl += `?dataset=${encodeURIComponent(pick.id)}`;
+          if (pick.id) {
+            baseUrl += `?dataset=${encodeURIComponent(pick.id)}`;
+            identityExtras = { datasetName: pick.name, workspaceName: pick.workspace };
+          }
         } else {
           void vscode.window.showInformationMessage(
             "No datasets are visible to this account yet — the source still connects; datasets appear in Browse & Bookmark once you're granted access.",
@@ -2775,6 +2879,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!surfacePicks || surfacePicks.length === 0) return;
       const surfaces = surfacePicks.map((p) => p.value);
       baseUrl = `https://graph.microsoft.com/v1.0/copilot/retrieval?surfaces=${surfaces.join(",")}`;
+      identityExtras = { surfaces };
 
       // Same Microsoft Entra / Graph sign-in the reconnect "plug" path uses, so
       // adding and later reconnecting an m365copilot source prompt identically.
@@ -2851,6 +2956,11 @@ export function activate(context: vscode.ExtensionContext): void {
         const parsed = parseConfluenceUrl(url.trim());
         if (parsed) {
           baseUrl = parsed.baseUrl;
+          // A space key in the pasted URL seeds the suggested name/alias even
+          // for a read-only reference; the managed write scope refines it below.
+          if (parsed.scope.kind !== "instance" && parsed.scope.spaceKey) {
+            identityExtras = { spaceKey: parsed.scope.spaceKey };
+          }
           if (managedConfluence) {
             writeScope = writeScopeFromParsed(parsed, url.trim());
             // A bare instance URL gives no write boundary — let the user narrow
@@ -2879,56 +2989,179 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         }
       }
+
+      if (typePick.value === "jira") {
+        // MANAGED JIRA (the managed-Confluence sibling): a managed connector
+        // unlocks the approval-gated ticket-update tools, bounded to a write
+        // scope. Default stays read-only reference.
+        const rolePick = preset?.role
+          ? { value: preset.role }
+          : await vscode.window.showQuickPick(
+              [
+                {
+                  label: "$(eye) Read-only reference",
+                  description: "search & read issues — nothing is ever written (default)",
+                  value: "reference" as const,
+                },
+                {
+                  label: "$(edit) Managed",
+                  description: "also enables approval-gated ticket updates (fields, comments, transitions) within a write scope",
+                  value: "managed" as const,
+                },
+              ],
+              { ignoreFocusOut: true, title: "Jira connector — read-only reference, or managed?" },
+            );
+        if (!rolePick) return;
+        if (rolePick.value === "managed") {
+          roleOverride = "managed";
+          // Credentials now: the write-boundary steps (project validation +
+          // permission probe) need a live sign-in before the source is saved.
+          presetCredential = await promptContextCredential("jira", deployment, undefined, baseUrl);
+          if (!presetCredential) return;
+          const jiraCred = presetCredential;
+          const timeoutMs = contextService.caps().timeoutMs;
+          const scopePick = await vscode.window.showQuickPick(
+            [
+              {
+                label: "$(project) Scope to a single project",
+                description: "enter a project key — recommended",
+                value: "project" as const,
+              },
+              {
+                label: "$(globe) Manage the entire instance",
+                description: "no write boundary — any issue anywhere",
+                value: "instance" as const,
+              },
+            ],
+            { ignoreFocusOut: true, title: "Managed Jira — write boundary (reads & JQL search stay global regardless)" },
+          );
+          if (!scopePick) return;
+          if (scopePick.value === "project") {
+            for (;;) {
+              const key = await vscode.window.showInputBox({
+                ignoreFocusOut: true,
+                title: "Managed Jira — project key",
+                placeHolder: "ENG",
+                prompt: "Ticket updates are limited to issues in this project (checked live against each issue's real project).",
+                validateInput: (v) => (v.trim() ? undefined : "Enter a project key"),
+              });
+              if (!key) return;
+              try {
+                const project = await vscode.window.withProgress(
+                  { location: vscode.ProgressLocation.Notification, title: `Checking Jira project "${key.trim()}"…` },
+                  () => getJiraProject({ baseUrl }, jiraCred, key.trim(), timeoutMs),
+                );
+                jiraWriteScope = { kind: "project", projectKey: project.key, url: baseUrl };
+                break;
+              } catch (err) {
+                if (classifyError(err) === "graph.notFound") {
+                  const again = await vscode.window.showWarningMessage(
+                    `Jira has no project "${key.trim()}" visible to this account. Check the key (Projects → the short key next to the name).`,
+                    "Re-enter Key",
+                  );
+                  if (again !== "Re-enter Key") return;
+                  continue;
+                }
+                // Validation is a convenience — never block onboarding on it.
+                log.warn(`Jira project validation failed: ${err instanceof Error ? err.message : String(err)}`);
+                void vscode.window.showWarningMessage(
+                  `Couldn't validate project "${key.trim()}" right now — keeping it as typed; writes will still verify each issue's project live.`,
+                );
+                jiraWriteScope = { kind: "project", projectKey: key.trim().toUpperCase(), url: baseUrl };
+                break;
+              }
+            }
+          } else {
+            jiraWriteScope = { kind: "instance", url: baseUrl };
+          }
+          // Best-effort write-permission probe (Cloud REQUIRES the permissions
+          // query param; DC tolerates it). Warn on gaps — never block: the
+          // probe itself can be unavailable, and reads are unaffected anyway.
+          try {
+            const { missing } = await vscode.window.withProgress(
+              { location: vscode.ProgressLocation.Notification, title: "Checking your Jira write permissions…" },
+              () =>
+                probeJiraWritePermissions(
+                  { baseUrl },
+                  jiraCred,
+                  jiraWriteScope?.kind === "project" ? jiraWriteScope.projectKey : undefined,
+                  timeoutMs,
+                ),
+            );
+            if (missing.length > 0) {
+              void vscode.window.showWarningMessage(
+                `Heads-up: this account appears to lack ${missing.join(", ")} in ${describeJiraWriteScope(jiraWriteScope)} — Jira may refuse ticket updates. The connector still connects, and reads/search are unaffected.`,
+              );
+            }
+          } catch (err) {
+            log.warn(`Jira write-permission probe failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
     }
 
     const credential =
       presetCredential ?? (await promptCredentialFor(typePick.value, deployment, undefined, defaultUpn));
     if (!credential) return;
-    const hostLabel = (() => {
-      try {
-        return new URL(baseUrl).hostname;
-      } catch {
-        return baseUrl;
-      }
-    })();
-    const displayName =
-      (await vscode.window.showInputBox({
-      ignoreFocusOut: true,
-        title: "Add Context Source — display name",
-        value: `${hostLabel} (${typePick.value})`,
-      })) ?? "";
-    if (!displayName) return;
 
-    const details = await promptSourceAliasAndDescription(contextSources.list());
-    if (!details) return;
+    // ONE identity prompt: the suggested name (space/project/database/dataset
+    // + type) with Enter-to-accept; alias and description defaults ride along
+    // silently and stay editable via Edit Name, Alias & Description.
+    const identity = await promptSourceIdentity(
+      contextSources.list(),
+      buildSourceIdentitySeed(typePick.value, baseUrl, {
+        ...identityExtras,
+        ...(writeScope && writeScope.kind !== "instance" && writeScope.spaceKey
+          ? { spaceKey: writeScope.spaceKey }
+          : {}),
+        ...(jiraWriteScope?.kind === "project" && jiraWriteScope.projectKey
+          ? { projectKey: jiraWriteScope.projectKey }
+          : {}),
+        ...(baseDn ? { baseDn } : {}),
+        deployment,
+      }),
+    );
+    if (!identity) return;
 
     const source: ContextSource = {
       id: crypto.randomUUID(),
       type: typePick.value,
-      displayName: displayName.trim(),
-      alias: details.alias,
-      description: details.description,
+      displayName: identity.displayName,
+      alias: identity.alias,
+      description: identity.description,
       baseUrl,
       baseDn,
       deployment,
       authMethod: credential.method,
       addedAt: nowIso(),
-      role: preset?.role ?? "reference",
+      role: roleOverride ?? preset?.role ?? "reference",
       ...(writeScope ? { writeScope } : {}),
+      ...(jiraWriteScope ? { jiraWriteScope } : {}),
     };
     try {
       const { account } = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: "Verifying source…" },
         () => contextService.verify(source, credential, true),
       );
-      await contextSources.upsert({ ...source, account, lastVerifiedAt: nowIso() });
+      const saved: ContextSource = { ...source, account, lastVerifiedAt: nowIso() };
+      await contextSources.upsert(saved);
       await contextSources.setCredential(source.id, credential);
       telemetry.record("context.add", { type: source.type, deployment: source.deployment, method: credential.method, ...(source.role === "managed" ? { role: "managed" } : {}) });
-      void vscode.window.showInformationMessage(
-        source.role === "managed"
-          ? `Connected "${source.displayName}" as ${account} — managed: writes are bounded to ${describeWriteScope(writeScope)}; reads span all of Confluence.`
-          : `Connected "${source.displayName}" as ${account} (read-only).`,
-      );
+      const editIdentity = "Edit Name, Alias & Description";
+      void vscode.window
+        .showInformationMessage(
+          source.role === "managed"
+            ? source.type === "jira"
+              ? `Connected "${source.displayName}" as ${account} — managed: approval-gated ticket updates are bounded to ${describeJiraWriteScope(jiraWriteScope)}; reads and JQL search span all of Jira.`
+              : `Connected "${source.displayName}" as ${account} — managed: writes are bounded to ${describeWriteScope(writeScope)}; reads span all of Confluence.`
+            : `Connected "${source.displayName}" as ${account} (read-only).`,
+          editIdentity,
+        )
+        .then((pick) => {
+          if (pick === editIdentity) {
+            void vscode.commands.executeCommand("aiSharePoint.editSourceAlias", saved);
+          }
+        });
       if (DB_TYPES.has(source.type)) {
         // First use of a database source: preload the schema catalog, then
         // offer the Copilot semantic indexing (consent-gated, ADR-0024).
@@ -2945,7 +3178,7 @@ export function activate(context: vscode.ExtensionContext): void {
           "Skip",
         );
         if (run === "Run Write Test") {
-          await vscode.commands.executeCommand("aiSharePoint.testWriteAccess", { ...source, account, lastVerifiedAt: nowIso() });
+          await vscode.commands.executeCommand("aiSharePoint.testWriteAccess", saved);
         }
       }
     } catch (err) {
@@ -2962,6 +3195,7 @@ export function activate(context: vscode.ExtensionContext): void {
       [
         { label: "$(cloud) SharePoint site", description: "Microsoft 365 sign-in; managed or reference", value: "sharepoint" as const },
         { label: "$(book) Confluence space", description: "read/write with your own API token — no admin consent", value: "confluence" as const },
+        { label: "$(issues) Jira project", description: "approval-gated ticket updates with your own API token — no admin consent", value: "jira" as const },
       ],
       { ignoreFocusOut: true, title: "Add a managed target" },
     );
@@ -2969,7 +3203,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (pick.value === "sharepoint") {
       await vscode.commands.executeCommand("aiSharePoint.connectSite");
     } else {
-      await vscode.commands.executeCommand("aiSharePoint.addContextSource", { type: "confluence", role: "managed" });
+      await vscode.commands.executeCommand("aiSharePoint.addContextSource", { type: pick.value, role: "managed" });
     }
   });
 
@@ -3175,20 +3409,41 @@ export function activate(context: vscode.ExtensionContext): void {
       "Remove Source",
     );
     if (confirm === "Remove Source") {
-      // The Power BI no-install sign-in keeps its MSAL refresh-token cache in
-      // a source-private keychain entry — wipe it with the source.
+      // aad-sso sources keep an MSAL refresh-token cache in the keychain.
+      // Capture the handle BEFORE removal (remove() wipes the credential),
+      // then clean up AFTER so the removed source doesn't count itself. The
+      // Power BI no-install cache is source-private (always wiped); other
+      // handles (standalone "Sign in to Microsoft 365 now" sessions, borrowed
+      // site sign-ins) can be SHARED, so mirror sitesStore.remove's refcount
+      // cleanup: wipe only when NO site connection and NO remaining source
+      // still references the handle. Never delete a handle a site still uses.
       const cred = await contextSources.getCredential(source.id).catch(() => undefined);
+      await contextSources.remove(source.id);
       if (cred?.method === "aad-sso") {
         try {
-          const handles = JSON.parse(cred.secret) as { cacheHandle?: string };
-          if (handles.cacheHandle?.startsWith(POWERBI_AZCLI_CACHE_PREFIX)) {
-            await secrets.delete(handles.cacheHandle);
+          const handle = (JSON.parse(cred.secret) as { cacheHandle?: string }).cacheHandle;
+          if (handle?.startsWith(POWERBI_AZCLI_CACHE_PREFIX)) {
+            await secrets.delete(handle);
+          } else if (handle && !sites.list().some((c) => c.cacheHandle === handle)) {
+            let shared = false;
+            for (const other of contextSources.list()) {
+              const otherCred = await contextSources.getCredential(other.id).catch(() => undefined);
+              if (otherCred?.method !== "aad-sso") continue;
+              try {
+                if ((JSON.parse(otherCred.secret) as { cacheHandle?: string }).cacheHandle === handle) {
+                  shared = true;
+                  break;
+                }
+              } catch {
+                // unreadable secret on another source — can't prove sharing; skip it
+              }
+            }
+            if (!shared) await secrets.delete(handle); // best-effort offboarding
           }
         } catch {
           // unreadable secret — nothing more to clean
         }
       }
-      await contextSources.remove(source.id);
       await bookmarks.removeForSource(source.id);
       await schemas.remove(source.id);
       await catalogs.remove(source.id);
@@ -3203,18 +3458,27 @@ export function activate(context: vscode.ExtensionContext): void {
   register("aiSharePoint.editSourceAlias", async (arg) => {
     const source = await resolveSourceArg(arg, contextSources);
     if (!source) return;
-    const details = await promptSourceAliasAndDescription(contextSources.list(), source);
+    const details = await promptSourceIdentity(
+      contextSources.list(),
+      buildSourceIdentitySeed(source.type, source.baseUrl),
+      source,
+    );
     if (!details) return;
     const stored = contextSources.get(source.id) ?? source;
-    await contextSources.upsert({ ...stored, alias: details.alias, description: details.description });
+    await contextSources.upsert({
+      ...stored,
+      displayName: details.displayName,
+      alias: details.alias,
+      description: details.description,
+    });
     telemetry.record("context.alias", {
       alias: details.alias ? "set" : "cleared",
       description: details.description ? "set" : "cleared",
     });
     void vscode.window.showInformationMessage(
       details.alias
-        ? `"${source.displayName}" answers to "${details.alias}" now — e.g. @sharepoint find … in the ${details.alias} database.`
-        : `Alias cleared for "${source.displayName}".`,
+        ? `"${details.displayName}" answers to "${details.alias}" now — e.g. @sharepoint find … in the ${details.alias} database.`
+        : `Saved "${details.displayName}" — no chat alias set.`,
     );
   });
 
@@ -6820,13 +7084,51 @@ export function activate(context: vscode.ExtensionContext): void {
   // Actively measure a model's REAL input-context limit. Copilot can deliver less
   // than the advertised maxInputTokens (varies by org), so this binary-searches
   // the accept/reject boundary with filler prompts and records it for budgeting.
-  register("aiSharePoint.probeModelContextLimit", async () => {
-    const model = await copilot.pickDefaultModel().catch(() => undefined);
-    if (!model) {
+  register("aiSharePoint.probeModelContextLimit", async (...args: unknown[]) => {
+    // The Copilot Activity tree passes the clicked row's model KEY as the first
+    // argument; the command palette passes nothing. A key must resolve to
+    // EXACTLY that model — never fall back to the default model, which would
+    // silently probe (and record a limit for) a different model than the one
+    // the user clicked. With no key, ask which model to measure.
+    const requestedKey = typeof args[0] === "string" && args[0].length > 0 ? args[0] : undefined;
+    copilot.ensureEntitled();
+    let available: vscode.LanguageModelChat[] = [];
+    try {
+      available = await vscode.lm.selectChatModels({ vendor: "copilot" });
+    } catch {
+      /* handled below via the empty list */
+    }
+    if (available.length === 0) {
       void vscode.window.showErrorMessage("No GitHub Copilot model is available — sign in to Copilot and retry.");
       return;
     }
-    const est = estimateProbeCost(modelCosts.multiplierFor(model.family || model.id), PROBE_MAX_STEPS, readPremiumPricing().pricePerRequest);
+    let model: vscode.LanguageModelChat | undefined;
+    if (requestedKey) {
+      model = findModelByKey(available, requestedKey);
+      if (!model) {
+        void vscode.window.showErrorMessage(
+          `The model “${requestedKey}” is not currently available from Copilot (it may have been renamed or removed), so its context limit can't be probed. Run “Probe Model Context Limit” from the Command Palette to pick a current model.`,
+        );
+        return;
+      }
+    } else {
+      const picked = await vscode.window.showQuickPick(
+        available.map((m) => ({
+          label: m.name,
+          description: modelKey(m),
+          detail: `advertised ${m.maxInputTokens?.toLocaleString() ?? "unknown"} tokens`,
+          model: m,
+        })),
+        {
+          title: "Probe Model Context Limit",
+          placeHolder: "Which Copilot model should be measured?",
+          ignoreFocusOut: true,
+        },
+      );
+      if (!picked) return;
+      model = picked.model;
+    }
+    const est = estimateProbeCost(modelCosts.multiplierFor(modelKey(model)), PROBE_MAX_STEPS, readPremiumPricing().pricePerRequest);
     const costPhrase =
       est.cost > 0
         ? ` Estimated cost up to ~${formatCost(est.cost, readPremiumPricing().currency)} (≤${est.premiumRequests} premium request(s) at your configured rate).`
@@ -6837,7 +7139,7 @@ export function activate(context: vscode.ExtensionContext): void {
       "Probe",
     );
     if (proceed !== "Probe") return;
-    const key = model.family || model.id;
+    const key = modelKey(model);
     const advertised = model.maxInputTokens;
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Measuring the real context limit for ${model.name}…`, cancellable: true },
@@ -7061,12 +7363,40 @@ export function activate(context: vscode.ExtensionContext): void {
     )?.trim();
     if (!spaceKey) return;
 
+    // Scope: the whole space, or just one AREA of it (the subtree under a
+    // parent page) — users often own an area, not the space.
+    const scopeChoice = await vscode.window.showQuickPick(
+      [
+        { label: "Whole space", description: `Every page in ${spaceKey}`, area: false },
+        { label: "Just an area", description: "One parent page and everything under it", area: true },
+      ],
+      { title: "Dossier scope", ignoreFocusOut: true },
+    );
+    if (!scopeChoice) return;
+    let rootPageId: string | undefined;
+    if (scopeChoice.area) {
+      rootPageId = (
+        await vscode.window.showInputBox({
+          title: "Area root page id",
+          placeHolder: "e.g. 123456789",
+          prompt: "The numeric id of the parent page whose subtree to aggregate (visible in the page URL as pageId=…).",
+          ignoreFocusOut: true,
+          validateInput: (v) => (/^\d+$/.test(v.trim()) ? undefined : "Enter the numeric page id."),
+        })
+      )?.trim();
+      if (!rootPageId) return;
+    }
+
     const dossierStarted = Date.now();
     let lastDone = 0;
     const r = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Building dossier for ${spaceKey}…`, cancellable: false },
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: rootPageId ? `Building dossier for the area under page ${rootPageId} (${spaceKey})…` : `Building dossier for ${spaceKey}…`,
+        cancellable: false,
+      },
       (progress) =>
-        buildDossierInto(project, source, spaceKey, { contextService, chatWorkspace, workItems }, (done, total) => {
+        buildDossierInto(project, source, { spaceKey, ...(rootPageId ? { rootPageId } : {}) }, { contextService, chatWorkspace, workItems }, (done, total) => {
           const increment = total > 0 ? ((done - lastDone) / total) * 100 : 0;
           lastDone = done;
           progress.report({
@@ -7079,7 +7409,7 @@ export function activate(context: vscode.ExtensionContext): void {
     telemetry.record("project.dossier", { space: "redacted" });
 
     const choice = await vscode.window.showInformationMessage(
-      `Dossier for ${spaceKey}: ${r.captured}/${r.total} page(s) reviewed${r.truncated ? " (capped)" : ""} — ${r.flagged} flagged. Opened ${r.created} new work item(s). Saved to the "${project.name}" workspace.`,
+      `Dossier for ${r.spaceKey}${spaceScopeSuffix(r)}: ${r.captured}/${r.total} page(s) reviewed${r.truncated ? " (capped)" : ""} — ${r.flagged} flagged. Opened ${r.created} new work item(s). Saved to the "${project.name}" workspace.`,
       "Open Inventory",
       "Open Owners",
     );

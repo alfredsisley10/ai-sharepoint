@@ -60,8 +60,8 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
   }
 
   /** A "Model context limits" branch: per-model reported (advertised) vs. tested
-   *  (measured) input-context limits and the budgeting cap. Empty until the
-   *  advertised limits are captured (on startup) or a probe has run. */
+   *  (measured) input-context limits. Empty until the advertised limits are
+   *  captured (on startup) or a probe has run. */
   private contextLimitNodes(): UsageNode[] {
     const rows = (this.modelLimits?.list() ?? []).map(describeModelLimit).sort((a, b) => a.key.localeCompare(b.key));
     if (rows.length === 0) return [];
@@ -72,30 +72,42 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageNode> {
         label: "Model context limits",
         icon: new vscode.ThemeIcon("dashboard"),
         tooltip:
-          "Reported = the model's advertised maxInputTokens. Tested = the largest input actually proven to work (or the learned ceiling). Usable = the actual per-turn budget a chat is held to: the tested/reported ceiling MINUS a ~15% safety margin (for tool schemas, multi-round growth, and tokenizer drift). Run “Probe Model Context Limit” to measure a model's real limit.",
+          "Reported = the model's advertised maxInputTokens. Tested = the largest input actually proven to work (or the learned ceiling) — when present, it's the limit in effect. Chats use the tested limit when available (else reported), minus ~15% headroom for the system prompt, tool schemas and chat history. Run “Probe Model Context Limit” to measure a model's real limit.",
         children: rows.map((r) => {
-          const tested = r.measured ? n(r.knownGood ?? r.effectiveCap) : "not tested";
+          const tested = r.measured ? `${n(r.knownGood ?? r.effectiveCap)} ✓` : "not tested";
           return {
             id: `limit:${r.key}`,
             label: r.key,
-            description: `reported ${n(r.advertised)} · tested ${tested}${r.usable !== undefined ? ` · usable ${n(r.usable)}` : ""}${r.drifted ? " · ⚠ advertised changed" : ""}`,
+            description: `reported ${n(r.advertised)} · tested ${tested}${r.drifted ? " · ⚠ advertised changed" : ""}`,
             icon: new vscode.ThemeIcon(r.drifted ? "warning" : "circuit-board"),
             tooltip: new vscode.MarkdownString(
               [
                 `**${r.key}**`,
                 "",
                 `- Reported (advertised): ${n(r.advertised)}`,
-                `- Tested — largest that worked: ${n(r.knownGood)}`,
-                ...(r.effectiveCap !== undefined ? [`- Tested — learned ceiling (overflow): ${n(r.effectiveCap)}`] : []),
-                `- Resolved ceiling (reported clamped by tested): ${n(r.cap)}`,
-                `- **Usable per turn** (ceiling − ~15% safety margin): **${n(r.usable)}**`,
-                "",
-                "_“Usable” is what a chat is actually budgeted to; the margin leaves room for tool schemas, multi-round tool calls, and tokenizer drift so a prompt that “fits” doesn't overflow mid-turn._",
+                r.measured
+                  ? `- **Tested: ${n(r.knownGood ?? r.effectiveCap)} ✓** — the limit in effect${r.knownGood !== undefined ? " (largest input proven to work)" : " (ceiling learned from an overflow)"}`
+                  : "- Tested: not yet measured",
+                ...(r.knownGood !== undefined && r.effectiveCap !== undefined
+                  ? [`- Learned overflow ceiling: ${n(r.effectiveCap)}`]
+                  : []),
+                ...(r.usable !== undefined
+                  ? [
+                      "",
+                      `_Chats use the tested limit when available (else reported), minus ~15% headroom for the system prompt, tool schemas and chat history — here **${n(r.usable)}** tokens per turn._`,
+                    ]
+                  : []),
                 ...(r.drifted ? ["", "⚠ The advertised limit changed since it was last measured — consider re-probing."] : []),
                 ...(r.measured ? [] : ["", "Not yet measured — run “Probe Model Context Limit”."]),
               ].join("\n"),
             ),
-            command: { command: "aiSharePoint.probeModelContextLimit", title: "Probe Model Context Limit" },
+            // Pass THIS row's model key so the probe tests the clicked model —
+            // without it the command falls back to picking a model itself.
+            command: {
+              command: "aiSharePoint.probeModelContextLimit",
+              title: "Probe Model Context Limit",
+              arguments: [r.key],
+            },
           };
         }),
       },

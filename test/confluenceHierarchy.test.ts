@@ -3,6 +3,8 @@ import * as assert from "node:assert/strict";
 import {
   buildPageTree,
   countTreeNodes,
+  flattenPageTree,
+  hierarchyCacheLocator,
   renderPageTree,
   getPageAncestors,
   getChildPages,
@@ -74,6 +76,38 @@ test("buildPageTree nests descendants under their parents", () => {
 test("buildPageTree attaches orphans (unknown parent) to the root", () => {
   const tree = buildPageTree(ref("1", "Root"), [ref("9", "Orphan", "999")]);
   assert.deepEqual(tree.children.map((c) => c.id), ["9"]);
+});
+
+test("flattenPageTree yields DFS (parent-before-children) order with parentId + depth", () => {
+  const tree = buildPageTree(ref("1", "Root"), [
+    ref("2", "A", "1"),
+    ref("3", "B", "1"),
+    ref("4", "A1", "2"),
+    ref("9", "Orphan", "999"), // unknown parent → re-parented to the root
+  ]);
+  const flat = flattenPageTree(tree);
+  assert.deepEqual(
+    flat.map((n) => [n.id, n.parentId, n.depth]),
+    [
+      ["1", undefined, 0],
+      ["2", "1", 1],
+      ["4", "2", 2],
+      ["3", "1", 1],
+      ["9", "1", 1], // orphan surfaces as a direct child of the root
+    ],
+    "each subtree is contiguous, parents precede children",
+  );
+  // The root carries no parentId at all (it has none within the area).
+  assert.ok(!("parentId" in flat[0]!));
+});
+
+test("hierarchyCacheLocator: one key shape per view+target (shared by the tool and the dossier walk)", () => {
+  assert.equal(hierarchyCacheLocator("descendants", "123"), "descendants:123");
+  assert.equal(hierarchyCacheLocator("ancestors", "123"), "ancestors:123");
+  assert.equal(hierarchyCacheLocator("children", "123"), "children:123");
+  assert.equal(hierarchyCacheLocator("roots", "ENG"), "roots:ENG");
+  // Distinct views of the same page must never collide.
+  assert.notEqual(hierarchyCacheLocator("children", "123"), hierarchyCacheLocator("descendants", "123"));
 });
 
 test("renderPageTree indents by depth", () => {

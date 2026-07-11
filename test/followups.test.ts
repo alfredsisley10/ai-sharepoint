@@ -36,6 +36,26 @@ test("site suggestions only appear when a site is connected", () => {
   assert.ok(withSite.includes("Plan my site"));
 });
 
+test("a Confluence-flavored thread suppresses site exploration even with a site connected", () => {
+  // Cleanup in flight → no SharePoint pull-back.
+  const cleanup = labels({
+    ...base,
+    sourceTypes: ["confluence"],
+    hasSites: true,
+    lastPrompt: "help me clean up our Confluence space and find stale pages",
+  });
+  assert.ok(!cleanup.includes("Explore my site"));
+  assert.ok(!cleanup.includes("Plan my site"));
+  // Even a plain Confluence-flavored read ("my wiki") keeps site options out.
+  const wikiRead = labels({ ...base, hasSites: true, lastPrompt: "search my wiki for onboarding" });
+  assert.ok(!wikiRead.includes("Explore my site"));
+  assert.ok(!wikiRead.includes("Plan my site"));
+  // A SharePoint-flavored (or neutral) last prompt still surfaces them.
+  const siteAsk = labels({ ...base, hasSites: true, lastPrompt: "what's on my site's home page" });
+  assert.ok(siteAsk.includes("Explore my site"));
+  assert.ok(siteAsk.includes("Plan my site"));
+});
+
 test("a tracked project workspace offers resume; an untracked one nudges goals", () => {
   assert.ok(
     labels({ ...base, project: { name: "P", hasGoals: true, workspaceEnabled: true } }).includes("Resume from workspace"),

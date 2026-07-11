@@ -99,6 +99,13 @@ export interface ContextSource {
    *  connector's baseUrl always points at the instance root so those span all
    *  of Confluence (ADR-0040). */
   writeScope?: ConfluenceWriteScope;
+  /** MANAGED Jira only: the write boundary that bounds MUTATING operations
+   *  (field updates, comments, workflow transitions). ADR-0040 parity with the
+   *  Confluence writeScope: reads/search (JQL) stay GLOBAL across the whole
+   *  instance and never consult this — the scope constrains writes only. A
+   *  managed Jira connector WITHOUT a scope is treated as read-only (writes
+   *  fail closed). Additive: persisted sources without it load unchanged. */
+  jiraWriteScope?: JiraWriteScope;
 }
 
 /** The write boundary of a managed Confluence connector. "instance" = the
@@ -110,6 +117,19 @@ export interface ConfluenceWriteScope {
   spaceKey?: string;
   pageId?: string;
   /** The human URL the scope was derived from (display only). */
+  url?: string;
+}
+
+/** The write boundary of a managed Jira connector. "instance" = the whole
+ *  site (no boundary); "project" = mutations are limited to issues whose
+ *  CURRENT project (resolved live — never inferred from the issue-key prefix,
+ *  because issues move between projects) matches `projectKey`,
+ *  case-insensitively. See adapters/jiraWrite. */
+export interface JiraWriteScope {
+  kind: "instance" | "project";
+  /** Project key, e.g. "ENG" (required when kind === "project"). */
+  projectKey?: string;
+  /** The human URL/entry the scope was derived from (display only). */
   url?: string;
 }
 

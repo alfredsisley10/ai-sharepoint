@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.133.0",
+  "version": "0.134.0",
   "release": {
     "channel": "standard"
   },
@@ -814,22 +814,23 @@
           "sharepoint",
           "confluence"
         ],
-        "modelDescription": "Aggregate a whole Confluence space into a durable dossier in the active project's workspace, for content cleanup. For every page it resolves the owner (recency-weighted contributor, LDAP active-employee checked), staleness, and data-quality flags (broken links, currency issues), then writes inventory.md/.json, owners.md, dossier.xlsx, per-owner outreach drafts, and per-page recommended-revision scaffolds, and opens a de-duplicated remediation work item for every flagged page. Requires an active project (the dossier is saved into its workspace). Use when the user asks to optimize/clean up/audit a Confluence space. It reads the whole space (can be many requests) but uses no Copilot premium requests. Args: spaceKey (required), optional source (the Confluence source alias/name if the project has more than one).",
+        "modelDescription": "Aggregate a whole Confluence space — or one AREA of it (the subtree under a parent page, when the user owns an area rather than the space) — into a durable dossier in the active project's workspace, for content cleanup. For every page it resolves the owner (recency-weighted contributor, LDAP active-employee checked), staleness, and data-quality flags (broken links, currency issues), then writes inventory.md/.json, owners.md, dossier.xlsx, per-owner outreach drafts, and per-page recommended-revision scaffolds, and opens a de-duplicated remediation work item for every flagged page. Requires an active project (the dossier is saved into its workspace). Use when the user asks to optimize/clean up/audit a Confluence space or their area of one. It reads every page in scope (can be many requests) but uses no Copilot premium requests. Args: spaceKey (whole space) and/or rootPageId (area — spaceKey is then derived from the page), optional source (the Confluence source alias/name if the project has more than one).",
         "inputSchema": {
           "type": "object",
           "properties": {
             "spaceKey": {
               "type": "string",
-              "description": "The Confluence space key to aggregate (Space Settings → Space Details → Key)."
+              "description": "The Confluence space key to aggregate (Space Settings → Space Details → Key). May be omitted when rootPageId is given (it is derived from the page)."
+            },
+            "rootPageId": {
+              "type": "string",
+              "description": "Optional: the NUMERIC id of a parent page — scopes the dossier to that page's AREA (the page plus all of its descendants) instead of the whole space. Not a URL or tiny-link; find the id via search_context or confluence_page_tree."
             },
             "source": {
               "type": "string",
               "description": "Optional: the Confluence source alias or name, if the project has more than one."
             }
-          },
-          "required": [
-            "spaceKey"
-          ]
+          }
         }
       },
       {
@@ -931,7 +932,7 @@
         "tags": [
           "sharepoint"
         ],
-        "modelDescription": "Get a live, read-only overview of a connected SharePoint site: title, description, lists/libraries, and modern pages. Pass the site URL or display name; omit it if only one connection exists.",
+        "modelDescription": "Get a live, read-only overview of a connected SharePoint site: title, description, lists/libraries, and modern pages. Pass the site URL or display name; omit it if only one connection exists. SharePoint sites only — for Confluence spaces/pages use search_context.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1027,7 +1028,7 @@
         "tags": [
           "sharepoint"
         ],
-        "modelDescription": "List the modern pages of a connected SharePoint site (title, URL, last modified). Read-only. Pass the site URL or display name; omit it if only one connection exists.",
+        "modelDescription": "List the modern pages of a connected SharePoint site (title, URL, last modified). Read-only. Pass the site URL or display name; omit it if only one connection exists. SharePoint sites only — for Confluence spaces/pages use search_context.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1128,6 +1129,114 @@
           "required": [
             "title",
             "markdown"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_update_jira_issue",
+        "displayName": "Update Jira Issue",
+        "toolReferenceName": "spUpdateJiraIssue",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(edit)",
+        "tags": [
+          "sharepoint",
+          "jira"
+        ],
+        "modelDescription": "UPDATE fields of a Jira issue — summary, description, and/or labels — using the Jira source's own API token (no admin consent). Requires the Jira connector to be onboarded as MANAGED: mutations are bounded to the connector's write scope (a single project, or the whole instance) and the issue's REAL current project is checked live before anything changes; a read-only connector refuses. Approval-gated: the user confirms an old → new preview before anything is written. ONLY the fields you pass are changed — never send a field the user didn't ask to change. The description is plain text / Jira wiki markup (REST v2 on Cloud and Data Center), NOT Markdown and NOT ADF JSON. Find the issue's key via search_context on that source first. Args: source (Jira source name/alias; optional if one), issueKey (required), summary, description, labels (full replacement array). Use ONLY for a change the user explicitly asked to make.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Jira source name/alias (optional when only one Jira source is configured)."
+            },
+            "issueKey": {
+              "type": "string",
+              "description": "The issue to update, e.g. ENG-42 (required) — find it via search_context."
+            },
+            "summary": {
+              "type": "string",
+              "description": "New summary (omit to leave unchanged)."
+            },
+            "description": {
+              "type": "string",
+              "description": "New description — plain text / Jira wiki markup, replaces the whole description (omit to leave unchanged)."
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "New FULL label set — replaces the issue's labels (omit to leave unchanged)."
+            }
+          },
+          "required": [
+            "issueKey"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_comment_jira_issue",
+        "displayName": "Comment on Jira Issue",
+        "toolReferenceName": "spCommentJiraIssue",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(comment)",
+        "tags": [
+          "sharepoint",
+          "jira"
+        ],
+        "modelDescription": "Add a COMMENT to a Jira issue using the Jira source's own API token. Requires a MANAGED Jira connector: the write is bounded to the connector's write scope (project or instance, checked against the issue's real current project); a read-only connector refuses. Approval-gated: the user sees the issue and the comment text before it posts. The body is plain text / Jira wiki markup (REST v2), not Markdown/ADF. Find the issue via search_context first. Args: source (optional if one Jira source), issueKey (required), body (required). Use ONLY when the user asked to comment.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Jira source name/alias (optional when only one Jira source is configured)."
+            },
+            "issueKey": {
+              "type": "string",
+              "description": "The issue to comment on, e.g. ENG-42 (required)."
+            },
+            "body": {
+              "type": "string",
+              "description": "The comment text — plain text / Jira wiki markup (required)."
+            }
+          },
+          "required": [
+            "issueKey",
+            "body"
+          ]
+        }
+      },
+      {
+        "name": "aisharepoint_transition_jira_issue",
+        "displayName": "Transition Jira Issue",
+        "toolReferenceName": "spTransitionJiraIssue",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(arrow-right)",
+        "tags": [
+          "sharepoint",
+          "jira"
+        ],
+        "modelDescription": "Move a Jira issue through its WORKFLOW (e.g. To Do → In Progress → Done). TWO modes: (1) WITHOUT 'transition' this is a READ — it returns the issue's current status and the transitions available to this account right now (no approval needed); call this FIRST when unsure what's allowed. (2) WITH 'transition' (a transition name, target status name, or id from mode 1) it APPLIES the transition — approval-gated, requires a MANAGED Jira connector, and bounded to the connector's write scope (checked against the issue's real current project); an unavailable transition is refused, never forced. Args: source (optional if one Jira source), issueKey (required), transition (omit to list). Use ONLY when the user asked to move/close/reopen/start a ticket.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Jira source name/alias (optional when only one Jira source is configured)."
+            },
+            "issueKey": {
+              "type": "string",
+              "description": "The issue to transition, e.g. ENG-42 (required)."
+            },
+            "transition": {
+              "type": "string",
+              "description": "The transition to apply — its name, the target status name, or the id returned by the list mode. OMIT to list what's available (a read, no approval)."
+            }
+          },
+          "required": [
+            "issueKey"
           ]
         }
       },

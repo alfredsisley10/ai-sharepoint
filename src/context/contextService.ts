@@ -62,6 +62,18 @@ import {
   ConfluenceWriteResult,
 } from "./adapters/confluenceWrite";
 import {
+  getJiraIssueProject,
+  assertIssueInWriteScope,
+  updateJiraIssueFields,
+  addJiraComment,
+  listJiraTransitions,
+  matchTransition,
+  transitionJiraIssueTo,
+  JiraIssueSnapshot,
+  JiraIssueFieldUpdate,
+  JiraTransition,
+} from "./adapters/jiraWrite";
+import {
   getConfluencePageLabels,
   getConfluencePageContributorsWeighted,
   getConfluenceSpaceContributorsWeighted,
@@ -95,9 +107,12 @@ import {
   getDescendantPages,
   getSpaceRootPages,
   getSpacePages,
-  getPageHierarchy,
   buildPageTree,
+  flattenPageTree,
+  hierarchyCacheLocator,
+  HierarchyCacheView,
   HierarchyResult,
+  PageRef,
 } from "./adapters/confluenceHierarchy";
 import { checkWriteScope, describeWriteScope } from "./adapters/confluenceScope";
 import { SpaceDossier, DossierPage, flagsFor } from "./spaceDossier";
@@ -844,6 +859,141 @@ export class ContextService {
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Managed Jira writes (the Confluence-write sibling). Every mutation runs
+  // through trackedWrite (breaker accounting + read-cache invalidation) and is
+  // scope-gated BEFORE the mutation: the issue's REAL project is resolved live
+  // (issues move between projects — the key prefix is never trusted) and
+  // checked against the connector's jiraWriteScope, which fails closed when
+  // absent. Reads/search stay global (ADR-0040 parity). The callers (the
+  // approval-gated chat tools) gate on explicit user confirmation first.
+  // -------------------------------------------------------------------------
+
+  private assertJiraSource(source: ContextSource, what: string): void {
+    if (source.type !== "jira") {
+      throw new AppError(`${what} targets a Jira source.`, "config");
+    }
+  }
+
+  /** Resolve an issue's current project/summary/status (a global READ) — used
+   *  by the write tools to preview old → new before the user approves.
+   *  Lockout-gated; never cached so the preview reflects the live issue. */
+  async peekJiraIssue(source: ContextSource, issueKey: string): Promise<JiraIssueSnapshot> {
+    this.assertJiraSource(source, "Issue lookup");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      getJiraIssueProject(source, credential, issueKey, caps.timeoutMs),
+    );
+  }
+
+  /** Scope gate shared by every Jira mutation: resolve where the issue REALLY
+   *  lives, then enforce the connector's write boundary (fail closed). Returns
+   *  the pre-write snapshot so results can narrate old → new. */
+  private async gateJiraWrite(
+    source: ContextSource,
+    credential: ContextCredential,
+    issueKey: string,
+    timeoutMs: number,
+  ): Promise<JiraIssueSnapshot> {
+    const before = await getJiraIssueProject(source, credential, issueKey, timeoutMs);
+    assertIssueInWriteScope(source.jiraWriteScope, before.projectKey);
+    return before;
+  }
+
+  /** Update an issue's summary/description/labels — only the provided fields
+   *  are sent, so nothing else is clobbered. Approval-gated by the caller. */
+  async updateJiraIssue(
+    source: ContextSource,
+    op: { issueKey: string } & JiraIssueFieldUpdate,
+  ): Promise<{ issueKey: string; url: string; before: JiraIssueSnapshot }> {
+    this.assertJiraSource(source, "Issue updates");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.trackedWrite(source, async () => {
+      const before = await this.gateJiraWrite(source, credential, op.issueKey, caps.timeoutMs);
+      await updateJiraIssueFields(
+        source,
+        credential,
+        op.issueKey,
+        {
+          ...(op.summary !== undefined ? { summary: op.summary } : {}),
+          ...(op.description !== undefined ? { description: op.description } : {}),
+          ...(op.labels !== undefined ? { labels: op.labels } : {}),
+        },
+        caps.timeoutMs,
+      );
+      return { issueKey: op.issueKey.trim(), url: this.jiraIssueUrl(source, op.issueKey), before };
+    });
+  }
+
+  /** Add a comment to an issue. Approval-gated by the caller. */
+  async commentJiraIssue(
+    source: ContextSource,
+    op: { issueKey: string; body: string },
+  ): Promise<{ issueKey: string; url: string; commentId: string; before: JiraIssueSnapshot }> {
+    this.assertJiraSource(source, "Issue comments");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    return this.trackedWrite(source, async () => {
+      const before = await this.gateJiraWrite(source, credential, op.issueKey, caps.timeoutMs);
+      const { id } = await addJiraComment(source, credential, op.issueKey, op.body, caps.timeoutMs);
+      return {
+        issueKey: op.issueKey.trim(),
+        url: this.jiraIssueUrl(source, op.issueKey),
+        commentId: id,
+        before,
+      };
+    });
+  }
+
+  /**
+   * Workflow transition, list + apply. Without `transition` this is a READ:
+   * it returns the transitions available right now (no scope gate — reads are
+   * global). With one, the scope gate runs, the reference is matched against
+   * the live list (id, transition name, or target status name), and the
+   * transition is applied.
+   */
+  async transitionJiraIssue(
+    source: ContextSource,
+    op: { issueKey: string; transition?: string },
+  ): Promise<
+    | { kind: "transitions"; issueKey: string; url: string; before: JiraIssueSnapshot; transitions: JiraTransition[] }
+    | { kind: "transitioned"; issueKey: string; url: string; before: JiraIssueSnapshot; applied: JiraTransition }
+  > {
+    this.assertJiraSource(source, "Issue transitions");
+    const caps = this.caps();
+    const credential = await this.storedCredential(source);
+    const url = this.jiraIssueUrl(source, op.issueKey);
+    if (!op.transition?.trim()) {
+      return this.tracked(source, false, async () => {
+        const before = await getJiraIssueProject(source, credential, op.issueKey, caps.timeoutMs);
+        const transitions = await listJiraTransitions(source, credential, op.issueKey, caps.timeoutMs);
+        return { kind: "transitions" as const, issueKey: op.issueKey.trim(), url, before, transitions };
+      });
+    }
+    const ref = op.transition.trim();
+    return this.trackedWrite(source, async () => {
+      const before = await this.gateJiraWrite(source, credential, op.issueKey, caps.timeoutMs);
+      const transitions = await listJiraTransitions(source, credential, op.issueKey, caps.timeoutMs);
+      const match = matchTransition(transitions, ref);
+      if (!match) {
+        throw new AppError(
+          `No transition "${ref}" is available on ${op.issueKey.trim()} (current status: ${before.statusName || "unknown"}). Available: ${
+            transitions.length ? transitions.map((t) => `"${t.name}" → ${t.toName}`).join(", ") : "none for this account"
+          }.`,
+          "config",
+        );
+      }
+      await transitionJiraIssueTo(source, credential, op.issueKey, match.id, caps.timeoutMs);
+      return { kind: "transitioned" as const, issueKey: op.issueKey.trim(), url, before, applied: match };
+    });
+  }
+
+  private jiraIssueUrl(source: ContextSource, issueKey: string): string {
+    return `${source.baseUrl.replace(/\/+$/, "")}/browse/${issueKey.trim()}`;
+  }
+
   /** Non-destructive write-access probe for a managed Confluence connector:
    *  create → update → delete a throwaway page within the connector's write
    *  scope, cleaning up after itself, so write-permission gaps surface at setup
@@ -1049,44 +1199,92 @@ export class ContextService {
     });
   }
 
+  /** Read-through TTL cache for Confluence NAVIGATION reads — the page tree
+   *  (ancestors / children / descendants / space roots), keyed per source +
+   *  view + target and cached like search/getItem (ADR-0011; the audit's
+   *  deferred perf finding: hierarchy exploration bypassed the cache entirely
+   *  and re-walked the tree on every call). Loads follow the search pattern —
+   *  credential + tracked() run only on a MISS, so a cache hit costs nothing
+   *  and feeds no breaker bookkeeping. Writes invalidate per-source
+   *  (trackedWrite), so cached trees self-heal right after a move/archive. */
+  private cachedHierarchy<T>(
+    source: ContextSource,
+    view: HierarchyCacheView,
+    target: string,
+    load: (credential: ContextCredential) => Promise<T>,
+  ): Promise<T> {
+    return this.cache.getOrLoad(
+      TtlCache.key(source.id, "hierarchy", hierarchyCacheLocator(view, target)),
+      this.ttlMs(),
+      async () => {
+        const credential = await this.storedCredential(source);
+        return this.tracked(source, false, () => load(credential));
+      },
+    );
+  }
+
   /** Explore a page's HIERARCHY & RELATIONSHIPS: its breadcrumb (ancestors),
    *  immediate children ("context", default), just ancestors, just children, the
    *  full nested subtree, or — with a spaceKey and no pageId — the space's root
-   *  pages. All listings are fully paginated (no truncation). Global READ. */
+   *  pages. All listings are fully paginated (no truncation). Global READ, cached
+   *  per view+target via cachedHierarchy — the "context" view composes the
+   *  cached ancestors + children reads (rather than calling getPageHierarchy)
+   *  so every view shares one cache entry per underlying listing. */
   async exploreConfluenceHierarchy(
     source: ContextSource,
     opts: { pageId?: string; spaceKey?: string; view?: "context" | "ancestors" | "children" | "subtree" },
   ): Promise<HierarchyResult> {
     if (source.type !== "confluence") throw new AppError("Hierarchy targets a Confluence source.", "config");
     const caps = this.caps();
-    const credential = await this.storedCredential(source);
     const ws = source.writeScope;
-    return this.tracked(source, false, async () => {
-      if (!opts.pageId) {
-        const spaceKey = opts.spaceKey ?? (ws?.kind === "space" ? ws.spaceKey : undefined);
-        if (!spaceKey) {
-          throw new AppError("Provide a pageId, or a spaceKey to list a space's root pages.", "config");
-        }
-        return { kind: "roots", spaceKey, roots: await getSpaceRootPages(source, credential, spaceKey, caps) };
+    if (!opts.pageId) {
+      const spaceKey = opts.spaceKey ?? (ws?.kind === "space" ? ws.spaceKey : undefined);
+      if (!spaceKey) {
+        throw new AppError("Provide a pageId, or a spaceKey to list a space's root pages.", "config");
       }
-      const view = opts.view ?? "context";
-      if (view === "ancestors") {
-        return { kind: "ancestors", ancestors: await getPageAncestors(source, credential, opts.pageId, caps) };
-      }
-      if (view === "children") {
-        const [anc, children] = await Promise.all([
-          getPageAncestors(source, credential, opts.pageId, caps),
-          getChildPages(source, credential, opts.pageId, caps),
-        ]);
-        return { kind: "children", page: anc.page, children };
-      }
-      if (view === "subtree") {
-        const anc = await getPageAncestors(source, credential, opts.pageId, caps);
-        const descendants = await getDescendantPages(source, credential, opts.pageId, caps);
-        return { kind: "subtree", root: anc.page, tree: buildPageTree(anc.page, descendants), count: descendants.length };
-      }
-      return { kind: "context", hierarchy: await getPageHierarchy(source, credential, opts.pageId, caps) };
-    });
+      const roots = await this.cachedHierarchy(source, "roots", spaceKey, (credential) =>
+        getSpaceRootPages(source, credential, spaceKey, caps),
+      );
+      return { kind: "roots", spaceKey, roots };
+    }
+    const pageId = opts.pageId;
+    const view = opts.view ?? "context";
+    const ancestors = () =>
+      this.cachedHierarchy(source, "ancestors", pageId, (credential) =>
+        getPageAncestors(source, credential, pageId, caps),
+      );
+    if (view === "ancestors") {
+      return { kind: "ancestors", ancestors: await ancestors() };
+    }
+    if (view === "subtree") {
+      const [anc, descendants] = await Promise.all([
+        ancestors(),
+        this.cachedHierarchy(source, "descendants", pageId, (credential) =>
+          getDescendantPages(source, credential, pageId, caps),
+        ),
+      ]);
+      return { kind: "subtree", root: anc.page, tree: buildPageTree(anc.page, descendants), count: descendants.length };
+    }
+    const [anc, children] = await Promise.all([
+      ancestors(),
+      this.cachedHierarchy(source, "children", pageId, (credential) =>
+        getChildPages(source, credential, pageId, caps),
+      ),
+    ]);
+    if (view === "children") {
+      return { kind: "children", page: anc.page, children };
+    }
+    return {
+      kind: "context",
+      hierarchy: {
+        page: anc.page,
+        ancestors: anc.ancestors,
+        ...(anc.parent ? { parent: anc.parent } : {}),
+        children,
+        childCount: children.length,
+        ...(anc.spaceKey ? { spaceKey: anc.spaceKey } : {}),
+      },
+    };
   }
 
   /** Resolve a page's owner(s): the owner label if present, else the most
@@ -1313,30 +1511,67 @@ export class ContextService {
   }
 
   /**
-   * Aggregate a whole Confluence space into a content-management dossier: every
-   * page with its owner (recency-weighted, LDAP active-checked), staleness, and
-   * data-quality flags. Enumerates the space via the resilient hierarchy walk
-   * (roots + descendants), then runs the currency review per page with bounded
+   * Aggregate a Confluence space — or one AREA of it (the subtree rooted at
+   * `rootPageId`; users often own an area, not a whole space) — into a
+   * content-management dossier: every page with its owner (recency-weighted,
+   * LDAP active-checked), staleness, and data-quality flags. A whole-space pass
+   * enumerates via the flat paginated listing; an area pass walks root +
+   * descendants through the cached hierarchy reads (each row then carries
+   * parentId/depth). With `rootPageId`, `spaceKey` may be omitted — it is
+   * derived from the root page. Runs the currency review per page with bounded
    * concurrency. Capped at `maxPages` (reports `truncated`). Global READ. */
   async buildConfluenceSpaceDossier(
     source: ContextSource,
-    spaceKey: string,
+    spaceKey: string | undefined,
     opts: {
       maxPages?: number;
       concurrency?: number;
       /** Cache the current body text of FLAGGED pages (default true) so the
        *  workspace can show current state + seed recommended revisions. */
       includeContent?: boolean;
+      /** Scope the dossier to the AREA under this page (the page + all its
+       *  descendants) instead of the whole space. */
+      rootPageId?: string;
       onProgress?: (done: number, total: number) => void;
     } = {},
   ): Promise<SpaceDossier> {
     if (source.type !== "confluence") throw new AppError("Space dossier targets a Confluence source.", "config");
+    const rootPageId = opts.rootPageId?.trim();
+    let key = spaceKey?.trim() ?? "";
+    if (!key && !rootPageId) {
+      throw new AppError("A space key (whole space) or a rootPageId (an area's parent page) is required.", "config");
+    }
     const caps = this.caps();
     const credential = await this.storedCredential(source);
     const directory = this.userDirectory();
     const maxPages = Math.max(1, opts.maxPages ?? 200);
     const concurrency = Math.max(1, Math.min(8, opts.concurrency ?? 5));
     const includeContent = opts.includeContent ?? true;
+
+    // AREA SCOPE: enumerate the ROOT PAGE + its whole subtree through the SAME
+    // cached hierarchy reads the page-tree tool uses (shared getOrLoad keys — a
+    // tree explored moments ago is reused, not re-walked; each read is its own
+    // tracked() call, like search/getItem), then flatten parent-before-children
+    // so every row carries its parentId + depth and the inventory indents as
+    // the tree. getDescendantPages is the resilient, fully-paginated walk
+    // (server-side subtree fast path with a child-walk fallback).
+    let area: SpaceDossier["area"];
+    let areaTargets: Array<PageRef & { parentId?: string; depth?: number }> | undefined;
+    if (rootPageId) {
+      const anc = await this.cachedHierarchy(source, "ancestors", rootPageId, (cred) =>
+        getPageAncestors(source, cred, rootPageId, caps),
+      );
+      const descendants = await this.cachedHierarchy(source, "descendants", rootPageId, (cred) =>
+        getDescendantPages(source, cred, rootPageId, caps),
+      );
+      areaTargets = flattenPageTree(buildPageTree(anc.page, descendants));
+      area = { rootPageId, rootTitle: anc.page.title };
+      // The space key comes from the root page itself when not supplied.
+      key = key || anc.spaceKey || "";
+      if (!key) {
+        throw new AppError(`Page ${rootPageId} reports no space key — pass spaceKey explicitly.`, "config");
+      }
+    }
 
     return this.tracked(source, false, async () => {
       // Failure kinds that ABORT the sweep instead of degrading a single row:
@@ -1346,10 +1581,12 @@ export class ContextService {
       // up to maxPages doomed calls), and a throttling server must be backed
       // off from, not swept. Mirrors resolveConfluenceOwners' abortKinds.
       const abortKinds = new Set(["auth.failed", "graph.throttled"]);
-      // Enumerate the space in a single flat, paginated sweep — the whole-space
-      // pass reviews each page independently, so the tree shape a root+subtree
-      // walk recovers isn't needed and its per-node request cost is avoided.
-      const all = await getSpacePages(source, credential, spaceKey, caps, maxPages * 3);
+      // Whole space: a single flat, paginated sweep — that pass reviews each
+      // page independently, so the tree shape a root+subtree walk recovers
+      // isn't needed and its per-node request cost is avoided. An AREA pass
+      // uses the hierarchy targets enumerated (with parentId/depth) above.
+      const all: Array<PageRef & { parentId?: string; depth?: number }> =
+        areaTargets ?? (await getSpacePages(source, credential, key, caps, maxPages * 3));
       const totalPages = all.length;
       const targets = all.slice(0, maxPages);
 
@@ -1384,6 +1621,9 @@ export class ContextService {
               id: rep.pageId || t.id,
               title: rep.title || t.title,
               url: rep.url || t.url,
+              // Hierarchy position from the area walk (unset on a flat sweep).
+              ...(t.parentId ? { parentId: t.parentId } : {}),
+              ...(t.depth !== undefined ? { depth: t.depth } : {}),
               owners: rep.owners,
               hasOwnerLabel: rep.hasOwnerLabel,
               ...(rep.lastUpdated ? { lastUpdated: rep.lastUpdated } : {}),
@@ -1397,7 +1637,17 @@ export class ContextService {
             });
           } else {
             reviewFailures += 1;
-            pages.push({ id: t.id, title: t.title, url: t.url, owners: [], hasOwnerLabel: false, brokenLinks: 0, issues: ["could not review"] });
+            pages.push({
+              id: t.id,
+              title: t.title,
+              url: t.url,
+              ...(t.parentId ? { parentId: t.parentId } : {}),
+              ...(t.depth !== undefined ? { depth: t.depth } : {}),
+              owners: [],
+              hasOwnerLabel: false,
+              brokenLinks: 0,
+              issues: ["could not review"],
+            });
           }
         }
         done += batch.length;
@@ -1498,7 +1748,8 @@ export class ContextService {
       }
 
       return {
-        spaceKey,
+        spaceKey: key,
+        ...(area ? { area } : {}),
         generatedAt: new Date().toISOString(),
         pages,
         totalPages,

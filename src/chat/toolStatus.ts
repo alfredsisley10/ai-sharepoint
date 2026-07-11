@@ -115,6 +115,14 @@ export function describeToolCall(name: string, input: unknown): string {
       return `Preparing a ${i.channel === "teams" ? "Teams message" : "draft email"}${str(i.to) ? ` to ${short(String(i.to), 40)}` : ""}…`;
     case "aisharepoint_write_confluence_page":
       return `${i.action === "update" ? "Updating" : "Creating"} a Confluence page${str(i.title) ? ` “${short(String(i.title), 40)}”` : ""} (awaiting approval)…`;
+    case "aisharepoint_update_jira_issue":
+      return `Updating Jira issue${str(i.issueKey) ? ` ${String(i.issueKey)}` : ""} (awaiting approval)…`;
+    case "aisharepoint_comment_jira_issue":
+      return `Commenting on Jira issue${str(i.issueKey) ? ` ${String(i.issueKey)}` : ""} (awaiting approval)…`;
+    case "aisharepoint_transition_jira_issue":
+      return str(i.transition)
+        ? `Transitioning Jira issue${str(i.issueKey) ? ` ${String(i.issueKey)}` : ""} via “${short(String(i.transition), 40)}” (awaiting approval)…`
+        : `Listing transitions of Jira issue${str(i.issueKey) ? ` ${String(i.issueKey)}` : ""}…`;
     case "aisharepoint_confluence_capabilities":
       return "Discovering Confluence content capabilities…";
     case "aisharepoint_validate_confluence_page":
@@ -130,7 +138,9 @@ export function describeToolCall(name: string, input: unknown): string {
     case "aisharepoint_resolve_page_owners":
       return `Resolving the owner(s) of Confluence page${str(i.pageId) ? ` ${String(i.pageId)}` : ""}…`;
     case "aisharepoint_build_space_dossier":
-      return `Building the dossier for ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"} — reviewing every page (owners, staleness, links); this can take a while…`;
+      return str(i.rootPageId)
+        ? `Building the dossier for the area under page ${String(i.rootPageId).trim()}${str(i.spaceKey) ? ` (space ${String(i.spaceKey)})` : ""} — reviewing every page in the subtree (owners, staleness, links); this can take a while…`
+        : `Building the dossier for ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"} — reviewing every page (owners, staleness, links); this can take a while…`;
     case "aisharepoint_review_space_manageability":
       return `Auditing read/write access across ${str(i.spaceKey) ? `space ${String(i.spaceKey)}` : "the Confluence space"} — checking every page; this can take a while…`;
     case "aisharepoint_review_page_currency":

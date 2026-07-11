@@ -71,6 +71,15 @@ test("Confluence governance tools get input-aware status lines", () => {
     describeToolCall("aisharepoint_build_space_dossier", { spaceKey: "ENG" }),
     /Building the dossier for space ENG/,
   );
+  // Area-scoped: the status names the subtree being reviewed, not the space alone.
+  assert.match(
+    describeToolCall("aisharepoint_build_space_dossier", { rootPageId: "123", spaceKey: "ENG" }),
+    /Building the dossier for the area under page 123 \(space ENG\)/,
+  );
+  assert.match(
+    describeToolCall("aisharepoint_build_space_dossier", { rootPageId: "123" }),
+    /Building the dossier for the area under page 123 —/,
+  );
   assert.equal(
     describeToolCall("aisharepoint_move_confluence_page", { pageId: "1", parentId: "2" }),
     "Re-parenting Confluence page 1 (awaiting approval)…",
@@ -78,6 +87,25 @@ test("Confluence governance tools get input-aware status lines", () => {
   assert.equal(
     describeToolCall("aisharepoint_move_confluence_page", { pageId: "1", position: "before", targetId: "2" }),
     "Reordering Confluence page 1 (awaiting approval)…",
+  );
+});
+
+test("managed-Jira write tools get input-aware status lines", () => {
+  assert.equal(
+    describeToolCall("aisharepoint_update_jira_issue", { issueKey: "ENG-42" }),
+    "Updating Jira issue ENG-42 (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_comment_jira_issue", { issueKey: "ENG-42" }),
+    "Commenting on Jira issue ENG-42 (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_transition_jira_issue", { issueKey: "ENG-42", transition: "Done" }),
+    "Transitioning Jira issue ENG-42 via “Done” (awaiting approval)…",
+  );
+  assert.equal(
+    describeToolCall("aisharepoint_transition_jira_issue", { issueKey: "ENG-42" }),
+    "Listing transitions of Jira issue ENG-42…",
   );
 });
 

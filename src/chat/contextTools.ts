@@ -21,6 +21,7 @@ import { redactError } from "../core/redaction";
 import { sourceChatLabel, resolveSourceRef } from "../context/sourceRef";
 import { EXPORT_MAX_ROWS, EXPORT_TIMEOUT_MS, EXPORT_DIR } from "../context/exportData";
 import { markdownToStorage, confluenceWriteConfirmationText, confluenceInstanceSpaceConfirmText } from "../context/adapters/confluenceWrite";
+import { jiraWriteConfirmationText, JiraIssueSnapshot } from "../context/adapters/jiraWrite";
 import {
   renderCapabilities,
   renderValidation,
@@ -105,6 +106,36 @@ export function registerContextTools(
    *  instance URL + the connector's space/scope before the change. */
   const confluenceWriteConfirmation = (ref: string | undefined, opLines: string[]): vscode.MarkdownString =>
     new vscode.MarkdownString(confluenceWriteConfirmationText(resolveSourceRef(scopedSources(), ref), ref, opLines));
+
+  /** The write-gate confirmation body for a Jira mutation — same soft-resolve
+   *  as its Confluence sibling, so the approval card always shows the instance
+   *  URL + the connector's write scope (project / instance / read-only). */
+  const jiraWriteConfirmation = (ref: string | undefined, opLines: string[]): vscode.MarkdownString =>
+    new vscode.MarkdownString(jiraWriteConfirmationText(resolveSourceRef(scopedSources(), ref), ref, opLines));
+
+  /** Best-effort pre-write snapshot of a Jira issue (current summary / status /
+   *  project) so the approval card previews old → new. A global read; any
+   *  failure degrades to a card without the "currently" line — the real write
+   *  still runs the fail-closed scope gate server-side. */
+  const peekJiraForConfirmation = async (
+    ref: string | undefined,
+    issueKey: string | undefined,
+  ): Promise<JiraIssueSnapshot | undefined> => {
+    if (!issueKey?.trim()) return undefined;
+    try {
+      const source = resolveSourceRef(scopedSources(), ref);
+      if (!source || source.type !== "jira") return undefined;
+      return await service.peekJiraIssue(source, issueKey.trim());
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** "Currently: …" preview line for a Jira write confirmation. */
+  const jiraCurrentLine = (key: string, cur: JiraIssueSnapshot | undefined): string[] =>
+    cur
+      ? [`**Currently:** \`${key}\` “${cur.summary || "(no summary)"}” · status **${cur.statusName || "?"}** · project \`${cur.projectKey}\``]
+      : [];
 
   /** Second-stage gate for an INSTANCE-scoped Confluence connector writing to a
    *  specific page. The synchronous approval card can't resolve where a page
@@ -248,6 +279,175 @@ export function registerContextTools(
         }
       },
     }),
+    // MANAGED JIRA writes — the Confluence-write siblings. Every mutation is
+    // approval-gated (VS Code tool confirmation, previewing old → new) and
+    // scope-gated in contextService (the issue's REAL project vs the
+    // connector's jiraWriteScope, failing closed when absent).
+    vscode.lm.registerTool<{
+      source?: string;
+      issueKey?: string;
+      summary?: string;
+      description?: string;
+      labels?: string[];
+    }>("aisharepoint_update_jira_issue", {
+      async prepareInvocation(options) {
+        const i = options.input;
+        const key = i.issueKey?.trim() || "?";
+        const current = await peekJiraForConfirmation(i.source, i.issueKey);
+        const opLines: string[] = [
+          `**Action:** update issue \`${key}\``,
+          ...jiraCurrentLine(key, current),
+          ...(i.summary !== undefined
+            ? [`**Summary:** ${current ? `“${current.summary || "(none)"}” → ` : ""}“${i.summary}”`]
+            : []),
+          ...(i.description !== undefined
+            ? [`**Description:** will be replaced (${i.description.length} chars).`]
+            : []),
+          ...(i.labels !== undefined ? [`**Labels:** ${i.labels.length ? i.labels.map((l) => `\`${l}\``).join(", ") : "(cleared)"}`] : []),
+          "Only these fields change — everything else on the issue is untouched. Jira keeps issue history, so it's reversible there.",
+        ];
+        return {
+          invocationMessage: `Update Jira issue ${key}`,
+          confirmationMessages: {
+            title: `Update Jira issue ${key}?`,
+            message: jiraWriteConfirmation(i.source, opLines),
+          },
+        };
+      },
+      async invoke(options) {
+        telemetry.record("tool.invoke", { tool: "aisharepoint_update_jira_issue" });
+        try {
+          const i = options.input;
+          const source = resolveOrExplain(i.source);
+          if (source.type !== "jira") {
+            return text(`"${source.displayName}" is a ${source.type} source — issue updates target a Jira source.`);
+          }
+          if (!i.issueKey?.trim()) return text("An issueKey is required (find it via search_context on the Jira source).");
+          if (i.summary === undefined && i.description === undefined && i.labels === undefined) {
+            return text("Nothing to update — provide a summary, description, and/or labels.");
+          }
+          const res = await service.updateJiraIssue(source, {
+            issueKey: i.issueKey.trim(),
+            ...(i.summary !== undefined ? { summary: i.summary } : {}),
+            ...(i.description !== undefined ? { description: i.description } : {}),
+            ...(i.labels !== undefined ? { labels: i.labels } : {}),
+          });
+          telemetry.record("jira.write", { action: "update" });
+          const changed = [
+            ...(i.summary !== undefined ? [`summary “${res.before.summary}” → “${i.summary}”`] : []),
+            ...(i.description !== undefined ? ["description replaced"] : []),
+            ...(i.labels !== undefined ? [`labels set to [${i.labels.join(", ")}]`] : []),
+          ].join("; ");
+          return text(`Jira issue ${res.issueKey} updated (${changed}) — ${res.url}`);
+        } catch (err) {
+          errors.capture("tool:aisharepoint_update_jira_issue", err);
+          return text(`Could not update the Jira issue: ${redactError(err).message}`);
+        }
+      },
+    }),
+    vscode.lm.registerTool<{ source?: string; issueKey?: string; body?: string }>(
+      "aisharepoint_comment_jira_issue",
+      {
+        async prepareInvocation(options) {
+          const i = options.input;
+          const key = i.issueKey?.trim() || "?";
+          const current = await peekJiraForConfirmation(i.source, i.issueKey);
+          const preview = (i.body ?? "").trim();
+          const opLines: string[] = [
+            `**Action:** add a comment to issue \`${key}\``,
+            ...jiraCurrentLine(key, current),
+            `**Comment:** ${preview.length > 300 ? `${preview.slice(0, 300)}…` : preview || "(empty)"}`,
+          ];
+          return {
+            invocationMessage: `Comment on Jira issue ${key}`,
+            confirmationMessages: {
+              title: `Comment on Jira issue ${key}?`,
+              message: jiraWriteConfirmation(i.source, opLines),
+            },
+          };
+        },
+        async invoke(options) {
+          telemetry.record("tool.invoke", { tool: "aisharepoint_comment_jira_issue" });
+          try {
+            const i = options.input;
+            const source = resolveOrExplain(i.source);
+            if (source.type !== "jira") {
+              return text(`"${source.displayName}" is a ${source.type} source — issue comments target a Jira source.`);
+            }
+            if (!i.issueKey?.trim()) return text("An issueKey is required (find it via search_context on the Jira source).");
+            if (!i.body?.trim()) return text("The comment body is required.");
+            const res = await service.commentJiraIssue(source, { issueKey: i.issueKey.trim(), body: i.body });
+            telemetry.record("jira.write", { action: "comment" });
+            return text(`Comment added to ${res.issueKey} (“${res.before.summary}”) — ${res.url}`);
+          } catch (err) {
+            errors.capture("tool:aisharepoint_comment_jira_issue", err);
+            return text(`Could not comment on the Jira issue: ${redactError(err).message}`);
+          }
+        },
+      },
+    ),
+    vscode.lm.registerTool<{ source?: string; issueKey?: string; transition?: string }>(
+      "aisharepoint_transition_jira_issue",
+      {
+        async prepareInvocation(options) {
+          const i = options.input;
+          const key = i.issueKey?.trim() || "?";
+          // No transition named = a READ (list what's available) — no gate.
+          if (!i.transition?.trim()) {
+            return { invocationMessage: `Listing transitions of Jira issue ${key}` };
+          }
+          const current = await peekJiraForConfirmation(i.source, i.issueKey);
+          const opLines: string[] = [
+            `**Action:** transition issue \`${key}\`${current?.statusName ? ` from **${current.statusName}**` : ""} via “${i.transition.trim()}”`,
+            ...jiraCurrentLine(key, current),
+            "The transition is matched against the workflow's live options; an unavailable one is refused rather than forced.",
+          ];
+          return {
+            invocationMessage: `Transition Jira issue ${key}`,
+            confirmationMessages: {
+              title: `Transition Jira issue ${key}?`,
+              message: jiraWriteConfirmation(i.source, opLines),
+            },
+          };
+        },
+        async invoke(options) {
+          telemetry.record("tool.invoke", { tool: "aisharepoint_transition_jira_issue" });
+          try {
+            const i = options.input;
+            const source = resolveOrExplain(i.source);
+            if (source.type !== "jira") {
+              return text(`"${source.displayName}" is a ${source.type} source — issue transitions target a Jira source.`);
+            }
+            if (!i.issueKey?.trim()) return text("An issueKey is required (find it via search_context on the Jira source).");
+            const res = await service.transitionJiraIssue(source, {
+              issueKey: i.issueKey.trim(),
+              ...(i.transition?.trim() ? { transition: i.transition.trim() } : {}),
+            });
+            if (res.kind === "transitions") {
+              if (res.transitions.length === 0) {
+                return text(
+                  `${res.issueKey} (“${res.before.summary}”, status ${res.before.statusName || "?"}) has no transitions available to this account.`,
+                );
+              }
+              return text(
+                [
+                  `${res.issueKey} (“${res.before.summary}”) is currently **${res.before.statusName || "?"}**. Available transitions:`,
+                  ...res.transitions.map((t) => `- ${t.name} → ${t.toName} (id ${t.id})`),
+                  "Call this tool again with `transition` set to the name (or id) to apply one — the user approves it first.",
+                ].join("\n"),
+              );
+            }
+            telemetry.record("jira.write", { action: "transition" });
+            return text(
+              `Jira issue ${res.issueKey} transitioned: ${res.before.statusName || "?"} → ${res.applied.toName || res.applied.name} (via “${res.applied.name}”) — ${res.url}`,
+            );
+          } catch (err) {
+            errors.capture("tool:aisharepoint_transition_jira_issue", err);
+            return text(`Could not transition the Jira issue: ${redactError(err).message}`);
+          }
+        },
+      },
+    ),
     // Discover the "Add more content" vocabulary (macros/elements) + what's
     // installed/in-use, so the model designs advanced pages with real elements.
     vscode.lm.registerTool<{ source?: string; spaceKey?: string; pageId?: string; subtree?: boolean }>(

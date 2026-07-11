@@ -23,7 +23,7 @@
   "aiSharePoint.addContextSource.title": "Add Context Source (Confluence/Jira/GitHub/LDAP/Databases/Power BI/ServiceNow/Splunk/Observability/Grafana)",
   "aiSharePoint.testContextSource.title": "Test Context Source",
   "aiSharePoint.removeContextSource.title": "Remove Context Source",
-  "aiSharePoint.editSourceAlias.title": "Edit Alias & Description",
+  "aiSharePoint.editSourceAlias.title": "Edit Name, Alias & Description",
   "aiSharePoint.loadSourceSchema.title": "Load/Refresh Database Schema",
   "aiSharePoint.precacheSourceCatalog.title": "Pre-cache Source Catalog (spaces/projects/queues)…",
   "aiSharePoint.draftTeamsMessage.title": "Draft Teams Message…",

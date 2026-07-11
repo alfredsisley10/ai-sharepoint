@@ -10,7 +10,7 @@ import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { ProjectsStore } from "../context/projectsStore";
 import { ChatWorkspaceStore } from "../context/chatWorkspaceStore";
-import { looksLikeConfluenceOptimization, confluenceOptimizationSeed } from "./intent";
+import { looksLikeConfluenceOptimization, confluenceOptimizationSeed, hasConfluenceSignal } from "./intent";
 import { betterModelFor } from "../copilot/modelRecommend";
 import { computeFollowups } from "./followups";
 import { TelemetryService } from "../diagnostics/telemetry";
@@ -77,6 +77,17 @@ const INSTRUCTIONS = [
   "To label/tag/categorize a page, use manage_confluence_labels (action add/remove/list with a",
   "pageId and labels) — add/remove are approval-gated writes; list is a read. Labels are lowercased",
   "and spaces become hyphens automatically.",
+  "You can also UPDATE Jira tickets when a Jira connector is onboarded as MANAGED:",
+  "update_jira_issue changes an issue's summary/description/labels (only the fields you pass),",
+  "comment_jira_issue adds a comment, and transition_jira_issue moves it through the workflow —",
+  "call transition_jira_issue WITHOUT 'transition' first (a read listing the available",
+  "transitions), then again with the chosen name/id. All three are APPROVAL-GATED (the user",
+  "confirms each change, previewed old → new) and BOUNDED to the connector's write scope (one",
+  "project, or the instance); reads and JQL search stay global regardless. Find the issue via",
+  "search_context on the Jira source first to get its key, and only change exactly what the user",
+  "asked — never rewrite fields they didn't mention. Descriptions/comments are plain text or Jira",
+  "wiki markup (never Markdown/ADF). On a read-only Jira connector these tools refuse — tell the",
+  "user to re-onboard it as managed (Managed Sites “+” → Jira project) to enable ticket updates.",
   "To understand page RELATIONSHIPS — a page's parent, ancestors (breadcrumb), children, or whole",
   "subtree — call confluence_page_tree (search_context finds pages but NOT how they relate). Pass a",
   "pageId with view 'context' (parent+ancestors+children, default), 'ancestors', 'children', or",
@@ -111,6 +122,9 @@ const INSTRUCTIONS = [
   "page. Follow up with list_work_items, recommend_page_revision (save a concrete proposed fix, shown to",
   "the owner in outreach), and draft_communication. Because it's all persisted, the cleanup survives the",
   "chat's context window — use workspace_summary to resume a starved/earlier conversation.",
+  "When the user owns just an AREA — 'my pages', 'everything under page X' — pass rootPageId to",
+  "build_space_dossier instead of dossiering the whole space: it covers that page + its descendants and",
+  "derives the spaceKey. Find the numeric page id via confluence_page_tree (or search_context) first.",
   "For free-form DATABASE questions ('records owned by X'), call db_schema with a topic first:",
   "it returns the tables/columns whose semantic tags match (e.g. group_cio tagged ownership),",
   "then write a SELECT against exactly those columns and run it with search_context. db_schema",
@@ -991,13 +1005,18 @@ async function buildSiteContext(
   }
 
   const urlInPrompt = deps.access.extractSiteUrl(request.prompt);
-  const promptLc = request.prompt.toLowerCase();
+  const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const namedConn = all.find(
-    (c) => c.displayName.length > 2 && promptLc.includes(c.displayName.toLowerCase()),
+    (c) =>
+      c.displayName.length > 2 &&
+      new RegExp(`\\b${escapeRegExp(c.displayName)}\\b`, "i").test(request.prompt),
   );
   // A site the user explicitly pointed at (URL or name) vs. the sole-connection
-  // fallback — only the former forces a read.
-  const explicitConn = deps.access.resolve(urlInPrompt) ?? namedConn;
+  // fallback — only the former forces a read. NOTE: resolve(undefined) falls
+  // back to the sole connection, so only consult it when a URL was actually
+  // present; otherwise a single connected site made explicitConn always truthy
+  // and the skip below dead code (every turn read SharePoint live).
+  const explicitConn = (urlInPrompt ? deps.access.resolve(urlInPrompt) : undefined) ?? namedConn;
   const conn = explicitConn ?? (all.length === 1 ? all[0] : undefined);
 
   const inventory = all
@@ -1022,10 +1041,17 @@ async function buildSiteContext(
     /\b(sharepoint|site|sites|subsite|web ?parts?|site ?(?:map|nav)|navigation|home ?page|landing ?page|librar(?:y|ies))\b/i.test(
       request.prompt,
     );
-  if (!explicitConn && !siteVocab) {
+  // Even when site vocabulary matched, a Confluence-flavored prompt ("our wiki
+  // navigation", "the DOCS space") or a project scoped to Confluence sources
+  // is almost certainly about the reference source, not a SharePoint site —
+  // skip the speculative read unless the user explicitly named a site.
+  const confluenceScoped = referenceSources.some((s) => s.type === "confluence");
+  const skipSpeculativeRead =
+    !explicitConn && (!siteVocab || hasConfluenceSignal(request.prompt) || confluenceScoped);
+  if (skipSpeculativeRead) {
     return [
       referenceBlock,
-      `Configured SharePoint connections (not read live — call site_overview / list_pages if the question turns out to concern a site):\n${inventory}`,
+      `Configured SharePoint connections (not read live — use search_context / the Confluence tools for reference-source questions; call site_overview / list_pages only if the question concerns a SharePoint site):\n${inventory}`,
     ]
       .filter(Boolean)
       .join("\n");

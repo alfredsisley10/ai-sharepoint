@@ -1,4 +1,4 @@
-import { looksLikeConfluenceOptimization } from "./intent";
+import { looksLikeConfluenceOptimization, hasConfluenceSignal } from "./intent";
 
 /**
  * Context-aware chat follow-up suggestions (pure, unit-tested).
@@ -47,7 +47,11 @@ export function computeFollowups(input: FollowupInput): Followup[] {
   if (has("servicenow")) contextual.push({ prompt: "Summarize recent ServiceNow records relevant to my project.", label: "Review ServiceNow" });
   if (DB_TYPES.some(has)) contextual.push({ prompt: "Which tables or columns map to ownership and status?", label: "Map my database" });
 
-  if (input.hasSites) {
+  // Site exploration/planning is noise in a Confluence-flavored thread (a
+  // cleanup in flight, or the last ask mentioned the wiki/space) — don't pull
+  // the user back toward SharePoint mid-task.
+  const confluenceThread = cleanup || (input.lastPrompt ? hasConfluenceSignal(input.lastPrompt) : false);
+  if (input.hasSites && !confluenceThread) {
     contextual.push({ prompt: "What lists and pages does my site have?", label: "Explore my site" });
     contextual.push({
       prompt: input.project?.hasGoals
