@@ -5,6 +5,10 @@
 > commit**. If a session ends mid-track (token/time limits), the next session reads this file,
 > finds the first unchecked box, and continues. Keep it honest: never check a box for code that
 > isn't compiled, tested, and pushed.
+>
+> **Not-yet-scheduled candidates** (agreed in principle, no track cut yet) live in
+> [`BACKLOG.md`](./BACKLOG.md). Promote an item from there into its own ADR + track here when it is
+> picked up.
 
 - Branch: `claude/hopeful-goldberg-jknx3v` · Baseline: v0.1.1 (all green)
 - Conventions: each increment = compile + tests + `scan:secrets` + commit + push.
