@@ -185,6 +185,21 @@ test("setReleaseManifest / setProvisioningManifest insert on a CRLF package.json
   }
 });
 
+test("setReleaseManifest bakes the white-label integration allowlist into package.json", () => {
+  const raw = '{\n  "name": "x",\n  "version": "1.0.0",\n  "description": "d"\n}\n';
+  const withRel = setReleaseManifest(raw, {
+    channel: "whitelabel",
+    builtAt: "t",
+    productName: "P",
+    integrations: ["confluence", "jira"],
+  });
+  const parsed = JSON.parse(withRel);
+  assert.deepEqual(parsed.release.integrations, ["confluence", "jira"]);
+  // A manifest without an allowlist bakes no `integrations` key (standard-like).
+  const noList = JSON.parse(setReleaseManifest(raw, { channel: "whitelabel", builtAt: "t", productName: "P" }));
+  assert.ok(!("integrations" in noList.release));
+});
+
 test("summarizeBrand lists only the changed fields", () => {
   const lines = summarizeBrand(
     { ...base, publisher: ORIGIN_BRAND.publisher, displayName: ORIGIN_BRAND.displayName },

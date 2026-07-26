@@ -29,6 +29,16 @@ test("parseReleaseProfile validates identity; serialize round-trips", () => {
   assert.throws(() => parseReleaseProfile(JSON.stringify({ identity: { publisher: "p" } })), /name/);
 });
 
+test("release profile round-trips the integration allowlist; non-string entries are dropped", () => {
+  const withList: ReleaseProfile = { ...PROFILE, integrations: ["confluence", "jira"] };
+  assert.deepEqual(parseReleaseProfile(serializeReleaseProfile(withList)), withList);
+  // A hand-edited profile with junk entries is sanitized to strings only.
+  const dirty = JSON.stringify({ ...PROFILE, integrations: ["confluence", 3, null, "jira"] });
+  assert.deepEqual(parseReleaseProfile(dirty).integrations, ["confluence", "jira"]);
+  // No allowlist ⇒ the field is simply absent.
+  assert.ok(!("integrations" in parseReleaseProfile(serializeReleaseProfile(PROFILE))));
+});
+
 test("stripProfileSecrets drops obfuscated tokens but keeps endpoints/flags", () => {
   const content = {
     telemetry: {

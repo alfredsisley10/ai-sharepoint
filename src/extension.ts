@@ -265,6 +265,7 @@ import { UsageTreeProvider } from "./ui/usageView";
 import { SupportTreeProvider } from "./ui/supportView";
 import { runRebrandFlow } from "./branding/rebrandFlow";
 import { evaluateExpiry, setReleaseStatus, ReleaseManifest } from "./branding/releaseExpiry";
+import { setEnabledIntegrations, integrationEnabled, labelForIntegration } from "./branding/integrationSelection";
 import { ExternalTelemetry, ExternalTelemetryConfig } from "./diagnostics/externalTelemetry";
 import { TelemetryEnv } from "./diagnostics/telemetrySink";
 import { TelemetryConfigStore, effectiveTelemetryConfig, StoredTelemetryConfig, telemetryStatus, TelemetryStatus } from "./diagnostics/telemetryConfig";
@@ -346,6 +347,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const releaseManifest = (context.extension.packageJSON as { release?: ReleaseManifest }).release;
   const expiry = evaluateExpiry(releaseManifest, Date.now());
   setReleaseStatus(expiry);
+  // White-label integration allowlist: restrict which reference-source types can
+  // be added in this build. Absent ⇒ every integration is enabled (standard).
+  setEnabledIntegrations(releaseManifest?.integrations);
   if (expiry.message) {
     const items = expiry.upgradeUrl ? ["Get the latest version"] : [];
     const open = (choice?: string) => {
@@ -644,6 +648,12 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       },
       seedConnector: (c) => {
+        // Consistency with the integration allowlist: never seed a pre-defined
+        // connector for an integration this white-label build has disabled.
+        if (!integrationEnabled(c.type)) {
+          log.info(`Skipped seeding connector "${c.displayName}" — ${labelForIntegration(c.type)} isn't enabled in this build.`);
+          return Promise.resolve();
+        }
         const source: ContextSource = {
           id: crypto.randomUUID(),
           type: c.type as ContextSourceType,
@@ -2376,32 +2386,46 @@ export function activate(context: vscode.ExtensionContext): void {
 
   register("aiSharePoint.addContextSource", async (presetArg?: unknown) => {
     const preset = presetArg as { type?: ContextSourceType; role?: "managed" | "reference" } | undefined;
+    const allTypeItems = [
+      { label: "$(book) Confluence", value: "confluence" as ContextSourceType },
+      { label: "$(issues) Jira", value: "jira" as ContextSourceType },
+      { label: "$(github) GitHub", description: "code, issues/PRs, repos & commits — Cloud or Enterprise Server (read-only)", value: "github" as ContextSourceType },
+      {
+        label: "$(organization) LDAP / Active Directory",
+        description: "auto-discovers domain controllers via DNS",
+        value: "ldap" as ContextSourceType,
+      },
+      { label: "$(database) SQL Server", description: "read-only SELECT (READ UNCOMMITTED, capped)", value: "mssql" as ContextSourceType },
+      { label: "$(database) PostgreSQL", description: "read-only session, capped", value: "postgres" as ContextSourceType },
+      { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
+      { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
+      { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Azure CLI or Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
+      { label: "$(sparkle) Microsoft 365 Copilot", description: "grounded enterprise context via the Copilot Retrieval API — reuses your Microsoft 365 sign-in", value: "m365copilot" as ContextSourceType },
+      { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
+      { label: "$(pulse) Splunk", description: "read-only SPL searches (oneshot, time-bounded)", value: "splunk" as ContextSourceType },
+      { label: "$(dashboard) Splunk Observability Cloud", description: "metrics/detectors/dashboards/active incidents (the former SignalFx)", value: "splunkobs" as ContextSourceType },
+      { label: "$(graph-line) Grafana", description: "dashboards, alert state, annotations, and LIVE panel data — Cloud or self-hosted", value: "grafana" as ContextSourceType },
+    ];
+    // White-label builds may ship only a subset of integrations enabled — offer
+    // just those. Absent allowlist ⇒ every integration is shown (standard build).
+    const typeItems = allTypeItems.filter((it) => integrationEnabled(it.value));
+    if (!preset?.type && typeItems.length === 0) {
+      void vscode.window.showWarningMessage("No reference-source integrations are enabled in this build.");
+      return;
+    }
     const typePick = preset?.type
       ? { label: "", value: preset.type }
-      : await vscode.window.showQuickPick(
-      [
-        { label: "$(book) Confluence", value: "confluence" as ContextSourceType },
-        { label: "$(issues) Jira", value: "jira" as ContextSourceType },
-        { label: "$(github) GitHub", description: "code, issues/PRs, repos & commits — Cloud or Enterprise Server (read-only)", value: "github" as ContextSourceType },
-        {
-          label: "$(organization) LDAP / Active Directory",
-          description: "auto-discovers domain controllers via DNS",
-          value: "ldap" as ContextSourceType,
-        },
-        { label: "$(database) SQL Server", description: "read-only SELECT (READ UNCOMMITTED, capped)", value: "mssql" as ContextSourceType },
-        { label: "$(database) PostgreSQL", description: "read-only session, capped", value: "postgres" as ContextSourceType },
-        { label: "$(database) MySQL", description: "read-only session, capped", value: "mysql" as ContextSourceType },
-        { label: "$(database) MongoDB", description: "find/aggregate reads, capped", value: "mongodb" as ContextSourceType },
-        { label: "$(graph) Power BI (cloud)", description: "workspaces & datasets — read-only DAX analysis, Azure CLI or Microsoft 365 SSO", value: "powerbi" as ContextSourceType },
-        { label: "$(sparkle) Microsoft 365 Copilot", description: "grounded enterprise context via the Copilot Retrieval API — reuses your Microsoft 365 sign-in", value: "m365copilot" as ContextSourceType },
-        { label: "$(tools) ServiceNow", description: "incidents/changes/CMDB/knowledge — read-only Table API", value: "servicenow" as ContextSourceType },
-        { label: "$(pulse) Splunk", description: "read-only SPL searches (oneshot, time-bounded)", value: "splunk" as ContextSourceType },
-        { label: "$(dashboard) Splunk Observability Cloud", description: "metrics/detectors/dashboards/active incidents (the former SignalFx)", value: "splunkobs" as ContextSourceType },
-        { label: "$(graph-line) Grafana", description: "dashboards, alert state, annotations, and LIVE panel data — Cloud or self-hosted", value: "grafana" as ContextSourceType },
-      ],
-      { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
-    );
+      : await vscode.window.showQuickPick(typeItems, {
+          ignoreFocusOut: true,
+          title: "Add Context Source — type (read-only reference data)",
+        });
     if (!typePick) return;
+    // Defense in depth: refuse a disabled integration even when reached via a
+    // preset/command argument, so a white-label allowlist can't be bypassed.
+    if (!integrationEnabled(typePick.value)) {
+      void vscode.window.showWarningMessage(`${labelForIntegration(typePick.value)} isn't available in this build.`);
+      return;
+    }
 
     let baseUrl: string;
     let baseDn: string | undefined;

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.135.0 — 2026-07-26
+
+### White-label: choose which integrations ship
+- **Select the integration support included in a rebranded build.** The **Rebrand / White-label…**
+  wizard now has a step to pick exactly which reference-source integrations (Confluence, Jira, GitHub,
+  ServiceNow, Splunk, Splunk Observability Cloud, Grafana, Power BI, Microsoft 365 Copilot, LDAP/AD,
+  and the SQL Server / PostgreSQL / MySQL / MongoDB databases) the produced build offers. Everything is
+  selected by default, so a distributor who wants the full set does nothing different.
+- **The chosen set is enforced in the build, not just cosmetic.** The selection bakes into
+  `release.integrations` in the rebranded `package.json`. On activation the build restricts the
+  **Add Reference Source** picker to the selected integrations and refuses a disabled type even if it's
+  reached via a command argument or a pre-seeded connector — so a locked-down build stays locked down.
+  Selecting all integrations bakes **no** allowlist, so the build behaves exactly like the standard one
+  (and older white-label builds without the field are unaffected).
+- **Remembered across releases.** The allowlist is saved in `whitelabel.profile.json` (secret-free) and
+  pre-fills the selection on the next run, so refreshing a release stays a quick, repeatable pass.
+
 ## 0.130.0 — 2026-07-08
 
 ### Copilot cost & model transparency

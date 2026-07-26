@@ -100,6 +100,9 @@ export interface ReleaseProfile {
   identity: ReleaseProfileIdentity;
   expiry?: { validityDays?: number; upgradeUrl?: string };
   provisioning?: ProvisioningContent;
+  /** White-label integration allowlist (reference-source types this build ships
+   *  enabled). Absent ⇒ all integrations enabled. See integrationSelection.ts. */
+  integrations?: string[];
 }
 
 /** Parse + validate a release profile. Throws with a clear message on bad data. */
@@ -120,7 +123,13 @@ export function parseReleaseProfile(json: string): ReleaseProfile {
       throw new Error(`Release profile identity is missing '${f}'.`);
     }
   }
-  return { version: 1, identity: id, expiry: p.expiry, provisioning: p.provisioning };
+  return {
+    version: 1,
+    identity: id,
+    expiry: p.expiry,
+    provisioning: p.provisioning,
+    ...(Array.isArray(p.integrations) ? { integrations: p.integrations.filter((t): t is string => typeof t === "string") } : {}),
+  };
 }
 
 export function serializeReleaseProfile(profile: ReleaseProfile): string {

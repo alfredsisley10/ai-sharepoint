@@ -105,7 +105,18 @@ locked-down enterprise environments:
 The wizard also steps you through **what to bake into the build** and saves it for next time, so
 refreshing a release is quick and consistent:
 
-- **Bake-in settings.** After the identity prompts you choose what ships with the build:
+- **Choose which integrations ship.** After the expiry step the wizard shows a multi-select of every
+  reference-source integration — Confluence, Jira, GitHub, ServiceNow, Splunk, Splunk Observability
+  Cloud, Grafana, Power BI, Microsoft 365 Copilot, LDAP / Active Directory, and the SQL Server /
+  PostgreSQL / MySQL / MongoDB databases. **Everything is selected by default**, so if you want the full
+  set, just accept. Deselect any you don't want the build to offer. The chosen set bakes into
+  `release.integrations` in the rebranded `package.json`, and the produced build **restricts the "Add
+  Reference Source" picker to exactly those integrations** — it also refuses a disabled type reached any
+  other way (a command argument, or a pre-defined connector you baked in), so a locked-down build stays
+  locked down. Selecting **all** integrations bakes no allowlist at all, so the build behaves exactly
+  like the standard one; a build with no `release.integrations` (the standard build and any older
+  white-label build) enables every integration. The selection is remembered in the release profile.
+- **Bake-in settings.** After the integration choice you choose what ships with the build:
   anonymized **telemetry** (Splunk HEC / OTEL endpoints, and — optionally — a **Splunk Attribution
   Identifier** / OTLP auth header that is **obfuscated** in the VSIX and moved to the OS keychain on first run; see
   the security note below), **pre-defined connectors** (a snapshot of your current reference

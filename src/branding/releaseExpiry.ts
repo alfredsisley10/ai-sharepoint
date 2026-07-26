@@ -25,6 +25,10 @@ export interface ReleaseManifest {
   upgradeUrl?: string;
   /** Product (white-label display) name, for messaging. */
   productName?: string;
+  /** White-label integration allowlist: the reference-source types this build
+   *  ships enabled (see integrationSelection.ts). Absent ⇒ every integration is
+   *  enabled (standard build). Present ⇒ only these types can be added/used. */
+  integrations?: string[];
 }
 
 export type ExpiryState = "ok" | "warn" | "expired";

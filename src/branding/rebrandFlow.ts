@@ -32,6 +32,13 @@ import {
   buildProvisioningManifest,
 } from "./releaseProfile";
 import { obfuscateSecret } from "../diagnostics/secretObfuscation";
+import { ContextSourceType } from "../context/types";
+import {
+  ALL_INTEGRATIONS,
+  normalizeIntegrationAllowlist,
+  isFullSelection,
+  summarizeIntegrationSelection,
+} from "./integrationSelection";
 
 /** Optional runtime snapshots the wizard can offer to BAKE into the build:
  *  the user's current reference sources (as non-secret connector descriptors)
@@ -217,6 +224,17 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     upgradeUrl = u.trim();
   }
 
+  // --- which reference-source integrations the build ships enabled ----------
+  // Selecting all (the default) bakes NO allowlist — the build behaves like the
+  // standard one. A subset bakes release.integrations, and the produced build's
+  // "Add Reference Source" picker offers only the selected integrations.
+  const selectedIntegrations = await gatherIntegrations(loaded?.integrations);
+  if (selectedIntegrations === undefined) return; // cancelled
+  const restrictIntegrations = !isFullSelection(selectedIntegrations);
+  const integrationsAllowlist = restrictIntegrations
+    ? normalizeIntegrationAllowlist(selectedIntegrations)
+    : undefined;
+
   // --- what to BAKE into the build (telemetry, connectors, memory, help) -----
   const provisioning = await gatherProvisioning(deps, loaded?.provisioning);
   if (provisioning === undefined) return; // cancelled
@@ -246,6 +264,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     channel: "whitelabel",
     builtAt: new Date(builtAtMs).toISOString(),
     productName: after.displayName,
+    ...(integrationsAllowlist ? { integrations: integrationsAllowlist } : {}),
     ...(days > 0
       ? {
           validityDays: days,
@@ -296,6 +315,9 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     release.expiresAt
       ? `Build expiry: ${release.expiresAt.slice(0, 10)} (${release.validityDays} days — users must upgrade after this)`
       : "Build expiry: none (this build never expires)",
+    restrictIntegrations
+      ? `Integrations: ${summarizeIntegrationSelection(integrationsAllowlist)}`
+      : "Integrations: all included",
     hasProvisioning
       ? `Bake-in: ${[
           provisioningManifest.connectors?.length ? `${provisioningManifest.connectors.length} connector(s)` : "",
@@ -363,6 +385,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
         renameIdentifiers,
       },
       ...(days > 0 ? { expiry: { validityDays: days, ...(upgradeUrl ? { upgradeUrl } : {}) } } : {}),
+      ...(integrationsAllowlist ? { integrations: integrationsAllowlist } : {}),
       ...(hasProvisioning ? { provisioning: stripProfileSecrets(provisioning) } : {}),
     },
     log,
@@ -737,6 +760,45 @@ async function saveProfileMaybe(root: vscode.Uri, profile: ReleaseProfile, log: 
     log.error("rebrand: save profile", e);
     void vscode.window.showWarningMessage(`Could not save the release profile: ${msg(e)}`);
   }
+}
+
+/** Let the release engineer choose WHICH reference-source integrations the
+ *  produced build ships enabled — a multi-select with everything picked by
+ *  default (seeded from a loaded profile's allowlist). Returns the selected type
+ *  ids (possibly empty), or undefined if cancelled. Selecting all is equivalent
+ *  to no restriction; the caller collapses that to "bake no allowlist". */
+async function gatherIntegrations(
+  seed: readonly string[] | undefined,
+): Promise<ContextSourceType[] | undefined> {
+  const seededAllowlist = normalizeIntegrationAllowlist(seed); // undefined ⇒ all picked
+  const picked = await vscode.window.showQuickPick(
+    ALL_INTEGRATIONS.map((i) => ({
+      label: i.label,
+      description: i.group,
+      integrationType: i.type,
+      picked: seededAllowlist ? seededAllowlist.includes(i.type) : true,
+    })),
+    {
+      title: WIZARD_TITLE,
+      canPickMany: true,
+      ignoreFocusOut: true,
+      placeHolder: `Select the integrations to include — all selected by default. ${CANCEL_HINT}`,
+    },
+  );
+  if (!picked) return undefined; // Esc — abort the whole wizard
+  if (picked.length === 0) {
+    const proceed = await vscode.window.showWarningMessage(
+      "No integrations selected.",
+      {
+        modal: true,
+        detail:
+          "The produced build won't be able to add ANY reference sources (Confluence, Jira, databases, ServiceNow, …). This is unusual — continue only if you intend a deliberately locked-down build.",
+      },
+      "Continue with none",
+    );
+    if (proceed !== "Continue with none") return undefined;
+  }
+  return picked.map((p) => p.integrationType);
 }
 
 /** Step the user through WHAT to bake into the build: telemetry endpoints,
