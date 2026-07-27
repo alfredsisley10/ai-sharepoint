@@ -652,7 +652,7 @@ export function activate(context: vscode.ExtensionContext): void {
         // connector for an integration this white-label build has disabled.
         if (!integrationEnabled(c.type)) {
           log.info(`Skipped seeding connector "${c.displayName}" — ${labelForIntegration(c.type)} isn't enabled in this build.`);
-          return Promise.resolve();
+          return Promise.resolve(false);
         }
         const source: ContextSource = {
           id: crypto.randomUUID(),
@@ -666,7 +666,7 @@ export function activate(context: vscode.ExtensionContext): void {
           addedAt: nowIso(),
           role: "reference",
         };
-        return Promise.resolve(contextSources.upsert(source));
+        return contextSources.upsert(source).then(() => true);
       },
       seedProject: (p) =>
         Promise.resolve(
@@ -3215,14 +3215,23 @@ export function activate(context: vscode.ExtensionContext): void {
   // Managed Sites "+": a managed target can be a SharePoint site OR a Confluence
   // space we actively manage (read/write via the source's own API token).
   register("aiSharePoint.addManagedTarget", async () => {
-    const pick = await vscode.window.showQuickPick(
-      [
-        { label: "$(cloud) SharePoint site", description: "Microsoft 365 sign-in; managed or reference", value: "sharepoint" as const },
-        { label: "$(book) Confluence space", description: "read/write with your own API token — no admin consent", value: "confluence" as const },
-        { label: "$(issues) Jira project", description: "approval-gated ticket updates with your own API token — no admin consent", value: "jira" as const },
-      ],
-      { ignoreFocusOut: true, title: "Add a managed target" },
-    );
+    // SharePoint is always offered (it is a site connection, not a gateable
+    // integration); the Atlassian entries follow the white-label allowlist so
+    // this picker can't advertise an integration the build would then refuse.
+    const managedItems = [
+      { label: "$(cloud) SharePoint site", description: "Microsoft 365 sign-in; managed or reference", value: "sharepoint" as const },
+      { label: "$(book) Confluence space", description: "read/write with your own API token — no admin consent", value: "confluence" as const },
+      { label: "$(issues) Jira project", description: "approval-gated ticket updates with your own API token — no admin consent", value: "jira" as const },
+    ].filter((it) => it.value === "sharepoint" || integrationEnabled(it.value));
+    // Only SharePoint left — skip a one-item picker and go straight there.
+    if (managedItems.length === 1) {
+      await vscode.commands.executeCommand("aiSharePoint.connectSite");
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(managedItems, {
+      ignoreFocusOut: true,
+      title: "Add a managed target",
+    });
     if (!pick) return;
     if (pick.value === "sharepoint") {
       await vscode.commands.executeCommand("aiSharePoint.connectSite");
@@ -3355,6 +3364,18 @@ export function activate(context: vscode.ExtensionContext): void {
     let credential = await contextSources.getCredential(source.id);
     let fresh = false;
     if (!credential || (!gateNow.allowed && gateNow.reason === "credential-bad")) {
+      // White-label allowlist. Re-verifying an ALREADY-STORED credential stays
+      // allowed — we don't strand a source the user configured before the build
+      // was restricted — but acquiring a NEW one re-arms an integration this
+      // build removed, which is exactly what the add wizard refuses. Gate the
+      // two together: promptCredentialFor is the shared router, and these are
+      // its only two callers (they have drifted before).
+      if (!integrationEnabled(source.type)) {
+        void vscode.window.showWarningMessage(
+          `${labelForIntegration(source.type)} isn't available in this build — new credentials for "${source.displayName}" can't be entered here.`,
+        );
+        return;
+      }
       credential = await promptCredential();
       if (!credential) return;
       fresh = true;
@@ -5777,6 +5798,12 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   register("aiSharePoint.discoverActiveDirectory", async () => {
+    // The report's only call to action is "add an LDAP source" — pointless (and
+    // misleading) in a build whose allowlist excludes LDAP.
+    if (!integrationEnabled("ldap")) {
+      void vscode.window.showWarningMessage(`${labelForIntegration("ldap")} isn't available in this build.`);
+      return;
+    }
     const result = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Discovering Active Directory via DNS…" },
       () => discoverActiveDirectory(),

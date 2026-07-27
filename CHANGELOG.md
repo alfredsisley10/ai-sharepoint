@@ -19,6 +19,15 @@
 - **Importing a shared config honors the allowlist too.** Importing reference config that names an
   integration the build doesn't ship now skips that source with a clear reason instead of creating it —
   and its bookmarks, schema index, and project memberships drop with it, so nothing dangles.
+- **Every other way in is gated too.** An audit of the remaining entry points closed these: the
+  Test/reconnect action no longer lets you enter **new** credentials for an excluded integration
+  (re-verifying a credential you already stored still works — existing sources are never stranded);
+  **Add a managed target** no longer offers Confluence/Jira in a build without them (and goes straight
+  to SharePoint when it's the only option); **Discover Active Directory** no longer runs in a build
+  without LDAP, since its only next step was to add an LDAP source; and the wizard no longer bakes
+  pre-defined connectors for integrations you just excluded, reporting how many it skipped.
+- First-run provisioning now reports the number of connectors **actually** seeded rather than planned,
+  so a restricted build's log can't overstate what was created.
 
 ### Fixes
 - **Config sharing no longer silently loses GitHub sources.** The importer validated against a

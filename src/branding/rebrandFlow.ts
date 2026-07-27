@@ -37,6 +37,7 @@ import {
   ALL_INTEGRATIONS,
   normalizeIntegrationAllowlist,
   isFullSelection,
+  isIntegrationEnabled,
   summarizeIntegrationSelection,
 } from "./integrationSelection";
 
@@ -236,7 +237,7 @@ export async function runRebrandFlow(log: Logger, deps: RebrandDeps = {}): Promi
     : undefined;
 
   // --- what to BAKE into the build (telemetry, connectors, memory, help) -----
-  const provisioning = await gatherProvisioning(deps, loaded?.provisioning);
+  const provisioning = await gatherProvisioning(deps, loaded?.provisioning, integrationsAllowlist);
   if (provisioning === undefined) return; // cancelled
 
   const after: BrandConfig = {
@@ -808,6 +809,9 @@ async function gatherIntegrations(
 async function gatherProvisioning(
   deps: RebrandDeps,
   seed: ProvisioningContent | undefined,
+  /** The chosen integration allowlist (undefined ⇒ unrestricted), so connectors
+   *  for excluded integrations are never baked into the build. */
+  allowlist: readonly string[] | undefined,
 ): Promise<ProvisioningContent | undefined> {
   const content: ProvisioningContent = {};
 
@@ -849,18 +853,27 @@ async function gatherProvisioning(
     content.telemetry = seedTel; // keep endpoints from the profile (it carries no tokens)
   }
 
-  // 2) Pre-defined connectors — a snapshot of the current reference sources.
-  const conns = deps.currentConnectors ?? [];
+  // 2) Pre-defined connectors — a snapshot of the current reference sources,
+  //    minus any whose integration this build won't ship (baking those would
+  //    put a descriptor in package.json that first-run seeding then refuses).
+  const keepEnabled = (list: ProvisionedConnector[]): ProvisionedConnector[] =>
+    list.filter((c) => isIntegrationEnabled(c.type, allowlist));
+  const conns = keepEnabled(deps.currentConnectors ?? []);
+  const droppedConns = (deps.currentConnectors ?? []).length - conns.length;
+  const droppedNote = droppedConns
+    ? ` ${droppedConns} skipped — their integration isn't included in this build.`
+    : "";
   if (conns.length) {
     const bake = await yesNo(
       `Bake in your ${conns.length} current reference source(s) as pre-defined connectors?`,
-      "Non-secret settings only (type, URL, alias); each user supplies their own credentials on first use.",
+      `Non-secret settings only (type, URL, alias); each user supplies their own credentials on first use.${droppedNote}`,
       Boolean(seed?.connectors?.length),
     );
     if (bake === undefined) return undefined;
     if (bake) content.connectors = conns;
   } else if (seed?.connectors?.length) {
-    content.connectors = seed.connectors;
+    const kept = keepEnabled(seed.connectors);
+    if (kept.length) content.connectors = kept;
   }
 
   // 3) Pre-defined projects / memory defaults.

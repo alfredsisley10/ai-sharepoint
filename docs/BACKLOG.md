@@ -183,3 +183,38 @@ PLAN §9.1 (shared framework services), §9.2 (adapter matrix); ADR-0008–0012 
 bookmarks, cache, read-safe queries), ADR-0014/0015 (standard-user auth + discovery), ADR-0016
 (pure-JS), ADR-0023 (alias/description). **Contrast:** ADR-0017 (local MCP **server** — the extension
 as provider — is *out of scope* for this item). **New ADR to be authored** (next free number).
+
+---
+
+## BL-3 — White-label bake-in defects found by audit (pre-existing, not allowlist-related)
+
+**Area:** `src/branding/` · rebrand / white-label wizard · [`REBRANDING.md`](../REBRANDING.md)
+
+### What problem would this solve?
+
+A multi-agent audit of the white-label bake path (run while adding the integration allowlist, 2026-07)
+confirmed several defects that are **independent of the allowlist** and predate it. They are recorded
+here rather than fixed inline, because each changes bake behavior a release engineer depends on and
+deserves its own change + test. Each was verified by reading the code, and adversarially re-verified.
+
+| # | Defect | Where | Severity |
+|---|---|---|---|
+| 1 | **A telemetry-only bake-in is silently discarded.** `hasProvisioning` tests only `settings \|\| connectors \|\| projects \|\| help` — but `buildProvisioningManifest` emits a fifth section, `telemetry`. Configure *only* telemetry endpoints in the wizard and the `provisioning` block is never baked into any output mode, nor saved to the profile. | `src/branding/rebrandFlow.ts` (the `hasProvisioning` gate) | **High** |
+| 2 | **`gatherProvisioning` never populates `content.settings`.** It is the only one of the five sections with no wizard step *and* no `else if (seed?.…)` carry-through, so a release profile's `provisioning.settings` is dropped on every re-release — the "repeatable release" promise silently loses setting defaults. | `src/branding/rebrandFlow.ts` (`gatherProvisioning`) | Medium |
+| 3 | **Release-profile round-trip loses `identity.renameIdentifiers`.** It is written into the saved profile but never read back, so a "Reuse profile" re-release silently reverts to the cosmetic rename depth unless the engineer re-picks it. (`identity.iconPath` is likewise declared but never saved or applied.) | `src/branding/rebrandFlow.ts` (depth quick-pick) · `releaseProfile.ts` | Medium |
+| 4 | **Minimal-components `.vscodeignore` omits the scaffold files that same function adds** (`MAINTAINING.md`, `.github/**`, `.gitignore`), so re-packaging the handoff does not reproduce the same VSIX entry set. | `src/branding/rebrandVsix.ts` (`BUILD_VSCODEIGNORE`) | Low |
+| 5 | **`get_context_item`'s model-facing description omits `splunkobs` and `grafana`**, which *do* support item fetch (`getSplunkObsItem` / `getGrafanaItem`). The model is never told it can pull a Grafana dashboard or a Splunk Observability detector by id, so a working capability goes unused. Opposite polarity to the others: it under-claims what the code supports. | `package.json` (`aisharepoint_get_context_item` `modelDescription`) | Low |
+
+### Acceptance criteria
+
+- Derive the "is there anything to bake?" gate from the manifest itself rather than a hand-listed
+  subset, so a **sixth** section can't repeat defect #1; test-lock a telemetry-only bake.
+- A profile round-trip preserves every field it stores (settings, rename depth) — test-locked, in the
+  spirit of the existing `parseReleaseProfile` round-trip test.
+- `minimalBuildComponents`' ignore list is derived from (or asserted against) what it actually emits.
+- The tool description matches the dispatch table in `contextService.getItem`.
+
+### References
+
+Audit run 2026-07-26 over `src/branding/*` + the add/import/provisioning paths; the allowlist-related
+findings from the same audit were fixed in the integration-allowlist change and are **not** listed here.

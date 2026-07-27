@@ -164,7 +164,10 @@ test("applyProvisioning seeds once, skipping what already exists, then marks app
     existingConnectorKeys: () => new Set(["gh"]),
     existingProjectNames: () => new Set(),
     userHasSetting: () => false,
-    seedConnector: async (c) => void seededConnectors.push(c),
+    seedConnector: async (c) => {
+      seededConnectors.push(c);
+      return true;
+    },
     seedProject: async (p) => void seededProjects.push(p),
     applySetting: async (k, v) => void (appliedSettings[k] = v),
     setHelp: async (h) => void (help = h),
@@ -196,4 +199,40 @@ test("applyProvisioning seeds once, skipping what already exists, then marks app
   // Second run (already applied id) seeds nothing.
   const fx2: ProvisioningEffects = { ...fx, appliedId: () => "b1" };
   assert.deepEqual(await applyProvisioning(manifest, fx2), { applied: false, connectors: 0, projects: 0, settings: 0, help: false, telemetry: false });
+});
+
+test("applyProvisioning counts connectors actually seeded, not planned (declined ⇒ not counted)", async () => {
+  // A restricted white-label build declines connectors whose integration it
+  // doesn't ship; the reported count must reflect reality, or the first-run log
+  // sends support hunting for connectors that were never created.
+  const stored: string[] = [];
+  const fx: ProvisioningEffects = {
+    appliedId: () => undefined,
+    existingConnectorKeys: () => new Set(),
+    existingProjectNames: () => new Set(),
+    userHasSetting: () => false,
+    seedConnector: async (c) => {
+      if (c.type === "splunk") return false; // integration not in this build
+      stored.push(c.displayName);
+      return true;
+    },
+    seedProject: async () => {},
+    applySetting: async () => {},
+    setHelp: async () => {},
+    seedTelemetry: async () => false,
+    markApplied: async () => {},
+  };
+  const result = await applyProvisioning(
+    {
+      id: "b2",
+      connectors: [
+        { type: "confluence", displayName: "Wiki", baseUrl: "https://w" },
+        { type: "splunk", displayName: "Splunk", baseUrl: "https://s" },
+        { type: "jira", displayName: "Jira", baseUrl: "https://j" },
+      ],
+    },
+    fx,
+  );
+  assert.equal(result.connectors, 2, "the declined connector is not counted");
+  assert.deepEqual(stored, ["Wiki", "Jira"]);
 });

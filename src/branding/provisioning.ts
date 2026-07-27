@@ -20,7 +20,10 @@ export interface ProvisioningEffects {
   existingConnectorKeys(): Set<string>;
   existingProjectNames(): Set<string>;
   userHasSetting(key: string): boolean;
-  seedConnector(connector: ProvisionedConnector): Promise<void>;
+  /** Seed one pre-defined connector. Returns whether it was actually stored —
+   *  a white-label build skips connectors whose integration it doesn't ship, and
+   *  the reported count must not include those (mirrors seedTelemetry). */
+  seedConnector(connector: ProvisionedConnector): Promise<boolean>;
   seedProject(project: ProvisionedProject): Promise<void>;
   applySetting(key: string, value: unknown): Promise<void>;
   setHelp(help: ProvisionedHelp): Promise<void>;
@@ -57,7 +60,13 @@ export async function applyProvisioning(
   });
   if (plan.alreadyApplied) return none;
 
-  for (const c of plan.connectors) await fx.seedConnector(c);
+  // Count what was actually seeded, not what was planned — the effect can
+  // decline (disabled integration), and an over-reported count sends support
+  // hunting for connectors that were never created.
+  let connectors = 0;
+  for (const c of plan.connectors) {
+    if (await fx.seedConnector(c)) connectors += 1;
+  }
   for (const p of plan.projects) await fx.seedProject(p);
   let settings = 0;
   for (const [k, v] of Object.entries(plan.settings)) {
@@ -74,5 +83,5 @@ export async function applyProvisioning(
     telemetry = await fx.seedTelemetry(plan.telemetry);
   }
   await fx.markApplied(manifest.id);
-  return { applied: true, connectors: plan.connectors.length, projects: plan.projects.length, settings, help, telemetry };
+  return { applied: true, connectors, projects: plan.projects.length, settings, help, telemetry };
 }
