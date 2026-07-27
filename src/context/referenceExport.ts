@@ -321,15 +321,39 @@ export interface ParsedImport {
   pricing?: ExportedPricing;
 }
 
-const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "powerbi", "servicenow", "splunk", "splunkobs", "grafana", "m365copilot"]);
-const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple", "ntlm", "az-sso", "aad-sso", "snow-oauth", "splunk-session", "snow-session", "sfx-token"]);
+// MUST list every ContextSourceType / ContextAuthMethod: an entry missing here
+// makes the importer reject that source as "malformed", silently. (That is how
+// `github` sources — and ServiceNow API-key / OIDC auth — were undroppable-but-
+// unimportable.) `referenceExport.test.ts` pins both sets to the unions with a
+// compile-time-exhaustive Record, so adding a type/method without updating these
+// fails the build rather than silently breaking config sharing.
+const SOURCE_TYPES = new Set<ContextSource["type"]>([
+  "confluence", "jira", "github", "ldap", "mssql", "postgres", "mysql", "mongodb",
+  "powerbi", "servicenow", "splunk", "splunkobs", "grafana", "m365copilot",
+]);
+const AUTH_METHODS = new Set<ContextAuthMethod>([
+  "basic", "pat", "github-oauth", "github-app", "ldap-simple", "ntlm", "az-sso",
+  "aad-sso", "snow-oauth", "splunk-session", "snow-session", "snow-apikey",
+  "snow-oidc", "sfx-token",
+]);
 const BOOKMARK_KINDS = new Set(["query", "item", "container"]);
 
-/** Parse + validate an export file; ids are regenerated via `newId`. */
+/**
+ * Optional gate on which source types may be imported. Returns a human-readable
+ * REASON to skip the type, or undefined to allow it. Injected (rather than
+ * importing the white-label integration registry here) so this module stays pure
+ * and brand-agnostic — the caller owns the policy and the product wording.
+ */
+export type ImportTypeGate = (type: string) => string | undefined;
+
+/** Parse + validate an export file; ids are regenerated via `newId`.
+ *  `disallowReason` optionally rejects source types this build doesn't ship
+ *  (white-label integration allowlist); omitted ⇒ every type is accepted. */
 export function parseReferenceImport(
   json: string,
   importedAt: string,
   newId: () => string,
+  disallowReason?: ImportTypeGate,
 ): ParsedImport {
   const out: ParsedImport = { sources: [], bookmarks: [], warnings: [], schemas: [], projects: [], sites: [], memory: [], prompts: [], modelLimits: [] };
   let raw: ReferenceExport;
@@ -359,6 +383,15 @@ export function parseReferenceImport(
     }
     if (s.type === "ldap" && typeof s.baseDn !== "string") {
       out.warnings.push(`LDAP source "${s.displayName}" lacks a baseDn — skipped.`);
+      continue;
+    }
+    // White-label integration allowlist: never materialize a source whose
+    // integration this build doesn't ship. Dropping it here (rather than at the
+    // command layer) also strands nothing — its bookmarks, schema index, and
+    // project memberships all resolve through `idByName` and are skipped with it.
+    const disallowed = disallowReason?.(s.type);
+    if (disallowed) {
+      out.warnings.push(`Source "${s.displayName}" skipped — ${disallowed}.`);
       continue;
     }
     const id = newId();

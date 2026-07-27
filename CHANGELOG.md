@@ -16,6 +16,18 @@
   (and older white-label builds without the field are unaffected).
 - **Remembered across releases.** The allowlist is saved in `whitelabel.profile.json` (secret-free) and
   pre-fills the selection on the next run, so refreshing a release stays a quick, repeatable pass.
+- **Importing a shared config honors the allowlist too.** Importing reference config that names an
+  integration the build doesn't ship now skips that source with a clear reason instead of creating it —
+  and its bookmarks, schema index, and project memberships drop with it, so nothing dangles.
+
+### Fixes
+- **Config sharing no longer silently loses GitHub sources.** The importer validated against a
+  hardcoded type list that had drifted from the real set: a **GitHub** source — and any source using
+  ServiceNow **API-key** or **OIDC** auth — was rejected as "malformed" and skipped without explanation.
+  Both lists are now complete and pinned to their types by a compile-time-exhaustive test, so a new
+  connector can't be added without config sharing following.
+- Bumped the compiled `EXTENSION_VERSION` constant in step with `package.json` (the torn-install
+  detector asserts they match).
 
 ## 0.130.0 — 2026-07-08
 

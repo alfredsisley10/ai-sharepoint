@@ -5146,7 +5146,11 @@ export function activate(context: vscode.ExtensionContext): void {
     const json = Buffer.from(await vscode.workspace.fs.readFile(picked[0])).toString("utf8");
     let parsed: ReturnType<typeof parseReferenceImport>;
     try {
-      parsed = parseReferenceImport(json, nowIso(), () => crypto.randomUUID());
+      parsed = parseReferenceImport(json, nowIso(), () => crypto.randomUUID(), (type) =>
+        integrationEnabled(type)
+          ? undefined
+          : `the ${labelForIntegration(type)} integration isn't available in this build`,
+      );
     } catch (e) {
       void vscode.window.showErrorMessage(`Could not import: ${e instanceof Error ? e.message : String(e)}`);
       return;

@@ -9,7 +9,7 @@ import {
   isReferenceExportSchema,
   REFERENCE_EXPORT_SCHEMA,
 } from "../src/context/referenceExport";
-import { ContextSource, ContextBookmark } from "../src/context/types";
+import { ContextSource, ContextSourceType, ContextAuthMethod, ContextBookmark } from "../src/context/types";
 import { MemoryItem, MemoryScope, MemoryScopeKind } from "../src/context/memory";
 import { PromptItem, PromptScope, PromptScopeKind } from "../src/context/promptLibrary";
 import { scanForLeaks } from "../src/diagnostics/bundle";
@@ -147,6 +147,118 @@ test("import drops duplicate aliases within a file (first wins) with a warning",
   assert.equal(parsed.sources[1].alias, undefined);
   assert.equal(parsed.warnings.length, 1);
   assert.match(parsed.warnings[0], /Duplicate alias/);
+});
+
+// Compile-time-exhaustive: adding a ContextSourceType / ContextAuthMethod without
+// listing it here fails to compile, and the round-trip below then proves the
+// importer actually accepts it. This is the drift that silently made `github`
+// sources (and ServiceNow api-key/OIDC auth) unimportable — "malformed, skipped".
+const EVERY_SOURCE_TYPE: Record<ContextSourceType, true> = {
+  confluence: true, jira: true, github: true, ldap: true, mssql: true, postgres: true,
+  mysql: true, mongodb: true, powerbi: true, servicenow: true, splunk: true,
+  splunkobs: true, grafana: true, m365copilot: true,
+};
+const EVERY_AUTH_METHOD: Record<ContextAuthMethod, true> = {
+  basic: true, pat: true, "github-oauth": true, "github-app": true, "ldap-simple": true,
+  ntlm: true, "az-sso": true, "aad-sso": true, "snow-oauth": true, "splunk-session": true,
+  "snow-session": true, "snow-apikey": true, "snow-oidc": true, "sfx-token": true,
+};
+
+test("import accepts EVERY source type — no silent 'malformed' drift", () => {
+  const types = Object.keys(EVERY_SOURCE_TYPE) as ContextSourceType[];
+  const doc = {
+    $schema: REFERENCE_EXPORT_SCHEMA,
+    exportedAt: T0,
+    notice: "",
+    sources: types.map((type) => ({
+      type,
+      displayName: `src-${type}`,
+      baseUrl: `https://${type}.example`,
+      ...(type === "ldap" ? { baseDn: "DC=corp,DC=example" } : {}),
+      deployment: "datacenter",
+      authMethod: "basic",
+    })),
+    bookmarks: [],
+  };
+  let n = 0;
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => `id-${n++}`);
+  assert.deepEqual(parsed.sources.map((s) => s.type).sort(), [...types].sort());
+  assert.deepEqual(parsed.warnings, []);
+});
+
+test("import accepts EVERY auth method — no silent 'malformed' drift", () => {
+  const methods = Object.keys(EVERY_AUTH_METHOD) as ContextAuthMethod[];
+  const doc = {
+    $schema: REFERENCE_EXPORT_SCHEMA,
+    exportedAt: T0,
+    notice: "",
+    sources: methods.map((authMethod, i) => ({
+      type: "confluence",
+      displayName: `src-${i}-${authMethod}`,
+      baseUrl: "https://wiki.example",
+      deployment: "datacenter",
+      authMethod,
+    })),
+    bookmarks: [],
+  };
+  let n = 0;
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => `id-${n++}`);
+  assert.deepEqual(parsed.sources.map((s) => s.authMethod).sort(), [...methods].sort());
+  assert.deepEqual(parsed.warnings, []);
+});
+
+test("import gate skips source types this build doesn't ship (white-label allowlist)", () => {
+  const doc = {
+    $schema: REFERENCE_EXPORT_SCHEMA,
+    exportedAt: T0,
+    notice: "",
+    sources: [
+      { type: "confluence", displayName: "Corp Wiki", baseUrl: "https://wiki", deployment: "datacenter", authMethod: "pat" },
+      { type: "splunk", displayName: "Prod Splunk", alias: "SPL", baseUrl: "https://splunk:8089", deployment: "datacenter", authMethod: "pat" },
+    ],
+    bookmarks: [
+      { source: "Corp Wiki", name: "Runbooks", locator: "space=OPS", kind: "query" },
+      { source: "Prod Splunk", name: "Errors", locator: "index=main error", kind: "query" },
+    ],
+    schemas: {},
+    projects: [{ name: "Ops", sources: ["Corp Wiki", "Prod Splunk"] }],
+  };
+  let n = 0;
+  const parsed = parseReferenceImport(
+    JSON.stringify(doc),
+    T0,
+    () => `id-${n++}`,
+    (type) => (type === "splunk" ? "the Splunk integration isn't available in this build" : undefined),
+  );
+  // The disabled source never materializes...
+  assert.deepEqual(parsed.sources.map((s) => s.type), ["confluence"]);
+  assert.ok(parsed.warnings.some((w) => /Prod Splunk.*Splunk integration isn't available/.test(w)));
+  // ...and everything hanging off it is dropped with it (no dangling refs).
+  assert.deepEqual(parsed.bookmarks.map((b) => b.name), ["Runbooks"]);
+  assert.deepEqual(parsed.projects[0].sourceIds, [parsed.sources[0].id]);
+  // Its alias is NOT consumed, so a later enabled source could still claim it.
+  assert.ok(!parsed.warnings.some((w) => /Duplicate alias/.test(w)));
+});
+
+test("import gate is optional and fails open — omitting it accepts every type", () => {
+  const doc = {
+    $schema: REFERENCE_EXPORT_SCHEMA,
+    exportedAt: T0,
+    notice: "",
+    sources: [
+      { type: "confluence", displayName: "Wiki", baseUrl: "https://wiki", deployment: "datacenter", authMethod: "pat" },
+      { type: "grafana", displayName: "Graf", baseUrl: "https://graf", deployment: "cloud", authMethod: "pat" },
+    ],
+    bookmarks: [],
+  };
+  let n = 0;
+  const parsed = parseReferenceImport(JSON.stringify(doc), T0, () => `id-${n++}`);
+  assert.equal(parsed.sources.length, 2);
+  assert.equal(parsed.warnings.length, 0);
+  // An always-allow gate behaves identically to omitting it.
+  let m = 0;
+  const withGate = parseReferenceImport(JSON.stringify(doc), T0, () => `id-${m++}`, () => undefined);
+  assert.deepEqual(withGate.sources, parsed.sources);
 });
 
 test("import rejects wrong schema and bad JSON", () => {
