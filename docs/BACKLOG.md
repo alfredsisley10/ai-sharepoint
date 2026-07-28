@@ -218,3 +218,69 @@ deserves its own change + test. Each was verified by reading the code, and adver
 
 Audit run 2026-07-26 over `src/branding/*` + the add/import/provisioning paths; the allowlist-related
 findings from the same audit were fixed in the integration-allowlist change and are **not** listed here.
+
+---
+
+## BL-4 — "Align with Authoritative Source": wire the durable engine to the product
+
+**Area:** `src/context/alignment*.ts` · [ADR-0049](./adr/0049-authoritative-alignment-runs.md)
+
+### Status
+
+The **durable core is built, tested, and shipped** (ADR-0049): the run document +
+stage ladder (`alignmentRun.ts`), the checkpointing executor with injected
+effects (`alignmentDriver.ts`), the per-run store (`alignmentRunStore.ts`), and
+the metered pieces — comparison prompt, fail-closed verdict parser, per-owner
+notice composer (`alignmentCompare.ts`). 31 unit tests cover crash-and-resume,
+verdict caching, failure isolation, pause/resume, and fail-closed parsing.
+
+What remains is the **I/O glue**: concrete `AlignmentEffects` implementations and
+the user-facing entry points. The engine was deliberately built effect-injected
+so this layer is mechanical and each adapter is swappable.
+
+### Remaining work
+
+1. **`AlignmentEffects` implementations.**
+   - `gatherAuthority` — Confluence: reuse `gatherAuthorityPages` (exists).
+     SharePoint: a site-wide content read (the path `scan_site_content` /
+     `inspect_site` already use), hashed per page.
+   - `sweep` — Confluence: reuse `findConflictCandidates` (exists), threading its
+     pagination through the target `cursor`. SharePoint: enumerate site pages.
+   - `fetchCandidate` — reuse the ADR-0042 Confluence content cache; add the
+     SharePoint equivalent keyed the same way.
+   - `compare` — `buildComparePrompt` → `copilot.ask` → `parseVerdict`. Throw
+     `AlignmentPaused` on an entitlement failure so the run pauses (the
+     ADR-0023.1 breaker already classifies these).
+   - `resolveOwner` — reuse the ownership suite (`confluenceOwnership`,
+     the SharePoint page-owner tool, LDAP active-employee validation).
+   - `draft` — `groupByOwner` + `composeOwnerNotice` → a work item (ADR-0045) and
+     an approval-gated outbox draft (ADR-0025). Draft **per owner**, not per
+     page, so a person gets one message.
+2. **Entry points.** A `aiSharePoint.alignWithAuthority` command (pick authority
+   corpus/scope + targets + topic), a project "use case" seed that pre-populates
+   the wizard, `Resume`/`Discard` on `AlignmentRunStore.resumable()`, and a
+   progress surface driving `runProgress`/`describeRun`.
+3. **Chat tools.** `start_alignment_run` / `resume_alignment_run` /
+   `alignment_status`, so the participant can drive and report on a run instead
+   of re-orchestrating the sweep by hand each turn.
+4. **Retire the prompt orchestration.** Once the tools exist, replace the
+   participant's multi-tool "cross-source review" instructions with a pointer to
+   the run, and note in `find_conflicts` that it is the Confluence-only slice.
+
+### Acceptance criteria
+
+- A run started against a **SharePoint** authority sweeps Confluence, and vice
+  versa — the asymmetry ADR-0049 was written to close.
+- Killing the window mid-run and reopening resumes without re-gathering the
+  authority, re-sweeping, or re-billing a completed comparison (already proven
+  at the engine level; needs an end-to-end check against a live instance).
+- Every notice is a **draft**; nothing sends without explicit approval.
+- Read caps (ADR-0012), the cost governor, and the entitlement breaker all apply
+  per step.
+
+### Note
+
+The engine's guarantees are unit-tested against fake effects. The adapters need
+validation against a **live** Confluence + SharePoint tenant, which this
+environment cannot provide — the same constraint recorded for other connectors
+in the deferral register.

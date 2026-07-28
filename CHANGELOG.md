@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.136.0 — 2026-07-27
+
+### Projects can scope SharePoint sites and files (fix)
+- **Creating a project now offers everything the Reference Sources view shows.** Previously the
+  wizard listed only connectors, so a **SharePoint site could not be added to a project at all** —
+  and the project model had nowhere to put one. Projects now carry SharePoint sites (by URL) and
+  attached files (by id) alongside connectors, and the Reference Sources view scopes all three
+  consistently instead of only connectors.
+- Projects saved before this keep working exactly as they did: a project with no site membership
+  recorded is treated as **unscoped** for sites, so nothing silently disappears on upgrade.
+- Removing a site or file now drops it from every project, and project labels read
+  "2 sources, 1 site" — with an empty scope shown as "everything (unscoped)" rather than the
+  misleading "0 sources". Shared reference-config carries a project's site membership too.
+
+### Align with Authoritative Source — durable run engine (foundation)
+- **Groundwork for the "one source of truth" workflow as a restartable job** rather than a
+  one-shot chat sweep. A run declares an authoritative **SharePoint site *or* Confluence space**,
+  sweeps the other content for anything that contradicts it, and carries each finding through
+  comparison → owner → drafted notice.
+- **Interruption-safe by design** (see [ADR-0049](docs/adr/0049-authoritative-alignment-runs.md)):
+  progress is checkpointed after every step, so losing the Copilot connection — or closing the
+  window — costs at most one step. Resuming re-gathers nothing, re-reads no page, and re-bills no
+  comparison whose inputs haven't changed. A comparison is cached against **both** the authority
+  and the page content, so an edit on either side correctly re-opens the question, while an
+  unchanged pair is never paid for twice. A Copilot entitlement failure **pauses** a run rather
+  than failing it.
+- One unreachable page can't stall a sweep: it's retried, then parked and **reported**, so a run
+  never claims a clean result while having quietly dropped pages.
+- This release ships the engine, its store, and the metered pieces (comparison prompt, fail-closed
+  verdict parsing, per-owner notice composition) with 31 tests. The connector glue and the
+  command/chat entry points are tracked as BL-4 in `docs/BACKLOG.md`.
+
 ## 0.135.0 — 2026-07-26
 
 ### White-label: choose which integrations ship
