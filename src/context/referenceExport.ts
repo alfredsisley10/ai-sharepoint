@@ -1,7 +1,7 @@
 import { ContextSource, ContextBookmark, ContextAuthMethod } from "./types";
 import { normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./sourceRef";
 import { SourceSchema } from "./db/schemaIndex";
-import { Project, INSTRUCTIONS_MAX_CHARS, GOALS_MAX_CHARS, AI_CONTEXT_MAX_CHARS } from "./types";
+import { Project, normSiteUrl, INSTRUCTIONS_MAX_CHARS, GOALS_MAX_CHARS, AI_CONTEXT_MAX_CHARS } from "./types";
 import { MemoryItem, MemoryScope, MemoryScopeKind, memoryKey, mergeMemory, sameMemoryContent, normalizeMemoryInput } from "./memory";
 import { PromptItem, PromptScope, PromptScopeKind, promptKey, mergePrompt, samePromptContent, normalizePromptInput } from "./promptLibrary";
 import { ModelLimit } from "../core/contextBudget";
@@ -127,6 +127,11 @@ export interface ReferenceExport {
     instructions?: string;
     aiContext?: string;
     sources: string[];
+    /** SharePoint sites in the project's scope, by `siteUrl` — already the
+     *  portable key (ids are machine-local, and ExportedSite is URL-keyed too).
+     *  Optional so older importers tolerate its absence. Attached FILE sources
+     *  are deliberately not carried: they point at paths on one machine. */
+    sites?: string[];
   }>;
   /** Managed/reference SharePoint sites — secret-free descriptors; recipients
    *  sign in on import. Optional so older importers (and the schema) tolerate it. */
@@ -253,6 +258,9 @@ export function buildReferenceExport(
             sources: pr.sourceIds
               .map((id) => byId.get(id))
               .filter((n): n is string => Boolean(n)),
+            // Site membership travels by URL. Only emitted when the project
+            // actually scopes sites, so an unscoped project stays unscoped.
+            ...(pr.siteUrls?.length ? { sites: [...pr.siteUrls] } : {}),
           })),
         }
       : {}),
@@ -473,6 +481,12 @@ export function parseReferenceImport(
         : {}),
       ...(typeof pr.instructions === "string" && pr.instructions.trim()
         ? { instructions: pr.instructions.trim().slice(0, INSTRUCTIONS_MAX_CHARS) }
+        : {}),
+      // Site membership by URL, normalized the same way the store compares it.
+      // Kept even when the file carries no matching `sites` entry: the recipient
+      // may already have that site connected under the same URL.
+      ...(Array.isArray(pr.sites) && pr.sites.some((u) => typeof u === "string")
+        ? { siteUrls: pr.sites.filter((u): u is string => typeof u === "string").map(normSiteUrl) }
         : {}),
       ...(typeof pr.aiContext === "string" && pr.aiContext.trim()
         ? { aiContext: pr.aiContext.trim().slice(0, AI_CONTEXT_MAX_CHARS) }

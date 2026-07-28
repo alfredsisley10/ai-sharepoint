@@ -85,6 +85,8 @@ import {
   ConfluenceWriteScope,
   JiraWriteScope,
   contextCredentialUi,
+  normSiteUrl,
+  describeProjectScope,
 } from "./context/types";
 import {
   parseConfluenceUrl,
@@ -732,6 +734,8 @@ export function activate(context: vscode.ExtensionContext): void {
     fileSources,
     nowIso,
     (all) => projects.scope(all),
+    (all) => projects.scopeSites(all),
+    (all) => projects.scopeFiles(all),
   );
   const usageProvider = new UsageTreeProvider(
     meter,
@@ -1573,6 +1577,9 @@ export function activate(context: vscode.ExtensionContext): void {
       // orphan (a re-added site at the same URL would otherwise inherit them).
       await memory.removeForScope({ kind: "site", key: conn.siteUrl });
       await prompts.removeForScope({ kind: "site", key: conn.siteUrl });
+      // …and drop it from every project's scope, as forgetSource does for a
+      // removed connector — otherwise the membership dangles.
+      await projects.forgetSite(conn.siteUrl);
       telemetry.record("site.remove");
     }
   });
@@ -3532,7 +3539,7 @@ export function activate(context: vscode.ExtensionContext): void {
     current?: Project,
     /** Pre-fill values for a NEW project (e.g. a Confluence space cleanup),
      *  so the wizard opens populated instead of blank. Ignored when editing. */
-    seed?: { name?: string; description?: string; goals?: string; instructions?: string; sourceIds?: string[] },
+    seed?: { name?: string; description?: string; goals?: string; instructions?: string; sourceIds?: string[]; siteUrls?: string[]; fileSourceIds?: string[] },
   ): Promise<Project | undefined> => {
     const pre = current ? undefined : seed;
     const name = await vscode.window.showInputBox({
@@ -3568,26 +3575,75 @@ export function activate(context: vscode.ExtensionContext): void {
         v.length > INSTRUCTIONS_MAX_CHARS ? `Max ${INSTRUCTIONS_MAX_CHARS} characters.` : undefined,
     });
     if (instructions === undefined) return undefined;
-    const all = contextSources.list();
-    if (all.length === 0) {
-      void vscode.window.showWarningMessage("Add at least one reference source before scoping a project.");
+    // A project scopes EVERYTHING the Reference Sources / Managed Sites views
+    // show — connectors, SharePoint sites, and attached files — so the picker
+    // must offer all three. (Sites were previously missing entirely, which made
+    // it impossible to scope a project to a SharePoint site.)
+    const allSources = contextSources.list();
+    const allSites = sites.list();
+    const allFiles = fileSources.list();
+    if (allSources.length + allSites.length + allFiles.length === 0) {
+      void vscode.window.showWarningMessage(
+        "Add at least one reference source, SharePoint site, or file before scoping a project.",
+      );
       return undefined;
     }
-    const member = new Set(current?.sourceIds ?? pre?.sourceIds ?? []);
-    const picks = await vscode.window.showQuickPick(
-      all.map((s) => ({
-        label: s.displayName,
-        description: `${s.alias ? `“${s.alias}” · ` : ""}${s.type}`,
-        picked: member.has(s.id),
-        s,
-      })),
-      {
-        ignoreFocusOut: true,
-        canPickMany: true,
-        title: "Project — which sources belong to it? (bookmarks follow their sources)",
-      },
-    );
+    const seedProject = current ?? pre;
+    const memberSources = new Set(seedProject?.sourceIds ?? []);
+    // Absent site/file membership ⇒ everything picked (matches how scopeSites/
+    // scopeFiles treat an absent field as unscoped), so editing an older project
+    // and pressing OK can't silently drop its sites.
+    const memberSites = seedProject?.siteUrls ? new Set(seedProject.siteUrls.map(normSiteUrl)) : undefined;
+    const memberFiles = seedProject?.fileSourceIds ? new Set(seedProject.fileSourceIds) : undefined;
+
+    type MemberPick = vscode.QuickPickItem & {
+      ref?: { kind: "source"; id: string } | { kind: "site"; siteUrl: string } | { kind: "file"; id: string };
+    };
+    const items: MemberPick[] = [];
+    if (allSources.length) {
+      items.push({ label: "Reference sources", kind: vscode.QuickPickItemKind.Separator });
+      for (const s of allSources) {
+        items.push({
+          label: s.displayName,
+          description: `${s.alias ? `“${s.alias}” · ` : ""}${s.type}`,
+          picked: memberSources.has(s.id),
+          ref: { kind: "source", id: s.id },
+        });
+      }
+    }
+    if (allSites.length) {
+      items.push({ label: "SharePoint sites", kind: vscode.QuickPickItemKind.Separator });
+      for (const c of allSites) {
+        items.push({
+          label: c.displayName,
+          description: `${c.role} · ${c.tenantHost}`,
+          detail: c.siteUrl,
+          picked: memberSites ? memberSites.has(normSiteUrl(c.siteUrl)) : true,
+          ref: { kind: "site", siteUrl: c.siteUrl },
+        });
+      }
+    }
+    if (allFiles.length) {
+      items.push({ label: "Attached files", kind: vscode.QuickPickItemKind.Separator });
+      for (const f of allFiles) {
+        items.push({
+          label: f.label,
+          description: f.kind,
+          picked: memberFiles ? memberFiles.has(f.id) : true,
+          ref: { kind: "file", id: f.id },
+        });
+      }
+    }
+    const picks = await vscode.window.showQuickPick(items, {
+      ignoreFocusOut: true,
+      canPickMany: true,
+      title: "Project — what belongs to it? (bookmarks follow their sources)",
+      placeHolder: "Sources, SharePoint sites, and files. Nothing selected = the project scopes everything.",
+    });
     if (!picks) return undefined;
+    const chosen = picks.map((p) => p.ref).filter((r): r is NonNullable<MemberPick["ref"]> => Boolean(r));
+    const pickedSiteUrls = chosen.flatMap((r) => (r.kind === "site" ? [r.siteUrl] : []));
+    const pickedFileIds = chosen.flatMap((r) => (r.kind === "file" ? [r.id] : []));
     return {
       id: current?.id ?? crypto.randomUUID(),
       name: name.trim(),
@@ -3596,7 +3652,11 @@ export function activate(context: vscode.ExtensionContext): void {
       ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
       // Preserve AI-managed context across user edits — it is never set here.
       ...(current?.aiContext ? { aiContext: current.aiContext } : {}),
-      sourceIds: picks.map((x) => x.s.id),
+      sourceIds: chosen.flatMap((r) => (r.kind === "source" ? [r.id] : [])),
+      // Only persist site/file membership when that kind exists to choose from;
+      // otherwise leave the field absent so the project stays unscoped for it.
+      ...(allSites.length ? { siteUrls: pickedSiteUrls } : {}),
+      ...(allFiles.length ? { fileSourceIds: pickedFileIds } : {}),
     };
   };
 
@@ -3605,7 +3665,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // Confluence space cleanup) may pass a seed to pre-populate the wizard.
     const seed =
       arg && typeof arg === "object"
-        ? (arg as { name?: string; description?: string; goals?: string; instructions?: string; sourceIds?: string[] })
+        ? (arg as { name?: string; description?: string; goals?: string; instructions?: string; sourceIds?: string[]; siteUrls?: string[]; fileSourceIds?: string[] })
         : undefined;
     const project = await promptProjectDetails(undefined, seed);
     if (!project) return;
@@ -3613,7 +3673,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await projects.setActive(project.id);
     telemetry.record("project.create", { sources: String(project.sourceIds.length) });
     void vscode.window.showInformationMessage(
-      `Project "${project.name}" created and activated — chat and the Reference Sources view are now scoped to its ${project.sourceIds.length} source(s).`,
+      `Project "${project.name}" created and activated — chat and the Reference Sources view are now scoped to ${describeProjectScope(project)}.`,
     );
   });
 
@@ -3628,7 +3688,7 @@ export function activate(context: vscode.ExtensionContext): void {
         },
         ...all.map((pr) => ({
           label: `$(folder) ${pr.name}`,
-          description: `${pr.sourceIds.length} source(s)${pr.instructions ? " · instructions" : ""}${pr.id === projects.activeId() ? " · active" : ""}`,
+          description: `${describeProjectScope(pr)}${pr.instructions ? " · instructions" : ""}${pr.id === projects.activeId() ? " · active" : ""}`,
           detail: pr.description,
           id: pr.id as string | undefined,
         })),
@@ -3666,7 +3726,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const pick = await vscode.window.showQuickPick(
-        all.map((pr) => ({ label: pr.name, description: `${pr.sourceIds.length} source(s)`, pr })),
+        all.map((pr) => ({ label: pr.name, description: describeProjectScope(pr), pr })),
         { ignoreFocusOut: true, title: "Edit which project?" },
       );
       if (!pick) return;
@@ -5013,7 +5073,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (allProjects.length) {
       items.push({ label: "Projects", kind: vscode.QuickPickItemKind.Separator });
       for (const p of allProjects) {
-        items.push({ label: p.name, description: `${p.sourceIds.length} source(s)`, picked: true, kind2: "project", key: p.id });
+        items.push({ label: p.name, description: describeProjectScope(p), picked: true, kind2: "project", key: p.id });
       }
     }
     // Memory notes: one row per entity that has any. Key encodes the scope
@@ -5228,7 +5288,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (parsed.projects.length) {
       items.push({ label: "Projects", kind: vscode.QuickPickItemKind.Separator });
-      for (const p of parsed.projects) items.push({ label: p.name, description: `${p.sourceIds.length} source(s)`, picked: true, kind2: "project", key: p.id });
+      for (const p of parsed.projects) items.push({ label: p.name, description: describeProjectScope(p), picked: true, kind2: "project", key: p.id });
     }
     if (parsed.memory.length) {
       items.push({ label: "Memory notes (review / decline)", kind: vscode.QuickPickItemKind.Separator });
@@ -5794,6 +5854,7 @@ export function activate(context: vscode.ExtensionContext): void {
         );
     if (!target) return;
     await fileSources.remove(target.id);
+    await projects.forgetFileSource(target.id);
     void vscode.window.showInformationMessage(`Removed “${target.label}” from context.`);
   });
 

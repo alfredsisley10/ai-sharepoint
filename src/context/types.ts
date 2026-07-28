@@ -210,6 +210,66 @@ export interface Project {
    *  managed separately and resettable. */
   aiContext?: string;
   sourceIds: string[];
+  /** Managed/reference **SharePoint sites** in this project, by `siteUrl` —
+   *  SiteConnection has no id, and the URL is its natural, portable key (the
+   *  same key reference-config export/import uses). Optional and additive:
+   *  projects persisted before sites could be scoped load unchanged. */
+  siteUrls?: string[];
+  /** Attached **file sources** in this project, by id. Machine-local by nature
+   *  (they point at paths on this machine), so they are deliberately NOT part
+   *  of a shared reference-config export. Optional/additive. */
+  fileSourceIds?: string[];
+}
+
+/** Canonical form of a SharePoint site URL for identity comparison: trimmed,
+ *  lowercased, no trailing slash. SiteConnection has no id — `siteUrl` IS its
+ *  key — so project membership, scoping, and cleanup must all normalize the
+ *  same way, or a site silently fails to match itself. */
+export function normSiteUrl(siteUrl: string): string {
+  return siteUrl.trim().toLowerCase().replace(/\/+$/, "");
+}
+
+/**
+ * Filter `items` to a project's membership list.
+ *
+ * The distinction that matters: **absent** (`undefined`) means UNSCOPED — every
+ * item is in scope — while an **empty array** means the user deselected them
+ * all. `siteUrls`/`fileSourceIds` are additive fields, so every project saved
+ * before they existed has them undefined; treating that as "no members" would
+ * silently empty the Sites view for every pre-existing project.
+ */
+export function scopeMembers<T>(
+  items: T[],
+  members: readonly string[] | undefined,
+  keyOf: (item: T) => string,
+): T[] {
+  if (members === undefined) return items;
+  const set = new Set(members);
+  return items.filter((i) => set.has(keyOf(i)));
+}
+
+/** Everything a project can scope. Sites and files are optional/additive, so
+ *  read them through these helpers rather than touching the fields directly. */
+export type ProjectMembership = Pick<Project, "sourceIds" | "siteUrls" | "fileSourceIds">;
+
+/** Total number of scoped members across all three kinds. */
+export function projectMemberCount(p: ProjectMembership): number {
+  return p.sourceIds.length + (p.siteUrls?.length ?? 0) + (p.fileSourceIds?.length ?? 0);
+}
+
+/**
+ * "3 sources, 1 site" — the human summary shown wherever a project is listed.
+ * A project with NO members is unscoped (everything is in scope), which reads
+ * very differently from "0 sources", so it is named explicitly.
+ */
+export function describeProjectScope(p: ProjectMembership): string {
+  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  const parts = [
+    p.sourceIds.length ? plural(p.sourceIds.length, "source") : "",
+    p.siteUrls?.length ? plural(p.siteUrls.length, "site") : "",
+    p.fileSourceIds?.length ? plural(p.fileSourceIds.length, "file") : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(", ") : "everything (unscoped)";
 }
 
 export const INSTRUCTIONS_MAX_CHARS = 2_000;

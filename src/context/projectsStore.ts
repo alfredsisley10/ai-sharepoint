@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ContextSource, Project, rememberNote, forgetNotes, listNotes } from "./types";
+import { ContextSource, Project, normSiteUrl, scopeMembers, rememberNote, forgetNotes, listNotes } from "./types";
 import { MementoListStore } from "./mementoListStore";
 
 export type { Project } from "./types";
@@ -64,6 +64,29 @@ export class ProjectsStore extends MementoListStore<Project> {
     return sources.filter((s) => ids.has(s.id));
   }
 
+  /**
+   * Scope SharePoint sites to the active project, by `siteUrl`.
+   *
+   * Back-compat matters here: `siteUrls` is additive, so a project saved before
+   * sites could be scoped has it undefined. Treating that as "no sites" would
+   * silently empty the Sites view for every existing project, so an absent
+   * field means UNSCOPED (all sites), while an explicitly empty array means the
+   * user deselected them all.
+   */
+  scopeSites<T extends { siteUrl: string }>(sites: T[]): T[] {
+    const active = this.active();
+    if (!active) return sites;
+    return scopeMembers(sites, active.siteUrls?.map(normSiteUrl), (s) => normSiteUrl(s.siteUrl));
+  }
+
+  /** Scope attached file sources to the active project, by id. Absent field ⇒
+   *  unscoped, for the same back-compat reason as `scopeSites`. */
+  scopeFiles<T extends { id: string }>(files: T[]): T[] {
+    const active = this.active();
+    if (!active) return files;
+    return scopeMembers(files, active.fileSourceIds, (f) => f.id);
+  }
+
   /** AI-managed: dedup-aware remember — reports whether the note was newly
    *  added or merged into (reinforced) an existing near-duplicate. Returns
    *  undefined when the project is gone. */
@@ -112,5 +135,29 @@ export class ProjectsStore extends MementoListStore<Project> {
     if (changed) {
       await this.persist(next);
     }
+  }
+
+  /** Drop a removed SharePoint site from every project's membership (URL-keyed,
+   *  trailing-slash/case tolerant — the same normalization `scopeSites` uses). */
+  async forgetSite(siteUrl: string): Promise<void> {
+    const target = normSiteUrl(siteUrl);
+    let changed = false;
+    const next = this.list().map((p) => {
+      if (!p.siteUrls?.some((u) => normSiteUrl(u) === target)) return p;
+      changed = true;
+      return { ...p, siteUrls: p.siteUrls.filter((u) => normSiteUrl(u) !== target) };
+    });
+    if (changed) await this.persist(next);
+  }
+
+  /** Drop a removed file source from every project's membership. */
+  async forgetFileSource(fileSourceId: string): Promise<void> {
+    let changed = false;
+    const next = this.list().map((p) => {
+      if (!p.fileSourceIds?.includes(fileSourceId)) return p;
+      changed = true;
+      return { ...p, fileSourceIds: p.fileSourceIds.filter((x) => x !== fileSourceId) };
+    });
+    if (changed) await this.persist(next);
   }
 }

@@ -76,6 +76,10 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
     private readonly files: FileSourcesStore,
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly scope: (all: ContextSource[]) => ContextSource[] = (all) => all,
+    /** Project scoping for the other two member kinds. Defaulted to identity so
+     *  existing callers (and tests) keep the previous unscoped behavior. */
+    private readonly scopeSites: <T extends { siteUrl: string }>(all: T[]) => T[] = (all) => all,
+    private readonly scopeFiles: <T extends { id: string }>(all: T[]) => T[] = (all) => all,
   ) {
     this.listeners = [
       sources.onDidChange(() => this.emitter.fire()),
@@ -115,7 +119,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
 
   getChildren(node?: Node): Node[] {
     if (!node) {
-      const referenceSites = this.sites.list().filter((c) => c.role === "reference");
+      const referenceSites = this.scopeSites(this.sites.list().filter((c) => c.role === "reference"));
       // Managed context sources (e.g. a managed Confluence space) live under
       // Managed Sites; Reference Sources keeps the read-only ones.
       const referenceSources = this.scope(this.sources.list().filter((s) => s.role !== "managed"));
@@ -126,7 +130,7 @@ export class SourcesTreeProvider implements vscode.TreeDataProvider<Node> {
       return [
         ...groupReferenceSites(referenceSites),
         ...groupSourcesByType(referenceSources),
-        ...groupFiles(this.files.list()),
+        ...groupFiles(this.scopeFiles(this.files.list())),
       ];
     }
     if (isSourceGroup(node)) return node.children;

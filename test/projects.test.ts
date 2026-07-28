@@ -7,6 +7,10 @@ import {
   listNotes,
   similarNote,
   AI_CONTEXT_MAX_CHARS,
+  normSiteUrl,
+  projectMemberCount,
+  describeProjectScope,
+  scopeMembers,
 } from "../src/context/types";
 
 test("appendAiNote builds a bulleted log, dedupes whitespace, caps each note", () => {
@@ -65,4 +69,40 @@ test("similarNote: exact/containment/overlap match; distinct notes don't", () =>
   assert.ok(similarNote("answer in German", "Answer in German!"));
   assert.ok(similarNote("use the CMDB", "use the CMDB for ownership"));
   assert.ok(!similarNote("answer in German", "cite the CMDB for ownership"));
+});
+
+// --- project scope: sources + SharePoint sites + attached files -------------
+// Regression: the project wizard only ever offered ContextSources, so a
+// SharePoint site could not be scoped to a project at all (SiteConnection has
+// no id — `siteUrl` is its key), and Project had no field to hold one.
+
+test("normSiteUrl makes site identity trailing-slash and case insensitive", () => {
+  assert.equal(normSiteUrl("https://c.sharepoint.com/sites/Ops/"), "https://c.sharepoint.com/sites/ops");
+  assert.equal(normSiteUrl("  HTTPS://C.SharePoint.com/sites/Ops//  "), "https://c.sharepoint.com/sites/ops");
+  // the two forms a user/export could realistically produce must agree
+  assert.equal(normSiteUrl("https://c.sharepoint.com/sites/Ops"), normSiteUrl("https://c.sharepoint.com/sites/Ops/"));
+});
+
+test("projectMemberCount and describeProjectScope span all three member kinds", () => {
+  assert.equal(projectMemberCount({ sourceIds: ["a", "b"], siteUrls: ["u"], fileSourceIds: ["f"] }), 4);
+  assert.equal(describeProjectScope({ sourceIds: ["a", "b"], siteUrls: ["u"] }), "2 sources, 1 site");
+  assert.equal(describeProjectScope({ sourceIds: ["a"], fileSourceIds: ["f", "g"] }), "1 source, 2 files");
+  // A project with nothing selected scopes EVERYTHING — "0 sources" would be a lie.
+  assert.equal(describeProjectScope({ sourceIds: [] }), "everything (unscoped)");
+  assert.equal(projectMemberCount({ sourceIds: [] }), 0);
+  // Absent optional fields are not counted as members.
+  assert.equal(describeProjectScope({ sourceIds: ["a"] }), "1 source");
+});
+
+test("scopeMembers: absent membership is UNSCOPED, empty array excludes everything", () => {
+  const sites = [{ siteUrl: "a" }, { siteUrl: "b" }];
+  const key = (s: { siteUrl: string }) => s.siteUrl;
+  // Absent (a project saved before sites could be scoped) ⇒ everything stays
+  // visible. This is the back-compat case that must never silently empty a view.
+  assert.deepEqual(scopeMembers(sites, undefined, key), sites);
+  // Explicitly empty ⇒ the user deselected them all.
+  assert.deepEqual(scopeMembers(sites, [], key), []);
+  assert.deepEqual(scopeMembers(sites, ["b"], key), [{ siteUrl: "b" }]);
+  // A member that no longer exists locally simply matches nothing.
+  assert.deepEqual(scopeMembers(sites, ["ghost"], key), []);
 });
