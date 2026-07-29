@@ -455,6 +455,16 @@ reasons — ADR-0022):
   Index* shows exactly what's stored; `#spDbSchema` gives the model the right columns before
   it writes a SELECT. **Indexes are shared via Export/Import Reference Config**, so one
   teammate's indexing run benefits everyone.
+- **How long a run takes, and why the batch size moves.** A run is a series of Copilot
+  requests, and each one's cost is driven by how much the model has to *write* — roughly one
+  line per column. Batches are therefore sized by a **column budget**, not a table count: the
+  first batch is deliberately small so you see progress in seconds, then the extension measures
+  the actual columns-per-second and aims each following batch at about **45 seconds**, growing
+  when the model is quick and easing off when it is slow. Bigger batches are *cheaper* (one
+  batch = one premium request), so it grows back whenever throughput allows. The progress line
+  shows the columns in flight and notes when the size moves up or down. If a batch fails —
+  usually a response too long to finish — the budget halves and those tables are retried in
+  smaller pieces rather than dropped.
 - **Build Database ER Diagram (ADR-0030)** — for the common enterprise case where **no foreign
   keys are declared** and nobody is sure what joins to what. The run is **sized by your
   database, not by fixed numbers**: a sizing pass reads approximate row counts from catalog

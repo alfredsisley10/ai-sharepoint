@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.138.0 — 2026-07-27
+
+### Database indexing: much faster first results, adaptive batch size
+- **Batches are sized by columns, not table count.** Indexing time is driven by how much JSON the
+  model has to *write* — one line per column — so the old fixed **40 tables per request** was the
+  wrong unit: 40 narrow lookup tables is trivial, while 40 wide tables at the 80-column cap asks for
+  ~3,200 columns in a single call. That is the reported **460s+ batch**, and it sits close enough to
+  the response ceiling that a truncated reply loses the whole batch.
+- **It starts small and speeds up.** The first batch is deliberately modest (~120 columns), so you
+  see real progress in seconds instead of minutes. After each batch the extension measures the
+  actual columns-per-second and retargets the next one at roughly **45 seconds**, growing when the
+  model is quick and backing off when it is slow. Changes are damped (never more than 2× per step)
+  and bounded, so one slow moment can't collapse the batch size and one fast one can't overshoot
+  into truncation.
+- **Bigger batches are cheaper**, since each batch is one metered Copilot request — so the sizing
+  deliberately grows back up whenever throughput allows rather than staying small.
+- **A failed batch retries smaller** instead of being lost: the budget halves and the same tables go
+  again in smaller pieces. A single table too wide to split is skipped rather than re-sent as an
+  identical prompt, so no request is spent twice on something that cannot succeed.
+- Progress now shows the **column count and remaining tables**, and says when the batch size moves
+  up or down, so an adapting run reads as deliberate rather than erratic.
+
 ## 0.137.0 — 2026-07-27
 
 ### SQL Server: a failed certificate check no longer throws away your work
