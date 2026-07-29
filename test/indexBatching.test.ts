@@ -8,6 +8,7 @@ import {
   shrinkAfterFailure,
   estimateBatchCount,
   describeBudgetChange,
+  planResume,
   START_COLUMN_BUDGET,
   MIN_COLUMN_BUDGET,
   MAX_COLUMN_BUDGET,
@@ -122,4 +123,22 @@ test("describeBudgetChange only speaks when the size actually moved", () => {
   assert.equal(describeBudgetChange(120, 120), "");
   assert.match(describeBudgetChange(120, 240), /↑/);
   assert.match(describeBudgetChange(240, 120), /↓/);
+});
+
+test("planResume skips work a cut-short run already paid for", () => {
+  const tables = [{ n: "dbo.A" }, { n: "dbo.B" }, { n: "dbo.C" }];
+  const key = (t: { n: string }) => t.n;
+  // Nothing done yet ⇒ everything is to do.
+  assert.deepEqual(planResume(tables, key, []), { todo: tables, skipped: 0 });
+  // A partial index carries two tables; only the third is re-sent.
+  const r = planResume(tables, key, ["dbo.A", "dbo.C"]);
+  assert.deepEqual(r.todo.map(key), ["dbo.B"]);
+  assert.equal(r.skipped, 2);
+  // Casing must not cause re-indexing: the model echoes names back and the
+  // casing does not reliably round-trip.
+  assert.equal(planResume(tables, key, ["DBO.a", " dbo.B "]).skipped, 2);
+  // A carried name that no longer exists in the catalog is simply ignored.
+  assert.equal(planResume(tables, key, ["dbo.Gone"]).skipped, 0);
+  // Everything done ⇒ nothing left to do.
+  assert.deepEqual(planResume(tables, key, ["dbo.A", "dbo.B", "dbo.C"]).todo, []);
 });

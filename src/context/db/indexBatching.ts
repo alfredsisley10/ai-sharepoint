@@ -142,6 +142,27 @@ export function estimateBatchCount(
   return n;
 }
 
+/**
+ * Split work into "already done" and "still to do" for a RESUMED run.
+ *
+ * A run cut short by a proxy reset, a crash, or a closed window leaves a
+ * partial index behind. Re-running is the documented recovery, so it must not
+ * re-pay for tables already indexed: anything whose key is in `doneKeys` is
+ * skipped. Matching is case-insensitive because the model echoes qualified
+ * names back and casing is not guaranteed to round-trip.
+ */
+export function planResume<T>(
+  items: readonly T[],
+  keyOf: (item: T) => string,
+  doneKeys: Iterable<string>,
+): { todo: T[]; skipped: number } {
+  const done = new Set<string>();
+  for (const k of doneKeys) done.add(k.trim().toLowerCase());
+  if (done.size === 0) return { todo: [...items], skipped: 0 };
+  const todo = items.filter((i) => !done.has(keyOf(i).trim().toLowerCase()));
+  return { todo, skipped: items.length - todo.length };
+}
+
 /** Human note for the progress line, so an adapting batch size is visible
  *  rather than looking like erratic behavior. */
 export function describeBudgetChange(before: number, after: number): string {

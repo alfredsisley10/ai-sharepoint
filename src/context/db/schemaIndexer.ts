@@ -19,16 +19,40 @@ import {
   CONTENT_MAX_TABLES,
 } from "./schemaIndex";
 import {
+  isTransientLlmError,
+  retryDelayMs,
+  describeRetry,
+  errorText,
+  MAX_TRANSIENT_RETRIES,
+  PROXY_GUIDANCE,
+} from "./llmRetry";
+import {
   takeBatch,
   batchUnits,
   nextColumnBudget,
   shrinkAfterFailure,
   estimateBatchCount,
   describeBudgetChange,
+  planResume,
   START_COLUMN_BUDGET,
 } from "./indexBatching";
 
 export type TableSampler = (table: TableDef) => Promise<Record<string, string[]>>;
+
+/** Wait `ms`, returning early if the run is cancelled — so a backoff can never
+ *  hold a cancelled indexing run open. */
+function sleep(ms: number, token?: vscode.CancellationToken): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      sub?.dispose();
+      resolve();
+    }, ms);
+    const sub = token?.onCancellationRequested(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
 
 /**
  * Consent-gated Copilot indexing of a database schema (ADR-0024).
@@ -87,6 +111,16 @@ export class SchemaIndexer {
    * run starts small for a fast first result and grows the budget whenever the
    * model proves quick — larger batches are cheaper, since each batch is one
    * metered request.
+   *
+   * The run is also RECOVERABLE, which matters on corporate networks where an
+   * SSL-inspecting proxy resets long streaming replies
+   * (`net::ERR_HTTP2_PROTOCOL_ERROR`):
+   *  - a transient transport failure retries the same request after a short
+   *    backoff before the batch is treated as too big (llmRetry.ts);
+   *  - the index is CHECKPOINTED after every batch, so a reset, crash, or
+   *    closed window never discards completed work; and
+   *  - re-running RESUMES — tables already indexed are skipped, so recovery
+   *    costs only the tables that never made it.
    */
   async runIndexing(
     source: ContextSource,
@@ -94,15 +128,53 @@ export class SchemaIndexer {
     progress?: vscode.Progress<{ message?: string; increment?: number }>,
     token?: vscode.CancellationToken,
   ): Promise<SourceSchema> {
-    const totalUnits = Math.max(1, batchUnits(schema.catalog.tables));
-    const estimated = Math.max(1, estimateBatchCount(schema.catalog.tables));
-    let remaining: TableDef[] = schema.catalog.tables;
+    // RESUME: a previous run that a proxy reset (or the user) cut short leaves a
+    // PARTIAL index. Re-running must not redo tables already paid for, so those
+    // are carried forward and skipped — re-running is the documented recovery.
+    const carried: SemanticTable[] = schema.semantic?.partial ? (schema.semantic.tables ?? []) : [];
+    const { todo, skipped } = planResume(
+      schema.catalog.tables,
+      (t) => qualifiedName(t),
+      carried.map((t) => t.table),
+    );
+    if (skipped > 0) {
+      progress?.report({
+        message: `Resuming — ${skipped} table(s) already indexed, ${todo.length} to go`,
+      });
+      this.log.info(`Schema indexing resumed for "${source.displayName}": skipping ${skipped} already-indexed table(s).`);
+    }
+    const totalUnits = Math.max(1, batchUnits(todo));
+    const estimated = Math.max(1, estimateBatchCount(todo));
+    let remaining: TableDef[] = todo;
     let budget = START_COLUMN_BUDGET;
-    const results: SemanticTable[][] = [];
-    let modelId = "";
+    const results: SemanticTable[][] = carried.length ? [carried] : [];
+    let modelId = schema.semantic?.modelId ?? "";
     let partial = false;
     let index = 0;
+    /** Retries used on the batch currently in flight; reset when we move on. */
+    let attempt = 0;
     this.lastRunRequests = 0;
+    /**
+     * Persist what is indexed SO FAR. Called after every batch, so a proxy
+     * reset, a crash, or a closed window can never throw away completed work —
+     * the next run resumes from here instead of restarting.
+     */
+    const checkpoint = async (stillPartial: boolean): Promise<SourceSchema> => {
+      const merged = mergeSemantic(results);
+      const snapshot: SourceSchema = {
+        ...schema,
+        catalog: schema.catalog,
+        semantic: {
+          indexedAt: this.now(),
+          modelId,
+          tables: merged,
+          ...(stillPartial ? { partial: true } : {}),
+        },
+        semanticState: merged.length > 0 ? "indexed" : schema.semanticState,
+      };
+      await this.schemas.set(source.id, snapshot);
+      return snapshot;
+    };
     while (remaining.length > 0) {
       if (token?.isCancellationRequested) {
         partial = true;
@@ -110,7 +182,7 @@ export class SchemaIndexer {
       }
       const { batch, rest } = takeBatch(remaining, budget);
       const units = batchUnits(batch);
-      index += 1;
+      if (attempt === 0) index += 1; // a retry is the SAME batch, not the next one
       // Live feedback (pilot): a batch is one long streaming model request —
       // tick elapsed seconds until the first token, then stream-throttled
       // byte counts, then a per-batch completion line with bar movement. The
@@ -151,10 +223,14 @@ export class SchemaIndexer {
         const parsed = parseSemanticResponse(res.text, schema.catalog);
         results.push(parsed);
         remaining = rest;
+        attempt = 0;
         const elapsed = Date.now() - startedAt;
         const adjusted = nextColumnBudget(budget, units, elapsed);
         const note = describeBudgetChange(budget, adjusted);
         budget = adjusted;
+        // CHECKPOINT: persist everything indexed so far. A proxy reset, crash,
+        // or closed window after this point costs nothing already paid for.
+        await checkpoint(remaining.length > 0 || partial);
         progress?.report({
           // Progress by COLUMNS completed, not batches — with adaptive sizing
           // the batch count isn't known up front, and columns are the real work.
@@ -170,11 +246,24 @@ export class SchemaIndexer {
           this.log.warn(`Schema indexing stopped at batch ${index}: ${err.message}`);
           break;
         }
-        // One bad batch (unparseable JSON, transient model error) shouldn't
-        // void the others — keep going, mark partial. A failure is usually an
-        // over-long response, so halve the budget before the next batch and
-        // RETRY these tables at the smaller size rather than dropping them.
+        // A TRANSIENT transport failure — the corporate-proxy HTTP/2 reset that
+        // kills long streaming replies — is not a sizing problem: the identical
+        // request usually succeeds on the next try. Retry it unchanged, with a
+        // short backoff, before falling back to shrinking.
+        if (isTransientLlmError(err) && attempt < MAX_TRANSIENT_RETRIES && !token?.isCancellationRequested) {
+          attempt += 1;
+          const delay = retryDelayMs(attempt);
+          const note = describeRetry(err, attempt, MAX_TRANSIENT_RETRIES, delay);
+          this.log.warn(`Schema indexing batch ${index}: ${note} — ${errorText(err)}`);
+          paint(`${batchLabel} — ${note}`);
+          await sleep(delay, token);
+          continue; // `remaining` untouched: the same batch goes again
+        }
+        // Out of retries, or not transient at all.
         partial = true;
+        if (isTransientLlmError(err)) {
+          this.log.warn(`Schema indexing batch ${index} gave up after ${attempt} retries: ${errorText(err)}. ${PROXY_GUIDANCE}`);
+        }
         const smaller = shrinkAfterFailure(budget);
         // Retry only when a smaller budget could actually produce a SMALLER
         // batch. A single table already over budget can't be split, so retrying
@@ -191,24 +280,18 @@ export class SchemaIndexer {
           // retrying would re-send an identical prompt. Skip it so the run can
           // never loop on the same tables, and let `partial` report the gap.
           remaining = rest;
+          attempt = 0;
           progress?.report({ increment: (units / totalUnits) * 100 });
         }
         // Otherwise `remaining` is unchanged: the same tables are retried at
         // the smaller budget, which will take fewer of them per batch.
       }
     }
-    const tables = mergeSemantic(results);
-    const indexed: SourceSchema = {
-      catalog: schema.catalog,
-      semantic: {
-        indexedAt: this.now(),
-        modelId,
-        tables,
-        ...(partial ? { partial: true } : {}),
-      },
-      semanticState: tables.length > 0 ? "indexed" : schema.semanticState,
-    };
-    await this.schemas.set(source.id, indexed);
+    // Anything still queued (an entitlement stop, or cancellation) means the
+    // index does not cover the whole catalog — record that so a re-run resumes.
+    if (remaining.length > 0) partial = true;
+    const indexed = await checkpoint(partial);
+    const tables = indexed.semantic?.tables ?? [];
     this.telemetry.record("schema.index", {
       type: source.type,
       tables: String(schema.catalog.tables.length),
@@ -285,6 +368,7 @@ export class SchemaIndexer {
         const results: SemanticTable[][] = [];
         let partial = tables.length < schema.catalog.tables.length;
         let i = 0;
+        let cAttempt = 0;
         while (remaining.length > 0) {
           if (token.isCancellationRequested) {
             partial = true;
@@ -293,7 +377,7 @@ export class SchemaIndexer {
           const { batch: taken, rest } = takeBatch(remaining, budget);
           const batchSamples: TableSample[] = taken.map((x) => x.sample);
           const units = batchUnits(taken);
-          i += 1;
+          if (cAttempt === 0) i += 1; // a retry is the SAME batch
           const label = `Describing batch ${i}/~${estimated} (${batchSamples.length} tables, ${units} columns)`;
           const startedAt = Date.now();
           let received = 0;
@@ -323,6 +407,7 @@ export class SchemaIndexer {
             this.lastRunRequests += 1;
             results.push(parseSemanticResponse(res.text, schema.catalog));
             remaining = rest;
+            cAttempt = 0;
             const elapsed = Date.now() - startedAt;
             const adjusted = nextColumnBudget(budget, units, elapsed);
             const note = describeBudgetChange(budget, adjusted);
@@ -334,10 +419,25 @@ export class SchemaIndexer {
             });
           } catch (err) {
             clearInterval(ticker);
-            partial = true;
             if (err instanceof AppError && err.code === "copilot.entitlement") {
+              partial = true;
               this.log.warn(`Content indexing stopped at batch ${i}: ${err.message}`);
               break;
+            }
+            // Same corporate-proxy reset case as the schema pass: retry the
+            // identical request before treating it as a sizing problem.
+            if (isTransientLlmError(err) && cAttempt < MAX_TRANSIENT_RETRIES && !token.isCancellationRequested) {
+              cAttempt += 1;
+              const delay = retryDelayMs(cAttempt);
+              const retryNote = describeRetry(err, cAttempt, MAX_TRANSIENT_RETRIES, delay);
+              this.log.warn(`Content batch ${i}: ${retryNote} — ${errorText(err)}`);
+              progress.report({ message: `${label} — ${retryNote}` });
+              await sleep(delay, token);
+              continue;
+            }
+            partial = true;
+            if (isTransientLlmError(err)) {
+              this.log.warn(`Content batch ${i} gave up after ${cAttempt} retries: ${errorText(err)}. ${PROXY_GUIDANCE}`);
             }
             // Usually an over-long response — halve and retry these tables
             // smaller; at the floor, skip them so the run can't loop forever.
@@ -353,6 +453,7 @@ export class SchemaIndexer {
               // Floor reached, or a lone table too wide to split — skip it
               // rather than re-sending an identical prompt.
               remaining = rest;
+              cAttempt = 0;
               progress.report({ increment: (units / totalUnits) * 60 });
             }
           }

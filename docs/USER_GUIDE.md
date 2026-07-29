@@ -465,6 +465,14 @@ reasons — ADR-0022):
   shows the columns in flight and notes when the size moves up or down. If a batch fails —
   usually a response too long to finish — the budget halves and those tables are retried in
   smaller pieces rather than dropped.
+- **Interrupted by a corporate proxy? Just run it again.** On networks with SSL inspection, a
+  long streaming reply can be cut off mid-flight (`net::ERR_HTTP2_PROTOCOL_ERROR`,
+  `ECONNRESET`). Indexing retries the same request a couple of times after a short pause,
+  **saves its progress after every batch**, and **resumes where it stopped** when you re-run —
+  the progress line tells you how many tables it is skipping because they are already indexed.
+  So a proxy interruption costs only the batch in flight, never the whole run. If it keeps
+  happening, enable `aiSharePoint.logging.verboseWire` to capture the masked status for your
+  network team.
 - **Build Database ER Diagram (ADR-0030)** — for the common enterprise case where **no foreign
   keys are declared** and nobody is sure what joins to what. The run is **sized by your
   database, not by fixed numbers**: a sizing pass reads approximate row counts from catalog

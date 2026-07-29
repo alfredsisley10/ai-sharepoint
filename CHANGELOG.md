@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.139.0 — 2026-07-27
+
+### Database indexing survives corporate-proxy interruptions
+- **A reset connection no longer wastes the whole run.** Reported: indexing died with
+  `net::ERR_HTTP2_PROTOCOL_ERROR` — an SSL-inspecting proxy or HTTP/2 intermediary cutting the long
+  streaming reply, which is exactly the traffic such proxies are most likely to interrupt. Indexing
+  now recovers from this in three ways:
+  - **Retry.** A transport reset is retried with the *same* request after a short pause (2s, then
+    6s) before the batch is treated as too large — the identical call usually succeeds next time.
+    Permanent refusals (org policy, cancellation) are never retried, so no metered request is spent
+    on an answer that cannot change.
+  - **Checkpoint.** The index is now saved **after every batch** instead of only at the end. A
+    reset, a crash, or closing the window can no longer throw away work you already paid for.
+  - **Resume.** Re-running indexing **picks up where it stopped** — tables already indexed are
+    skipped, so recovering from an interruption costs only the tables that never made it. The
+    progress line says how many are being skipped.
+- Failures are also reported more honestly: a batch that recovers on retry no longer marks the whole
+  index partial, and a run is flagged partial only when tables genuinely didn't get indexed.
+- The content-types pass gets the same retry, checkpoint and reporting behavior.
+
 ## 0.138.0 — 2026-07-27
 
 ### Database indexing: much faster first results, adaptive batch size
