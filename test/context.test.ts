@@ -488,12 +488,14 @@ test("contextCredentialUi sends every non-Entra source type to the generic promp
   // Exhaustive over the type union; if a future source type needs a dedicated
   // (e.g. Entra) picker, it must be moved out of this list AND given a case in
   // contextCredentialUi — otherwise it silently inherits the Atlassian default.
+  // `mssql` is exactly that case: it now has its own picker so SQL Server can
+  // sign in as the current Microsoft user (Entra) as well as with a SQL login
+  // or a Windows account.
   const GENERIC: ContextSourceType[] = [
     "confluence",
     "jira",
     "github",
     "ldap",
-    "mssql",
     "postgres",
     "mysql",
     "mongodb",
@@ -505,4 +507,9 @@ test("contextCredentialUi sends every non-Entra source type to the generic promp
   for (const type of GENERIC) {
     assert.equal(contextCredentialUi(type), "generic", `${type} should use the generic credential prompt`);
   }
+  // The dedicated pickers, so a routing regression is caught here rather than
+  // by a user being asked for an Atlassian account email.
+  assert.equal(contextCredentialUi("powerbi"), "powerbi-aad");
+  assert.equal(contextCredentialUi("m365copilot"), "m365-graph");
+  assert.equal(contextCredentialUi("mssql"), "mssql");
 });

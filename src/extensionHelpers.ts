@@ -11,6 +11,15 @@ import {
 import { assertReadOnlySql, parseMongoSpec } from "./context/db/readSafe";
 import { aliasIssue, normalizeAlias, DESCRIPTION_MAX_LENGTH } from "./context/sourceRef";
 import { SiteSyncConfig } from "./sync/syncConfigStore";
+import {
+  classifyTlsFailure,
+  parseCertAltNames,
+  suggestConnectionNames,
+  withMssqlHost,
+  withTrustServerCertificate,
+  mssqlHostOf,
+  describeTlsFailure,
+} from "./context/db/mssqlCertRecovery";
 import { ChangeReport } from "./sync/changeReport";
 
 /**
@@ -494,4 +503,119 @@ export async function openBundledDoc(
     const doc = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(doc, { preview: true });
   }
+}
+
+// --- Failed-verify recovery (SQL Server TLS + generic) -----------------------
+
+/** What the add-source flow should do after a failed verification. */
+export type VerifyRecovery =
+  | { kind: "retry"; url: string }
+  | { kind: "credentials" };
+
+/**
+ * Offer to FIX a failed connection instead of discarding the wizard.
+ *
+ * Pilot report: adding a SQL Server whose certificate didn't validate threw the
+ * user all the way back to the start, losing the server, instance, port,
+ * database, name and credentials they had just typed. The overwhelmingly common
+ * cause is a name mismatch — connecting by IP or short name when the certificate
+ * is issued for the FQDN — which we can *read out of the error* and offer to
+ * correct (mssqlCertRecovery).
+ *
+ * Returns the recovery to apply, or undefined when the user gives up (the caller
+ * then reports the original error, as before).
+ */
+export async function offerVerifyRecovery(
+  sourceType: ContextSourceType,
+  currentUrl: string,
+  err: unknown,
+  opts: {
+    /** aiSharePoint.db.allowTrustServerCertificate — a ?trustServerCertificate=true
+     *  URL is IGNORED without it, so offering "trust" without offering to turn
+     *  this on would silently do nothing. */
+    allowTrustSetting: boolean;
+    enableTrustSetting: () => Promise<void>;
+  },
+): Promise<VerifyRecovery | undefined> {
+  const message = err instanceof Error ? err.message : String(err);
+  const tls = sourceType === "mssql" ? classifyTlsFailure(message) : undefined;
+
+  type Item = vscode.QuickPickItem & { action?: VerifyRecovery | "trust" | "rename" };
+  const items: Item[] = [];
+
+  if (tls) {
+    const alt = parseCertAltNames(message);
+    for (const s of suggestConnectionNames(mssqlHostOf(currentUrl), alt)) {
+      items.push({
+        label: `$(arrow-right) Connect as "${s.host}"`,
+        description: s.reason,
+        action: { kind: "retry", url: withMssqlHost(currentUrl, s.host) },
+      });
+    }
+    items.push({
+      label: "$(edit) Use a different server name…",
+      description: "type the name the certificate was issued for",
+      action: "rename",
+    });
+    items.push({
+      label: "$(unlock) Trust the server certificate (skip validation)",
+      description: opts.allowTrustSetting
+        ? "the SSMS 'Trust server certificate' checkbox"
+        : "also enables the machine-scoped setting this requires",
+      action: "trust",
+    });
+  } else {
+    // Not a certificate problem — still better than losing the whole wizard.
+    items.push({
+      label: "$(key) Re-enter credentials",
+      description: "wrong password, or the wrong authentication mode",
+      action: { kind: "credentials" },
+    });
+    items.push({
+      label: "$(edit) Change the server name…",
+      description: "fix a typo in the host without starting over",
+      action: "rename",
+    });
+  }
+
+  const headline = tls
+    ? describeTlsFailure(tls, parseCertAltNames(message))
+    : `Could not connect: ${message.slice(0, 200)}`;
+  const pick = await vscode.window.showQuickPick(items, {
+    ignoreFocusOut: true,
+    title: "Connection failed — how would you like to fix it?",
+    placeHolder: `${headline}  ·  Esc discards this connection.`,
+  });
+  if (!pick?.action) return undefined;
+
+  if (pick.action === "rename") {
+    const next = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Server name to connect as",
+      value: mssqlHostOf(currentUrl),
+      prompt: "Everything else you entered (instance, port, database, credentials) is kept.",
+      validateInput: (v) => (v.trim() && !v.includes("://") ? undefined : "Enter the server name only — no scheme"),
+    });
+    if (!next?.trim()) return undefined;
+    return { kind: "retry", url: withMssqlHost(currentUrl, next.trim()) };
+  }
+
+  if (pick.action === "trust") {
+    if (!opts.allowTrustSetting) {
+      const ok = await vscode.window.showWarningMessage(
+        "Turn off SQL Server certificate validation for this machine?",
+        {
+          modal: true,
+          detail:
+            "Connections will no longer verify the server's identity, so this machine can't detect an impostor server or a TLS-intercepting proxy on the database connection. Prefer connecting by the name on the certificate, or installing your internal CA.\n\nThis enables aiSharePoint.db.allowTrustServerCertificate (machine-scoped); per-connection trust still has to be requested by each connection.",
+        },
+        "Enable and trust",
+      );
+      if (ok !== "Enable and trust") return undefined;
+      await opts.enableTrustSetting();
+    }
+    return { kind: "retry", url: withTrustServerCertificate(currentUrl, true) };
+  }
+
+  return pick.action;
 }

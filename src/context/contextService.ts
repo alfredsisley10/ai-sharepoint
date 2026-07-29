@@ -160,6 +160,7 @@ import {
   fetchSnowUserToken,
 } from "./adapters/servicenowAuth";
 import { SchemaCatalog, TableDef } from "./db/schemaIndex";
+import { MSSQL_AAD_SCOPES } from "./db/mssqlAuth";
 import { AppError, classifyError } from "../core/errors";
 
 /** AAD token acquisition for sources that reuse the extension's Microsoft
@@ -497,7 +498,8 @@ export class ContextService {
     );
   }
 
-  private dbTls(): DbTlsOptions {
+  private dbTls(credential?: ContextCredential): DbTlsOptions {
+    const broker = this.aadBroker;
     return {
       caBundlePath: this.caBundlePath("ldap.caCertificatesFile"),
       // ?trustServerCertificate=true (cert validation off) is honored only
@@ -505,6 +507,11 @@ export class ContextService {
       allowTrustServerCertificate: vscode.workspace
         .getConfiguration("aiSharePoint")
         .get<boolean>("db.allowTrustServerCertificate", false),
+      // SQL Server "sign in as me": mint the Entra token from the extension's
+      // existing Microsoft 365 sign-in, so nothing extra is stored.
+      ...(credential?.method === "aad-sso" && broker
+        ? { mssqlAccessToken: (interactive: boolean) => broker(credential, interactive, MSSQL_AAD_SCOPES) }
+        : {}),
     };
   }
 
@@ -584,7 +591,7 @@ export class ContextService {
     const caps = this.caps();
     return this.tracked(source, fresh, () => {
       if (ContextService.DB_TYPES.has(source.type)) {
-        return verifyDb(source, credential, this.dbTls(), caps);
+        return verifyDb(source, credential, this.dbTls(credential), caps);
       }
       switch (source.type) {
         case "ldap":
@@ -657,7 +664,7 @@ export class ContextService {
     opts?: { allowExpensive?: boolean },
   ): Promise<ContextSearchHit[]> {
     if (ContextService.DB_TYPES.has(source.type)) {
-      return searchDb(source, credential, query, this.dbTls(), caps, opts);
+      return searchDb(source, credential, query, this.dbTls(credential), caps, opts);
     }
     switch (source.type) {
       case "ldap":
@@ -709,7 +716,7 @@ export class ContextService {
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, async () => {
       if (ContextService.DB_TYPES.has(source.type)) {
-        return searchDbRaw(source, credential, query, this.dbTls(), caps);
+        return searchDbRaw(source, credential, query, this.dbTls(credential), caps);
       }
       const hits = await this.dispatchSearch(source, credential, query, caps);
       return hits.map((h) => ({
@@ -1820,7 +1827,7 @@ export class ContextService {
     }
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
-      describeDb(source, credential, this.dbTls(), this.caps(), nowIso),
+      describeDb(source, credential, this.dbTls(credential), this.caps(), nowIso),
     );
   }
 
@@ -1906,7 +1913,7 @@ export class ContextService {
     });
     const caps = budget.timeoutMs === base.timeoutMs ? base : { ...base, timeoutMs: budget.timeoutMs };
     return this.tracked(source, false, () =>
-      probeJoinRate(source, credential, this.dbTls(), caps, from, to, sample, cast),
+      probeJoinRate(source, credential, this.dbTls(credential), caps, from, to, sample, cast),
     );
   }
 
@@ -1918,7 +1925,7 @@ export class ContextService {
     }
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
-      estimateRowCounts(source, credential, this.dbTls(), this.caps()),
+      estimateRowCounts(source, credential, this.dbTls(credential), this.caps()),
     );
   }
 
@@ -1930,7 +1937,7 @@ export class ContextService {
     }
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
-      sampleTableValues(source, credential, this.dbTls(), this.caps(), table),
+      sampleTableValues(source, credential, this.dbTls(credential), this.caps(), table),
     );
   }
 
@@ -1999,7 +2006,7 @@ export class ContextService {
             return out.slice(0, caps.maxResults * 2);
           }
           if (ContextService.DB_TYPES.has(source.type)) {
-            return browseDb(source, credential, this.dbTls(), caps);
+            return browseDb(source, credential, this.dbTls(credential), caps);
           }
           if (source.type === "powerbi") {
             return browsePowerBi(this.powerBiTokens(credential), caps);

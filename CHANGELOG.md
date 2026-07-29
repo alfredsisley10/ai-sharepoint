@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.137.0 — 2026-07-27
+
+### SQL Server: a failed certificate check no longer throws away your work
+- **The connection is no longer discarded when verification fails.** Previously a SQL Server whose
+  certificate didn't validate sent you back to the very start — server, instance, port, database,
+  name and credentials all lost. Now the wizard offers to **fix it in place** and retries, keeping
+  everything you typed.
+- **It suggests the right name.** The certificate error itself lists the names the certificate is
+  valid for, so when you connect by IP or short name and the certificate is issued for the FQDN,
+  the fix is offered as a one-click *"Connect as sql01.corp.example"*. Wildcard entries are turned
+  into the concrete name your server implies rather than offered as-is (you can't dial `*.corp`),
+  and a name you already tried is never suggested back.
+- **"Trust server certificate" actually works now.** Choosing it did nothing unless the
+  machine-scoped `aiSharePoint.db.allowTrustServerCertificate` setting happened to be on — the
+  request was dropped and the only trace was a wire-log line, so the connection failed on the very
+  same certificate error. The wizard now asks to enable that setting (explaining the trade-off) at
+  the moment you choose to trust, and if the request is ever dropped anyway the error says so
+  instead of hiding it.
+- Non-certificate failures are recoverable too: re-enter credentials or fix a typo'd server name
+  without restarting the wizard.
+
+### SQL Server: sign in as yourself
+- **New "Use my Microsoft account (Entra)" sign-in for SQL Server** — no database password is
+  stored at all. It reuses the Microsoft 365 sign-in the extension already has and mints a
+  short-lived token per connection, for Azure SQL, SQL Managed Instance, and any Entra-enabled
+  SQL Server.
+- On-prem Windows accounts still use NTLM with a password: passwordless integrated SSPI/Kerberos
+  needs native binaries, which the single-VSIX portability rule (ADR-0016) rules out.
+
 ## 0.136.0 — 2026-07-27
 
 ### Projects can scope SharePoint sites and files (fix)

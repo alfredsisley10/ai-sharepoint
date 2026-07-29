@@ -23,6 +23,7 @@ import {
   SourceIdentityExtras,
   renderPullPreview,
   openBundledDoc,
+  offerVerifyRecovery,
 } from "./extensionHelpers";
 import { tenantCacheHandle } from "./auth/msalCache";
 import { isSupportedSiteUrl } from "./auth/sharePointClient";
@@ -243,7 +244,7 @@ import {
 import { CommsTreeProvider } from "./ui/commsView";
 import { registerCommsTools } from "./chat/commsTools";
 import { registerSiteDevTools } from "./chat/siteDevTools";
-import { parseSsmsServerName, buildMssqlUrl } from "./context/db/mssqlAuth";
+import { parseSsmsServerName, buildMssqlUrl, MSSQL_AAD_SCOPES } from "./context/db/mssqlAuth";
 import { scanForLeaks } from "./diagnostics/bundle";
 import { BookmarksStore } from "./context/bookmarksStore";
 import { MemoryStore } from "./context/memoryStore";
@@ -2364,6 +2365,48 @@ export function activate(context: vscode.ExtensionContext): void {
    *  reconnect path didn't, so reconnecting an imported m365copilot source fell
    *  through to the Atlassian "account email" prompt. Funnelling both through
    *  `contextCredentialUi` makes that impossible to repeat. */
+  /**
+   * SQL Server sign-in. "Use my Microsoft account" leads because it stores NO
+   * database credential at all — the keychain entry holds only the MSAL
+   * provider/cache handles, and a short-lived Entra token is minted per
+   * connection (Azure SQL / SQL MI / any Entra-enabled SQL Server).
+   *
+   * Passwordless integrated Windows auth is deliberately absent: SSPI/Kerberos
+   * needs native bindings, which the one-VSIX portability rule forbids
+   * (ADR-0016), so on-prem Windows accounts still go through NTLM + password.
+   */
+  const pickMssqlCredential = async (
+    deployment: ContextDeployment,
+    baseUrl?: string,
+    defaultUpn?: string,
+  ): Promise<ContextCredential | undefined> => {
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(account) Use my Microsoft account (Entra)",
+          description: "no password stored — Azure SQL / Entra-enabled SQL Server",
+          value: "aad-sso" as const,
+        },
+        {
+          label: "$(key) SQL Server Authentication",
+          description: "database login + password",
+          value: "basic" as const,
+        },
+        {
+          label: "$(organization) Windows Authentication (NTLM)",
+          description: "DOMAIN\\user or user@domain + password — no passwordless SSO (pure-JS NTLM)",
+          value: "ntlm" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "SQL Server sign-in method" },
+    );
+    if (!mode) return undefined;
+    if (mode.value === "aad-sso") {
+      return signInToM365Standalone("Microsoft sign-in for SQL Server", MSSQL_AAD_SCOPES);
+    }
+    return promptContextCredential("mssql", deployment, defaultUpn, baseUrl, mode.value);
+  };
+
   const promptCredentialFor = (
     type: ContextSourceType,
     deployment: ContextDeployment,
@@ -2375,6 +2418,8 @@ export function activate(context: vscode.ExtensionContext): void {
         return pickAadCredential();
       case "m365-graph":
         return pickM365GraphCredential();
+      case "mssql":
+        return pickMssqlCredential(deployment, baseUrl, defaultUpn);
       default:
         return promptContextCredential(type, deployment, defaultUpn, baseUrl);
     }
@@ -2528,12 +2573,43 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (!certPick) return;
 
+      // "Trust server certificate" is honored only when the machine-scoped
+      // aiSharePoint.db.allowTrustServerCertificate setting is ON — a connection
+      // URL alone can never switch validation off. Without asking here, picking
+      // this option did NOTHING and the connection still failed on the same
+      // certificate error (reported: "ignoring SSL errors does not appear to
+      // work"), with the only clue buried in a wire log. So ask now, and if the
+      // user declines, say plainly that validation stays on.
+      let trustCert = certPick.value;
+      if (trustCert && !vscode.workspace.getConfiguration("aiSharePoint").get<boolean>("db.allowTrustServerCertificate", false)) {
+        const ok = await vscode.window.showWarningMessage(
+          "Turn off SQL Server certificate validation for this machine?",
+          {
+            modal: true,
+            detail:
+              "Skipping validation requires the machine-scoped setting aiSharePoint.db.allowTrustServerCertificate — without it this choice is ignored and the connection keeps validating the certificate.\n\nWith it off, connections no longer verify the server's identity, so an impostor server or a TLS-intercepting proxy on the database connection can't be detected. Prefer connecting by the name on the certificate, or installing your internal CA.",
+          },
+          "Enable and trust",
+          "Keep validating",
+        );
+        if (ok === "Enable and trust") {
+          await vscode.workspace
+            .getConfiguration("aiSharePoint")
+            .update("db.allowTrustServerCertificate", true, vscode.ConfigurationTarget.Global);
+        } else {
+          trustCert = false;
+          void vscode.window.showInformationMessage(
+            "Certificate validation stays ON. If the connection fails on the certificate, the next step offers to connect by the name the certificate was issued for.",
+          );
+        }
+      }
+
       baseUrl = buildMssqlUrl({
         host,
         instance,
         port: portNum,
         database: database.trim(),
-        trustServerCertificate: certPick.value,
+        trustServerCertificate: trustCert,
       });
       identityExtras = { host, database: database.trim() };
     } else if (typePick.value === "servicenow") {
@@ -3169,15 +3245,60 @@ export function activate(context: vscode.ExtensionContext): void {
       ...(writeScope ? { writeScope } : {}),
       ...(jiraWriteScope ? { jiraWriteScope } : {}),
     };
+    // Verification with IN-PLACE RECOVERY. A failed verify used to discard the
+    // whole wizard (pilot: a SQL Server whose certificate didn't validate threw
+    // the user back to the start, losing server/instance/port/database/name and
+    // the credentials they had just typed). Now the fixable failures — above
+    // all a certificate name mismatch, where the error itself names the host to
+    // use — are offered as a correction and retried with everything preserved.
+    let attempt = source;
+    let attemptCredential = credential;
     try {
-      const { account } = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: "Verifying source…" },
-        () => contextService.verify(source, credential, true),
-      );
-      const saved: ContextSource = { ...source, account, lastVerifiedAt: nowIso() };
+      let account: string;
+      for (;;) {
+        try {
+          ({ account } = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: "Verifying source…" },
+            () => contextService.verify(attempt, attemptCredential, true),
+          ));
+          break;
+        } catch (verifyErr) {
+          // Clear the just-recorded failure before re-attempting, so retrying
+          // inside the wizard can't walk this unsaved source into a lockout.
+          await contextSources.resetLockout(attempt.id);
+          const recovery = await offerVerifyRecovery(attempt.type, attempt.baseUrl, verifyErr, {
+            allowTrustSetting: vscode.workspace
+              .getConfiguration("aiSharePoint")
+              .get<boolean>("db.allowTrustServerCertificate", false),
+            enableTrustSetting: () =>
+              Promise.resolve(
+                vscode.workspace
+                  .getConfiguration("aiSharePoint")
+                  .update("db.allowTrustServerCertificate", true, vscode.ConfigurationTarget.Global),
+              ),
+          });
+          if (!recovery) throw verifyErr; // gave up — report the original failure
+          if (recovery.kind === "credentials") {
+            const next = await promptCredentialFor(attempt.type, attempt.deployment, attempt.baseUrl);
+            if (!next) throw verifyErr;
+            attemptCredential = next;
+          } else {
+            attempt = { ...attempt, baseUrl: recovery.url };
+          }
+        }
+      }
+      // `attempt`/`attemptCredential` carry any in-wizard recovery (a corrected
+      // server name, a trusted certificate, or re-entered credentials), so the
+      // saved source records what ACTUALLY verified — not what was first typed.
+      const saved: ContextSource = {
+        ...attempt,
+        authMethod: attemptCredential.method,
+        account,
+        lastVerifiedAt: nowIso(),
+      };
       await contextSources.upsert(saved);
-      await contextSources.setCredential(source.id, credential);
-      telemetry.record("context.add", { type: source.type, deployment: source.deployment, method: credential.method, ...(source.role === "managed" ? { role: "managed" } : {}) });
+      await contextSources.setCredential(saved.id, attemptCredential);
+      telemetry.record("context.add", { type: saved.type, deployment: saved.deployment, method: attemptCredential.method, ...(saved.role === "managed" ? { role: "managed" } : {}) });
       const editIdentity = "Edit Name, Alias & Description";
       void vscode.window
         .showInformationMessage(
@@ -8083,6 +8204,10 @@ async function promptContextCredential(
   deployment: ContextDeployment,
   defaultUpn?: string,
   baseUrl?: string,
+  /** SQL Server only: the method already chosen by the mssql router, so the
+   *  method is not asked twice (the router also offers Microsoft sign-in,
+   *  which this module-level prompt cannot reach). */
+  presetMssqlMethod?: ContextCredential["method"],
 ): Promise<ContextCredential | undefined> {
   let method: ContextCredential["method"];
   if (type === "github") {
@@ -8554,23 +8679,9 @@ async function promptContextCredential(
     let userTitle = "Database user (read-only account recommended)";
     let userPlaceholder = "report_reader";
     if (type === "mssql") {
-      const mode = await vscode.window.showQuickPick(
-        [
-          {
-            label: "$(key) SQL Server Authentication",
-            description: "database login + password",
-            value: "basic" as const,
-          },
-          {
-            label: "$(account) Windows Authentication (NTLM)",
-            description: "DOMAIN\\user or user@domain + password — no passwordless SSO (pure-JS NTLM)",
-            value: "ntlm" as const,
-          },
-        ],
-        { ignoreFocusOut: true, title: "SQL Server sign-in method" },
-      );
-      if (!mode) return undefined;
-      dbMethod = mode.value;
+      // The method was chosen by the mssql router (which also offers signing in
+      // as the current Microsoft user); fall back to SQL auth if absent.
+      dbMethod = presetMssqlMethod ?? "basic";
       if (dbMethod === "ntlm") {
         userTitle = "Windows account";
         userPlaceholder = "CORP\\jdoe  or  jdoe@corp.example";

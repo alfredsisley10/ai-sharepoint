@@ -14,6 +14,7 @@ import { MongoClient } from "mongodb";
 import { ContextSource, ContextCredential, ContextSearchHit, ReadCaps } from "../types";
 import { assertReadOnlySql, rowsToHits, parseMongoSpec } from "./readSafe";
 import { buildMssqlAuthentication, parseMssqlParams, resolveMssqlEndpoint } from "./mssqlAuth";
+import { withTrustIgnoredHint } from "./mssqlCertRecovery";
 import {
   SchemaCatalog,
   TableDef,
@@ -73,12 +74,20 @@ function wireSqlResult(
   );
 }
 
+/** Connection-level options threaded into every database runner: TLS trust, plus
+ *  the Entra token source for SQL Server sources that sign in as the user. */
 export interface DbTlsOptions {
   caBundlePath?: string;
   /** Machine-scoped opt-in (aiSharePoint.db.allowTrustServerCertificate)
    *  gating the per-URL ?trustServerCertificate=true escape hatch — without
    *  it a connection URL can never switch SQL Server cert validation off. */
   allowTrustServerCertificate?: boolean;
+  /** Mint an Entra access token for a SQL Server source whose method is
+   *  "aad-sso" (the signed-in Microsoft user). Supplied by the extension layer,
+   *  which owns the MSAL provider registry; absent in contexts without a
+   *  sign-in, where such a source fails with a clear message instead of
+   *  silently falling back to password auth. */
+  mssqlAccessToken?: (interactive: boolean) => Promise<string>;
 }
 
 export interface BrowseCandidate {
@@ -190,11 +199,19 @@ async function mssqlRows(
   const { host, port, database, params } = parseDbUrl(source);
   const ca = loadTrustedCAs(tls.caBundlePath);
   const mp = parseMssqlParams(params, tls.allowTrustServerCertificate === true);
+  // A source that signs in as the user mints its token per connection (they are
+  // short-lived, so caching one on the descriptor would just serve stale ones).
+  // Non-interactive here: a background read must never pop a sign-in prompt.
+  const aadToken =
+    credential.method === "aad-sso" && tls.mssqlAccessToken
+      ? await tls.mssqlAccessToken(false)
+      : undefined;
   const connection = new TdsConnection({
     server: host,
-    // SQL Server Authentication or Windows Authentication (NTLM) — selected
-    // by the stored method, with safe inference for DOMAIN\user accounts.
-    authentication: buildMssqlAuthentication(credential),
+    // Entra (signed-in user), SQL Server Authentication, or Windows
+    // Authentication (NTLM) — selected by the stored method, with safe
+    // inference for DOMAIN\user accounts.
+    authentication: buildMssqlAuthentication(credential, aadToken),
     options: {
       database,
       // SqlClient precedence: an explicit port connects directly (instance
@@ -221,6 +238,13 @@ async function mssqlRows(
   const withServerDetail = (err: unknown): unknown => {
     if (err instanceof Error && serverMessages.length > 0) {
       err.message = `${err.message} — server said: ${serverMessages.slice(-2).join(" | ")}`;
+    }
+    // Surface a DROPPED trust-the-certificate request in the error itself. It
+    // was previously noted only in the wire log, so ticking "Trust server
+    // certificate" and still failing on the certificate looked like the option
+    // simply didn't work.
+    if (err instanceof Error) {
+      err.message = withTrustIgnoredHint(err.message, mp.trustServerCertificateIgnored === true);
     }
     return err;
   };

@@ -392,12 +392,32 @@ reasons — ADR-0022):
   5. **Certificate handling** — choose **"Trust server certificate"** (the SSMS checkbox
      equivalent) when the server's certificate is self-signed or doesn't match the FQDN you
      connect with; validation is skipped for that source only;
-  6. **Sign-in method** — **SQL Server Authentication** (database login) or **Windows
-     Authentication** (NTLM — `CORP\user` or `user@corp.example` + password; passwordless SSO
-     is not possible in a portable extension) — then username and password. The connection is
-     verified with a single read before anything is saved, and a rejected login now includes
-     **SQL Server's own error message** (login failed vs. cannot open database vs. wrong
+  6. **Sign-in method** — one of:
+     - **Use my Microsoft account (Entra)** — *no database password is stored.* Reuses the
+       Microsoft 365 sign-in the extension already has and mints a short-lived token per
+       connection. Works with Azure SQL, SQL Managed Instance, and any Entra-enabled SQL Server.
+     - **SQL Server Authentication** — a database login + password.
+     - **Windows Authentication** — NTLM (`CORP\user` or `user@corp.example` + password).
+       Passwordless integrated SSO needs native binaries, which a single portable VSIX can't
+       ship (ADR-0016), so on-prem Windows accounts still need a password here.
+
+     The connection is verified with a single read before anything is saved, and a rejected login
+     includes **SQL Server's own error message** (login failed vs. cannot open database vs. wrong
      instance) so the fix is obvious.
+
+  **If the certificate check fails, you don't start over.** The wizard offers to fix it and
+  retries with everything you typed intact:
+     - **Connect as `<name>`** — the certificate error names the hosts the certificate is valid
+       for, so connecting by IP or short name when the cert is issued for the FQDN is a one-click
+       correction.
+     - **Use a different server name…** — type the name yourself.
+     - **Trust the server certificate** — the SSMS checkbox. This needs the machine-scoped
+       `aiSharePoint.db.allowTrustServerCertificate` setting, so the wizard offers to enable it
+       right there; without it the request is ignored and validation stays on (the error says so
+       rather than looking like the option silently failed).
+
+     Non-certificate failures are recoverable too — re-enter credentials or fix a typo'd server
+     name without restarting.
   The equivalent URL forms, if you script sources via export/import:
   `mssql://sqlhost:14330/Sales` (direct port) or `mssql://sqlhost/Sales?instance=PROD`
   (SQL Browser, UDP 1434), plus `?trustServerCertificate=true`.

@@ -28,13 +28,18 @@ export type ContextDeployment = "cloud" | "datacenter";
  *  Atlassian account when it should reuse the Microsoft 365 / Graph sign-in.
  *  Centralizing the decision here (consumed by one router) keeps the add wizard
  *  and the reconnect path from ever diverging on it again. */
-export type ContextCredentialUi = "powerbi-aad" | "m365-graph" | "generic";
+export type ContextCredentialUi = "powerbi-aad" | "m365-graph" | "mssql" | "generic";
 export function contextCredentialUi(type: ContextSourceType): ContextCredentialUi {
   switch (type) {
     case "powerbi":
       return "powerbi-aad";
     case "m365copilot":
       return "m365-graph";
+    // SQL Server can sign in as the SIGNED-IN Microsoft user (Entra/Azure SQL)
+    // as well as with a SQL login or a Windows account, so its method pick has
+    // to reach the Microsoft sign-in — which the generic prompt cannot.
+    case "mssql":
+      return "mssql";
     default:
       return "generic";
   }

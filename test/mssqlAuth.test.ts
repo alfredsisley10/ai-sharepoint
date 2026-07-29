@@ -167,3 +167,31 @@ test("resolveMssqlEndpoint: explicit port beats instance; instance beats default
     { port: 1433 },
   );
 });
+
+test("aad-sso signs in as the current Microsoft user — no stored database password", () => {
+  const auth = buildMssqlAuthentication(
+    // The keychain entry for an aad-sso source holds provider/cache HANDLES,
+    // not a password — which is the whole point of the method.
+    { method: "aad-sso", secret: JSON.stringify({ providerId: "msal-public-interactive", cacheHandle: "h" }) },
+    "eyJ0eXAiOi.token",
+  );
+  assert.equal(auth.type, "azure-active-directory-access-token");
+  assert.deepEqual(auth.options, { token: "eyJ0eXAiOi.token" });
+  // The handle blob must never travel as a password.
+  assert.ok(!JSON.stringify(auth).includes("cacheHandle"));
+});
+
+test("aad-sso without a token FAILS rather than falling back to password auth", () => {
+  // Falling through to SQL auth here would send the credential JSON (provider
+  // handles) as the password — a confusing failure and a needless secret write.
+  assert.throws(
+    () => buildMssqlAuthentication({ method: "aad-sso", secret: "{}" }),
+    /Microsoft account/i,
+  );
+});
+
+test("a token supplied for a non-aad method is ignored (the method decides)", () => {
+  const auth = buildMssqlAuthentication({ method: "basic", username: "reader", secret: "pw" }, "stray-token");
+  assert.equal(auth.type, "default");
+  assert.deepEqual(auth.options, { userName: "reader", password: "pw" });
+});

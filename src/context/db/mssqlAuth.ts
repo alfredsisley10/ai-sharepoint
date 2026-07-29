@@ -29,22 +29,48 @@ export function parseWindowsAccount(username: string): WindowsAccount | null {
   return null;
 }
 
+/** The Entra scope for a SQL Server / Azure SQL access token. */
+export const MSSQL_AAD_SCOPES = ["https://database.windows.net/.default"];
+
 export type TediousAuthentication =
   | { type: "default"; options: { userName: string; password: string } }
-  | { type: "ntlm"; options: { userName: string; password: string; domain: string } };
+  | { type: "ntlm"; options: { userName: string; password: string; domain: string } }
+  | { type: "azure-active-directory-access-token"; options: { token: string } };
 
 /**
  * Pick the tedious authentication config:
+ *  - method "aad-sso" → the SIGNED-IN Microsoft user. `accessToken` is minted on
+ *    demand from the extension's existing Microsoft 365 sign-in, so no database
+ *    credential is ever stored for this source (the keychain entry holds only
+ *    the provider/cache handles). Works against Azure SQL / SQL MI and any
+ *    Entra-enabled SQL Server;
  *  - method "ntlm" → Windows Authentication (NTLM), domain parsed from the
  *    account (falls back to plain user + empty domain if unparseable);
  *  - method "basic" with a Windows-shaped account (DOMAIN\\user / UPN) →
  *    NTLM too — SQL logins cannot contain "\\", so this inference is safe
  *    and rescues users who picked the wrong mode;
  *  - otherwise → SQL Server Authentication.
+ *
+ * Note on passwordless ON-PREM Windows auth: integrated SSPI/Kerberos needs
+ * native bindings, which the one-VSIX portability rule forbids (ADR-0016), so
+ * on-prem still needs NTLM with a password. `aad-sso` covers the cloud/Entra
+ * case, which is where "don't store another credential" actually applies.
  */
 export function buildMssqlAuthentication(
   credential: ContextCredential,
+  /** Token minted from the signed-in Microsoft account (method "aad-sso"). */
+  accessToken?: string,
 ): TediousAuthentication {
+  if (credential.method === "aad-sso") {
+    if (!accessToken) {
+      // Fail loudly: silently falling back to SQL auth here would send the
+      // credential JSON (provider handles, not a password) as a password.
+      throw new Error(
+        "This SQL Server source signs in with your Microsoft account, but no access token was available. Sign in to Microsoft 365 and try again.",
+      );
+    }
+    return { type: "azure-active-directory-access-token", options: { token: accessToken } };
+  }
   const username = credential.username ?? "";
   const win = parseWindowsAccount(username);
   if (credential.method === "ntlm" || win) {
