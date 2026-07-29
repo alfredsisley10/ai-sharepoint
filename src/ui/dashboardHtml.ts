@@ -323,6 +323,12 @@ export function renderDashboardHtml(
 </div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
+  // Liveness handshake. VS Code webviews sometimes fail to boot with
+  // "could not register service worker: InvalidStateError" — an Electron-level
+  // fault we cannot catch from the extension host, and which leaves a BLANK
+  // panel with no clue. If this message never arrives the host offers a
+  // recovery path instead of the user staring at nothing.
+  vscode.postMessage({ command: "ready" });
   const wire = (id, command) => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("click", () => vscode.postMessage({ command }));

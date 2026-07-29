@@ -20,6 +20,7 @@ import {
 } from "./schemaIndex";
 import {
   isTransientLlmError,
+  isTransportReset,
   retryDelayMs,
   describeRetry,
   errorText,
@@ -69,6 +70,10 @@ export class SchemaIndexer {
     private readonly telemetry: TelemetryService,
     private readonly log: Logger,
     private readonly now: () => string,
+    /** Reported when a batch fails with a TRANSPORT RESET (a proxy cutting the
+     *  streaming reply), so the extension can offer the Copilot-transport
+     *  remedy once a pattern emerges rather than on the first blip. */
+    private readonly onTransportReset?: () => void,
   ) {}
 
   /** Copilot requests made by the most recent indexing run — surfaced in
@@ -250,6 +255,7 @@ export class SchemaIndexer {
         // kills long streaming replies — is not a sizing problem: the identical
         // request usually succeeds on the next try. Retry it unchanged, with a
         // short backoff, before falling back to shrinking.
+        if (isTransportReset(err)) this.onTransportReset?.();
         if (isTransientLlmError(err) && attempt < MAX_TRANSIENT_RETRIES && !token?.isCancellationRequested) {
           attempt += 1;
           const delay = retryDelayMs(attempt);
@@ -426,6 +432,7 @@ export class SchemaIndexer {
             }
             // Same corporate-proxy reset case as the schema pass: retry the
             // identical request before treating it as a sizing problem.
+            if (isTransportReset(err)) this.onTransportReset?.();
             if (isTransientLlmError(err) && cAttempt < MAX_TRANSIENT_RETRIES && !token.isCancellationRequested) {
               cAttempt += 1;
               const delay = retryDelayMs(cAttempt);

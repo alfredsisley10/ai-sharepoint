@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.141.0 — 2026-07-27
+
+### Copilot connectivity: diagnose and fix HTTP/2 resets
+- **New command: Diagnose Copilot Connectivity (HTTP/2 resets)…** explains why
+  `net::ERR_HTTP2_PROTOCOL_ERROR` happens and offers a one-click fix. Copilot's default transport is
+  Electron's networking stack, which negotiates **HTTP/2**; an SSL-inspecting corporate proxy
+  frequently resets those long streaming replies, while Node's HTTP/1.1 transport gets through the
+  same proxy. The command shows which transport is active, how many resets this session, and can
+  switch Copilot to the Node fetcher (and revert).
+- **It offers the fix at the moment it matters.** After a *pattern* of resets during indexing — two,
+  not one, since a single reset is normal and our retry absorbs it — the extension offers the switch
+  once per session rather than nagging on every batch. If you're *already* on the Node fetcher it
+  says so instead of re-offering the same change, and points at the proxy itself.
+- Switching preserves any other `github.copilot.advanced` settings, and reverting **removes** our
+  keys rather than pinning them to values we invented.
+
+### Copilot Activity panel: no more blank webview
+- **A webview that fails to load now tells you, and still shows your data.** VS Code webviews can
+  fail with `could not register service worker: InvalidStateError` — an Electron-level fault the
+  extension cannot catch, which previously left a blank panel with no explanation. The panel now
+  reports whether it booted; if it doesn't, you get a clear message plus two working options:
+  **Reload Window**, or **Show as text** — the same figures rendered as a markdown document.
+
 ## 0.140.0 — 2026-07-27
 
 ### Align with Authoritative Source — now a command you can run

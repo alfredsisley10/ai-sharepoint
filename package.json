@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.140.0",
+  "version": "0.141.0",
   "release": {
     "channel": "standard"
   },
@@ -564,6 +564,12 @@
         "title": "Resume Chat from Project Workspace",
         "category": "%category%",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "aiSharePoint.diagnoseCopilotConnectivity",
+        "title": "%aiSharePoint.diagnoseCopilotConnectivity.title%",
+        "category": "%category%",
+        "icon": "$(pulse)"
       },
       {
         "command": "aiSharePoint.alignWithAuthority",

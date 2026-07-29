@@ -21,6 +21,8 @@ export class UsageDashboard {
   private readonly costs = new ModelCostTable();
   /** Active view filter — toggled by clicking the summary cards. */
   private filter: "all" | "failed" = "all";
+  /** Set when the webview reports it booted (see the handshake in show()). */
+  private ready = false;
 
   constructor(
     private readonly meter: UsageMeter,
@@ -46,12 +48,38 @@ export class UsageDashboard {
     );
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      this.ready = false;
       while (this.disposables.length) {
         this.disposables.pop()?.dispose();
       }
     });
+    // If the webview never reports `ready`, its service worker failed to
+    // register (a known VS Code/Electron fault) and the panel is blank. Offer
+    // the two things that actually help: reload the window, or read the same
+    // numbers as text.
+    const readyTimer = setTimeout(() => {
+      if (this.ready) return;
+      const RELOAD = "Reload Window";
+      const TEXT = "Show as text";
+      void vscode.window
+        .showWarningMessage(
+          "The Copilot Activity panel didn't finish loading. This is a VS Code webview fault (the service worker failed to register), not a problem with your data.",
+          RELOAD,
+          TEXT,
+        )
+        .then((pick) => {
+          if (pick === RELOAD) void vscode.commands.executeCommand("workbench.action.reloadWindow");
+          else if (pick === TEXT) void this.showAsText();
+        });
+    }, 5_000);
+    this.disposables.push({ dispose: () => clearTimeout(readyTimer) });
     this.disposables.push(
       this.panel.webview.onDidReceiveMessage((msg: { command?: string; value?: string }) => {
+        if (msg?.command === "ready") {
+          this.ready = true;
+          clearTimeout(readyTimer);
+          return;
+        }
         switch (msg?.command) {
           case "export":
             void vscode.commands.executeCommand("aiSharePoint.exportDiagnostics");
@@ -89,6 +117,41 @@ export class UsageDashboard {
       }),
     );
     this.render();
+  }
+
+  /**
+   * Markdown fallback for when the webview can't boot. Renders the same figures
+   * the panel would have shown — a broken webview should not mean losing access
+   * to your Copilot usage.
+   */
+  async showAsText(): Promise<void> {
+    const d = this.collect();
+    const lines = [
+      "# Copilot Activity",
+      "",
+      `_Generated ${d.generatedAt}. Shown as text because the webview panel could not load._`,
+      "",
+      `- Requests today: **${d.todayRequests}**`,
+      `- Requests this month: **${d.monthRequests}**`,
+      `- Failed/cancelled this month: **${d.monthFailures}**`,
+      "",
+      "## By model (this month)",
+      "",
+      "| Model | Requests | Failed | Input tokens | Output tokens | Est. cost |",
+      "|---|---:|---:|---:|---:|---:|",
+      ...d.byModel.map(
+        (m) =>
+          `| ${m.key} | ${m.requests} | ${m.failures ?? 0} | ${m.inputTokens} | ${m.outputTokens} | ${m.cost ?? "—"} |`,
+      ),
+      "",
+      "## Daily (last 30 days)",
+      "",
+      "| Day | Requests | Failed |",
+      "|---|---:|---:|",
+      ...d.daily.map((x) => `| ${x.day} | ${x.requests} | ${x.failures} |`),
+    ];
+    const doc = await vscode.workspace.openTextDocument({ content: lines.join("\n"), language: "markdown" });
+    await vscode.window.showTextDocument(doc, { preview: true });
   }
 
   private render(): void {

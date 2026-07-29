@@ -86,6 +86,7 @@
   "aiSharePoint.rotateAnonymousId.title": "Rotate Anonymous Install ID",
   "aiSharePoint.copySupportInfo.title": "Copy Support Info (version + install ID)",
   "aiSharePoint.openLogs.title": "Open Extension Logs",
+  "aiSharePoint.diagnoseCopilotConnectivity.title": "Diagnose Copilot Connectivity (HTTP/2 resets)…",
   "aiSharePoint.alignWithAuthority.title": "Align with Authoritative Source…",
   "aiSharePoint.rebrandExtension.title": "Rebrand / White-label This Extension…",
   "aiSharePoint.openUserGuide.title": "Open User Guide",

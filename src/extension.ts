@@ -279,6 +279,17 @@ import {
 import { runAlignmentPass } from "./context/alignmentDriver";
 import { buildAlignmentEffects } from "./context/alignmentEffects";
 import { AlignmentRunStore } from "./context/alignmentRunStore";
+import {
+  COPILOT_ADVANCED_SECTION,
+  COPILOT_ADVANCED_KEY,
+  RESET_THRESHOLD,
+  ResetTracker,
+  currentFetcherMode,
+  nodeFetcherSettings,
+  revertFetcherSettings,
+  adviseFetcher,
+} from "./copilot/fetcherStrategy";
+
 import { resolveSharePointOwners } from "./auth/sharePointOwnership";
 import { activeFromDirectory, contactOf } from "./context/userDirectory";
 import { summarizePageContent } from "./chat/siteInspect";
@@ -499,6 +510,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // "Signed in" is inferred from entitled chat models being available — the
   // only signal vscode.lm exposes. Kept current by refreshCopilotState below.
   const copilotState = { chatInstalled: false, signedIn: false };
+  // Transport-reset pattern detector (fetcherStrategy.ts): a single reset is
+  // internet weather, a pattern means the proxy is cutting HTTP/2 streams.
+  const resetTracker = new ResetTracker();
 
   const contextSources = new ContextSourcesStore(context.globalState, secrets, nowIso);
   const contextCache = new TtlCache();
@@ -552,7 +566,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => clearInterval(snowKeepAlive) });
   const bookmarks = new BookmarksStore(context.globalState);
   const schemas = new SchemaStore(context.globalStorageUri);
-  const schemaIndexer = new SchemaIndexer(copilot, schemas, telemetry, log, nowIso);
+  const schemaIndexer = new SchemaIndexer(copilot, schemas, telemetry, log, nowIso, () => resetTracker.record());
   void schemas.preload();
   const catalogs = new CatalogStore(context.globalStorageUri);
   void catalogs.preload();
@@ -1267,6 +1281,100 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage(
       `Copilot is ready: ${models.length} model(s) available (default: ${models[0]?.name ?? "n/a"}).`,
     );
+  });
+
+  /** Read/merge the `github.copilot.advanced` object (the fetcher lives inside
+   *  it, so individual keys can't be written directly). */
+  const copilotAdvanced = () =>
+    vscode.workspace
+      .getConfiguration(COPILOT_ADVANCED_SECTION)
+      .get<Record<string, unknown>>(COPILOT_ADVANCED_KEY);
+
+  const applyNodeFetcher = async (revert = false): Promise<void> => {
+    const cfg = vscode.workspace.getConfiguration(COPILOT_ADVANCED_SECTION);
+    const current = copilotAdvanced();
+    await cfg.update(
+      COPILOT_ADVANCED_KEY,
+      revert ? revertFetcherSettings(current) : nodeFetcherSettings(current),
+      vscode.ConfigurationTarget.Global,
+    );
+    resetTracker.clear();
+    const reload = "Reload Window";
+    const pick = await vscode.window.showInformationMessage(
+      revert
+        ? "Copilot transport reverted to its default (Electron-first). Reload for it to take effect."
+        : "Copilot will now use Node's HTTP/1.1 transport instead of Electron's HTTP/2. Reload for it to take effect.",
+      reload,
+    );
+    if (pick === reload) await vscode.commands.executeCommand("workbench.action.reloadWindow");
+  };
+
+  /** Offer the transport switch once a PATTERN of resets has been seen. Called
+   *  from the paths that actually stream long Copilot replies (indexing,
+   *  alignment), because that is the traffic proxies cut. */
+  const offerFetcherRemedyIfNeeded = (): void => {
+    const mode = currentFetcherMode(copilotAdvanced());
+    if (!resetTracker.shouldOffer(mode)) return;
+    const advice = adviseFetcher(resetTracker.resets, mode);
+    const SWITCH = "Switch to Node transport";
+    const LEARN = "What is this?";
+    void vscode.window
+      .showWarningMessage(`Copilot connection keeps being reset. ${advice.reason}`, SWITCH, LEARN)
+      .then((pick) => {
+        if (pick === SWITCH) void applyNodeFetcher(false);
+        else if (pick === LEARN) void vscode.commands.executeCommand("aiSharePoint.diagnoseCopilotConnectivity");
+      });
+  };
+
+  register("aiSharePoint.diagnoseCopilotConnectivity", async () => {
+    const mode = currentFetcherMode(copilotAdvanced());
+    const advice = adviseFetcher(Math.max(resetTracker.resets, RESET_THRESHOLD), mode);
+    const lines = [
+      "# Copilot connectivity",
+      "",
+      `- Transport: **${mode === "node" ? "Node (HTTP/1.1)" : mode === "electron" ? "Electron (HTTP/2), pinned" : "Copilot default (Electron-first, HTTP/2)"}**`,
+      `- Connection resets seen this session: **${resetTracker.resets}**`,
+      "",
+      "## Why `net::ERR_HTTP2_PROTOCOL_ERROR` happens",
+      "",
+      "Copilot's default transport is Electron's networking stack, which negotiates",
+      "**HTTP/2**. A long streaming reply — exactly what schema indexing and authority",
+      "alignment produce — is the traffic an SSL-inspecting corporate proxy is most",
+      "likely to reset mid-flight. Node's transport uses HTTP/1.1 and generally gets",
+      "through the same proxy. This is a Copilot/VS Code transport issue, not a problem",
+      "with the requests this extension sends, so the remedy is a Copilot setting:",
+      "",
+      "```jsonc",
+      '"github.copilot.advanced": {',
+      '  "debug.useElectronFetcher": false,',
+      '  "debug.useNodeFetcher": true,',
+      '  "debug.useNodeFetchFetcher": true',
+      "}",
+      "```",
+      "",
+      `**Current assessment:** ${advice.reason}`,
+      "",
+      "## What this extension already does",
+      "",
+      "- Recognizes the reset family and **retries the same request** after a short",
+      "  backoff before treating a batch as too large.",
+      "- **Checkpoints indexing and alignment after every step**, so a reset costs at",
+      "  most one step — re-running resumes instead of restarting.",
+      "- Enable `aiSharePoint.logging.verboseWire` to capture the masked status for",
+      "  your network team (a reset hides the real HTTP response).",
+      "",
+      "_References: microsoft/vscode#283623, microsoft/vscode-copilot-release#10262._",
+    ];
+    const doc = await vscode.workspace.openTextDocument({ content: lines.join("\n"), language: "markdown" });
+    await vscode.window.showTextDocument(doc, { preview: true });
+    const SWITCH = "Switch to Node transport";
+    const REVERT = "Revert to default";
+    const pick = await vscode.window.showInformationMessage(
+      "Change the Copilot transport?",
+      ...(mode === "node" ? [REVERT] : [SWITCH]),
+    );
+    if (pick === SWITCH) await applyNodeFetcher(false);
+    else if (pick === REVERT) await applyNodeFetcher(true);
   });
 
   register("aiSharePoint.listModels", async () => {
@@ -4036,6 +4144,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     if (schema.semanticState === "none") {
       await schemaIndexer.indexInteractively(source, schema);
+      offerFetcherRemedyIfNeeded();
     }
   });
 
@@ -4046,6 +4155,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!source || !requireDbSource(source)) return;
     const schema = await loadSchemaWithProgress(source);
     await schemaIndexer.indexInteractively(source, schema);
+    offerFetcherRemedyIfNeeded();
   });
 
   register("aiSharePoint.indexSourceContent", async (arg) => {
@@ -4057,6 +4167,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await schemaIndexer.indexContentInteractively(source, schema, (table) =>
       contextService.sampleTable(source, table),
     );
+    offerFetcherRemedyIfNeeded();
   });
 
   // --- Catalog pre-cache (Confluence spaces / Jira projects+queues) --------
