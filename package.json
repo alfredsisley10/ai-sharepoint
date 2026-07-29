@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.139.0",
+  "version": "0.140.0",
   "release": {
     "channel": "standard"
   },
@@ -564,6 +564,12 @@
         "title": "Resume Chat from Project Workspace",
         "category": "%category%",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "aiSharePoint.alignWithAuthority",
+        "title": "%aiSharePoint.alignWithAuthority.title%",
+        "category": "%category%",
+        "icon": "$(verified)"
       },
       {
         "command": "aiSharePoint.buildSpaceDossier",
@@ -1825,6 +1831,22 @@
               "description": "The topic label (optional, informational)."
             }
           }
+        }
+      },
+      {
+        "name": "aisharepoint_alignment_status",
+        "displayName": "Authority Alignment Status",
+        "toolReferenceName": "spAlignmentStatus",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(verified)",
+        "tags": [
+          "confluence",
+          "sharepoint"
+        ],
+        "modelDescription": "Report on 'Align with Authoritative Source' runs — the DURABLE, restartable job that declares one SharePoint site or Confluence space the source of truth, sweeps the other content for anything that contradicts it, resolves each page's effective owner, opens work items and drafts one correction notice per owner. Returns each run's progress (pages compared, conflicts found, notices drafted, pages that failed) and whether a run is paused and resumable. Read-only — it reports, it does not start or change a run; the user starts one with the 'Align with Authoritative Source' command. Prefer this over re-running gather_authority/find_conflicts by hand when a run already exists. No arguments.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
         }
       },
       {

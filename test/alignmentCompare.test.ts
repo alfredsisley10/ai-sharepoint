@@ -136,3 +136,30 @@ test("composeOwnerNotice degrades gracefully with one page, no name, no authorit
   // No dangling "source of truth: undefined".
   assert.ok(!n.body.includes("undefined"));
 });
+
+// --- the wired use case: manifest + registration parity ---------------------
+// The engine is unit-tested; these guard the WIRING, which is where a
+// hand-edited manifest silently breaks a feature that otherwise compiles.
+
+test("the alignment command and status tool are declared in the manifest", () => {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const path = require("node:path") as typeof import("node:path");
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "package.json"), "utf8")) as {
+    contributes: {
+      commands: Array<{ command: string; title: string }>;
+      languageModelTools?: Array<{ name: string; modelDescription?: string; inputSchema?: unknown }>;
+    };
+  };
+  const cmd = pkg.contributes.commands.find((c) => c.command === "aiSharePoint.alignWithAuthority");
+  assert.ok(cmd, "aiSharePoint.alignWithAuthority must be declared");
+  assert.match(cmd!.title, /^%.*%$/, "the title must be an NLS key so white-label rebranding reaches it");
+
+  const nls = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "package.nls.json"), "utf8")) as Record<string, string>;
+  assert.ok(nls["aiSharePoint.alignWithAuthority.title"], "the NLS key must exist or the palette shows a raw %token%");
+
+  const tool = (pkg.contributes.languageModelTools ?? []).find((t) => t.name === "aisharepoint_alignment_status");
+  assert.ok(tool, "the status tool must be declared or the model can never call it");
+  // It must read as read-only: this tool reports, it never starts or mutates a run.
+  assert.match(tool!.modelDescription ?? "", /read-only/i);
+  assert.match(tool!.modelDescription ?? "", /does not start/i);
+});

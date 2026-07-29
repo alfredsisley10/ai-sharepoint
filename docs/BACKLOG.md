@@ -221,11 +221,20 @@ findings from the same audit were fixed in the integration-allowlist change and 
 
 ---
 
-## BL-4 — "Align with Authoritative Source": wire the durable engine to the product
+## BL-4 — "Align with Authoritative Source": wire the durable engine to the product — ✅ DONE (0.140.0)
 
 **Area:** `src/context/alignment*.ts` · [ADR-0049](./adr/0049-authoritative-alignment-runs.md)
 
-### Status
+> **Shipped.** `alignmentEffects.ts` implements `AlignmentEffects` over the real
+> adapters; `aiSharePoint.alignWithAuthority` runs the wizard, drives the run with
+> cancellable progress, and offers **Resume** for any unfinished run;
+> `aisharepoint_alignment_status` reports on runs (read-only); the participant's
+> manual multi-tool sweep is now documented as a spot-check only, with
+> `find_conflicts` labelled the stateless Confluence-only slice. Remaining caveat:
+> validated against fakes and the type system, **not** a live Confluence +
+> SharePoint tenant — see the note at the end.
+
+### Original status (kept for context)
 
 The **durable core is built, tested, and shipped** (ADR-0049): the run document +
 stage ladder (`alignmentRun.ts`), the checkpointing executor with injected

@@ -267,6 +267,22 @@ import { SitesTreeProvider } from "./ui/sitesView";
 import { UsageTreeProvider } from "./ui/usageView";
 import { SupportTreeProvider } from "./ui/supportView";
 import { runRebrandFlow } from "./branding/rebrandFlow";
+import {
+  AlignmentRun,
+  createAlignmentRun,
+  alignmentRunIssue,
+  resumeRun,
+  describeRun,
+  runProgress,
+  staleActionedCandidates,
+} from "./context/alignmentRun";
+import { runAlignmentPass } from "./context/alignmentDriver";
+import { buildAlignmentEffects } from "./context/alignmentEffects";
+import { AlignmentRunStore } from "./context/alignmentRunStore";
+import { resolveSharePointOwners } from "./auth/sharePointOwnership";
+import { activeFromDirectory, contactOf } from "./context/userDirectory";
+import { summarizePageContent } from "./chat/siteInspect";
+
 import { evaluateExpiry, setReleaseStatus, ReleaseManifest } from "./branding/releaseExpiry";
 import { setEnabledIntegrations, integrationEnabled, labelForIntegration } from "./branding/integrationSelection";
 import { ExternalTelemetry, ExternalTelemetryConfig } from "./diagnostics/externalTelemetry";
@@ -540,6 +556,11 @@ export function activate(context: vscode.ExtensionContext): void {
   void schemas.preload();
   const catalogs = new CatalogStore(context.globalStorageUri);
   void catalogs.preload();
+  // Alignment runs (ADR-0049): one JSON per run in globalStorage, so a run
+  // interrupted by a proxy reset, a crash, or a closed window resumes.
+  const alignmentRuns = new AlignmentRunStore(context.globalStorageUri);
+  void alignmentRuns.preload();
+  context.subscriptions.push({ dispose: () => alignmentRuns.dispose() });
   const projects = new ProjectsStore(context.globalState);
   const chatWorkspace = new ChatWorkspaceStore(context.globalState, context.globalStorageUri, nowIso);
   const memory = new MemoryStore(context.globalState);
@@ -1103,6 +1124,7 @@ export function activate(context: vscode.ExtensionContext): void {
         errors,
         nowIso,
         () => projects.scope(contextSources.list()),
+        () => alignmentRuns.list(),
       ),
     ),
     ...tryRegister("work-items tools", () =>
@@ -7563,6 +7585,337 @@ export function activate(context: vscode.ExtensionContext): void {
   // workspace (inventory + owners + XLSX), open a remediation work item for every
   // flagged page, and draft per-owner outreach — the durable, restartable home
   // for a space cleanup (ADR-0048 follow-up; reuses the ownership/currency suite).
+  // --- Align with Authoritative Source (ADR-0049) ---------------------------
+  // Declare ONE space/site the truth, sweep the other content for anything that
+  // contradicts it, resolve the effective owner, and prepare a correction
+  // notice. A durable, restartable run — not a one-shot chat sweep.
+  const alignmentEffectsFor = () =>
+    buildAlignmentEffects({
+      confluenceSource: (id) => contextSources.get(id),
+      gatherConfluence: (source, scope) =>
+        contextService.gatherConfluenceAuthority(source, {
+          topic: scope.topic,
+          kind: scope.kind,
+          ...(scope.spaceKey ? { spaceKey: scope.spaceKey } : {}),
+          ...(scope.pageId ? { pageId: scope.pageId } : {}),
+        }),
+      findConfluenceConflicts: (source, topic, exclude) =>
+        contextService.findConfluenceConflicts(source, topic, exclude),
+      confluencePageText: async (source, pageId) => {
+        const item = await contextService.getItem(source, pageId);
+        return { title: item.title, text: item.body, url: item.url };
+      },
+      confluenceOwner: async (source, pageId) => {
+        const res = await contextService.resolveConfluenceOwners(source, pageId, false);
+        const first = res.ownerContacts?.[0];
+        return {
+          ...(first?.displayName ? { name: first.displayName } : {}),
+          ...(first?.contact ? { email: first.contact } : {}),
+          basis: res.resolution.basis,
+        };
+      },
+      sharePointPages: async (siteUrl) => {
+        const conn = sites.get(siteUrl);
+        if (!conn) throw new Error(`No connected SharePoint site for ${siteUrl}.`);
+        const client = access.clientFor(conn, { silent: true });
+        const site = await client.getSite(conn.siteUrl);
+        const pages = await client.getPages(site.id);
+        const out: Array<{ id: string; title: string; url: string; text: string }> = [];
+        for (const p of pages) {
+          try {
+            const content = await client.getPageContent(site.id, p.id);
+            const sum = summarizePageContent({ title: p.title, webUrl: p.webUrl, lastModified: p.lastModified }, content);
+            out.push({ id: p.id, title: sum.title, url: sum.url, text: sum.text });
+          } catch {
+            // A page whose content the tenant blocks is skipped, not fatal.
+          }
+        }
+        return out;
+      },
+      sharePointOwner: async (siteUrl, pageId) => {
+        // Best-effort: an unresolvable owner yields a work item without a
+        // notice, which is far better than emailing the wrong person.
+        try {
+          const conn = sites.get(siteUrl);
+          if (!conn) return {};
+          const client = access.clientFor(conn, { silent: true });
+          const site = await client.getSite(conn.siteUrl);
+          const read = await client.getPageEditors(site.id, pageId);
+          const dir = contextService.emailUserDirectory();
+          const resolution = await resolveSharePointOwners(
+            read.editors,
+            dir ? activeFromDirectory(dir.dir) : async () => true,
+            { nowMs: Date.parse(nowIso()), directoryWired: Boolean(dir), ...(read.readError ? { readError: read.readError } : {}) },
+          );
+          const first = resolution.owners[0];
+          if (!first) return { basis: resolution.basis };
+          const rec = dir ? await dir.dir(first).catch(() => undefined) : undefined;
+          return {
+            name: rec?.displayName ?? first,
+            email: contactOf(rec) ?? first,
+            basis: resolution.basis,
+          };
+        } catch {
+          return {};
+        }
+      },
+      ask: async (prompt, label) => {
+        const res = await copilot.ask({ prompt, label }, nowIso);
+        return res.text;
+      },
+      trackWorkItem: async (input) => {
+        const item = await workItems.create({
+          title: input.title,
+          finding: input.finding,
+          target: input.target,
+          authorityTopic: input.authorityTopic,
+          ...(input.owner
+            ? {
+                owner: {
+                  ...(input.owner.name ? { displayName: input.owner.name } : {}),
+                  ...(input.owner.email ? { contact: input.owner.email } : {}),
+                  ...(input.owner.basis ? { basis: input.owner.basis } : {}),
+                },
+              }
+            : {}),
+          tags: ["alignment"],
+        });
+        return item.id;
+      },
+      draftNotice: async (input) => {
+        const draft: CommDraft = {
+          id: crypto.randomUUID(),
+          channel: "outlook",
+          to: input.to,
+          subject: input.subject,
+          body: input.body,
+          createdAt: nowIso(),
+          origin: "agent",
+          reason: input.reason,
+        };
+        await outbox.add(draft);
+        return draft.id;
+      },
+      save: (run) => alignmentRuns.save(run),
+      now: nowIso,
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      log: (m) => log.info(m),
+    });
+
+  /** Drive a run to completion (or to its next stopping point) with progress. */
+  const driveAlignmentRun = async (start: AlignmentRun): Promise<void> => {
+    const fx = alignmentEffectsFor();
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Aligning with "${start.title}"`, cancellable: true },
+      (progress, token) =>
+        runAlignmentPass(start, { ...fx, onProgress: (r) => progress.report({ message: describeRun(r) }) }, {
+          isCancelled: () => token.isCancellationRequested,
+        }),
+    );
+    const p = runProgress(result.run);
+    const summary = `${describeRun(result.run)} — ${p.total} page(s) reviewed`;
+    if (result.stopped === "paused") {
+      void vscode.window.showWarningMessage(
+        `Alignment paused: ${result.run.pausedReason ?? "interrupted"}. Nothing was lost — ${summary}. Resume from Support & Diagnostics or run the command again.`,
+      );
+      return;
+    }
+    if (result.stopped === "max-steps" || result.stopped === "cancelled") {
+      void vscode.window.showInformationMessage(
+        `Alignment ${result.stopped === "cancelled" ? "cancelled" : "paused after a batch of work"} — ${summary}. Run the command again to continue where it stopped.`,
+      );
+      return;
+    }
+    const stale = staleActionedCandidates(result.run).length;
+    const review = "Review drafts";
+    const items = p.drafted > 0 ? [review] : [];
+    void vscode.window
+      .showInformationMessage(
+        `Alignment complete: ${summary}.${
+          p.drafted > 0
+            ? ` ${p.drafted} owner notice(s) drafted — nothing is sent until you approve it.`
+            : " No owner notices were needed."
+        }${stale ? ` ${stale} earlier notice(s) predate the current authority and may need revisiting.` : ""}`,
+        ...items,
+      )
+      .then((pick) => {
+        // Reveal the Communications view, where each draft is approved or
+        // discarded (reviewCommDraft acts on ONE draft, so it can't open "all").
+        if (pick === review) void vscode.commands.executeCommand("aiSharePoint.commsView.focus");
+      });
+  };
+
+  register("aiSharePoint.alignWithAuthority", async () => {
+    // Resume first: an interrupted run is the common case on a flaky network,
+    // and restarting one would re-pay for work already done.
+    const resumable = alignmentRuns.resumable();
+    if (resumable.length > 0) {
+      const RESUME = "$(debug-continue) Resume";
+      const pick = await vscode.window.showQuickPick(
+        [
+          ...resumable.map((r) => ({
+            label: `${RESUME} "${r.title}"`,
+            description: describeRun(r),
+            detail: `started ${r.createdAt.slice(0, 16).replace("T", " ")}`,
+            run: r,
+            fresh: false,
+          })),
+          { label: "$(add) Start a new alignment run", run: undefined, fresh: true },
+        ],
+        { ignoreFocusOut: true, title: "Align with Authoritative Source" },
+      );
+      if (!pick) return;
+      if (!pick.fresh && pick.run) {
+        await driveAlignmentRun(resumeRun(pick.run, nowIso()));
+        return;
+      }
+    }
+
+    // --- authority ----------------------------------------------------------
+    const confluenceSources = contextSources.list().filter((s) => s.type === "confluence");
+    const siteList = sites.list();
+    const authorityItems = [
+      ...siteList.map((c) => ({
+        label: `$(cloud) ${c.displayName}`,
+        description: "SharePoint site",
+        detail: c.siteUrl,
+        corpus: "sharepoint" as const,
+        siteUrl: c.siteUrl,
+        sourceId: undefined as string | undefined,
+      })),
+      ...confluenceSources.map((s) => ({
+        label: `$(book) ${s.displayName}`,
+        description: "Confluence",
+        detail: s.baseUrl,
+        corpus: "confluence" as const,
+        siteUrl: undefined as string | undefined,
+        sourceId: s.id,
+      })),
+    ];
+    if (authorityItems.length === 0) {
+      void vscode.window.showWarningMessage(
+        "Connect a SharePoint site or a Confluence source first — one of them has to be the source of truth.",
+      );
+      return;
+    }
+    const authorityPick = await vscode.window.showQuickPick(authorityItems, {
+      ignoreFocusOut: true,
+      title: "Which content is AUTHORITATIVE? (the source of truth)",
+      placeHolder: "Everything else will be checked against it.",
+    });
+    if (!authorityPick) return;
+
+    let scopeKind: "space" | "page" | "subtree" | "site" = "site";
+    let spaceKey: string | undefined;
+    let pageId: string | undefined;
+    if (authorityPick.corpus === "confluence") {
+      const scope = await vscode.window.showQuickPick(
+        [
+          { label: "A whole space", value: "space" as const },
+          { label: "A single page", value: "page" as const },
+          { label: "A page and everything under it", value: "subtree" as const },
+        ],
+        { ignoreFocusOut: true, title: "What part of Confluence is authoritative?" },
+      );
+      if (!scope) return;
+      scopeKind = scope.value;
+      if (scope.value === "space") {
+        const key = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: "Authoritative space key",
+          placeHolder: "OPS",
+          validateInput: (v) => (v.trim() ? undefined : "Enter the space key"),
+        });
+        if (!key) return;
+        spaceKey = key.trim();
+      } else {
+        const id = await vscode.window.showInputBox({
+          ignoreFocusOut: true,
+          title: scope.value === "page" ? "Authoritative page id" : "Root page id of the authoritative subtree",
+          validateInput: (v) => (v.trim() ? undefined : "Enter the page id"),
+        });
+        if (!id) return;
+        pageId = id.trim();
+      }
+    }
+
+    const topic = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "What is this content the authority ON?",
+      placeHolder: "VPN access",
+      prompt: "Used to find other pages on the same subject, and named in the notices to owners.",
+      validateInput: (v) => (v.trim() ? undefined : "Enter a topic"),
+    });
+    if (!topic) return;
+
+    // --- targets ------------------------------------------------------------
+    const targetItems = [
+      ...confluenceSources.map((s) => ({
+        label: `$(book) ${s.displayName}`,
+        description: "Confluence",
+        picked: true,
+        corpus: "confluence" as const,
+        sourceId: s.id as string | undefined,
+        siteUrl: undefined as string | undefined,
+      })),
+      ...siteList.map((c) => ({
+        label: `$(cloud) ${c.displayName}`,
+        description: "SharePoint site",
+        picked: authorityPick.corpus !== "sharepoint" || c.siteUrl !== authorityPick.siteUrl,
+        corpus: "sharepoint" as const,
+        sourceId: undefined as string | undefined,
+        siteUrl: c.siteUrl as string | undefined,
+      })),
+    ];
+    const targetPicks = await vscode.window.showQuickPick(targetItems, {
+      ignoreFocusOut: true,
+      canPickMany: true,
+      title: "Where should I look for content that contradicts it?",
+      placeHolder: "The authoritative content itself is never checked against itself.",
+    });
+    if (!targetPicks || targetPicks.length === 0) return;
+
+    const run = createAlignmentRun(
+      {
+        title: `${topic.trim()} — ${authorityPick.label.replace(/^\$\([a-z-]+\)\s*/, "")}`,
+        authority: {
+          corpus: authorityPick.corpus,
+          ...(authorityPick.sourceId ? { sourceId: authorityPick.sourceId } : {}),
+          ...(authorityPick.siteUrl ? { siteUrl: authorityPick.siteUrl } : {}),
+          scopeKind,
+          ...(spaceKey ? { spaceKey } : {}),
+          ...(pageId ? { pageId } : {}),
+          topic: topic.trim(),
+        },
+        targets: targetPicks.map((t) => ({
+          corpus: t.corpus,
+          ...(t.sourceId ? { sourceId: t.sourceId } : {}),
+          ...(t.siteUrl ? { siteUrl: t.siteUrl } : {}),
+        })),
+        ...(projects.activeId() ? { projectId: projects.activeId()! } : {}),
+      },
+      crypto.randomUUID(),
+      nowIso(),
+    );
+    const issue = alignmentRunIssue({ title: run.title, authority: run.authority, targets: run.targets });
+    if (issue) {
+      void vscode.window.showErrorMessage(`Cannot start: ${issue}`);
+      return;
+    }
+    const go = await vscode.window.showInformationMessage(
+      `Start aligning with "${run.authority.topic}"?`,
+      {
+        modal: true,
+        detail:
+          `Authoritative: ${authorityPick.detail}\nChecking: ${targetPicks.length} place(s)\n\nEach page found on this topic is compared against the authoritative content with Copilot (one metered request per page), conflicts open a work item, and owners get a DRAFT notice — nothing is sent without your approval. Progress is saved after every step, so an interruption resumes rather than restarting.`,
+      },
+      "Start",
+    );
+    if (go !== "Start") return;
+    await alignmentRuns.save(run);
+    await driveAlignmentRun(run);
+  });
+
   register("aiSharePoint.buildSpaceDossier", async (arg) => {
     const project = await resolveProjectArg(arg);
     if (!project) return;

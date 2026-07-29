@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.140.0 — 2026-07-27
+
+### Align with Authoritative Source — now a command you can run
+- **The flagship "one source of truth" workflow is wired end to end.** Run **Align with
+  Authoritative Source** from the Command Palette: pick the content that IS authoritative — a
+  **SharePoint site or a Confluence space/page/subtree** — name the topic it owns, choose where to
+  look, and the extension does the rest.
+- **It sweeps both corpora.** SharePoint can now be the authority, not just a place to search —
+  the asymmetry that made "this site is the source of truth" unexpressible is gone.
+- **For every page that contradicts the authority** it opens a work item in the remediation
+  inventory, resolves the effective owner (page contributors, then site/space contributions, with
+  active-employee validation where a directory is wired), and prepares **one email notice per
+  owner** covering all of their pages — never one message per page. Notices are **drafts**:
+  nothing is sent until you approve it in the Communications view.
+- **Interruptions are cheap.** Progress is saved after every step, so a dropped Copilot
+  connection, a corporate-proxy reset, or a closed window costs at most one step — re-run the
+  command and it offers **Resume**, re-gathering nothing and never re-billing a comparison whose
+  inputs haven't changed. A Copilot entitlement refusal pauses the run instead of failing it.
+- **The assistant knows about it**: ask `@sharepoint` for alignment status and it reports each
+  run's progress, conflicts and drafts (read-only — it reports, it never starts or changes a run).
+  The old hand-driven sweep is now documented as a spot-check only, since it keeps no state.
+
 ## 0.139.0 — 2026-07-27
 
 ### Database indexing survives corporate-proxy interruptions

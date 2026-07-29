@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { ContextSourcesStore } from "../context/sourcesStore";
 import { ContextService } from "../context/contextService";
+import { AlignmentRun, describeRun, runProgress } from "../context/alignmentRun";
 import { BookmarksStore } from "../context/bookmarksStore";
 import { SchemaStore } from "../context/schemaStore";
 import { SchemaIndexer } from "../context/db/schemaIndexer";
@@ -55,6 +56,10 @@ export function registerContextTools(
   errors: ErrorReportStore,
   nowIso: () => string,
   scopedSources: () => ContextSource[] = () => store.list(),
+  /** Alignment runs (ADR-0049), so the model can REPORT on a durable run
+   *  instead of re-orchestrating the whole sweep by hand each turn. Optional so
+   *  callers/tests that don't wire it keep working. */
+  alignmentRuns: () => AlignmentRun[] = () => [],
 ): vscode.Disposable[] {
   const guarded = <T>(
     name: string,
@@ -729,9 +734,39 @@ export function registerContextTools(
         const lines = [
           `# Candidate pages discussing "${i.topic.trim()}" (${candidates.length}) — Confluence`,
           "Compare each against the authoritative content (gather_authority) and flag conflicts/inaccuracies; then resolve_page_owners + track_work_item + draft_communication to action them.",
-          "This sweep covers CONFLUENCE only. To also catch inaccurate/outdated content on SHAREPOINT, run scan_site_content (or inspect_site) on the relevant SharePoint site(s) and compare those pages against the same authoritative content.",
+          "This sweep covers CONFLUENCE only, one page at a time, and keeps no state — if the connection drops mid-sweep the work is lost.",
+          "PREFER THE DURABLE RUN for anything more than a spot check: the \"Align with Authoritative Source\" command (aiSharePoint.alignWithAuthority) does this whole workflow as a restartable job — a SharePoint site OR a Confluence space as the authority, sweeps BOTH corpora, compares, resolves owners, opens work items and drafts one notice per owner, checkpointing after every step so an interruption resumes instead of restarting. Tell the user to run it (or call alignment_status to report on one already going).",
         ];
         for (const c of candidates) lines.push(`- **${c.title}** (${c.id})${c.space ? ` · space ${c.space}` : ""} — ${c.url}${c.excerpt ? `\n  ${c.excerpt}` : ""}`);
+        return lines.join("\n");
+      }),
+    ),
+    // Alignment runs — report on the durable authority-alignment job (READ).
+    vscode.lm.registerTool<Record<string, never>>(
+      "aisharepoint_alignment_status",
+      guarded("aisharepoint_alignment_status", "Checking authority-alignment runs", async () => {
+        const runs = alignmentRuns();
+        if (!runs.length) {
+          return "No authority-alignment runs yet. The user can start one with the \"Align with Authoritative Source\" command, which declares a SharePoint site or Confluence space as the source of truth and sweeps the rest for content that contradicts it.";
+        }
+        const lines = ["# Authority-alignment runs"];
+        for (const r of runs) {
+          const p = runProgress(r);
+          lines.push(
+            `- **${r.title}** — ${r.status}: ${describeRun(r)}${
+              p.failed ? ` (${p.failed} page(s) could not be checked)` : ""
+            }`,
+          );
+          lines.push(
+            `  topic "${r.authority.topic}", authority: ${r.authority.corpus}${r.authority.spaceKey ? ` space ${r.authority.spaceKey}` : ""}${r.authority.siteUrl ? ` ${r.authority.siteUrl}` : ""}; updated ${r.updatedAt}`,
+          );
+          if (r.status === "paused") {
+            lines.push(`  PAUSED — ${r.pausedReason ?? "interrupted"}. Nothing was lost; re-running the command resumes it.`);
+          }
+        }
+        lines.push(
+          "Owner notices are DRAFTS in the communications outbox — nothing is sent without the user's approval.",
+        );
         return lines.join("\n");
       }),
     ),
