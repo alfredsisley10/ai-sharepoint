@@ -102,3 +102,50 @@ test("describeSignInFailure passes an already-classified AppError through", () =
   const original = new AppError("Sign-in state mismatch — possible forged redirect.", "auth.failed");
   assert.equal(describeSignInFailure(original, AUTHORITY), original);
 });
+
+test("a failed statement names the statement", async () => {
+  const { mapDbError } = await import("../src/context/db/dbAdapters");
+  const sql = "SELECT MAX([lst_upd_dt]) AS last_updated FROM [dbo].[Orders]";
+  const mapped = mapDbError(new Error("Invalid object name 'dbo.Orders'."), "SQL Server", sql);
+  // "SQL Server error: Invalid object name" names neither the object nor which
+  // of a run's many statements produced it.
+  assert.match(mapped.message, /Invalid object name/);
+  assert.match(mapped.message, /statement: SELECT MAX\(\[lst_upd_dt\]\)/);
+
+  // A timeout is the case where knowing WHICH query ran is the whole question.
+  const slow = mapDbError(new Error("Timeout: Request failed to complete in 30000ms"), "SQL Server", sql);
+  assert.match(slow.message, /statement:/);
+  assert.equal(slow.code, "config");
+
+  // Auth and connection failures are about the SESSION, not a statement —
+  // attaching SQL there would be noise pointing at the wrong thing.
+  const auth = mapDbError(new Error("Login failed for user 'svc'. ELOGIN"), "SQL Server", sql);
+  assert.equal(auth.code, "auth.failed");
+  assert.ok(!auth.message.includes("statement:"), auth.message);
+});
+
+test("an error with an EMPTY message still reports the reason", async () => {
+  const { mapDbError } = await import("../src/context/db/dbAdapters");
+  // The reported defect: `e.message ?? String(err)` does not fall back on an
+  // empty string, so a driver that leaves `message` blank produced
+  // "MySQL error: " — a message that reports nothing while looking reported.
+  const err = Object.assign(new Error(""), {
+    sqlMessage: "Unknown column 'lst_upd_dt' in 'field list'",
+    code: "ER_BAD_FIELD_ERROR",
+  });
+  const mapped = mapDbError(err, "MySQL", "SELECT MAX(`lst_upd_dt`) FROM `t`");
+  assert.match(mapped.message, /Unknown column/);
+  assert.ok(!/MySQL error:\s*(—|$)/.test(mapped.message), `still empty: ${mapped.message}`);
+});
+
+test("statementForError keeps an error to one readable line", async () => {
+  const { statementForError } = await import("../src/context/db/dbAdapters");
+  // A multi-line statement must not break the single log line it rides in.
+  assert.equal(statementForError("SELECT a,\n  b\nFROM t"), "SELECT a, b FROM t");
+  assert.equal(statementForError(undefined), "");
+  assert.equal(statementForError("   "), "");
+  // And a huge generated query must not bury the reason it accompanies.
+  const long = statementForError(`SELECT ${"x".repeat(2000)} FROM t`, 100);
+  assert.ok(long.length < 140, String(long.length));
+  assert.match(long, /\+\d+ chars/);
+});

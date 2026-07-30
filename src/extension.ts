@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SecretStore } from "./secrets/secretStore";
 import { Logger } from "./core/log";
-import { AppError, adviceForError, classifyError } from "./core/errors";
+import { AppError, adviceForError, classifyError, describeError } from "./core/errors";
 import { EXTENSION_VERSION } from "./core/version";
 import { redactError } from "./core/redaction";
 import { UsageMeter } from "./copilot/meter";
@@ -131,6 +131,8 @@ import {
   formatDay,
   pickRecencyColumn,
   recencyNoteFor,
+  normalizeRecencyFailures,
+  RecencyFailure,
 } from "./context/db/tableStats";
 import { summarizeIndexState } from "./context/db/indexBatching";
 import {
@@ -4923,6 +4925,20 @@ export function activate(context: vscode.ExtensionContext): void {
           ]
         : []),
       `- ER model: **${schema.er ? `${schema.er.relationships.length} relationship(s)` : "not built"}**${schema.er ? ` (probed ${schema.er.builtAt}${schema.er.partial ? ", partial" : ""})` : " — run “Build Database ER Diagram”"}`,
+      // A failed probe is not the same as "no date column", so the failures are
+      // listed WITH their reasons rather than blending into blank cells.
+      ...(normalizeRecencyFailures(schema.stats?.recencyFailed).length
+        ? [
+            "",
+            `<details><summary>⚠️ ${normalizeRecencyFailures(schema.stats?.recencyFailed).length} last-updated probe(s) failed</summary>`,
+            "",
+            ...normalizeRecencyFailures(schema.stats?.recencyFailed).map(
+              (f) => `- \`${f.table}\` — ${f.reason}`,
+            ),
+            "",
+            "</details>",
+          ]
+        : []),
       "",
       "_Catalog = names and types read from the database. Semantic tags/synonyms (when indexed) are Copilot's generalization so free-form questions find the right columns. Row counts are engine ESTIMATES from catalog statistics (never `COUNT(*)`), and “last updated” is the maximum of the table's most plausible audit-date column — the column used is always named._",
     ];
@@ -5005,7 +5021,7 @@ export function activate(context: vscode.ExtensionContext): void {
       tables[key] = { columns: t.columns.length, ...(sized[key] ?? {}) };
     }
     let recencyProbed = false;
-    const recencyFailed: string[] = [];
+    const recencyFailed: RecencyFailure[] = [];
     // Tables the engine already answered for (MySQL) need no probe.
     const probeable = schema.catalog.tables.filter(
       (t) => !tables[qualifiedName(t).toLowerCase()]?.lastUpdated && pickRecencyColumn(t),
@@ -5046,8 +5062,13 @@ export function activate(context: vscode.ExtensionContext): void {
                 // One table's scan timing out must not cost the whole pass —
                 // and a blank cell would read as "no date column", which is a
                 // different and wrong answer.
-                recencyFailed.push(qualifiedName(t));
-                log.warn(`Last-updated probe failed for ${qualifiedName(t)}: ${String(err)}`);
+                // describeError, not String(err): a driver error whose
+                // `message` is empty stringifies to nothing, which produced
+                // log lines that ended at the colon and reported no error at
+                // all. mapDbError has already appended the failing statement.
+                const reason = describeError(err);
+                recencyFailed.push({ table: qualifiedName(t), reason });
+                log.warn(`Last-updated probe failed for ${qualifiedName(t)}: ${reason}`);
               }
             }
           },
@@ -5081,12 +5102,21 @@ export function activate(context: vscode.ExtensionContext): void {
       `"${source.displayName}": ${totals.tables} tables · ${totals.columns.toLocaleString("en-US")} columns${
         totals.rows !== undefined ? ` · ≈ ${formatRows(totals.rows)} rows` : ""
       }${totals.bytes !== undefined ? ` · ${formatBytes(totals.bytes)}` : ""}${
-        recencyFailed.length ? ` (${recencyFailed.length} recency probe(s) failed)` : ""
+        recencyFailed.length ? ` — ${recencyFailed.length} recency probe(s) failed` : ""
       }.`,
-      "View Schema",
+      ...(recencyFailed.length ? (["View Schema", "Show Errors"] as const) : (["View Schema"] as const)),
     ).then((p) => {
       if (p === "View Schema") {
         void vscode.commands.executeCommand("aiSharePoint.viewSourceSchema", contextSources.get(source.id));
+      } else if (p === "Show Errors") {
+        // The reasons belong where the user is, not only in a log they have to
+        // know to open.
+        void vscode.window.showErrorMessage(
+          `Last-updated probe failures for "${source.displayName}":\n\n${recencyFailed
+            .map((f) => `• ${f.table}: ${f.reason}`)
+            .join("\n")}`,
+          { modal: true },
+        );
       }
     });
   });

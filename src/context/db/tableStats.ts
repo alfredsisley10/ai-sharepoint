@@ -62,9 +62,27 @@ export interface TableStatsIndex {
   tables: Record<string, TableStats>;
   /** True once the (per-table, more expensive) recency probe has run. */
   recencyProbed?: boolean;
-  /** Tables whose recency probe failed or timed out — surfaced rather than
-   *  silently leaving a blank cell. */
-  recencyFailed?: string[];
+  /** Tables whose recency probe failed or timed out, WITH the reason —
+   *  surfaced rather than silently leaving a blank cell that would read as
+   *  "no date column", which is a different and wrong answer. */
+  recencyFailed?: RecencyFailure[];
+}
+
+export interface RecencyFailure {
+  table: string;
+  /** Why it failed, including the statement that failed. */
+  reason: string;
+}
+
+/** Read a stored `recencyFailed` list tolerantly: 0.143.0 stored bare table
+ *  names, so an upgraded install has both shapes on disk. */
+export function normalizeRecencyFailures(value: unknown): RecencyFailure[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) =>
+    typeof v === "string"
+      ? { table: v, reason: "no reason recorded" }
+      : { table: String((v as RecencyFailure)?.table ?? "?"), reason: String((v as RecencyFailure)?.reason ?? "") },
+  );
 }
 
 // --- sizing: ONE query per database -----------------------------------------

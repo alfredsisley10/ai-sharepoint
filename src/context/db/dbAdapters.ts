@@ -61,7 +61,7 @@ import {
   SUBSET_TOP_ROWS,
 } from "./queryCost";
 import { loadTrustedCAs } from "../ldap/osTrust";
-import { AppError } from "../../core/errors";
+import { AppError, describeError } from "../../core/errors";
 import { detectProxyInterference, flattenNetworkError } from "../../core/networkDiagnostics";
 import { wireEnabled, emitWire, capDetail, safeJson } from "../../core/wireLog";
 
@@ -142,10 +142,37 @@ function guardSql(query: string): string {
   return query;
 }
 
-export function mapDbError(err: unknown, engine: string): AppError {
+/**
+ * Collapse a statement onto one line and cap it, so it can ride in an error
+ * message and a single log line. Errors are read in a log; a 40-line query
+ * pasted into one would bury the reason it accompanies.
+ */
+export function statementForError(sql: string | undefined, max = 600): string {
+  if (!sql) return "";
+  const flat = sql.replace(/\s+/g, " ").trim();
+  if (!flat) return "";
+  return flat.length > max ? `${flat.slice(0, max)}… (+${flat.length - max} chars)` : flat;
+}
+
+/**
+ * Map a driver error onto an AppError.
+ *
+ * `statement` is the SQL (or Mongo operation) that failed and is appended to
+ * the message: without it "SQL Server error: Invalid object name" names neither
+ * the object nor the query, and the reader has to guess which of the run's many
+ * statements it came from.
+ */
+export function mapDbError(err: unknown, engine: string, statement?: string): AppError {
   if (err instanceof AppError) return err;
   const e = err as { code?: string | number; errno?: number; message?: string };
-  const msg = e?.message ?? String(err);
+  // describeError, not `e.message ?? String(err)`: `??` does not fall back on
+  // an EMPTY message, and mysql2/MongoDB/pg/tedious all keep the real reason in
+  // fields other than `message`. That combination produced errors that
+  // reported nothing at all.
+  const msg = describeError(err);
+  const stmt = statementForError(statement);
+  const withStmt = (e2: AppError): AppError =>
+    stmt ? new AppError(`${e2.message} — statement: ${stmt}`, e2.code, e2.userSummary) : e2;
   const code = String(e?.code ?? "");
   // A corporate SSL-inspection appliance re-signing the database TLS handshake
   // with a CA the workstation doesn't trust is a top "can't connect" cause on
@@ -187,16 +214,20 @@ export function mapDbError(err: unknown, engine: string): AppError {
       msg,
     )
   ) {
-    return new AppError(
-      `${engine} query timed out: ${msg}`,
-      "config",
-      "The statement exceeded the query timeout — it scans more data than the server can read in time. Narrow it with a WHERE on an indexed column or TOP n; for SQL Server the cost guard estimates this from catalog stats first and answers expensive queries from a bounded sample instead.",
+    return withStmt(
+      new AppError(
+        `${engine} query timed out: ${msg}`,
+        "config",
+        "The statement exceeded the query timeout — it scans more data than the server can read in time. Narrow it with a WHERE on an indexed column or TOP n; for SQL Server the cost guard estimates this from catalog stats first and answers expensive queries from a bounded sample instead.",
+      ),
     );
   }
   if (/timeout|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|socket|getaddrinfo/i.test(msg)) {
     return new AppError(`${engine} connection failed: ${msg}`, "network");
   }
-  return new AppError(`${engine} error: ${msg}`, "unknown");
+  // Auth and connection failures are about the SESSION, not the statement, so
+  // they stay statement-free; everything reaching here is a statement failure.
+  return withStmt(new AppError(`${engine} error: ${msg}`, "unknown"));
 }
 
 // --- SQL Server (tedious) ---------------------------------------------------
@@ -307,8 +338,8 @@ async function mssqlRows(
     wireSqlResult("mssql", target, result, started);
     return result;
   } catch (err) {
-    emitWire("mssql", "✗", `${target} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
-    throw mapDbError(err, "SQL Server");
+    emitWire("mssql", "✗", `${target} — ${describeError(err)} (${Date.now() - started}ms)`, capDetail(sql));
+    throw mapDbError(err, "SQL Server", sql);
   } finally {
     connection.close();
   }
@@ -349,8 +380,8 @@ async function pgRows(
     wireSqlResult("postgres", target, rows, started);
     return rows;
   } catch (err) {
-    emitWire("postgres", "✗", `${target} — ${err instanceof Error ? err.message : String(err)} (${Date.now() - started}ms)`);
-    throw mapDbError(err, "PostgreSQL");
+    emitWire("postgres", "✗", `${target} — ${describeError(err)} (${Date.now() - started}ms)`, capDetail(sql));
+    throw mapDbError(err, "PostgreSQL", sql);
   } finally {
     await client.end().catch(() => undefined);
   }
@@ -391,8 +422,8 @@ async function mysqlRows(
     wireSqlResult("mysql", `${host}:${port ?? 3306}/${database}`, capped, startedQuery);
     return capped;
   } catch (err) {
-    emitWire("mysql", "✗", `${host}:${port ?? 3306}/${database} — ${err instanceof Error ? err.message : String(err)}`);
-    throw mapDbError(err, "MySQL");
+    emitWire("mysql", "✗", `${host}:${port ?? 3306}/${database} — ${describeError(err)}`, capDetail(sql));
+    throw mapDbError(err, "MySQL", sql);
   } finally {
     await connection?.end().catch(() => undefined);
   }

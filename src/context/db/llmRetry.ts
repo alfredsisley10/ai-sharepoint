@@ -17,7 +17,7 @@
  * Pure and unit-tested — the caller supplies the sleep.
  */
 
-import { AppError } from "../../core/errors";
+import { AppError, describeError } from "../../core/errors";
 
 /** How many EXTRA attempts a transient failure gets before the caller falls
  *  back to shrinking the batch. Kept small: each attempt is a metered request. */
@@ -66,21 +66,10 @@ export function isTransportReset(err: unknown): boolean {
 /** Flatten an error (and its `cause` chain, where fetch hides the real reason)
  *  into searchable text. */
 export function errorText(err: unknown): string {
-  const seen = new Set<unknown>();
-  const parts: string[] = [];
-  let cur: unknown = err;
-  while (cur && !seen.has(cur) && parts.length < 8) {
-    seen.add(cur);
-    if (typeof cur === "string") {
-      parts.push(cur);
-      break;
-    }
-    const e = cur as { message?: unknown; code?: unknown; cause?: unknown };
-    if (typeof e.message === "string") parts.push(e.message);
-    if (typeof e.code === "string" || typeof e.code === "number") parts.push(String(e.code));
-    cur = e.cause;
-  }
-  return parts.join(" | ");
+  // One implementation, in core/errors: the classifier below and every log line
+  // in the product need the same "what actually went wrong" text, and two
+  // extractors would drift into disagreeing about the same error.
+  return describeError(err);
 }
 
 /**

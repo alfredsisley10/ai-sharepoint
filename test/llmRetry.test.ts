@@ -82,7 +82,12 @@ test("errorText flattens messages, codes and cause chains without looping", () =
   assert.match(text, /outer/);
   assert.match(text, /ERR_X/);
   assert.equal(errorText("plain string"), "plain string");
-  assert.equal(errorText(undefined), "");
+  // errorText now delegates to describeError, whose contract is that it NEVER
+  // returns the empty string — an empty reason is what made log lines end at
+  // the colon and report nothing. What matters here is that an unreadable
+  // value still classifies as non-transient rather than being retried.
+  assert.match(errorText(undefined), /nothing was thrown/);
+  assert.equal(isTransientLlmError(undefined), false);
 });
 
 test("a cancellation that ALSO mentions a reset is treated as a reset", () => {

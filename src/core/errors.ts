@@ -49,6 +49,94 @@ export function classifyError(err: unknown): ErrorCode {
   return "unknown";
 }
 
+/**
+ * Fields drivers put the real reason in when `message` is empty or useless.
+ *
+ * `err.message` is the obvious place and often the WRONG one: mysql2 puts the
+ * server's text in `sqlMessage`, MongoDB in `errmsg`, node-postgres splits it
+ * across `detail`/`hint`/`where`, and tedious wraps the original in
+ * `originalError`. An extractor that reads only `.message` reports nothing at
+ * all for those — which is how a log line ends in "failed: " with the reason
+ * sitting unread on the object.
+ */
+const DETAIL_KEYS = ["sqlMessage", "errmsg", "detail", "hint", "where", "reason", "description"];
+/** Object-valued fields worth descending into. */
+const NESTED_KEYS = ["originalError", "info", "cause", "error", "err"];
+/** Short codes worth appending — they are what a DBA searches for. */
+const CODE_KEYS = ["code", "errno", "number", "state", "sqlState", "codeName", "severity", "class"];
+
+/**
+ * Everything readable about a thrown value, as one line — and NEVER the empty
+ * string.
+ *
+ * A message that says only "failed:" is worse than useless: it looks like the
+ * error was reported when it wasn't, so the reader stops looking. This walks
+ * the message, the driver-specific detail fields, the aggregate members, and
+ * the cause chain; if all of that is empty it falls back to the object's own
+ * properties and finally to naming the type. Loop-safe and depth-bounded, so a
+ * self-referencing error can't hang the logger.
+ */
+export function describeError(err: unknown): string {
+  // `throw undefined` is legal and does happen. "failed: undefined" is at
+  // least honest; "failed: " is the bug this function exists to prevent.
+  if (err === undefined) return "undefined (nothing was thrown)";
+  if (err === null) return "null (nothing was thrown)";
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  const add = (text: string): void => {
+    const t = text.trim();
+    // Drivers repeat themselves (message === sqlMessage is common); a line that
+    // says the same thing three times reads as noise and hides the codes.
+    if (t && !parts.some((p) => p === t || p.includes(t))) parts.push(t);
+  };
+  const visit = (cur: unknown, depth: number): void => {
+    if (cur === null || cur === undefined || depth > 4 || parts.length > 8) return;
+    if (typeof cur !== "object") {
+      add(String(cur));
+      return;
+    }
+    if (seen.has(cur)) return;
+    seen.add(cur);
+    const e = cur as Record<string, unknown>;
+    if (typeof e.message === "string") add(e.message);
+    for (const k of DETAIL_KEYS) {
+      if (typeof e[k] === "string") add(e[k] as string);
+    }
+    const codes = CODE_KEYS.filter((k) => typeof e[k] === "string" || typeof e[k] === "number").map(
+      (k) => `${k}=${String(e[k])}`,
+    );
+    if (codes.length > 0) add(codes.join(" "));
+    // AggregateError (and driver equivalents): the members carry the reasons.
+    if (Array.isArray(e.errors)) for (const sub of e.errors.slice(0, 3)) visit(sub, depth + 1);
+    for (const k of NESTED_KEYS) visit(e[k], depth + 1);
+  };
+  visit(err, 0);
+  if (parts.length === 0) {
+    // Nothing in the known places — dump what the object actually has rather
+    // than giving up. Own property names include non-enumerables like `stack`
+    // on Errors, which is why this is a last resort and not the first move.
+    try {
+      const own = JSON.stringify(err, Object.getOwnPropertyNames(Object(err)).slice(0, 20));
+      if (own && own !== "{}" && own !== "null") add(own.slice(0, 400));
+    } catch {
+      /* circular or unserializable — fall through to the type name */
+    }
+  }
+  if (parts.length === 0) {
+    const s = String(err);
+    add(
+      s && s !== "[object Object]"
+        ? s
+        : `unreadable ${typeof err} value${
+            (err as { constructor?: { name?: string } })?.constructor?.name
+              ? ` (${(err as { constructor?: { name?: string } }).constructor!.name})`
+              : ""
+          }`,
+    );
+  }
+  return parts.join(" | ");
+}
+
 /** Short remediation hint per code, shown next to error notifications. */
 export function adviceFor(code: ErrorCode): string | undefined {
   switch (code) {

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.144.0 — 2026-07-30
+
+### Errors that actually say what went wrong
+- **Fixed: database errors could report nothing at all.** The extractor read `err.message ?? String(err)`
+  — and `??` does not fall back on an *empty* string, so a driver that leaves `message` blank produced
+  `MySQL error: ` and log lines that ended at the colon. That is worse than a missing message: it looks
+  reported, so the reader stops looking. A new `describeError` reads the fields drivers actually use —
+  mysql2's `sqlMessage`, MongoDB's `errmsg`, node-postgres's `detail`/`hint`/`severity`, tedious's
+  `originalError` — plus SQLSTATE/errno codes, `AggregateError` members and the `cause` chain, and is
+  contractually **never empty**. Loop-safe and depth-bounded.
+- **A failed SQL statement now names the statement.** `SQL Server error: Invalid object name` identified
+  neither the object nor which of a run's many statements produced it; the query is now appended
+  (collapsed to one line, capped) to statement-level errors and to the wire log's failure line. Auth and
+  connection failures stay statement-free — those are about the session, and attaching SQL would point
+  at the wrong thing.
+- **Last-updated probe failures now carry their reason**, in the log, in a "Show Errors" button on the
+  completion toast, and in a collapsible list in the schema view. Previously a failed probe was recorded
+  as a bare table name, which read the same as "this table has no date column" — a different and wrong
+  answer.
+- `errorText` in the indexing retry path now delegates to the same extractor, so classification and log
+  lines can't disagree about the same error.
+
 ## 0.143.0 — 2026-07-30
 
 ### Table statistics in the schema view
