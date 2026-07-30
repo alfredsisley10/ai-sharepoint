@@ -122,7 +122,17 @@ import {
   TestedPair,
   qualifiedName,
   describeTruncation,
+  CATALOG_TABLE_CEILING,
+  CATALOG_COLUMN_CEILING,
 } from "./context/db/schemaIndex";
+import {
+  buildInventory,
+  inventoryMarkdown,
+  summarizeAging,
+  agingMarkdown,
+  recommendLimits,
+  schemaReportSheets,
+} from "./context/db/schemaReport";
 import {
   TableStats,
   summarizeStats,
@@ -4156,6 +4166,22 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     await schemas.set(source.id, schema);
     telemetry.record("schema.load", { type: source.type, tables: String(catalog.tables.length) });
+    // A truncated catalog is the moment the caps matter, and the caps are
+    // settable — so offer the fix here rather than leaving a warning in a
+    // document the user may never open.
+    if (catalog.truncated) {
+      void vscode.window
+        .showWarningMessage(
+          `"${source.displayName}" was cut short by the catalog read limits: ${
+            describeTruncation(catalog.truncation, catalog.engine === "mongodb" ? "collections" : "tables") ||
+            "a cap was hit"
+          }.`,
+          "Measure & Raise Limits…",
+        )
+        .then((pick) => {
+          if (pick === "Measure & Raise Limits…") void tuneCatalogLimits(source, true);
+        });
+    }
     return schema;
   };
 
@@ -4942,6 +4968,20 @@ export function activate(context: vscode.ExtensionContext): void {
       "",
       "_Catalog = names and types read from the database. Semantic tags/synonyms (when indexed) are Copilot's generalization so free-form questions find the right columns. Row counts are engine ESTIMATES from catalog statistics (never `COUNT(*)`), and “last updated” is the maximum of the table's most plausible audit-date column — the column used is always named._",
     ];
+    // Per-table figures as a scannable inventory, biggest first: on a large
+    // schema the per-heading lines below are unreachable without scrolling, and
+    // "which tables actually hold the data" is the first question asked.
+    const inventory = buildInventory(schema, nowIso());
+    const aging = summarizeAging(schema.catalog, schema.stats, nowIso());
+    if (schema.stats) {
+      lines.push("", "## Tables by size", "", ...inventoryMarkdown(inventory));
+      lines.push("", "## Table aging — what's still being written to", "", ...agingMarkdown(aging));
+    } else {
+      lines.push(
+        "",
+        "> **No table statistics yet.** Run **Refresh Database Table Statistics** for per-table row counts, sizes and last-updated dates, plus the aging summary. It is one metadata query — no `COUNT(*)`.",
+      );
+    }
     if (schema.er) {
       lines.push(
         "",
@@ -5119,6 +5159,104 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     });
+  });
+
+  /** Measure the database, compare against the caps, and offer to fix them. */
+  const tuneCatalogLimits = async (source: ContextSource, quiet = false): Promise<void> => {
+    const { capacity, columnCounts } = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Sizing "${source.displayName}" (metadata only)…`,
+      },
+      () => contextService.catalogCapacity(source),
+    );
+    const current = contextService.catalogLimits();
+    const rec = recommendLimits(
+      capacity,
+      current,
+      { maxTables: CATALOG_TABLE_CEILING, maxColumnsPerTable: CATALOG_COLUMN_CEILING },
+      columnCounts.length ? columnCounts : undefined,
+    );
+    if (capacity.estimated) {
+      void vscode.window.showInformationMessage(
+        `"${source.displayName}" has ${capacity.tables} collection(s). MongoDB has no metadata catalog, so field counts can't be measured without sampling every collection — the collection cap (aiSharePoint.context.maxCollections, currently ${current.maxCollections}) is the one that matters here.`,
+      );
+      return;
+    }
+    if (rec.adequate) {
+      if (!quiet) {
+        void vscode.window.showInformationMessage(`"${source.displayName}": ${rec.summary}`);
+      }
+      return;
+    }
+    const apply = await vscode.window.showWarningMessage(
+      `"${source.displayName}" does not fit the current catalog limits.\n\n${rec.summary}`,
+      { modal: true },
+      `Set ${rec.maxTables} / ${rec.maxColumnsPerTable}`,
+      "Open Settings",
+    );
+    if (apply === "Open Settings") {
+      void vscode.commands.executeCommand("workbench.action.openSettings", "aiSharePoint.context.max");
+      return;
+    }
+    if (!apply) return;
+    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    await cfg.update("context.maxTables", rec.maxTables, vscode.ConfigurationTarget.Global);
+    await cfg.update("context.maxColumnsPerTable", rec.maxColumnsPerTable, vscode.ConfigurationTarget.Global);
+    log.info(
+      `Catalog limits raised for "${source.displayName}": ${current.maxTables}/${current.maxColumnsPerTable} → ${rec.maxTables}/${rec.maxColumnsPerTable} (database has ${capacity.tables} tables, widest ${capacity.maxColumns} columns).`,
+    );
+    // Raising the caps changes nothing until the catalog is read again — say so
+    // and offer it, rather than leaving the old truncated catalog in place
+    // looking fixed.
+    const reload = await vscode.window.showInformationMessage(
+      `Limits raised to ${rec.maxTables} tables / ${rec.maxColumnsPerTable} columns. The stored catalog is still the truncated one — reload it to pick up the tables that were missing.`,
+      "Reload Schema Now",
+    );
+    if (reload === "Reload Schema Now") {
+      const reloaded = await loadSchemaWithProgress(source);
+      void vscode.window.showInformationMessage(
+        `Schema reloaded: ${reloaded.catalog.tables.length} tables/collections${
+          reloaded.catalog.truncated ? " — still truncated, see the schema view" : "."
+        }`,
+      );
+    }
+  };
+
+  register("aiSharePoint.tuneCatalogLimits", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    await tuneCatalogLimits(source);
+  });
+
+  register("aiSharePoint.exportSchemaReport", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    const schema = schemas.getSync(source.id) ?? (await loadSchemaWithProgress(source));
+    const now = nowIso();
+    const sheets = schemaReportSheets(schema, {
+      sourceName: source.displayName,
+      generatedAt: now,
+      version: EXTENSION_VERSION,
+    });
+    const stamp = now.replace(/[:.]/g, "-").slice(0, 19);
+    const slug = source.displayName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "database";
+    const paths = await writeExportFiles([
+      { name: `db-schema-report-${slug}-${stamp}.xlsx`, bytes: buildXlsx(sheets, { headerRow: true }) },
+    ]);
+    if (paths.length === 0) return;
+    telemetry.record("schema.report", { type: source.type, tables: String(schema.catalog.tables.length) });
+    const open = await vscode.window.showInformationMessage(
+      `Schema report exported: ${paths[0]} (${sheets.length} sheets — ${sheets.map((s) => s.name).join(", ")}).${
+        schema.stats ? "" : " Row counts and sizes are blank — run Refresh Database Table Statistics first."
+      }`,
+      "Reveal",
+    );
+    if (open === "Reveal") {
+      const ws = vscode.workspace.workspaceFolders?.[0];
+      const uri = ws && !paths[0].startsWith("/") ? vscode.Uri.joinPath(ws.uri, paths[0]) : vscode.Uri.file(paths[0]);
+      await vscode.commands.executeCommand("revealFileInOS", uri);
+    }
   });
 
   register("aiSharePoint.resetSourceIndex", async (arg) => {

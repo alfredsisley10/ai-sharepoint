@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.144.0",
+  "version": "0.145.0",
   "release": {
     "channel": "standard"
   },
@@ -269,6 +269,18 @@
         "title": "%aiSharePoint.refreshTableStats.title%",
         "category": "%category%",
         "icon": "$(graph)"
+      },
+      {
+        "command": "aiSharePoint.tuneCatalogLimits",
+        "title": "%aiSharePoint.tuneCatalogLimits.title%",
+        "category": "%category%",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "aiSharePoint.exportSchemaReport",
+        "title": "%aiSharePoint.exportSchemaReport.title%",
+        "category": "%category%",
+        "icon": "$(file-binary)"
       },
       {
         "command": "aiSharePoint.resetSourceIndex",
@@ -3392,9 +3404,19 @@
           "group": "1_schema@6"
         },
         {
-          "command": "aiSharePoint.resetSourceIndex",
+          "command": "aiSharePoint.exportSchemaReport",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
           "group": "1_schema@7"
+        },
+        {
+          "command": "aiSharePoint.tuneCatalogLimits",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
+          "group": "1_schema@8"
+        },
+        {
+          "command": "aiSharePoint.resetSourceIndex",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
+          "group": "1_schema@9"
         },
         {
           "command": "aiSharePoint.clearErrorReports",
@@ -3542,6 +3564,14 @@
         },
         {
           "command": "aiSharePoint.refreshTableStats",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.tuneCatalogLimits",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.exportSchemaReport",
           "when": "aiSharePoint.hasSources"
         },
         {

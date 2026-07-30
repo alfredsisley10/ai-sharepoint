@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.145.0 — 2026-07-30
+
+### Per-table figures, and a read of which tables are still alive
+- **The schema view now opens with a per-table inventory** — rows, size, columns, last updated,
+  age band and index state — **sorted by size**. On a large schema alphabetical order buries the
+  ten tables that hold the data. Views read as *n/a* rather than blank, because a view has no
+  storage and an empty cell would claim "not measured".
+- **New: table aging.** Tables are banded by how long ago their data last changed (current ≤ 30d,
+  recent ≤ 90d, aging ≤ 1y, stale 1–3y, dormant beyond), with a headline that names the finding.
+  Bands carry **rows and bytes, not just table counts** — "40 of 120 tables are dormant" and "the
+  dormant tables hold 92% of the rows" are different findings, and only the second one changes what
+  you do next. Unmeasured tables are their own band, never counted as old. A share that isn't quite
+  everything reads as ">99%", not "100%".
+
+### Knowing what limits a database actually needs
+- **New command: Measure Database & Tune Catalog Limits…** It measures the database *outside* the
+  caps — reading a capped catalog to judge the caps would always answer "yes" — and states what the
+  current settings cost: how many tables would be **missing**, how many described **incompletely**,
+  and which table is the widest, by name. One click applies both settings and offers to reload the
+  schema, since raising a cap changes nothing until the catalog is read again.
+- Recommendations carry ~15% headroom so a growing schema doesn't quietly start truncating again,
+  never lower a limit you raised deliberately, and say plainly when a database exceeds the supported
+  maximum rather than promising a complete catalog they can't deliver.
+- **A truncated catalog now offers the fix at the moment it happens**, instead of leaving a warning
+  in a document you might never open.
+
+### Export
+- **New command: Export Database Schema Report (XLSX)** — six sheets: Summary, Tables (the full
+  inventory, with both a human-readable size and the raw byte count so it sorts), Columns (one row
+  per column: declared *and* effective type, tags, synonyms, content summary, measured
+  null-rate/distinct/length), Aging, Relationships, and Issues. Different grains get different
+  sheets; mixing them makes all of them unfilterable. Exports are git-ignored automatically.
+
 ## 0.144.0 — 2026-07-30
 
 ### Errors that actually say what went wrong

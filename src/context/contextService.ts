@@ -36,7 +36,7 @@ import {
 } from "./adapters/jira";
 import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
-import { verifyDb, searchDb, searchDbRaw, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, fetchTableStats, probeLastUpdated, DbTlsOptions } from "./db/dbAdapters";
+import { verifyDb, searchDb, searchDbRaw, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, fetchTableStats, probeLastUpdated, probeCatalogCapacity, DbTlsOptions } from "./db/dbAdapters";
 import { JoinProbeEnd, JoinProbeCounts, RowEstimates } from "./db/erDiagram";
 import { planProbeBudget } from "./db/queryBudget";
 import {
@@ -165,7 +165,9 @@ import {
   TableValueSample,
   CatalogLimits,
   resolveCatalogLimits,
+  CATALOG_TABLE_CEILING,
 } from "./db/schemaIndex";
+import { CatalogCapacity } from "./db/schemaReport";
 import { TableStats } from "./db/tableStats";
 import { MSSQL_AAD_SCOPES } from "./db/mssqlAuth";
 import { AppError, classifyError } from "../core/errors";
@@ -1850,6 +1852,26 @@ export class ContextService {
       maxColumnsPerTable: cfg.get<number>("context.maxColumnsPerTable"),
       maxCollections: cfg.get<number>("context.maxCollections"),
     });
+  }
+
+  /** How big the database actually is, measured OUTSIDE the caps — so the
+   *  caps can be judged against it rather than against themselves. */
+  async catalogCapacity(
+    source: ContextSource,
+  ): Promise<{ capacity: CatalogCapacity; columnCounts: number[] }> {
+    if (!ContextService.DB_TYPES.has(source.type)) {
+      throw new AppError("Catalog sizing applies to database sources only.", "config");
+    }
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      probeCatalogCapacity(
+        source,
+        credential,
+        this.dbTls(credential),
+        this.caps(),
+        CATALOG_TABLE_CEILING,
+      ),
+    );
   }
 
   /** Row counts, byte sizes and true column counts for every table — one

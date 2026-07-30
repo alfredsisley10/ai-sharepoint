@@ -485,6 +485,35 @@ reasons — ADR-0022):
   column)”* instead. Because a `MAX()` over an unindexed column is a scan, this second pass is
   a separate opt-in that tells you how many tables it would query; MySQL, which records a
   modification time itself, needs no probe at all.
+- **Per-table inventory, biggest first.** The schema view opens with every table's row count,
+  size, column count, last-updated date and index state, sorted by size — on a thousand-table
+  schema, alphabetical order buries the ten tables that actually hold the data. Views read as
+  *n/a* rather than blank, since a view has no storage of its own and an empty cell would say
+  "not measured".
+- **Table aging — what's still being written to.** Tables are banded by how long ago their data
+  last changed (current ≤ 30 days, recent ≤ 90, aging ≤ 1 year, stale 1–3 years, dormant beyond
+  that), with a headline that names the finding rather than reciting counts. The bands carry
+  **rows and bytes as well as table counts**, because *"40 of 120 tables are dormant"* and
+  *"the dormant tables hold 92% of the rows"* are different findings and only the second changes
+  what you do next. Tables that couldn't be measured are their own band, never silently counted
+  as old.
+- **Measure Database & Tune Catalog Limits…** answers "what do I need to set to process this
+  database completely?" It measures the database **outside** the caps — reading a capped catalog
+  to judge the caps would always answer "yes" — and reports what the current settings would cost:
+  *"1,847 tables/views, widest has 412 columns (dbo.FactSales); 847 tables would be MISSING at the
+  current cap of 1,000; 2 tables would be described INCOMPLETELY at the current 300-column cap;
+  recommended 2,150 / 500."* One click applies both settings and offers to reload the schema —
+  raising the caps changes nothing until the catalog is read again. Recommendations carry ~15%
+  headroom so a schema that grows a little doesn't quietly start truncating, and never *lower* a
+  limit you raised deliberately. A truncated catalog now offers this directly instead of leaving a
+  warning in a document you might not open.
+- **Export Database Schema Report (XLSX)** writes a six-sheet workbook: **Summary** (totals, index
+  state, aging headline), **Tables** (the full inventory, with both a human size and the raw byte
+  count so it sorts properly), **Columns** (one row per column with declared *and* effective type,
+  tags, synonyms, content summary and the measured null-rate/distinct/length stats), **Aging**,
+  **Relationships** (the probed ER model), and **Issues** (truncation, failed probes, a partial
+  index — everything that went wrong, in one place). Exports land in `ai-sharepoint-exports/`,
+  which is git-ignored automatically because the file carries real enterprise metadata.
 - **Continue, or start over?** Whenever an index already exists, running *Index Database
   Schema* or *Index Database Content Types* asks which run you want, and states the cost of
   each: **Continue** indexes only what's missing or changed and keeps everything else;

@@ -166,5 +166,7 @@
   "config.aiSharePoint.context.maxColumnsPerTable.markdownDescription": "Maximum columns captured per table/view. Beyond this the table still appears but is **incompletely described**, which is the more damaging of the two caps — a wide fact table cut short produces confident, wrong SQL. Raise it if the schema viewer reports column truncation.",
   "config.aiSharePoint.context.maxCollections.markdownDescription": "Maximum MongoDB collections read into a catalog. Lower than the table cap by default because MongoDB has no metadata catalog: each collection costs its own sampling query rather than sharing one read.",
   "aiSharePoint.refreshTableStats.title": "Refresh Database Table Statistics",
-  "aiSharePoint.resetSourceIndex.title": "Reset Database Index (Start Over)…"
+  "aiSharePoint.resetSourceIndex.title": "Reset Database Index (Start Over)…",
+  "aiSharePoint.tuneCatalogLimits.title": "Measure Database & Tune Catalog Limits…",
+  "aiSharePoint.exportSchemaReport.title": "Export Database Schema Report (XLSX)"
 }

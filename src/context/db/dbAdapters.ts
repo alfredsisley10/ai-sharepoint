@@ -41,6 +41,7 @@ import {
   JoinProbeCounts,
   ER_SAMPLE_SIZE,
 } from "./erDiagram";
+import { buildCapacityProbeSql, parseCapacity, CatalogCapacity } from "./schemaReport";
 import {
   buildCatalogStatsSql,
   parseCatalogStats,
@@ -867,6 +868,48 @@ export async function probeLastUpdated(
   );
   const value = parseMaxDate(rows);
   return { ...(value ? { lastUpdated: value } : {}), basis: `MAX(${pick.column})` };
+}
+
+/**
+ * How big the database IS, independent of the caps — one row per table with
+ * its column count.
+ *
+ * This deliberately does NOT go through the catalog: the caps are exactly what
+ * is being measured, so reading a capped catalog to decide whether the caps are
+ * big enough would always answer "yes".
+ */
+export async function probeCatalogCapacity(
+  source: ContextSource,
+  credential: ContextCredential,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+  ceiling: number,
+): Promise<{ capacity: CatalogCapacity; columnCounts: number[] }> {
+  if (source.type === "mongodb") {
+    // MongoDB has no metadata catalog: collections are countable, but field
+    // counts would need a sampling query each. Report the honest subset rather
+    // than a made-up column figure.
+    const names = await withMongo(source, credential, tls, caps, async (client, dbName) =>
+      (await client.db(dbName).listCollections(undefined, { nameOnly: true }).toArray())
+        .map((c) => c.name)
+        .filter((n) => !n.startsWith("system.")),
+    );
+    return {
+      capacity: { tables: names.length, maxColumns: 0, totalColumns: 0, estimated: true },
+      columnCounts: [],
+    };
+  }
+  const rows = await SQL_RUNNERS[source.type as SqlEngine](
+    source,
+    credential,
+    tls,
+    { ...caps, maxResults: ceiling },
+    buildCapacityProbeSql(source.type as SqlStatsEngine),
+  );
+  const columnCounts = rows
+    .map((r) => Number(r.column_count ?? r.COLUMN_COUNT ?? r.Column_Count) || 0)
+    .filter((n) => n > 0);
+  return { capacity: parseCapacity(rows), columnCounts };
 }
 
 /** Approximate per-table row counts from catalog STATISTICS — one query for
