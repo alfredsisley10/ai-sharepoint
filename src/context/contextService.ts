@@ -168,6 +168,13 @@ import {
   CATALOG_TABLE_CEILING,
 } from "./db/schemaIndex";
 import { CatalogCapacity } from "./db/schemaReport";
+import {
+  resolveConcurrency,
+  DEFAULT_QUERY_CONCURRENCY,
+  DEFAULT_MODEL_CONCURRENCY,
+  MAX_QUERY_CONCURRENCY,
+  MAX_MODEL_CONCURRENCY,
+} from "./db/concurrency";
 import { TableStats } from "./db/tableStats";
 import { MSSQL_AAD_SCOPES } from "./db/mssqlAuth";
 import { AppError, classifyError } from "../core/errors";
@@ -1837,6 +1844,30 @@ export class ContextService {
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
       describeDb(source, credential, this.dbTls(credential), this.caps(), nowIso, this.catalogLimits()),
+    );
+  }
+
+  /**
+   * How many database queries long-running jobs may run at once — a CEILING,
+   * not a fixed parallelism: the governor moves the running value underneath
+   * it. Each unit is a separate connection, which is why the default is modest.
+   */
+  queryConcurrency(): number {
+    return resolveConcurrency(
+      vscode.workspace.getConfiguration("aiSharePoint").get<number>("db.maxConcurrency"),
+      DEFAULT_QUERY_CONCURRENCY,
+      MAX_QUERY_CONCURRENCY,
+    );
+  }
+
+  /** How many Copilot indexing requests may be in flight at once. Lower than
+   *  the query ceiling by default: these are metered, and long streaming
+   *  replies are what SSL-inspecting proxies reset. */
+  modelConcurrency(): number {
+    return resolveConcurrency(
+      vscode.workspace.getConfiguration("aiSharePoint").get<number>("db.maxModelConcurrency"),
+      DEFAULT_MODEL_CONCURRENCY,
+      MAX_MODEL_CONCURRENCY,
     );
   }
 

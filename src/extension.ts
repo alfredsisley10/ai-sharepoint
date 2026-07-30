@@ -146,6 +146,14 @@ import {
 } from "./context/db/tableStats";
 import { summarizeIndexState } from "./context/db/indexBatching";
 import {
+  ConcurrencyGovernor,
+  runWithConcurrency,
+  describeLimitChange,
+  LimitChange,
+  MAX_QUERY_CONCURRENCY,
+  MAX_MODEL_CONCURRENCY,
+} from "./context/db/concurrency";
+import {
   proposeJoinCandidates,
   proposeExhaustivePairs,
   classifyJoin,
@@ -595,7 +603,17 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => clearInterval(snowKeepAlive) });
   const bookmarks = new BookmarksStore(context.globalState);
   const schemas = new SchemaStore(context.globalStorageUri);
-  const schemaIndexer = new SchemaIndexer(copilot, schemas, telemetry, log, nowIso, () => resetTracker.record());
+  const schemaIndexer = new SchemaIndexer(
+    copilot,
+    schemas,
+    telemetry,
+    log,
+    nowIso,
+    () => resetTracker.record(),
+    // Wrapped rather than passed directly: the reporter is defined further
+    // down, and only ever called after activation has finished.
+    (message) => reportConcurrencyReduction(message),
+  );
   void schemas.preload();
   const catalogs = new CatalogStore(context.globalStorageUri);
   void catalogs.preload();
@@ -1341,6 +1359,34 @@ export function activate(context: vscode.ExtensionContext): void {
   /** Offer the transport switch once a PATTERN of resets has been seen. Called
    *  from the paths that actually stream long Copilot replies (indexing,
    *  alignment), because that is the traffic proxies cut. */
+  /**
+   * Tell the user, ONCE per session, that a database job automatically slowed
+   * itself down.
+   *
+   * Once, not once per reduction: a run that backs off twice is one story, and
+   * repeating it turns a useful explanation into noise the user learns to
+   * dismiss. Without any notice at all, an adaptive limit is indistinguishable
+   * from the extension being mysteriously slow — which is the failure mode that
+   * makes people turn features off.
+   */
+  let concurrencyReductionReported = false;
+  const reportConcurrencyReduction = (text: string): void => {
+    if (concurrencyReductionReported) return;
+    concurrencyReductionReported = true;
+    void vscode.window
+      .showWarningMessage(`${text}`, "Change Concurrency…", "Why?")
+      .then((pick) => {
+        if (pick === "Change Concurrency…") {
+          void vscode.commands.executeCommand("aiSharePoint.setDbConcurrency");
+        } else if (pick === "Why?") {
+          void vscode.window.showInformationMessage(
+            "Repeated timeouts, connection-limit or rate-limit errors mean the server (or the proxy in front of it) is refusing the load. Running fewer operations at once gets the job finished instead of failing it. The limit recovers on its own as operations succeed, and never goes above the ceiling you set. Errors that are NOT about load — a missing table, a permission denial — are ignored by this control on purpose.",
+            { modal: true },
+          );
+        }
+      });
+  };
+
   const offerFetcherRemedyIfNeeded = (): void => {
     const mode = currentFetcherMode(copilotAdvanced());
     if (!resetTracker.shouldOffer(mode)) return;
@@ -4630,9 +4676,35 @@ export function activate(context: vscode.ExtensionContext): void {
         // appends new hypotheses).
         const queue = [...candidates];
         const runStarted = Date.now();
+        // The probes are independent round-trips, so they run several at once
+        // under a ceiling the user sets. The governor moves the running value
+        // beneath that ceiling when the SERVER says we are pushing too hard.
+        const governor = new ConcurrencyGovernor(contextService.queryConcurrency(), "Database");
+        // In-flight visibility: the parallelism is part of the run's shape, so
+        // it belongs in the status line rather than only in the log.
+        const concurrencyNote = (): string => {
+          const g = governor.snapshot();
+          if (g.ceiling <= 1) return "";
+          return g.reduced && g.limit < g.ceiling
+            ? ` · ${g.limit}× (eased from ${g.ceiling})`
+            : ` · ${g.limit}×`;
+        };
+        const noteLimitChange = (change: LimitChange | undefined) => {
+          if (!change) return;
+          const text = describeLimitChange(change, "Database");
+          log.info(`ER probing: ${text}`);
+          // Tell the user the FIRST time it backs off, not on every step —
+          // a run that silently slows down is a mystery, and one that narrates
+          // every adjustment is noise.
+          if (change.direction === "down") reportConcurrencyReduction(text);
+        };
         let passLabel = "native pass";
         let lastMessage = "";
         let lastStatusAt = 0;
+        // Probes now finish out of order, so "done" has to be a COUNT of
+        // completed pairs rather than the index of the one being dispatched —
+        // an index would jump around and make the ETA nonsense.
+        let completed = 0;
         const paint = (done: number, current?: string, force = false, increment = 0) => {
           const now = Date.now();
           // Recompute the line at the throttle cadence — but EVERY report
@@ -4650,10 +4722,10 @@ export function activate(context: vscode.ExtensionContext): void {
               phase: passLabel,
             });
           }
-          progress.report({ increment, message: lastMessage });
+          progress.report({ increment, message: `${lastMessage}${concurrencyNote()}` });
         };
         paint(0, undefined, true);
-        const probeOne = async (c: JoinCandidate, i: number): Promise<void> => {
+        const probeOne = async (c: JoinCandidate): Promise<void> => {
           const from = endFor(c.fromTable, c.fromColumn);
           const to = endFor(c.toTable, c.toColumn);
           if (!from || !to) return;
@@ -4669,7 +4741,7 @@ export function activate(context: vscode.ExtensionContext): void {
             let complete = sample === "full";
             for (;;) {
               paint(
-                i,
+                completed,
                 `${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn} (${sample === "full" ? "complete join" : `${sample}-value sample`})`,
               );
               const started = Date.now();
@@ -4714,6 +4786,7 @@ export function activate(context: vscode.ExtensionContext): void {
               reason: c.reason,
               ...(c.cast ? { cast: true } : {}),
             });
+            noteLimitChange(governor.recordSuccess());
             if (verdict) {
               relationships.push({
                 fromTable: c.fromTable,
@@ -4747,11 +4820,16 @@ export function activate(context: vscode.ExtensionContext): void {
               outcome: "failed",
               reason: c.reason,
             });
+            // A timeout or a connection-limit error is evidence we are running
+            // too many at once; a missing column is not, and reacting to it
+            // would collapse the limit for reasons unrelated to load.
+            noteLimitChange(governor.recordFailure(err));
             log.warn(
-              `ER probe failed for ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn}: ${err instanceof Error ? err.message : String(err)}`,
+              `ER probe failed for ${c.fromTable}.${c.fromColumn} ↔ ${c.toTable}.${c.toColumn}: ${describeError(err)}`,
             );
           }
-          paint(i, undefined, false, 100 / queue.length);
+          completed += 1;
+          paint(completed, undefined, false, 100 / queue.length);
         };
         // Escalation ladder: each stage runs when the queue drains and may
         // append new candidates. Maximum mode escalates automatically; the
@@ -4847,9 +4925,23 @@ export function activate(context: vscode.ExtensionContext): void {
             if (more.length > 0) queue.push(...more);
             continue;
           }
-          await probeOne(queue[i], i);
-          i += 1;
+          // Run the pending slice concurrently. The slice is bounded by the
+          // queue as it stands now, because a stage may APPEND to it — and a
+          // pool that kept consuming a growing array would run the escalation
+          // passes before their gate had been asked.
+          const slice = queue.slice(i);
+          i = queue.length;
+          await runWithConcurrency(slice, (c) => probeOne(c), {
+            limit: () => governor.limit,
+            isCancelled: () => token.isCancellationRequested,
+          });
+          if (token.isCancellationRequested) {
+            partial = true;
+            break;
+          }
         }
+        const govSummary = governor.summary();
+        if (govSummary) log.info(`ER probing finished: ${govSummary}.`);
       },
     );
     relationships.sort(
@@ -5081,36 +5173,53 @@ export function activate(context: vscode.ExtensionContext): void {
             cancellable: true,
           },
           async (progress, token) => {
+            // One independent query per table — the case parallelism is for.
+            // The governor pulls the rate down if the server starts refusing.
+            const governor = new ConcurrencyGovernor(contextService.queryConcurrency(), "Database");
             let done = 0;
-            for (const t of probeable) {
-              if (token.isCancellationRequested) break;
-              const key = qualifiedName(t).toLowerCase();
-              progress.report({
-                message: `${qualifiedName(t)} (${++done}/${probeable.length})`,
-                increment: 100 / probeable.length,
-              });
-              try {
-                const r = await contextService.lastUpdatedFor(source, t);
-                if (r) {
-                  tables[key] = {
-                    ...tables[key],
-                    ...(r.lastUpdated ? { lastUpdated: r.lastUpdated } : {}),
-                    lastUpdatedBasis: r.basis,
-                  };
+            await runWithConcurrency(
+              probeable,
+              async (t) => {
+                const key = qualifiedName(t).toLowerCase();
+                try {
+                  const r = await contextService.lastUpdatedFor(source, t);
+                  if (r) {
+                    tables[key] = {
+                      ...tables[key],
+                      ...(r.lastUpdated ? { lastUpdated: r.lastUpdated } : {}),
+                      lastUpdatedBasis: r.basis,
+                    };
+                  }
+                  const up = governor.recordSuccess();
+                  if (up) log.info(`Last-updated probes: ${describeLimitChange(up, "Database")}`);
+                } catch (err) {
+                  // One table's scan timing out must not cost the whole pass —
+                  // and a blank cell would read as "no date column", which is a
+                  // different and wrong answer. describeError, not String(err):
+                  // a driver error whose `message` is empty stringifies to
+                  // nothing. mapDbError has already appended the statement.
+                  const reason = describeError(err);
+                  recencyFailed.push({ table: qualifiedName(t), reason });
+                  log.warn(`Last-updated probe failed for ${qualifiedName(t)}: ${reason}`);
+                  const down = governor.recordFailure(err);
+                  if (down) {
+                    const text = describeLimitChange(down, "Database");
+                    log.info(`Last-updated probes: ${text}`);
+                    reportConcurrencyReduction(text);
+                  }
                 }
-              } catch (err) {
-                // One table's scan timing out must not cost the whole pass —
-                // and a blank cell would read as "no date column", which is a
-                // different and wrong answer.
-                // describeError, not String(err): a driver error whose
-                // `message` is empty stringifies to nothing, which produced
-                // log lines that ended at the colon and reported no error at
-                // all. mapDbError has already appended the failing statement.
-                const reason = describeError(err);
-                recencyFailed.push({ table: qualifiedName(t), reason });
-                log.warn(`Last-updated probe failed for ${qualifiedName(t)}: ${reason}`);
-              }
-            }
+                done += 1;
+                progress.report({
+                  message: `${qualifiedName(t)} (${done}/${probeable.length}${
+                    governor.ceiling > 1 ? `, ${governor.limit}×` : ""
+                  })`,
+                  increment: 100 / probeable.length,
+                });
+              },
+              { limit: () => governor.limit, isCancelled: () => token.isCancellationRequested },
+            );
+            const summary = governor.summary();
+            if (summary) log.info(`Last-updated probes finished: ${summary}.`);
           },
         );
       }
@@ -5227,6 +5336,80 @@ export function activate(context: vscode.ExtensionContext): void {
     const source = await resolveSourceArg(arg, contextSources);
     if (!source || !requireDbSource(source)) return;
     await tuneCatalogLimits(source);
+  });
+
+  register("aiSharePoint.setDbConcurrency", async () => {
+    // Two ceilings, asked separately, because they bound different resources:
+    // one is the database server's connection budget, the other is metered
+    // Copilot requests through a proxy that resets long streaming replies.
+    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    const currentQuery = contextService.queryConcurrency();
+    const currentModel = contextService.modelConcurrency();
+    const which = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(database) Database queries",
+          description: `${currentQuery} at a time`,
+          detail:
+            "ER diagram probing and last-updated probes. Each unit is a separate connection to your server.",
+          key: "query" as const,
+        },
+        {
+          label: "$(sparkle) Copilot indexing requests",
+          description: `${currentModel} at a time`,
+          detail:
+            "Schema and content-type indexing batches. These are metered premium requests, and long streaming replies are what SSL-inspecting proxies cut.",
+          key: "model" as const,
+        },
+      ],
+      {
+        title: "Set Database Concurrency",
+        placeHolder: "Both are ceilings — repeated load failures reduce the running value automatically",
+        ignoreFocusOut: true,
+      },
+    );
+    if (!which) return;
+    const isQuery = which.key === "query";
+    const max = isQuery ? MAX_QUERY_CONCURRENCY : MAX_MODEL_CONCURRENCY;
+    const now = isQuery ? currentQuery : currentModel;
+    const options = (isQuery ? [1, 2, 4, 6, 8, 12, 16] : [1, 2, 3, 4, 6, 8]).filter((n) => n <= max);
+    const pick = await vscode.window.showQuickPick(
+      options.map((n) => ({
+        label: `${n}${n === now ? "  $(check)" : ""}`,
+        description:
+          n === 1
+            ? "sequential — one at a time (the original behavior)"
+            : n <= 4
+              ? "conservative"
+              : n <= 8
+                ? "faster — for a server with headroom"
+                : "aggressive — only for a warehouse you know can take it",
+        detail:
+          n === 1
+            ? "Slowest, and the safest thing to choose if a shared server is complaining."
+            : isQuery
+              ? `Up to ${n} simultaneous connections during ER probing and statistics.`
+              : `Up to ${n} Copilot requests in flight. Higher values finish sooner but hit proxy resets and rate limits more often.`,
+        value: n,
+      })),
+      {
+        title: `${isQuery ? "Database query" : "Copilot indexing"} concurrency — currently ${now}`,
+        placeHolder: "This is the ceiling; the running value adapts downward on sustained failures",
+        ignoreFocusOut: true,
+      },
+    );
+    if (!pick) return;
+    await cfg.update(
+      isQuery ? "db.maxConcurrency" : "db.maxModelConcurrency",
+      pick.value,
+      vscode.ConfigurationTarget.Global,
+    );
+    log.info(`${isQuery ? "Query" : "Model"} concurrency ceiling set to ${pick.value}.`);
+    void vscode.window.showInformationMessage(
+      `${isQuery ? "Database query" : "Copilot indexing"} concurrency set to ${pick.value}. It applies to the next run${
+        pick.value === 1 ? " — jobs will run strictly one at a time." : "."
+      }`,
+    );
   });
 
   register("aiSharePoint.exportSchemaReport", async (arg) => {

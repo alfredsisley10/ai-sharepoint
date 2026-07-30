@@ -293,3 +293,30 @@ The engine's guarantees are unit-tested against fake effects. The adapters need
 validation against a **live** Confluence + SharePoint tenant, which this
 environment cannot provide — the same constraint recorded for other connectors
 in the deferral register.
+
+---
+
+## BL-5 — Content-description batches still run one at a time
+
+**Area:** `src/context/db/schemaIndexer.ts` (`indexContentInteractively`, phase 2)
+
+### What problem would this solve?
+
+`aiSharePoint.db.maxModelConcurrency` governs the **schema** pass's Copilot batches and the
+content pass's **sampling** queries, but the content pass's *description* batches (phase 2)
+are still sequential. The setting therefore does slightly less than its name suggests.
+
+This was a deliberate scope call, not an oversight: phase 2's loop carries the same intricate
+retry-in-place, budget-shrink and checkpoint semantics that the schema pass has, and
+converting it means either duplicating that logic or extracting a shared wave driver. The
+payoff is small in the meantime — content indexing is capped at `CONTENT_MAX_TABLES` (50),
+so it is a handful of batches, while the schema pass runs over the whole catalog and is where
+the hours actually go.
+
+### Sketch
+
+Extract the wave driver added to `runIndexing` (take `governor.limit` batches, run them
+through `runWithConcurrency`, adapt the budget from the wave's aggregate with the target
+scaled by wave size, checkpoint once) into a private method both passes call, parameterized
+by prompt builder, parser and checkpoint. That removes the duplication rather than adding to
+it, and makes the setting mean what it says.

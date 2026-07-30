@@ -168,5 +168,8 @@
   "aiSharePoint.refreshTableStats.title": "Refresh Database Table Statistics",
   "aiSharePoint.resetSourceIndex.title": "Reset Database Index (Start Over)…",
   "aiSharePoint.tuneCatalogLimits.title": "Measure Database & Tune Catalog Limits…",
-  "aiSharePoint.exportSchemaReport.title": "Export Database Schema Report (XLSX)"
+  "aiSharePoint.exportSchemaReport.title": "Export Database Schema Report (XLSX)",
+  "config.aiSharePoint.db.maxConcurrency.markdownDescription": "How many database queries long-running jobs (ER diagram probing, last-updated probes) may run **at once**. Each unit is a separate connection, so this is a load choice about *your server*, not about this extension: a warehouse shrugs at 8, a contended OLTP box behind a connection pool may not. This is a **ceiling** — sustained timeouts or connection-limit errors automatically halve the running value underneath it, and it recovers as operations succeed. Set to 1 for the previous strictly-sequential behavior.",
+  "config.aiSharePoint.db.maxModelConcurrency.markdownDescription": "How many Copilot indexing requests may be in flight **at once**. Kept lower than the query concurrency by default: these are metered premium requests, and an SSL-inspecting proxy is more likely to reset several long streaming replies running together. A ceiling — sustained resets or rate limits reduce the running value automatically.",
+  "aiSharePoint.setDbConcurrency.title": "Set Database Concurrency…"
 }

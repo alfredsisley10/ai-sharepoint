@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.145.0",
+  "version": "0.146.0",
   "release": {
     "channel": "standard"
   },
@@ -275,6 +275,12 @@
         "title": "%aiSharePoint.tuneCatalogLimits.title%",
         "category": "%category%",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "aiSharePoint.setDbConcurrency",
+        "title": "%aiSharePoint.setDbConcurrency.title%",
+        "category": "%category%",
+        "icon": "$(dashboard)"
       },
       {
         "command": "aiSharePoint.exportSchemaReport",
@@ -3414,6 +3420,11 @@
           "group": "1_schema@8"
         },
         {
+          "command": "aiSharePoint.setDbConcurrency",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
+          "group": "1_schema@8"
+        },
+        {
           "command": "aiSharePoint.resetSourceIndex",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
           "group": "1_schema@9"
@@ -3569,6 +3580,9 @@
         {
           "command": "aiSharePoint.tuneCatalogLimits",
           "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.setDbConcurrency"
         },
         {
           "command": "aiSharePoint.exportSchemaReport",
@@ -3954,6 +3968,22 @@
           "maximum": 10000,
           "order": 13,
           "markdownDescription": "%config.aiSharePoint.context.maxCollections.markdownDescription%"
+        },
+        "aiSharePoint.db.maxConcurrency": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 16,
+          "order": 13,
+          "markdownDescription": "%config.aiSharePoint.db.maxConcurrency.markdownDescription%"
+        },
+        "aiSharePoint.db.maxModelConcurrency": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 8,
+          "order": 13,
+          "markdownDescription": "%config.aiSharePoint.db.maxModelConcurrency.markdownDescription%"
         },
         "aiSharePoint.ldap.tlsRejectUnauthorized": {
           "type": "boolean",

@@ -43,7 +43,19 @@ import {
   summarizeIndexState,
   describeIndexChoices,
   START_COLUMN_BUDGET,
+  TARGET_BATCH_MS,
 } from "./indexBatching";
+import {
+  ConcurrencyGovernor,
+  runWithConcurrency,
+  describeLimitChange,
+  LimitChange,
+  resolveConcurrency,
+  DEFAULT_MODEL_CONCURRENCY,
+  MAX_MODEL_CONCURRENCY,
+  DEFAULT_QUERY_CONCURRENCY,
+  MAX_QUERY_CONCURRENCY,
+} from "./concurrency";
 
 /**
  * How a run treats what is already indexed.
@@ -91,7 +103,29 @@ export class SchemaIndexer {
      *  streaming reply), so the extension can offer the Copilot-transport
      *  remedy once a pattern emerges rather than on the first blip. */
     private readonly onTransportReset?: () => void,
+    /** Told once when the governor backs the batch concurrency off, so the
+     *  extension can explain a run that quietly slowed down. */
+    private readonly onConcurrencyReduced?: (message: string) => void,
   ) {}
+
+  /** Ceiling on database queries in flight (content sampling). */
+  private queryConcurrency(): number {
+    return resolveConcurrency(
+      vscode.workspace.getConfiguration("aiSharePoint").get<number>("db.maxConcurrency"),
+      DEFAULT_QUERY_CONCURRENCY,
+      MAX_QUERY_CONCURRENCY,
+    );
+  }
+
+  /** Ceiling on Copilot requests in flight. Read per run, so changing the
+   *  setting takes effect on the next run without a reload. */
+  private modelConcurrency(): number {
+    return resolveConcurrency(
+      vscode.workspace.getConfiguration("aiSharePoint").get<number>("db.maxModelConcurrency"),
+      DEFAULT_MODEL_CONCURRENCY,
+      MAX_MODEL_CONCURRENCY,
+    );
+  }
 
   /** Copilot requests made by the most recent indexing run — surfaced in
    *  the completion toast (pilot: cost wasn't visible at point of use). */
@@ -266,9 +300,20 @@ export class SchemaIndexer {
     let modelId = schema.semantic?.modelId ?? "";
     let partial = false;
     let index = 0;
-    /** Retries used on the batch currently in flight; reset when we move on. */
-    let attempt = 0;
     this.lastRunRequests = 0;
+    // Batches run several at a time under a user-set ceiling. The governor
+    // moves the running value down when the model or the proxy in front of it
+    // starts refusing the load, and back up as requests succeed.
+    const governor = new ConcurrencyGovernor(this.modelConcurrency(), "Copilot indexing");
+    let inFlight = 0;
+    const inFlightNote = (): string =>
+      inFlight > 1 ? ` · ${inFlight} batches in flight` : "";
+    const noteLimit = (change: LimitChange | undefined): void => {
+      if (!change) return;
+      const text = describeLimitChange(change, "Copilot indexing");
+      this.log.info(`Schema indexing: ${text}`);
+      if (change.direction === "down") this.onConcurrencyReduced?.(text);
+    };
     /**
      * Persist what is indexed SO FAR. Called after every batch, so a proxy
      * reset, a crash, or a closed window can never throw away completed work —
@@ -304,119 +349,189 @@ export class SchemaIndexer {
       await this.schemas.set(source.id, snapshot);
       return snapshot;
     };
+    /**
+     * One batch, including its own transient retries.
+     *
+     * Retries live INSIDE this function rather than as a `continue` in the
+     * driver, because batches now run several at a time: a `continue` can only
+     * re-run "the current batch" when there is exactly one.
+     */
+    const runBatch = async (
+      batch: TableDef[],
+      batchNo: number,
+    ): Promise<
+      | { kind: "ok"; parsed: SemanticTable[]; units: number; modelId: string }
+      | { kind: "entitlement"; err: AppError }
+      | { kind: "failed"; err: unknown; units: number }
+    > => {
+      const units = batchUnits(batch);
+      const batchLabel = `Batch ${batchNo}/~${estimated} (${batch.length} tables, ${units} columns)`;
+      for (let tries = 0; ; ) {
+        const startedAt = Date.now();
+        let received = 0;
+        let lastPaint = 0;
+        // Live feedback (pilot): a batch is one long streaming model request —
+        // tick elapsed seconds until the first token, then stream-throttled
+        // byte counts. The column count is shown because it, not the table
+        // count, is what makes a batch slow.
+        const paint = (msg: string) => progress?.report({ message: `${msg}${inFlightNote()}` });
+        paint(`${batchLabel} — sending to Copilot…`);
+        const ticker = setInterval(() => {
+          if (received === 0) {
+            paint(`${batchLabel} — waiting for the model… ${Math.round((Date.now() - startedAt) / 1000)}s`);
+          }
+        }, 1000);
+        try {
+          const res = await this.copilot.ask(
+            {
+              prompt: buildIndexPrompt(schema.catalog, batch),
+              label: "schemaIndex",
+              token,
+              onChunk: (text) => {
+                received += text.length;
+                if (Date.now() - lastPaint > 400) {
+                  lastPaint = Date.now();
+                  paint(
+                    `${batchLabel} — model is writing… ${(received / 1024).toFixed(1)} KB, ${Math.round((Date.now() - startedAt) / 1000)}s`,
+                  );
+                }
+              },
+            },
+            this.now,
+          );
+          clearInterval(ticker);
+          this.lastRunRequests += 1;
+          const parsed = parseSemanticResponse(res.text, schema.catalog);
+          noteLimit(governor.recordSuccess());
+          progress?.report({
+            // Progress by COLUMNS completed, not batches — with adaptive sizing
+            // the batch count isn't known up front, and columns are the real work.
+            increment: (units / totalUnits) * 100,
+            message: `${batchLabel} done — ${parsed.length} tables tagged in ${Math.round((Date.now() - startedAt) / 1000)}s${inFlightNote()}`,
+          });
+          return { kind: "ok", parsed, units, modelId: res.modelId };
+        } catch (err) {
+          clearInterval(ticker);
+          if (err instanceof AppError && err.code === "copilot.entitlement") {
+            // "Not authorized for this Copilot feature" — every remaining batch
+            // would hit the same refusal. The driver stops the run (pilot).
+            return { kind: "entitlement", err };
+          }
+          // A TRANSIENT transport failure — the corporate-proxy HTTP/2 reset
+          // that kills long streaming replies — is not a sizing problem: the
+          // identical request usually succeeds next try. Retry unchanged with a
+          // short backoff before the driver falls back to shrinking.
+          if (isTransportReset(err)) this.onTransportReset?.();
+          noteLimit(governor.recordFailure(err));
+          if (isTransientLlmError(err) && tries < MAX_TRANSIENT_RETRIES && !token?.isCancellationRequested) {
+            tries += 1;
+            const delay = retryDelayMs(tries);
+            const note = describeRetry(err, tries, MAX_TRANSIENT_RETRIES, delay);
+            this.log.warn(`Schema indexing batch ${batchNo}: ${note} — ${errorText(err)}`);
+            paint(`${batchLabel} — ${note}`);
+            await sleep(delay, token);
+            continue;
+          }
+          if (isTransientLlmError(err)) {
+            this.log.warn(`Schema indexing batch ${batchNo} gave up after ${tries} retries: ${errorText(err)}. ${PROXY_GUIDANCE}`);
+          }
+          return { kind: "failed", err, units };
+        }
+      }
+    };
+
     while (remaining.length > 0) {
       if (token?.isCancellationRequested) {
         partial = true;
         break;
       }
-      const { batch, rest } = takeBatch(remaining, budget);
-      const units = batchUnits(batch);
-      if (attempt === 0) index += 1; // a retry is the SAME batch, not the next one
-      // Live feedback (pilot): a batch is one long streaming model request —
-      // tick elapsed seconds until the first token, then stream-throttled
-      // byte counts, then a per-batch completion line with bar movement. The
-      // column count is shown because it, not the table count, is what makes a
-      // batch slow.
-      const batchLabel = `Batch ${index}/~${estimated} (${batch.length} tables, ${units} columns)`;
-      const startedAt = Date.now();
-      let received = 0;
-      let lastPaint = 0;
-      const paint = (msg: string) => progress?.report({ message: msg });
-      paint(`${batchLabel} — sending to Copilot…`);
-      const ticker = setInterval(() => {
-        if (received === 0) {
-          paint(`${batchLabel} — waiting for the model… ${Math.round((Date.now() - startedAt) / 1000)}s`);
-        }
-      }, 1000);
-      try {
-        const res = await this.copilot.ask(
-          {
-            prompt: buildIndexPrompt(schema.catalog, batch),
-            label: "schemaIndex",
-            token,
-            onChunk: (text) => {
-              received += text.length;
-              if (Date.now() - lastPaint > 400) {
-                lastPaint = Date.now();
-                paint(
-                  `${batchLabel} — model is writing… ${(received / 1024).toFixed(1)} KB, ${Math.round((Date.now() - startedAt) / 1000)}s`,
-                );
-              }
-            },
-          },
-          this.now,
-        );
-        clearInterval(ticker);
-        modelId = res.modelId;
-        this.lastRunRequests += 1;
-        const parsed = parseSemanticResponse(res.text, schema.catalog);
-        results.push(parsed);
-        remaining = rest;
-        attempt = 0;
-        const elapsed = Date.now() - startedAt;
-        const adjusted = nextColumnBudget(budget, units, elapsed);
-        const note = describeBudgetChange(budget, adjusted);
-        budget = adjusted;
-        // CHECKPOINT: persist everything indexed so far. A proxy reset, crash,
-        // or closed window after this point costs nothing already paid for.
-        await checkpoint(remaining.length > 0 || partial);
-        progress?.report({
-          // Progress by COLUMNS completed, not batches — with adaptive sizing
-          // the batch count isn't known up front, and columns are the real work.
-          increment: (units / totalUnits) * 100,
-          message: `${batchLabel} done — ${parsed.length} tables tagged in ${Math.round(elapsed / 1000)}s${note}${rest.length ? `; ${rest.length} table(s) to go` : ""}`,
-        });
-      } catch (err) {
-        clearInterval(ticker);
-        if (err instanceof AppError && err.code === "copilot.entitlement") {
-          // "Not authorized for this Copilot feature" — every remaining
-          // batch would hit the same refusal. Stop the run (pilot).
-          partial = true;
-          this.log.warn(`Schema indexing stopped at batch ${index}: ${err.message}`);
-          break;
-        }
-        // A TRANSIENT transport failure — the corporate-proxy HTTP/2 reset that
-        // kills long streaming replies — is not a sizing problem: the identical
-        // request usually succeeds on the next try. Retry it unchanged, with a
-        // short backoff, before falling back to shrinking.
-        if (isTransportReset(err)) this.onTransportReset?.();
-        if (isTransientLlmError(err) && attempt < MAX_TRANSIENT_RETRIES && !token?.isCancellationRequested) {
-          attempt += 1;
-          const delay = retryDelayMs(attempt);
-          const note = describeRetry(err, attempt, MAX_TRANSIENT_RETRIES, delay);
-          this.log.warn(`Schema indexing batch ${index}: ${note} — ${errorText(err)}`);
-          paint(`${batchLabel} — ${note}`);
-          await sleep(delay, token);
-          continue; // `remaining` untouched: the same batch goes again
-        }
-        // Out of retries, or not transient at all.
+      // A WAVE of batches, sized by the governor. Waves rather than a
+      // free-running pool because the wave boundary is where the budget is
+      // re-tuned and the index is checkpointed — both of which need a
+      // consistent view of what finished.
+      const waveSize = Math.max(1, governor.limit);
+      const batches: TableDef[][] = [];
+      let rest: TableDef[] = remaining;
+      while (batches.length < waveSize && rest.length > 0) {
+        const taken = takeBatch(rest, budget);
+        batches.push(taken.batch);
+        rest = taken.rest;
+      }
+      inFlight = batches.length;
+      const firstNo = index + 1;
+      index += batches.length;
+      const waveStarted = Date.now();
+      const outcomes = await runWithConcurrency(
+        batches,
+        (batch, k) => runBatch(batch, firstNo + k),
+        { limit: () => governor.limit, isCancelled: () => token?.isCancellationRequested === true },
+      );
+      const waveElapsed = Date.now() - waveStarted;
+      inFlight = 0;
+
+      // An entitlement refusal answers the same way for every batch — stop.
+      if (outcomes.some((o) => o?.kind === "entitlement")) {
         partial = true;
-        if (isTransientLlmError(err)) {
-          this.log.warn(`Schema indexing batch ${index} gave up after ${attempt} retries: ${errorText(err)}. ${PROXY_GUIDANCE}`);
+        const e = outcomes.find((o) => o?.kind === "entitlement") as { err: AppError };
+        this.log.warn(`Schema indexing stopped: ${e.err.message}`);
+        break;
+      }
+
+      let okUnits = 0;
+      const retryTables: TableDef[] = [];
+      let anyFailure = false;
+      outcomes.forEach((o, k) => {
+        if (o?.kind === "ok") {
+          results.push(o.parsed);
+          modelId = o.modelId;
+          okUnits += o.units;
+          return;
         }
+        anyFailure = true;
+        partial = true;
+        const batch = batches[k];
         const smaller = shrinkAfterFailure(budget);
         // Retry only when a smaller budget could actually produce a SMALLER
         // batch. A single table already over budget can't be split, so retrying
         // it would just re-spend metered requests on the identical prompt.
         const canRetrySmaller = smaller < budget && batch.length > 1;
         this.log.warn(
-          `Schema indexing batch ${index} (${batch.length} tables, ${units} columns) failed: ${String(err)}${
-            canRetrySmaller ? ` — retrying the remainder at ${smaller} columns/batch` : ""
-          }`,
+          `Schema indexing batch ${firstNo + k} (${batch.length} tables, ${o?.kind === "failed" ? o.units : 0} columns) failed: ${
+            o?.kind === "failed" ? errorText(o.err) : "cancelled"
+          }${canRetrySmaller ? ` — retrying the remainder at ${smaller} columns/batch` : ""}`,
         );
-        budget = smaller;
-        if (!canRetrySmaller) {
-          // Either already at the floor, or a lone table too wide to split —
-          // retrying would re-send an identical prompt. Skip it so the run can
-          // never loop on the same tables, and let `partial` report the gap.
-          remaining = rest;
-          attempt = 0;
-          progress?.report({ increment: (units / totalUnits) * 100 });
-        }
-        // Otherwise `remaining` is unchanged: the same tables are retried at
-        // the smaller budget, which will take fewer of them per batch.
+        if (canRetrySmaller) retryTables.push(...batch);
+        else if (o?.kind === "failed") progress?.report({ increment: (o.units / totalUnits) * 100 });
+      });
+
+      if (anyFailure) budget = shrinkAfterFailure(budget);
+      else if (okUnits > 0) {
+        // Adapt from the WAVE, and scale the target by how many ran together:
+        // with N in flight each batch's wall-clock is inflated by contention,
+        // so measuring one against the single-batch target would shrink the
+        // budget for a run that is in fact keeping up.
+        const adjusted = nextColumnBudget(
+          budget,
+          okUnits,
+          waveElapsed,
+          TARGET_BATCH_MS * batches.length,
+        );
+        const note = describeBudgetChange(budget, adjusted);
+        if (note) this.log.info(`Schema indexing: ${okUnits} columns in ${Math.round(waveElapsed / 1000)}s${note}`);
+        budget = adjusted;
       }
+
+      // Tables that failed but can be split go back to the FRONT, so the run
+      // makes progress on them at the smaller budget rather than deferring
+      // them behind everything else.
+      remaining = [...retryTables, ...rest];
+      // CHECKPOINT: persist everything indexed so far. A proxy reset, crash, or
+      // closed window after this point costs nothing already paid for.
+      await checkpoint(remaining.length > 0 || partial);
     }
+
+    const govSummary = governor.summary();
+    if (govSummary) this.log.info(`Schema indexing finished: ${govSummary}.`);
     // Anything still queued (an entitlement stop, or cancellation) means the
     // index does not cover the whole catalog — record that so a re-run resumes.
     if (remaining.length > 0) partial = true;
@@ -493,28 +608,50 @@ export class SchemaIndexer {
       },
       async (progress, token) => {
         this.lastRunRequests = 0;
-        // Phase 1: sampling — one query per table, live per-table feedback.
-        const samples: TableSample[] = [];
-        for (let i = 0; i < tables.length; i++) {
-          if (token.isCancellationRequested) break;
-          const name = qualifiedName(tables[i]);
-          progress.report({
-            increment: 40 / tables.length,
-            message: `Sampling ${name} (${i + 1}/${tables.length})…`,
-          });
-          try {
-            const sample = await sampler(tables[i]);
-            // Keep the table even when every sampled column was null: the
-            // profile still says "always NULL", which is exactly the
-            // sparsely-populated signal an analyst wants. Previously an
-            // all-null table produced no entry and vanished silently.
-            if (Object.keys(sample.values).length > 0 || Object.keys(sample.profile).length > 0) {
-              samples.push({ table: name, values: sample.values, profile: sample.profile });
+        // Phase 1: sampling — one independent query per table, so these run
+        // several at a time under the DATABASE ceiling (a different resource
+        // from the Copilot ceiling that phase 2 answers to).
+        const sampleGovernor = new ConcurrencyGovernor(this.queryConcurrency(), "Database");
+        let sampled = 0;
+        const collected = await runWithConcurrency(
+          tables,
+          async (table) => {
+            const name = qualifiedName(table);
+            try {
+              const sample = await sampler(table);
+              const up = sampleGovernor.recordSuccess();
+              if (up) this.log.info(`Content sampling: ${describeLimitChange(up, "Database")}`);
+              // Keep the table even when every sampled column was null: the
+              // profile still says "always NULL", which is exactly the
+              // sparsely-populated signal an analyst wants. Previously an
+              // all-null table produced no entry and vanished silently.
+              return Object.keys(sample.values).length > 0 || Object.keys(sample.profile).length > 0
+                ? { table: name, values: sample.values, profile: sample.profile }
+                : undefined;
+            } catch (err) {
+              this.log.warn(`Content sample for ${name} failed: ${errorText(err)}`);
+              const down = sampleGovernor.recordFailure(err);
+              if (down) {
+                const text = describeLimitChange(down, "Database");
+                this.log.info(`Content sampling: ${text}`);
+                this.onConcurrencyReduced?.(text);
+              }
+              return undefined;
+            } finally {
+              sampled += 1;
+              progress.report({
+                increment: 40 / tables.length,
+                message: `Sampling ${name} (${sampled}/${tables.length}${
+                  sampleGovernor.ceiling > 1 ? `, ${sampleGovernor.limit}×` : ""
+                })…`,
+              });
             }
-          } catch (err) {
-            this.log.warn(`Content sample for ${name} failed: ${String(err)}`);
-          }
-        }
+          },
+          { limit: () => sampleGovernor.limit, isCancelled: () => token.isCancellationRequested },
+        );
+        // Input order is preserved by the pool, so the batches stay in catalog
+        // order regardless of which query finished first.
+        const samples: TableSample[] = collected.filter((s) => s !== undefined) as TableSample[];
         // Phase 2: Copilot description, batched + streamed like the schema pass
         // — and sized the same adaptive way. A content batch's cost also tracks
         // the number of COLUMNS being described, not the table count, so the

@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.146.0 — 2026-07-30
+
+### Database jobs now run several operations at once
+- **ER probing, last-updated probes, content sampling and schema-indexing batches were strictly
+  sequential** — one round trip, wait, next. On a large schema that is hours of mostly-idle time,
+  because the bottleneck is latency, not the client. They now run several at once.
+- **Two ceilings, because they bound different resources.** `aiSharePoint.db.maxConcurrency`
+  (default 4) governs database queries — each unit is a **connection to your server**.
+  `aiSharePoint.db.maxModelConcurrency` (default 2) governs Copilot indexing requests — each unit
+  is a **metered premium request** through a proxy that is more likely to reset several long
+  streaming replies at once. Conflating them would force a database that can take 8 readers to
+  also fire 8 model requests.
+- **New command: Set Database Concurrency…** picks either ceiling from a list, with what each
+  value means. Setting either to **1** restores exactly the previous sequential behavior.
+
+### It backs off by itself — and says so
+- **Sustained load failures halve the running limit; sustained success walks it back up one step
+  at a time.** Multiplicative decrease, additive increase: backing off has to outrun the overload
+  or the run oscillates against whatever is saturated. Two failures in the recent window trigger a
+  reduction (not one — a single timeout is normal on a busy database); ten consecutive successes
+  earn a step back up.
+- **The ceiling you set is never exceeded.** Automatic control moves within [1, ceiling]; it does
+  not get to decide it knows better than the setting.
+- **Failures that aren't about load are ignored on purpose.** A missing table, a permission denial,
+  a syntax error — none improve with less parallelism, and reacting to them would throttle a run
+  whose only problem is that some tables aren't readable. Only overload signatures move the limit;
+  the rest are logged and counted separately, and reported at the end of the run.
+- **You are told, once.** The live parallelism shows in the progress line (*"· 4×"*, or
+  *"· 2× (eased from 8)"*), and the first reduction in a session raises a notification explaining
+  why, with buttons to change the ceiling or read the reasoning. An adaptive limit nobody mentions
+  is indistinguishable from the extension being mysteriously slow.
+
+### Under the hood
+- Batch adaptation now measures a **wave** and scales its target by how many ran together —
+  otherwise contention between concurrent batches would look like slowness and shrink the column
+  budget for a run that is in fact keeping up.
+- ER progress counts **completed** pairs rather than the dispatch index, which is no longer
+  monotonic; the ETA was previously derived from a number that now jumps around.
+- Known gap, tracked as BL-5: the content pass's *description* batches are still sequential (its
+  sampling queries are not). Deliberate — that loop carries the same delicate retry/checkpoint
+  semantics, and content indexing is capped at 50 tables, so the payoff is small next to the
+  duplication.
+
 ## 0.145.0 — 2026-07-30
 
 ### Per-table figures, and a read of which tables are still alive

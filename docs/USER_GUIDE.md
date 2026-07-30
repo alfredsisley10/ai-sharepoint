@@ -530,6 +530,29 @@ reasons — ADR-0022):
   Index* shows exactly what's stored; `#spDbSchema` gives the model the right columns before
   it writes a SELECT. **Indexes are shared via Export/Import Reference Config**, so one
   teammate's indexing run benefits everyone.
+- **Concurrency: how many operations run at once.** ER probing, last-updated probes, content
+  sampling and schema-indexing batches used to run strictly one at a time, which on a large
+  schema is hours of mostly-idle waiting — the bottleneck is round-trip latency, not your
+  machine. They now run several at once, under two ceilings you control:
+  **Set Database Concurrency…** (or `aiSharePoint.db.maxConcurrency`, default 4) for database
+  queries, and `aiSharePoint.db.maxModelConcurrency` (default 2) for Copilot indexing requests.
+  They are separate because they bound different things: each query unit is a **connection to
+  your server**, while each model unit is a **metered premium request** through a proxy that
+  is more likely to reset several long streaming replies at once. Set either to **1** for
+  exactly the previous sequential behavior.
+- **It backs off by itself, and tells you when it does.** Both ceilings are *ceilings*: the
+  running value adapts underneath them. Two load-related failures in the recent window — a
+  timeout, a connection-limit or rate-limit error, a reset — **halve** it; ten consecutive
+  successes step it back up by one. Backing off is deliberately faster than recovering, or the
+  run would just oscillate against whatever is saturated. The current parallelism is shown live
+  in the progress line (*“… · 4×”*, or *“· 2× (eased from 8)”*), and the first time a run
+  reduces itself you get a notification explaining why, with buttons to change the ceiling or
+  read the reasoning — an adaptive limit nobody mentions is indistinguishable from the
+  extension being mysteriously slow.
+- **Failures that aren't about load are ignored on purpose.** A missing table, a permission
+  denial, a syntax error — none of those improve with less parallelism, and reacting to them
+  would throttle a run whose only problem is that some tables aren't readable. Only overload
+  signatures move the limit; everything else is logged and counted separately.
 - **How long a run takes, and why the batch size moves.** A run is a series of Copilot
   requests, and each one's cost is driven by how much the model has to *write* — roughly one
   line per column. Batches are therefore sized by a **column budget**, not a table count: the
@@ -1036,6 +1059,8 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | `aiSharePoint.context.maxTables` | `1000` | Max tables/views read into a catalog. Beyond it, tables are **missing** — the schema view says so |
 | `aiSharePoint.context.maxColumnsPerTable` | `300` | Max columns captured per table. Beyond it a table looks complete but isn't — raise this first |
 | `aiSharePoint.context.maxCollections` | `250` | Max MongoDB collections per catalog (lower: each costs its own sampling query) |
+| `aiSharePoint.db.maxConcurrency` | `4` | Ceiling on simultaneous database queries (ER probes, statistics, sampling). Each unit is a connection |
+| `aiSharePoint.db.maxModelConcurrency` | `2` | Ceiling on simultaneous Copilot indexing requests. Metered, and proxy-reset-prone |
 | `aiSharePoint.context.autoProbeOnFirstUse` | `false` | **Machine-scoped** — on first use of a model, send one short calibration request to learn its real context limit (uses a little Copilot quota) |
 | `aiSharePoint.ldap.dnsServers` | `[]` | **Machine-scoped** — internal DNS IPs for AD SRV lookups (fixes VPN split-DNS) |
 | `aiSharePoint.logging.verboseWire` | `false` | Full redacted request/response detail from every integration in the log |
