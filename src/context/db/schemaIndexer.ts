@@ -17,7 +17,11 @@ import {
   mergeContentIntoSemantic,
   qualifiedName,
   CONTENT_MAX_TABLES,
+  CONTENT_DISTINCT_PER_COLUMN,
+  CONTENT_VALUE_MAX_CHARS,
+  TableValueSample,
 } from "./schemaIndex";
+import { WIRE_DETAIL_CAP } from "../../core/wireLog";
 import {
   isTransientLlmError,
   isTransportReset,
@@ -34,11 +38,12 @@ import {
   shrinkAfterFailure,
   estimateBatchCount,
   describeBudgetChange,
-  planResume,
+  planIndexWork,
+  tableFingerprint,
   START_COLUMN_BUDGET,
 } from "./indexBatching";
 
-export type TableSampler = (table: TableDef) => Promise<Record<string, string[]>>;
+export type TableSampler = (table: TableDef) => Promise<TableValueSample>;
 
 /** Wait `ms`, returning early if the run is cancelled — so a backoff can never
  *  hold a cancelled indexing run open. */
@@ -95,7 +100,7 @@ export class SchemaIndexer {
     const columns = schema.catalog.tables.reduce((n, t) => n + t.columns.length, 0);
     const batches = estimateBatchCount(schema.catalog.tables);
     const pick = await vscode.window.showInformationMessage(
-      `Index the "${source.displayName}" schema with Copilot? Table and column NAMES only — no data rows — are sent (${tables} tables, ${columns} columns ≈ ${batches} Copilot request${batches === 1 ? "" : "s"}). The semantic index lets free-form questions find the right columns (e.g. group_cio → "owned by …").`,
+      `Index the "${source.displayName}" schema with Copilot? Table and column NAMES and TYPES only — no data rows — are sent (${tables} tables, ${columns} columns ≈ ${batches} Copilot request${batches === 1 ? "" : "s"}). The semantic index lets free-form questions find the right columns (e.g. group_cio → "owned by …").`,
       { modal: true },
       "Index with Copilot",
       "Not Now",
@@ -136,17 +141,31 @@ export class SchemaIndexer {
     // RESUME: a previous run that a proxy reset (or the user) cut short leaves a
     // PARTIAL index. Re-running must not redo tables already paid for, so those
     // are carried forward and skipped — re-running is the documented recovery.
-    const carried: SemanticTable[] = schema.semantic?.partial ? (schema.semantic.tables ?? []) : [];
-    const { todo, skipped } = planResume(
-      schema.catalog.tables,
-      (t) => qualifiedName(t),
-      carried.map((t) => t.table),
-    );
-    if (skipped > 0) {
+    // Carry the WHOLE stored index, not just a partial one: a table can need
+    // reprocessing even when the last run finished, because its SCHEMA changed.
+    const carriedAll: SemanticTable[] = schema.semantic?.tables ?? [];
+    const plan = planIndexWork(schema.catalog.tables, carriedAll);
+    const { todo, skipped } = plan;
+    // Entries whose table no longer exists are dropped rather than described
+    // forever; without this the index accumulates ghosts across every resume.
+    const carried = plan.orphaned.length
+      ? carriedAll.filter((t) => !plan.orphaned.some((o) => o.toLowerCase() === t.table.toLowerCase()))
+      : carriedAll;
+    if (plan.orphaned.length) {
+      this.log.info(`Schema indexing: dropped ${plan.orphaned.length} index entr(ies) for table(s) no longer in the catalog (${plan.orphaned.slice(0, 5).join(", ")}).`);
+    }
+    if (skipped > 0 || plan.changed > 0) {
+      const changedNote = plan.changed
+        ? `, ${plan.changed} changed and queued for reprocessing`
+        : "";
       progress?.report({
-        message: `Resuming — ${skipped} table(s) already indexed, ${todo.length} to go`,
+        message: `${skipped} table(s) already indexed${changedNote} — ${todo.length} to process`,
       });
-      this.log.info(`Schema indexing resumed for "${source.displayName}": skipping ${skipped} already-indexed table(s).`);
+      this.log.info(
+        `Schema indexing for "${source.displayName}": skipping ${skipped} unchanged table(s)${
+          plan.changed ? `; SCHEMA CHANGED for ${plan.changedNames.slice(0, 10).join(", ")} — reprocessing` : ""
+        }.`,
+      );
     }
     const totalUnits = Math.max(1, batchUnits(todo));
     const estimated = Math.max(1, estimateBatchCount(todo));
@@ -164,19 +183,33 @@ export class SchemaIndexer {
      * reset, a crash, or a closed window can never throw away completed work —
      * the next run resumes from here instead of restarting.
      */
+    /** Live fingerprint per qualified name, stamped onto whatever the model
+     *  returns so the NEXT run can detect a schema change. */
+     const fingerprints = new Map(
+      schema.catalog.tables.map((t) => [qualifiedName(t).toLowerCase(), tableFingerprint(t)]),
+    );
     const checkpoint = async (stillPartial: boolean): Promise<SourceSchema> => {
-      const merged = mergeSemantic(results);
+      const merged = mergeSemantic(results).map((t) => ({
+        ...t,
+        ...(fingerprints.get(t.table.toLowerCase())
+          ? { fingerprint: fingerprints.get(t.table.toLowerCase()) }
+          : {}),
+      }));
       const snapshot: SourceSchema = {
         ...schema,
         catalog: schema.catalog,
         semantic: {
+          // Preserve everything the content pass wrote (contentIndexedAt) —
+          // rebuilding this object from scratch used to discard it.
+          ...(schema.semantic ?? {}),
           indexedAt: this.now(),
           modelId,
           tables: merged,
-          ...(stillPartial ? { partial: true } : {}),
+          ...(stillPartial ? { partial: true } : { partial: undefined }),
         },
         semanticState: merged.length > 0 ? "indexed" : schema.semanticState,
       };
+      if (!stillPartial) delete snapshot.semantic!.partial;
       await this.schemas.set(source.id, snapshot);
       return snapshot;
     };
@@ -307,8 +340,9 @@ export class SchemaIndexer {
     return indexed;
   }
 
-  /** "Index Database Content Types": sample top distinct values per column
-   *  (one bounded query per table), then have Copilot describe the VALUES.
+  /** "Index Database Content Types": take a bounded row sample per table,
+   *  reduce it locally to the first-seen distinct values plus measured
+   *  per-column statistics, then have Copilot describe the VALUES.
    *  Consent is explicit that real data samples leave for Copilot. */
   async indexContentInteractively(
     source: ContextSource,
@@ -321,9 +355,28 @@ export class SchemaIndexer {
       );
       return schema;
     }
-    const tables = schema.catalog.tables.slice(0, CONTENT_MAX_TABLES);
+    // RESUME, mirroring the schema pass: only tables not yet described, plus
+    // any whose SCHEMA CHANGED. Previously every re-run re-sampled (real DB
+    // queries) and re-described (metered requests) all 50 tables.
+    const contentPlan = planIndexWork(schema.catalog.tables, schema.semantic?.tables ?? [], {
+      requireContent: true,
+    });
+    const tables = contentPlan.todo.slice(0, CONTENT_MAX_TABLES);
+    if (contentPlan.skipped > 0 || contentPlan.changed > 0) {
+      this.log.info(
+        `Content indexing for "${source.displayName}": skipping ${contentPlan.skipped} already-described table(s)${
+          contentPlan.changed ? `; SCHEMA CHANGED for ${contentPlan.changedNames.slice(0, 10).join(", ")} — reprocessing` : ""
+        }.`,
+      );
+    }
+    if (tables.length === 0) {
+      void vscode.window.showInformationMessage(
+        `Content types are already described for every table in "${source.displayName}" — nothing to do. If the database changed, re-index the schema first so the change is detected.`,
+      );
+      return schema;
+    }
     const pick = await vscode.window.showWarningMessage(
-      `Index "${source.displayName}" content types with Copilot? Unlike schema indexing, this sends SAMPLED DATA VALUES — the top distinct values per column (truncated), from a bounded row sample of ${tables.length} table(s) — to your Copilot model so it can describe what each column contains. NOTHING from the database is persisted: the samples exist only for the request, and only Copilot's descriptive summaries (e.g. "ISO country codes") are stored to aid search. Don't proceed if these tables hold regulated data.`,
+      `Index "${source.displayName}" content types with Copilot? Unlike schema indexing, this sends SAMPLED DATA VALUES — up to ${CONTENT_DISTINCT_PER_COLUMN} distinct values per column (truncated to ${CONTENT_VALUE_MAX_CHARS} chars), from a bounded row sample of ${tables.length} table(s) — to your Copilot model so it can describe what each column contains. Sampled values are NOT stored in the index: they exist only for the request, and only Copilot's descriptive summaries (e.g. "ISO country codes") plus measured statistics (null rate, distinct count) are saved. One exception: if you have turned on "aiSharePoint.logging.verboseWire", the first ${WIRE_DETAIL_CAP.toLocaleString()} characters of each prompt — sampled values included — are written to this extension's local VS Code log. Don't proceed if these tables hold regulated data.`,
       { modal: true },
       "Sample & Index Content",
       "Don't Ask Again for This Source",
@@ -353,8 +406,14 @@ export class SchemaIndexer {
             message: `Sampling ${name} (${i + 1}/${tables.length})…`,
           });
           try {
-            const values = await sampler(tables[i]);
-            if (Object.keys(values).length > 0) samples.push({ table: name, values });
+            const sample = await sampler(tables[i]);
+            // Keep the table even when every sampled column was null: the
+            // profile still says "always NULL", which is exactly the
+            // sparsely-populated signal an analyst wants. Previously an
+            // all-null table produced no entry and vanished silently.
+            if (Object.keys(sample.values).length > 0 || Object.keys(sample.profile).length > 0) {
+              samples.push({ table: name, values: sample.values, profile: sample.profile });
+            }
           } catch (err) {
             this.log.warn(`Content sample for ${name} failed: ${String(err)}`);
           }
@@ -365,16 +424,60 @@ export class SchemaIndexer {
         // sampled column names are the work unit here.
         const withUnits = samples.map((sample) => ({
           sample,
-          columns: Object.keys(sample.values),
+          columns: [...new Set([...Object.keys(sample.values), ...Object.keys(sample.profile ?? {})])],
         }));
         const totalUnits = Math.max(1, batchUnits(withUnits));
         const estimated = Math.max(1, estimateBatchCount(withUnits));
         let remaining = withUnits;
         let budget = START_COLUMN_BUDGET;
         const results: SemanticTable[][] = [];
-        let partial = tables.length < schema.catalog.tables.length;
+        // `partial` means WORK REMAINS, not "the catalog was capped": a run that
+        // describes everything it set out to is complete even when the catalog
+        // exceeds CONTENT_MAX_TABLES. Setting it from the cap used to mislabel a
+        // clean run and — via the old destructive write — clear the schema
+        // pass's genuine partial flag.
+        let partial = contentPlan.todo.length > CONTENT_MAX_TABLES;
         let i = 0;
         let cAttempt = 0;
+        const stamp = this.now();
+        const contentFingerprints = new Map(
+          schema.catalog.tables.map((t) => [qualifiedName(t).toLowerCase(), tableFingerprint(t)]),
+        );
+        /**
+         * Persist the descriptions so far. Called after EVERY batch, so an
+         * interruption costs one batch instead of the whole run — and it SPREADS
+         * the existing schema so it can never discard the ER model, the schema
+         * pass's partial flag, or anything else it doesn't own.
+         */
+        const contentCheckpoint = async (stillPartial: boolean): Promise<SourceSchema> => {
+          const described = results.flat().map((t) => ({
+            ...t,
+            contentIndexedAt: stamp,
+            ...(contentFingerprints.get(t.table.toLowerCase())
+              ? { fingerprint: contentFingerprints.get(t.table.toLowerCase()) }
+              : {}),
+          }));
+          const merged = mergeContentIntoSemantic(schema.semantic?.tables ?? [], described);
+          const snapshot: SourceSchema = {
+            ...schema,
+            catalog: schema.catalog,
+            semantic: {
+              ...(schema.semantic ?? {}),
+              indexedAt: schema.semantic?.indexedAt ?? this.now(),
+              modelId: schema.semantic?.modelId ?? "",
+              tables: merged,
+              // Only ever ADD partial here; never clear a schema-pass partial.
+              ...(stillPartial || schema.semantic?.partial ? { partial: true } : {}),
+              contentIndexedAt: stamp,
+            },
+            semanticState: merged.length > 0 ? "indexed" : schema.semanticState,
+            // Only claim "indexed" once something was actually described — a
+            // cancel during sampling used to stamp it with zero work done.
+            ...(described.length > 0 ? { contentState: "indexed" as const } : {}),
+          };
+          await this.schemas.set(source.id, snapshot);
+          return snapshot;
+        };
         while (remaining.length > 0) {
           if (token.isCancellationRequested) {
             partial = true;
@@ -411,13 +514,26 @@ export class SchemaIndexer {
             );
             clearInterval(ticker);
             this.lastRunRequests += 1;
-            results.push(parseSemanticResponse(res.text, schema.catalog));
+            // Attach the MEASURED profile to whatever the model returned, so
+            // the stored index carries fact (null rate, cardinality, lengths)
+            // alongside the model's prose rather than only the prose.
+            const profiles = new Map(batchSamples.map((b) => [b.table.toLowerCase(), b.profile ?? {}]));
+            results.push(
+              parseSemanticResponse(res.text, schema.catalog).map((t) => {
+                const p = profiles.get(t.table.toLowerCase()) ?? {};
+                return {
+                  ...t,
+                  columns: t.columns.map((c) => (p[c.name] ? { ...c, profile: p[c.name] } : c)),
+                };
+              }),
+            );
             remaining = rest;
             cAttempt = 0;
             const elapsed = Date.now() - startedAt;
             const adjusted = nextColumnBudget(budget, units, elapsed);
             const note = describeBudgetChange(budget, adjusted);
             budget = adjusted;
+            await contentCheckpoint(remaining.length > 0 || partial);
             // 60% of the bar belongs to this phase (sampling took the first 40).
             progress.report({
               increment: (units / totalUnits) * 60,
@@ -465,23 +581,8 @@ export class SchemaIndexer {
             }
           }
         }
-        const merged = mergeContentIntoSemantic(
-          schema.semantic?.tables ?? [],
-          results.flat(),
-        );
-        const next: SourceSchema = {
-          catalog: schema.catalog,
-          semantic: {
-            indexedAt: schema.semantic?.indexedAt ?? this.now(),
-            modelId: schema.semantic?.modelId ?? "",
-            tables: merged,
-            ...(partial ? { partial: true } : {}),
-            contentIndexedAt: this.now(),
-          },
-          semanticState: merged.length > 0 ? "indexed" : schema.semanticState,
-          contentState: "indexed",
-        };
-        await this.schemas.set(source.id, next);
+        if (remaining.length > 0) partial = true;
+        const next = await contentCheckpoint(partial);
         this.telemetry.record("schema.contentIndex", {
           type: source.type,
           tables: String(samples.length),

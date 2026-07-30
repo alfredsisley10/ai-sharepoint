@@ -446,11 +446,17 @@ reasons — ADR-0022):
     writes descriptive summaries (tags/synonyms/purposes). Sends **names and types only** —
     e.g. `group_cio` gets tagged *ownership* so *"records owned by X"* finds it.
   - **Index Database Content Types** — samples a bounded set of rows per table, reduces them
-    locally to top distinct values per column, and Copilot describes **what the values are**
-    ("ISO country codes", "statuses: Active/Retired"). This option does send sampled values
-    to Copilot (the consent dialog says so) — but **nothing from the database is ever
-    persisted**: the samples exist only for the request, and only Copilot's descriptive
-    summaries are stored to aid navigation and search.
+    locally to the first-seen distinct values per column (up to 10, truncated to 60 chars)
+    plus *measured* per-column statistics, and Copilot describes **what the values are**
+    ("ISO country codes", "statuses: Active/Retired"), what the column *effectively* holds
+    when the declared type lies (a `varchar` that really stores ISO dates), and a one-line
+    **synopsis** of the table as a whole. This option does send sampled values to Copilot
+    (the consent dialog says so) — but **sampled values are not stored in the index**: they
+    exist only for the request, and what's saved is Copilot's descriptive summaries plus the
+    statistics the extension measured itself (null rate, distinct count, length range). The
+    one exception is `aiSharePoint.logging.verboseWire`: if you turn it on, the first 4,000
+    characters of each prompt — sampled values included — are written to the extension's
+    local VS Code log, which is why it is off by default.
   Both honor `aiSharePoint.context.allowSchemaIndexing`; *View Database Schema & Semantic
   Index* shows exactly what's stored; `#spDbSchema` gives the model the right columns before
   it writes a SELECT. **Indexes are shared via Export/Import Reference Config**, so one
@@ -472,7 +478,20 @@ reasons — ADR-0022):
   the progress line tells you how many tables it is skipping because they are already indexed.
   So a proxy interruption costs only the batch in flight, never the whole run. If it keeps
   happening, enable `aiSharePoint.logging.verboseWire` to capture the masked status for your
-  network team.
+  network team. **Both passes resume this way** — the content pass re-samples and re-describes
+  only the tables it hasn't finished, so a second run doesn't re-query the database or re-pay
+  for descriptions you already have.
+- **When the database changes, only the changed tables are re-indexed.** Each indexed table
+  records a fingerprint of its *shape* — its qualified name plus every column's name and type.
+  On the next run those fingerprints are compared against the live catalog, and a table whose
+  shape moved is put back into the work list for **both** passes with a log line naming it
+  (*"SCHEMA CHANGED for dbo.Orders — reprocessing"*). This matters because descriptions are
+  per-column: without it, a retyped column would keep the description of the column it used to
+  be, and a newly added column would never be described at all. Column *order* and casing are
+  deliberately ignored, since neither means anything. Entries indexed before this feature
+  existed have no fingerprint and are left alone rather than re-billed wholesale — they pick up
+  a fingerprint the next time they're genuinely indexed. Tables that have been dropped from the
+  database are pruned from the index instead of lingering as descriptions of nothing.
 - **Build Database ER Diagram (ADR-0030)** — for the common enterprise case where **no foreign
   keys are declared** and nobody is sure what joins to what. The run is **sized by your
   database, not by fixed numbers**: a sizing pass reads approximate row counts from catalog

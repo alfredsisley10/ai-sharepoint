@@ -7,6 +7,10 @@ import {
   buildIndexPrompt,
   parseSemanticResponse,
   mergeSemantic,
+  mergeContentIntoSemantic,
+  profileColumns,
+  describeProfile,
+  PROFILE_DISTINCT_CAP,
   searchSchema,
   renderSchemaForModel,
   qualifiedName,
@@ -295,4 +299,201 @@ test("content summaries are searchable and rendered for the model", async () => 
   const ranked = searchSchema(schema, "names");
   assert.ok([...ranked[0].matchedColumns].includes("group_cio"));
   assert.match(renderSchemaForModel(schema, "owned"), /values: owner names/);
+});
+
+test("profileColumns measures what the model must not be asked to guess", () => {
+  const rows = [
+    { status: "Active", notes: null, code: "US" },
+    { status: "Retired", notes: "needs review", code: "DE" },
+    { status: "Active", notes: null, code: "US" },
+    { status: null, notes: null, code: "FR" },
+  ];
+  const p = profileColumns(rows);
+  assert.equal(p.status.sampled, 4);
+  assert.equal(p.status.nulls, 1);
+  assert.equal(p.status.distinct, 2, "Active/Retired — a code list, not free text");
+  assert.equal(p.notes.nulls, 3, "sparsely populated, as measured");
+  assert.equal(p.code.minLength, 2);
+  assert.equal(p.code.maxLength, 2);
+  assert.equal(p.code.min, "DE");
+  assert.equal(p.code.max, "US");
+});
+
+test("profileColumns counts a column that never appears in any row as all-null", () => {
+  // The driver omits keys for columns that are NULL in every sampled row, so
+  // seeding from the column list is what makes "essentially unpopulated"
+  // reportable at all — without it the column is simply invisible.
+  const p = profileColumns([{ a: 1 }, { a: 2 }], ["a", "b"]);
+  assert.equal(p.b.sampled, 2);
+  assert.equal(p.b.nulls, 2);
+  assert.equal(p.b.distinct, 0);
+  assert.equal(p.a.nulls, 0);
+});
+
+test("profileColumns caps the distinct set so a unique column can't grow it", () => {
+  const rows = Array.from({ length: 500 }, (_, i) => ({ id: `row-${i}` }));
+  const p = profileColumns(rows);
+  assert.equal(p.id.distinct, PROFILE_DISTINCT_CAP);
+  assert.match(describeProfile(p.id), /50\+ distinct/, "reads as 'at least', which is the honest claim");
+});
+
+test("describeProfile states sparseness as measured fact", () => {
+  assert.match(describeProfile({ sampled: 100, nulls: 98, distinct: 2 }), /98% NULL \(essentially unpopulated\)/);
+  assert.match(describeProfile({ sampled: 100, nulls: 60, distinct: 5 }), /60% NULL \(sparsely populated\)/);
+  assert.match(describeProfile({ sampled: 100, nulls: 3, distinct: 5 }), /^3% NULL/);
+  assert.match(describeProfile({ sampled: 100, nulls: 0, distinct: 5 }), /never NULL/);
+  // Fixed-width values read as one length, not a degenerate range.
+  assert.match(
+    describeProfile({ sampled: 10, nulls: 0, distinct: 3, minLength: 2, maxLength: 2 }),
+    /length 2(?!-)/,
+  );
+  assert.match(
+    describeProfile({ sampled: 10, nulls: 0, distinct: 3, minLength: 2, maxLength: 40 }),
+    /length 2-40/,
+  );
+  // An empty sample says nothing rather than dividing by zero.
+  assert.equal(describeProfile({ sampled: 0, nulls: 0, distinct: 0 }), "");
+});
+
+test("the content parser accepts BOTH levels of description plus a table synopsis", () => {
+  const catalog = cmdbCatalog();
+  const parsed = parseSemanticResponse(
+    JSON.stringify({
+      tables: [
+        {
+          table: "dbo.Applications",
+          synopsis: "One row per deployed application, with its owning CIO org and last-touch audit date.",
+          columns: [
+            {
+              name: "lst_upd_dt",
+              tags: ["date"],
+              synonyms: ["last updated"],
+              // LEVEL 1: the declared type lies — it is stored as text.
+              effectiveType: "ISO 8601 date (stored as text)",
+              // LEVEL 2: what an analyst would say the values ARE.
+              contentSummary: "Last-modified timestamps, mostly within the past two years",
+            },
+          ],
+        },
+      ],
+    }),
+    catalog,
+  );
+  assert.equal(parsed.length, 1);
+  assert.match(parsed[0].synopsis ?? "", /One row per deployed application/);
+  assert.equal(parsed[0].columns[0].effectiveType, "ISO 8601 date (stored as text)");
+  assert.match(parsed[0].columns[0].contentSummary ?? "", /Last-modified timestamps/);
+});
+
+test("a column carrying ONLY an effectiveType still survives the parser", () => {
+  // The prompt tells the model to omit tags/synonyms it has nothing to add to,
+  // so "effectiveType alone" is a legitimate answer — dropping it would lose
+  // the single most useful correction the content pass makes.
+  const parsed = parseSemanticResponse(
+    JSON.stringify({
+      tables: [{ table: "dbo.Servers", columns: [{ name: "hostname", effectiveType: "FQDN" }] }],
+    }),
+    cmdbCatalog(),
+  );
+  assert.deepEqual(parsed[0].columns.map((c) => c.effectiveType), ["FQDN"]);
+  // A column with nothing at all is still dropped.
+  const empty = parseSemanticResponse(
+    JSON.stringify({ tables: [{ table: "dbo.Servers", columns: [{ name: "hostname" }] }] }),
+    cmdbCatalog(),
+  );
+  assert.deepEqual(empty[0].columns, []);
+});
+
+test("mergeContentIntoSemantic is PURE and preserves the schema pass's work", () => {
+  const existing = indexedSchema().semantic!.tables;
+  const before = JSON.parse(JSON.stringify(existing));
+  const merged = mergeContentIntoSemantic(existing, [
+    {
+      table: "dbo.Applications",
+      synopsis: "One row per application.",
+      contentIndexedAt: T0,
+      fingerprint: "abc12345",
+      columns: [
+        {
+          name: "group_cio",
+          tags: ["org"],
+          synonyms: ["CIO"],
+          contentSummary: "CIO organization names",
+          effectiveType: "org name",
+          profile: { sampled: 50, nulls: 0, distinct: 7 },
+        },
+      ],
+    },
+  ]);
+  // The input must be untouched: the caller checkpoints the ORIGINAL between
+  // batches, and a mutated input would silently rewrite already-saved state.
+  assert.deepEqual(existing, before, "no mutation of the caller's array");
+
+  const apps = merged.find((t) => t.table === "dbo.Applications")!;
+  // The schema pass's purpose and the other columns survive the content merge —
+  // the regression that destroyed the whole index once already.
+  assert.equal(apps.purpose, "Application inventory");
+  assert.equal(apps.columns.length, 3);
+  assert.equal(apps.synopsis, "One row per application.");
+  assert.equal(apps.contentIndexedAt, T0);
+  assert.equal(apps.fingerprint, "abc12345");
+  const cio = apps.columns.find((c) => c.name === "group_cio")!;
+  // Tags union rather than replace: both passes contribute vocabulary.
+  assert.ok(cio.tags.includes("ownership") && cio.tags.includes("org"));
+  assert.equal(cio.contentSummary, "CIO organization names");
+  assert.equal(cio.effectiveType, "org name");
+  assert.equal(cio.profile?.distinct, 7);
+  assert.equal(cio.note, "CIO/exec owner of the record", "schema-pass note not clobbered");
+  // A table the content pass saw but the schema pass didn't is added, not lost.
+  const only = mergeContentIntoSemantic([], [{ table: "dbo.New", columns: [] }]);
+  assert.deepEqual(only.map((t) => t.table), ["dbo.New"]);
+});
+
+test("renderSchemaForModel surfaces the effective type, synopsis and profile", () => {
+  const schema = indexedSchema();
+  const tables = mergeContentIntoSemantic(schema.semantic!.tables, [
+    {
+      table: "dbo.Applications",
+      synopsis: "One row per deployed application.",
+      columns: [
+        {
+          name: "lst_upd_dt",
+          tags: [],
+          synonyms: [],
+          effectiveType: "ISO date stored as text",
+          contentSummary: "audit timestamps",
+          profile: { sampled: 100, nulls: 91, distinct: 9 },
+        },
+      ],
+    },
+  ]);
+  const rendered = renderSchemaForModel(
+    { ...schema, semantic: { ...schema.semantic!, tables } },
+    undefined,
+  );
+  assert.match(rendered, /really ISO date stored as text/, "so the model doesn't write a date comparison against a string");
+  assert.match(rendered, /values: audit timestamps/);
+  assert.match(rendered, /One row per deployed application/);
+  assert.match(rendered, /91% NULL/, "sparseness travels to the model as measured fact");
+});
+
+test("the content prompt gives the model the declared type and the measured profile", async () => {
+  const { buildContentPrompt } = await import("../src/context/db/schemaIndex");
+  const prompt = buildContentPrompt(cmdbCatalog(), [
+    {
+      table: "dbo.Applications",
+      values: { lst_upd_dt: ["2026-01-04", "2025-11-30"] },
+      profile: { lst_upd_dt: { sampled: 100, nulls: 62, distinct: 38, minLength: 10, maxLength: 10 } },
+    },
+  ]);
+  // Without the DECLARED type the model cannot notice that a text column is
+  // really holding dates — that is the whole point of level 1.
+  assert.match(prompt, /datetime/);
+  // Without the MEASURED profile "sparsely populated" would be the model
+  // guessing from 10 sampled values rather than reporting a counted fact.
+  assert.match(prompt, /62% NULL \(sparsely populated\)/);
+  assert.match(prompt, /38 distinct/);
+  // And both outputs are asked for by name.
+  assert.match(prompt, /effectiveType/);
+  assert.match(prompt, /synopsis/);
 });

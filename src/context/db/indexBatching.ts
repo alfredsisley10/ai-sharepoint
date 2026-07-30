@@ -163,6 +163,120 @@ export function planResume<T>(
   return { todo, skipped: items.length - todo.length };
 }
 
+/**
+ * Fingerprint of a table's SHAPE — qualified name plus every column's
+ * `name:type`, sorted so column ORDER changes (which mean nothing) don't look
+ * like schema changes, while an added/removed/retyped column does.
+ *
+ * This is what lets a re-run notice that a table it already indexed has
+ * CHANGED. Skipping purely by name (the original resume) would keep serving a
+ * semantic entry that describes columns the table no longer has — or silently
+ * omit ones it gained.
+ */
+export function tableFingerprint(table: {
+  schema?: string;
+  name: string;
+  columns: ReadonlyArray<{ name: string; dataType?: string }>;
+}): string {
+  const qualified = (table.schema ? `${table.schema}.${table.name}` : table.name).toLowerCase();
+  const cols = table.columns
+    .map((c) => `${c.name.toLowerCase()}:${(c.dataType ?? "").toLowerCase()}`)
+    .sort()
+    .join(",");
+  return contentHashLike(`${qualified}|${cols}`);
+}
+
+/** FNV-1a, mirroring alignmentRun.contentHash — cheap, stable, and a collision
+ *  costs at most one unnecessary re-index, never a correctness bug. */
+function contentHashLike(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+/** What an indexed entry looks like to the planner. */
+export interface IndexedEntry {
+  /** Qualified table name as stored. */
+  table: string;
+  /** Fingerprint recorded when it was indexed; absent on entries written
+   *  before fingerprinting existed. */
+  fingerprint?: string;
+  /** For the CONTENT pass: whether this table has been described. */
+  contentIndexedAt?: string;
+}
+
+export interface IndexWorkPlan<T> {
+  /** Tables to (re)process this run. */
+  todo: T[];
+  /** Already done and unchanged — skipped. */
+  skipped: number;
+  /** Skipped-by-name but flagged for REPROCESSING because their schema
+   *  changed. These are inside `todo`; the count is for the progress line. */
+  changed: number;
+  /** Names of changed tables, for the log — so a surprise re-index is
+   *  explainable rather than mysterious. */
+  changedNames: string[];
+  /** Indexed entries whose table no longer exists in the catalog. Returned so
+   *  the caller can PRUNE them; a stale entry would otherwise describe a
+   *  dropped table forever. */
+  orphaned: string[];
+}
+
+/**
+ * Decide what a run must process.
+ *
+ * A table is processed when it is: (a) absent from the index, (b) present but
+ * its fingerprint differs from the live catalog — i.e. **its schema changed**,
+ * or (c) present but the specific pass hasn't covered it yet (`requireContent`
+ * for the content pass, whose "done" marker is separate from the schema pass's).
+ *
+ * An entry with NO stored fingerprint is treated as up to date rather than
+ * stale: those were written before fingerprinting existed, and forcing a
+ * re-index of every such table on upgrade would silently re-bill an entire
+ * catalog. New indexing writes fingerprints, so change detection starts working
+ * from the next run onward.
+ */
+export function planIndexWork<T extends { schema?: string; name: string; columns: ReadonlyArray<{ name: string; dataType?: string }> }>(
+  catalogTables: readonly T[],
+  indexed: readonly IndexedEntry[],
+  opts: { requireContent?: boolean } = {},
+): IndexWorkPlan<T> {
+  const byName = new Map(indexed.map((e) => [e.table.trim().toLowerCase(), e]));
+  const seen = new Set<string>();
+  const todo: T[] = [];
+  const changedNames: string[] = [];
+  let skipped = 0;
+  for (const t of catalogTables) {
+    const qualified = (t.schema ? `${t.schema}.${t.name}` : t.name).toLowerCase();
+    seen.add(qualified);
+    const entry = byName.get(qualified);
+    if (!entry) {
+      todo.push(t);
+      continue;
+    }
+    if (entry.fingerprint && entry.fingerprint !== tableFingerprint(t)) {
+      todo.push(t);
+      changedNames.push(t.schema ? `${t.schema}.${t.name}` : t.name);
+      continue;
+    }
+    if (opts.requireContent && !entry.contentIndexedAt) {
+      todo.push(t);
+      continue;
+    }
+    skipped += 1;
+  }
+  return {
+    todo,
+    skipped,
+    changed: changedNames.length,
+    changedNames,
+    orphaned: indexed.map((e) => e.table).filter((n) => !seen.has(n.trim().toLowerCase())),
+  };
+}
+
 /** Human note for the progress line, so an adapting batch size is visible
  *  rather than looking like erratic behavior. */
 export function describeBudgetChange(before: number, after: number): string {

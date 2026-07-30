@@ -4124,9 +4124,14 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     const previous = schemas.getSync(source.id);
     const schema: SourceSchema = {
+      // Spread the previous schema FIRST so nothing this function doesn't own
+      // is lost at a catalog re-pull — `contentState` and the probed ER model
+      // used to be dropped here, silently, before indexing even started.
+      ...(previous ?? {}),
       catalog,
-      // A re-pulled catalog keeps the existing semantic layer; re-index to
-      // cover newly appeared tables.
+      // A re-pulled catalog keeps the existing semantic layer; re-indexing
+      // covers newly appeared tables, and the stored per-table fingerprints
+      // make CHANGED tables get reprocessed too.
       semantic: previous?.semantic,
       semanticState: previous?.semanticState ?? "none",
     };

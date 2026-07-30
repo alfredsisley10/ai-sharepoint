@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.142.0 — 2026-07-30
+
+### Database indexing: only index what actually needs indexing
+- **A changed table is now detected and re-indexed; an unchanged one is not.** Every indexed
+  table records a fingerprint of its shape — qualified name plus each column's name and type,
+  order-insensitive and case-insensitive. Re-running an index compares those fingerprints against
+  the live catalog and puts changed tables back into the work list for **both** the schema and the
+  content pass, logging *"SCHEMA CHANGED for dbo.Orders — reprocessing"* so a surprise re-index is
+  explainable. Previously a re-run skipped purely by name, which meant a retyped column kept the
+  description of the column it used to be, and a column added after the first run was never
+  described at all.
+- **Dropped tables are pruned** from the index rather than lingering as descriptions of tables
+  that no longer exist.
+- **Content indexing now resumes like schema indexing does.** It saves after every batch and, on
+  re-run, samples and describes only the tables it hasn't finished — so a proxy interruption no
+  longer costs a full round of database queries and metered Copilot requests.
+- Entries written before fingerprints existed are treated as up to date instead of stale, so
+  upgrading doesn't silently re-bill an entire catalog; they gain a fingerprint the next time
+  they're genuinely indexed.
+
+### Content descriptions an analyst would recognize
+- **Two levels of description per column.** *What the values effectively are* — a `varchar` that
+  really holds ISO dates is now flagged as such, so the model stops writing date comparisons
+  against strings — and *what they mean in business language* ("CIO organization names", "statuses:
+  Active/Retired") for columns whose name and type don't say.
+- **Measured facts, not model guesses.** The extension itself computes null rate, distinct count
+  and value-length range from the sample and passes them to Copilot, so "sparsely populated, 91%
+  NULL" is counted rather than inferred from ten sampled values. Those statistics are stored and
+  shown to the model alongside the descriptions.
+- **A one-line synopsis per table or view** — what a row represents and what the table is for —
+  which now leads the rendered schema and is searchable.
+- **The consent dialog is accurate.** It states the exact sampling limits, says that sampled values
+  are *not stored in the index* (only descriptions and measured statistics are), and names the one
+  exception: with `aiSharePoint.logging.verboseWire` enabled, prompt text — sampled values included
+  — is written to the local VS Code log.
+
+### Fixes
+- Re-pulling a catalog no longer discarded the content-indexing state and the ER model that a
+  previous run had built.
+- A content-indexing run no longer cleared the schema pass's "partial" marker, which had made an
+  interrupted schema run look complete and stopped it resuming.
+
 ## 0.141.0 — 2026-07-27
 
 ### Copilot connectivity: diagnose and fix HTTP/2 resets

@@ -159,7 +159,7 @@ import {
   buildSnowSessionSecret,
   fetchSnowUserToken,
 } from "./adapters/servicenowAuth";
-import { SchemaCatalog, TableDef } from "./db/schemaIndex";
+import { SchemaCatalog, TableDef, TableValueSample } from "./db/schemaIndex";
 import { MSSQL_AAD_SCOPES } from "./db/mssqlAuth";
 import { AppError, classifyError } from "../core/errors";
 
@@ -1931,7 +1931,7 @@ export class ContextService {
 
   /** Content-type indexing: bounded row sample for one table, reduced to
    *  per-column distinct values locally (ADR-0024 amendment). */
-  async sampleTable(source: ContextSource, table: TableDef): Promise<Record<string, string[]>> {
+  async sampleTable(source: ContextSource, table: TableDef): Promise<TableValueSample> {
     if (!ContextService.DB_TYPES.has(source.type)) {
       throw new AppError("Content sampling applies to database sources only.", "config");
     }

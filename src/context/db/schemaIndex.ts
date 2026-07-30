@@ -36,6 +36,24 @@ export interface SchemaCatalog {
   truncated?: boolean;
 }
 
+/** Measured facts about a column's VALUES, computed locally from the sampled
+ *  rows — never inferred by the model. Sample-based, so rates are estimates;
+ *  `sampled` says how many rows they came from so nothing reads as exact. */
+export interface ColumnProfile {
+  /** Rows examined. */
+  sampled: number;
+  /** Rows where the value was NULL/undefined. */
+  nulls: number;
+  /** Distinct non-null values seen (capped by the sample, not the table). */
+  distinct: number;
+  /** Shortest/longest stringified non-null value — flags fixed-width codes. */
+  minLength?: number;
+  maxLength?: number;
+  /** Lexical min/max of non-null values, useful for date-ish and code columns. */
+  min?: string;
+  max?: string;
+}
+
 export interface SemanticColumn {
   name: string;
   /** Lowercase concept tags, e.g. ["ownership","organization"]. */
@@ -43,9 +61,17 @@ export interface SemanticColumn {
   /** Words users actually say for this column, e.g. ["owner","CIO"]. */
   synonyms: string[];
   note?: string;
-  /** From content indexing: what the column's VALUES look like
-   *  ("ISO country codes", "statuses: Active/Retired/Pending"). */
+  /** LEVEL 1 — what the values actually ARE, when the declared type doesn't
+   *  say: a varchar holding ISO-8601 dates, integers, JSON, a bit flag as
+   *  'Y'/'N'. Set only when it differs meaningfully from the declared type, so
+   *  its presence is itself the "declared type is not self-describing" signal. */
+  effectiveType?: string;
+  /** LEVEL 2 — what the column MEANS in business language, the way an analyst
+   *  would describe it ("ISO country codes", "statuses: Active/Retired"). */
   contentSummary?: string;
+  /** Measured, not inferred: null rate, cardinality, lengths. Lets the model
+   *  (and the user) see "sparsely populated / mostly null" as fact. */
+  profile?: ColumnProfile;
 }
 
 export interface SemanticTable {
@@ -53,6 +79,18 @@ export interface SemanticTable {
   table: string;
   purpose?: string;
   columns: SemanticColumn[];
+  /** Table/view-level synopsis in business language — what this table holds
+   *  and what a row represents, informed by the sampled content rather than
+   *  the name alone (which is all `purpose` from the schema pass has). */
+  synopsis?: string;
+  /** Fingerprint of the CATALOG shape this entry was indexed against (see
+   *  tableFingerprint). When the live catalog's fingerprint differs, the table's
+   *  schema changed and the entry is stale — planIndexWork flags it for
+   *  reprocessing even though its name is already in the index. */
+  fingerprint?: string;
+  /** Set once the content pass has described this table's values, so a resumed
+   *  content run can skip it. Absent = never content-indexed. */
+  contentIndexedAt?: string;
 }
 
 export interface SemanticIndex {
@@ -373,28 +411,36 @@ export function parseSemanticResponse(
       if (!columnsOf.has(name.toLowerCase())) continue; // hallucinated column
       const tags = clampList(c.tags, 6, true);
       const synonyms = clampList(c.synonyms, 8, false);
-      const hasContent =
-        typeof (c as { contentSummary?: unknown }).contentSummary === "string" &&
-        ((c as { contentSummary: string }).contentSummary).trim().length > 0;
-      if (tags.length === 0 && synonyms.length === 0 && !hasContent) continue;
+      const str = (v: unknown, max: number): string | undefined => {
+        const t = typeof v === "string" ? v.trim() : "";
+        return t ? t.slice(0, max) : undefined;
+      };
+      const contentSummary = str((c as { contentSummary?: unknown }).contentSummary, 200);
+      const effectiveType = str((c as { effectiveType?: unknown }).effectiveType, 80);
+      if (tags.length === 0 && synonyms.length === 0 && !contentSummary && !effectiveType) continue;
       columns.push({
         name,
         tags,
         synonyms,
-        ...(typeof c.note === "string" && c.note.trim()
-          ? { note: c.note.trim().slice(0, 160) }
-          : {}),
-        ...(typeof (c as { contentSummary?: unknown }).contentSummary === "string" &&
-        ((c as { contentSummary: string }).contentSummary).trim()
-          ? { contentSummary: (c as { contentSummary: string }).contentSummary.trim().slice(0, 160) }
-          : {}),
+        ...(str(c.note, 160) ? { note: str(c.note, 160)! } : {}),
+        // LEVEL 1: only present when the declared type wasn't self-describing —
+        // the prompt asks the model to OMIT it otherwise, so its presence is
+        // itself the signal.
+        ...(effectiveType ? { effectiveType } : {}),
+        // LEVEL 2: the analyst's plain-language description.
+        ...(contentSummary ? { contentSummary } : {}),
       });
     }
+    const synopsis =
+      typeof raw.synopsis === "string" && raw.synopsis.trim()
+        ? raw.synopsis.trim().slice(0, 400)
+        : undefined;
     out.push({
       table: tableName,
       ...(typeof raw.purpose === "string" && raw.purpose.trim()
         ? { purpose: raw.purpose.trim().slice(0, 200) }
         : {}),
+      ...(synopsis ? { synopsis } : {}),
       columns,
     });
   }
@@ -488,6 +534,7 @@ export function searchSchema(
     for (const w of words) {
       if (tableName.includes(w)) entry.score += 4;
       if (entry.semantic?.purpose?.toLowerCase().includes(w)) entry.score += 3;
+      if (entry.semantic?.synopsis?.toLowerCase().includes(w)) entry.score += 3;
     }
     for (const col of entry.table.columns) {
       const colName = col.name.toLowerCase();
@@ -530,7 +577,10 @@ export function renderSchemaForModel(
   lines.push(header);
   for (const e of ranked) {
     const q = qualifiedName(e.table);
-    lines.push(`\n${q}${e.semantic?.purpose ? ` — ${e.semantic.purpose}` : ""} (${e.table.kind})`);
+    // The content pass's synopsis (informed by actual values) is the better
+    // description when present; `purpose` is name-only inference.
+    const headline = e.semantic?.synopsis || e.semantic?.purpose;
+    lines.push(`\n${q}${headline ? ` — ${headline}` : ""} (${e.table.kind})`);
     const cols =
       e.matchedColumns.size > 0
         ? e.table.columns.filter((c) => e.matchedColumns.has(c.name))
@@ -538,7 +588,7 @@ export function renderSchemaForModel(
     for (const c of cols) {
       const sem = e.semantic?.columns.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
       const extra = sem
-        ? ` [${sem.tags.join(",")}${sem.synonyms.length ? ` | aka: ${sem.synonyms.join(", ")}` : ""}]${sem.note ? ` — ${sem.note}` : ""}${sem.contentSummary ? ` — values: ${sem.contentSummary}` : ""}`
+        ? `${sem.effectiveType ? ` (really ${sem.effectiveType})` : ""} [${sem.tags.join(",")}${sem.synonyms.length ? ` | aka: ${sem.synonyms.join(", ")}` : ""}]${sem.note ? ` — ${sem.note}` : ""}${sem.contentSummary ? ` — values: ${sem.contentSummary}` : ""}${sem.profile ? ` {${describeProfile(sem.profile)}}` : ""}`
         : "";
       lines.push(`  - ${c.name}: ${c.dataType}${extra}`);
     }
@@ -555,12 +605,28 @@ export function renderSchemaForModel(
 
 /** One sample query per table (cheap); per-column distincts are computed
  *  locally from the row sample, never with N-per-column queries. */
+/** The columns the SQL sample actually SELECTs — the same slice buildSampleQuery
+ *  uses, exported so the profiler can seed an entry for every queried column
+ *  (including ones that are null in every sampled row). */
+export function sampledColumnNames(table: TableDef): string[] {
+  return table.columns.slice(0, SAMPLE_COLUMN_CAP).map((c) => c.name);
+}
+
+/** Columns per table in the content sample. */
+export const SAMPLE_COLUMN_CAP = 16;
+
+/** What the sampler returns: value lists plus the measured profile. */
+export interface TableValueSample {
+  values: Record<string, string[]>;
+  profile: Record<string, ColumnProfile>;
+}
+
 export function buildSampleQuery(
   engine: ContextSourceType,
   table: TableDef,
   rows = CONTENT_SAMPLE_ROWS,
 ): string {
-  const cols = table.columns.slice(0, 16).map((c) => c.name);
+  const cols = sampledColumnNames(table);
   const q = (c: string) =>
     engine === "mssql" ? `[${c}]` : engine === "mysql" ? `\`${c}\`` : `"${c}"`;
   const target = table.schema ? `${q(table.schema)}.${q(table.name)}` : q(table.name);
@@ -570,7 +636,11 @@ export function buildSampleQuery(
     : `SELECT ${list} FROM ${target} LIMIT ${rows}`;
 }
 
-/** Sampled rows → top distinct values per column (truncated, deduped). */
+/** Sampled rows → the FIRST-SEEN distinct values per column (truncated, deduped,
+ *  capped at CONTENT_DISTINCT_PER_COLUMN). Not "top" values: nothing here ranks
+ *  by frequency — the cap is hit in row order, so a column whose common value
+ *  happens to appear late may not be represented. `profileColumns` carries the
+ *  measured counts that the value list deliberately does not. */
 export function distinctValues(
   rows: Array<Record<string, unknown>>,
 ): Record<string, string[]> {
@@ -590,6 +660,86 @@ export function distinctValues(
 export interface TableSample {
   table: string;
   values: Record<string, string[]>;
+  /** Measured per-column facts from the same sampled rows (null rate,
+   *  cardinality, lengths). Optional so older callers/tests still typecheck. */
+  profile?: Record<string, ColumnProfile>;
+}
+
+/**
+ * Profile the sampled rows LOCALLY — no extra query, no data sent.
+ *
+ * `distinctValues` deliberately drops nulls (it is building a value list), which
+ * made "sparsely populated / mostly null" unobservable and made a 100%-null
+ * column VANISH from the payload entirely. This walks the same rows and counts
+ * what the value list throws away, so an analyst-style description ("almost
+ * always null", "5 distinct codes") rests on measurement rather than a guess.
+ *
+ * Keyed by the column names the ROWS actually carry, and seeded from
+ * `columnNames` when given so a column that is null in every sampled row still
+ * gets an entry (nulls = sampled) instead of disappearing.
+ */
+export function profileColumns(
+  rows: Array<Record<string, unknown>>,
+  columnNames?: readonly string[],
+): Record<string, ColumnProfile> {
+  const out: Record<string, ColumnProfile> = {};
+  const ensure = (k: string): ColumnProfile =>
+    (out[k] ??= { sampled: rows.length, nulls: 0, distinct: 0 });
+  for (const name of columnNames ?? []) ensure(name);
+  const distinct: Record<string, Set<string>> = {};
+  for (const row of rows) {
+    for (const [k, v] of Object.entries(row)) {
+      const p = ensure(k);
+      if (v === null || v === undefined) {
+        p.nulls += 1;
+        continue;
+      }
+      const str = String(v);
+      const set = (distinct[k] ??= new Set());
+      // Cap the distinct SET so a unique-per-row column can't grow it without
+      // bound; the count then reads "at least N", which is what matters for
+      // telling a code list from a free-text field.
+      if (set.size < PROFILE_DISTINCT_CAP) set.add(str);
+      const len = str.length;
+      p.minLength = p.minLength === undefined ? len : Math.min(p.minLength, len);
+      p.maxLength = p.maxLength === undefined ? len : Math.max(p.maxLength, len);
+      const cmp = str.slice(0, CONTENT_VALUE_MAX_CHARS);
+      p.min = p.min === undefined || cmp < p.min ? cmp : p.min;
+      p.max = p.max === undefined || cmp > p.max ? cmp : p.max;
+    }
+  }
+  // A column present in `columnNames` but absent from every row object still
+  // counted zero nulls above; treat unseen as null so the rate is honest.
+  for (const [k, p] of Object.entries(out)) {
+    p.distinct = distinct[k]?.size ?? 0;
+    const seen = p.nulls + p.distinct;
+    if (seen === 0 && rows.length > 0) p.nulls = rows.length;
+  }
+  return out;
+}
+
+/** Beyond this many distinct values the column is "high cardinality" and the
+ *  exact count stops being informative. */
+export const PROFILE_DISTINCT_CAP = 50;
+
+/** One-line, human rendering of a profile — used in the prompt and the guide
+ *  so "mostly null" is stated as measured fact, not model opinion. */
+export function describeProfile(p: ColumnProfile): string {
+  const bits: string[] = [];
+  if (p.sampled > 0) {
+    const nullPct = Math.round((p.nulls / p.sampled) * 100);
+    if (nullPct >= 95) bits.push(`${nullPct}% NULL (essentially unpopulated)`);
+    else if (nullPct >= 50) bits.push(`${nullPct}% NULL (sparsely populated)`);
+    else if (nullPct > 0) bits.push(`${nullPct}% NULL`);
+    else bits.push("never NULL");
+  }
+  if (p.distinct > 0) {
+    bits.push(p.distinct >= PROFILE_DISTINCT_CAP ? `${PROFILE_DISTINCT_CAP}+ distinct` : `${p.distinct} distinct`);
+  }
+  if (p.minLength !== undefined && p.maxLength !== undefined) {
+    bits.push(p.minLength === p.maxLength ? `length ${p.minLength}` : `length ${p.minLength}-${p.maxLength}`);
+  }
+  return bits.join(", ");
 }
 
 /** Prompt for one batch of table samples: describe what the VALUES are so a
@@ -598,57 +748,107 @@ export function buildContentPrompt(
   catalog: SchemaCatalog,
   samples: TableSample[],
 ): string {
+  // Declared type + measured profile ride along with the values: without the
+  // declared type the model cannot tell that a varchar is really holding dates,
+  // and without the profile "mostly null" would be a guess rather than a fact.
+  const declared = new Map<string, string>();
+  for (const t of catalog.tables) {
+    for (const c of t.columns) declared.set(`${qualifiedName(t).toLowerCase()}|${c.name.toLowerCase()}`, c.dataType);
+  }
   const block = samples
-    .map(
-      (s) =>
-        `${s.table}:\n${Object.entries(s.values)
-          .map(([c, vals]) => `  - ${c}: ${vals.join(" | ")}`)
-          .join("\n")}`,
-    )
+    .map((s) => {
+      const cols = [...new Set([...Object.keys(s.values), ...Object.keys(s.profile ?? {})])];
+      const lines = cols.map((c) => {
+        const type = declared.get(`${s.table.toLowerCase()}|${c.toLowerCase()}`) ?? "unknown";
+        const prof = s.profile?.[c];
+        const stats = prof ? ` {${describeProfile(prof)}}` : "";
+        const vals = (s.values[c] ?? []).join(" | ");
+        return `  - ${c} (declared ${type})${stats}: ${vals || "(no non-null values sampled)"}`;
+      });
+      return `${s.table}:\n${lines.join("\n")}`;
+    })
     .join("\n\n");
   return [
-    `You are indexing the CONTENT of a ${catalog.engine} database ("${catalog.database}").`,
-    "Below are top distinct sample values per column. For each column, describe in one short",
-    "phrase what the values ARE (format, vocabulary, meaning) so a search assistant can route",
-    "free-form questions to the right columns — e.g. values \"DE | FR | US\" → \"ISO country",
-    "codes\"; values \"Active | Retired\" → \"lifecycle status: Active/Retired\"; person-name",
-    "values on a column like group_cio → \"owner names (CIO)\". Also refine tags/synonyms when",
-    "the values clarify meaning.",
+    `You are profiling the CONTENT of a ${catalog.engine} database ("${catalog.database}") the way`,
+    "a data analyst would, so a search assistant can route free-form questions to the right",
+    "columns and know what it will get back.",
+    "",
+    "For each column below you are given its DECLARED type, MEASURED statistics in {braces}",
+    "(computed locally from a sample — treat them as fact, do not contradict them), and up to",
+    "10 distinct sampled values.",
+    "",
+    "Produce, per column:",
+    '  - "effectiveType": what the values REALLY are when the declared type does not say —',
+    '    e.g. declared varchar but holding "2024-03-01" → "date (ISO-8601, stored as text)";',
+    '    varchar holding "1"/"0" → "boolean flag stored as text"; varchar holding JSON → "JSON".',
+    "    OMIT this field entirely when the declared type already describes the values.",
+    '  - "contentSummary": one plain-BUSINESS-language phrase an analyst would use for what the',
+    '    column holds — e.g. "ISO country codes"; "lifecycle status: Active/Retired"; "owning',
+    '    CIO organisation names". Mention sparseness when the stats show it (e.g. "free-text',
+    '    close notes, populated on ~10% of rows"). Do NOT rely on the column name alone: if the',
+    "    values contradict the name, describe the VALUES and say so.",
+    '  - "tags"/"synonyms": refine only when the values clarify meaning.',
+    "",
+    "And per table, a \"synopsis\": one or two sentences saying what the table holds and what a",
+    "single ROW represents (the grain), in business language.",
     "",
     "Return ONLY JSON, exactly:",
-    '{"tables":[{"table":"<as given>","columns":[{"name":"<col>","contentSummary":"<one phrase>",',
-    '"tags":["<concept>", ...],"synonyms":["<words>", ...]}]}]}',
+    '{"tables":[{"table":"<as given>","synopsis":"<1-2 sentences>","columns":[{"name":"<col>",',
+    '"effectiveType":"<optional>","contentSummary":"<one phrase>","tags":["<concept>", ...],',
+    '"synonyms":["<words>", ...]}]}]}',
     "",
-    "Samples:",
+    "Columns (declared type, {measured stats}, sampled values):",
     block,
   ].join("\n");
 }
 
-/** Merge a content pass into the existing semantic index without losing the
- *  schema pass: tags union, synonyms union, contentSummary added/updated. */
+/**
+ * Merge a content pass into the existing semantic index without losing the
+ * schema pass: tags/synonyms union, and the content fields (contentSummary,
+ * effectiveType, profile) added or refreshed.
+ *
+ * PURE — it copies rather than mutating. The caller hands it the STORED
+ * `semantic.tables`, and with per-batch checkpointing this now runs many times
+ * per run; mutating in place would edit the persisted objects underneath the
+ * store and make each checkpoint depend on the last one's side effects.
+ */
 export function mergeContentIntoSemantic(
   existing: SemanticTable[],
   content: SemanticTable[],
 ): SemanticTable[] {
-  const byTable = new Map(existing.map((t) => [t.table.toLowerCase(), t]));
+  const byTable = new Map<string, SemanticTable>(
+    existing.map((t) => [t.table.toLowerCase(), { ...t, columns: t.columns.map((c) => ({ ...c })) }]),
+  );
   for (const ct of content) {
-    const base = byTable.get(ct.table.toLowerCase());
+    const key = ct.table.toLowerCase();
+    const base = byTable.get(key);
     if (!base) {
-      byTable.set(ct.table.toLowerCase(), ct);
+      byTable.set(key, { ...ct, columns: ct.columns.map((c) => ({ ...c })) });
       continue;
     }
-    const byCol = new Map(base.columns.map((c) => [c.name.toLowerCase(), c]));
+    // Table-level facts the content pass owns.
+    const nextTable: SemanticTable = {
+      ...base,
+      ...(ct.synopsis ? { synopsis: ct.synopsis } : {}),
+      ...(ct.contentIndexedAt ? { contentIndexedAt: ct.contentIndexedAt } : {}),
+      ...(ct.fingerprint ? { fingerprint: ct.fingerprint } : {}),
+      columns: base.columns.map((c) => ({ ...c })),
+    };
+    const byCol = new Map(nextTable.columns.map((c) => [c.name.toLowerCase(), c]));
     for (const cc of ct.columns) {
       const bc = byCol.get(cc.name.toLowerCase());
       if (!bc) {
-        base.columns.push(cc);
+        nextTable.columns.push({ ...cc });
         continue;
       }
       bc.tags = [...new Set([...bc.tags, ...cc.tags])].slice(0, 8);
       bc.synonyms = [...new Set([...bc.synonyms, ...cc.synonyms])].slice(0, 10);
       if (cc.contentSummary) bc.contentSummary = cc.contentSummary;
+      if (cc.effectiveType) bc.effectiveType = cc.effectiveType;
+      if (cc.profile) bc.profile = cc.profile;
       if (cc.note && !bc.note) bc.note = cc.note;
     }
+    byTable.set(key, nextTable);
   }
   return [...byTable.values()];
 }

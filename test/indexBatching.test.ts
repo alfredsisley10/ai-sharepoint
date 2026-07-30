@@ -9,6 +9,8 @@ import {
   estimateBatchCount,
   describeBudgetChange,
   planResume,
+  tableFingerprint,
+  planIndexWork,
   START_COLUMN_BUDGET,
   MIN_COLUMN_BUDGET,
   MAX_COLUMN_BUDGET,
@@ -141,4 +143,112 @@ test("planResume skips work a cut-short run already paid for", () => {
   assert.equal(planResume(tables, key, ["dbo.Gone"]).skipped, 0);
   // Everything done ⇒ nothing left to do.
   assert.deepEqual(planResume(tables, key, ["dbo.A", "dbo.B", "dbo.C"]).todo, []);
+});
+
+/** A catalog table with named, typed columns. */
+const tbl = (
+  name: string,
+  cols: Array<[string, string]>,
+  schema: string | undefined = "dbo",
+) => ({ schema, name, columns: cols.map(([n, dataType]) => ({ name: n, dataType })) });
+
+test("tableFingerprint changes only when the SHAPE changes", () => {
+  const base = tbl("Orders", [["id", "int"], ["total", "decimal"]]);
+  // Same shape ⇒ same fingerprint, run after run.
+  assert.equal(tableFingerprint(base), tableFingerprint(tbl("Orders", [["id", "int"], ["total", "decimal"]])));
+  // Column ORDER is meaningless — reordering must not look like a change, or
+  // every catalog whose driver returns a different order would re-index.
+  assert.equal(
+    tableFingerprint(base),
+    tableFingerprint(tbl("Orders", [["total", "decimal"], ["id", "int"]])),
+  );
+  // Casing must not either: names round-trip through the model and the store.
+  assert.equal(tableFingerprint(base), tableFingerprint(tbl("ORDERS", [["ID", "INT"], ["Total", "Decimal"]])));
+  // A RETYPED column is a real change: the stored description ("integer key")
+  // may no longer be true.
+  assert.notEqual(tableFingerprint(base), tableFingerprint(tbl("Orders", [["id", "varchar"], ["total", "decimal"]])));
+  // An ADDED column is a change — the index would otherwise never describe it.
+  assert.notEqual(
+    tableFingerprint(base),
+    tableFingerprint(tbl("Orders", [["id", "int"], ["total", "decimal"], ["currency", "char"]])),
+  );
+  // A DROPPED column is a change — the index would otherwise describe a column
+  // that no longer exists and mislead the model writing SELECTs.
+  assert.notEqual(tableFingerprint(base), tableFingerprint(tbl("Orders", [["id", "int"]])));
+  // Same table name in a different schema is a different table.
+  assert.notEqual(tableFingerprint(base), tableFingerprint(tbl("Orders", [["id", "int"], ["total", "decimal"]], "sales")));
+  // An unqualified table is handled without a stray leading dot.
+  assert.equal(typeof tableFingerprint(tbl("Orders", [["id", "int"]], undefined)), "string");
+});
+
+test("planIndexWork flags a table for REPROCESSING when its schema changed", () => {
+  const orders = tbl("Orders", [["id", "int"], ["total", "decimal"]]);
+  const customers = tbl("Customers", [["id", "int"]]);
+  // Both were indexed at their CURRENT shape.
+  const indexed = [
+    { table: "dbo.Orders", fingerprint: tableFingerprint(orders) },
+    { table: "dbo.Customers", fingerprint: tableFingerprint(customers) },
+  ];
+  // Nothing changed ⇒ nothing to do, and the run costs zero requests.
+  const stable = planIndexWork([orders, customers], indexed);
+  assert.deepEqual(stable.todo, []);
+  assert.equal(stable.skipped, 2);
+  assert.equal(stable.changed, 0);
+
+  // Now Orders gains a column. It must come back as work, Customers must not.
+  const ordersV2 = tbl("Orders", [["id", "int"], ["total", "decimal"], ["currency", "char"]]);
+  const plan = planIndexWork([ordersV2, customers], indexed);
+  assert.deepEqual(plan.todo.map((t) => t.name), ["Orders"]);
+  assert.equal(plan.changed, 1);
+  assert.deepEqual(plan.changedNames, ["dbo.Orders"], "named in the log so a surprise re-index is explainable");
+  assert.equal(plan.skipped, 1);
+});
+
+test("planIndexWork treats an un-fingerprinted entry as up to date", () => {
+  // Entries written before fingerprinting existed have no fingerprint. Calling
+  // them stale would silently re-bill an entire catalog on upgrade, so they are
+  // left alone; the next real indexing run stamps one and detection begins.
+  const orders = tbl("Orders", [["id", "int"]]);
+  const plan = planIndexWork([orders], [{ table: "dbo.Orders" }]);
+  assert.deepEqual(plan.todo, []);
+  assert.equal(plan.skipped, 1);
+  assert.equal(plan.changed, 0);
+});
+
+test("planIndexWork covers absent tables, the content pass, and orphans", () => {
+  const orders = tbl("Orders", [["id", "int"]]);
+  const fresh = tbl("Shipments", [["id", "int"]]);
+  const indexed = [
+    { table: "dbo.Orders", fingerprint: tableFingerprint(orders), contentIndexedAt: "2026-07-01T00:00:00Z" },
+    { table: "dbo.Dropped", fingerprint: "deadbeef" },
+  ];
+  const plan = planIndexWork([orders, fresh], indexed);
+  // A table absent from the index is always work.
+  assert.deepEqual(plan.todo.map((t) => t.name), ["Shipments"]);
+  // An indexed entry whose table is gone from the catalog is reported so the
+  // caller can prune it — otherwise it describes a dropped table forever.
+  assert.deepEqual(plan.orphaned, ["dbo.Dropped"]);
+
+  // The CONTENT pass has its own "done" marker: a table the schema pass covered
+  // still needs describing, so requireContent pulls it back into todo.
+  const contentPlan = planIndexWork([orders, fresh], indexed, { requireContent: true });
+  assert.deepEqual(contentPlan.todo.map((t) => t.name), ["Shipments"], "Orders is already described");
+  const undescribed = planIndexWork([orders], [{ table: "dbo.Orders", fingerprint: tableFingerprint(orders) }], {
+    requireContent: true,
+  });
+  assert.deepEqual(undescribed.todo.map((t) => t.name), ["Orders"]);
+});
+
+test("a changed table is reprocessed by the CONTENT pass too", () => {
+  // The regression this guards: content descriptions ("statuses: Active/Retired")
+  // are per-COLUMN. If a column is retyped, the old description outlives the
+  // column it described unless the change forces a re-run of both passes.
+  const v1 = tbl("Orders", [["status", "int"]]);
+  const v2 = tbl("Orders", [["status", "varchar"]]);
+  const indexed = [
+    { table: "dbo.Orders", fingerprint: tableFingerprint(v1), contentIndexedAt: "2026-07-01T00:00:00Z" },
+  ];
+  const plan = planIndexWork([v2], indexed, { requireContent: true });
+  assert.deepEqual(plan.todo.map((t) => t.name), ["Orders"]);
+  assert.equal(plan.changed, 1, "counted as changed, not merely undescribed");
 });

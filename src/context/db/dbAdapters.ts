@@ -21,12 +21,15 @@ import {
   catalogFromRows,
   catalogFromMongoSamples,
   buildSampleQuery,
+  sampledColumnNames,
   distinctValues,
+  profileColumns,
   SCHEMA_MAX_TABLES,
   SCHEMA_MAX_COLUMNS_PER_TABLE,
   MONGO_MAX_COLLECTIONS,
   MONGO_SAMPLE_DOCS,
   CONTENT_SAMPLE_ROWS,
+  TableValueSample,
 } from "./schemaIndex";
 import {
   buildJoinProbeSql,
@@ -653,24 +656,25 @@ export async function describeDb(
 }
 
 /** Content-type indexing sample: one bounded row sample per table, reduced
- *  to top distinct values per column LOCALLY — only the distinct value
- *  strings (already truncated) survive into the caller's hands. */
+ *  LOCALLY to the first-seen distinct values per column — only those value
+ *  strings (already truncated) plus measured per-column statistics survive
+ *  into the caller's hands; the sampled rows themselves are dropped here. */
 export async function sampleTableValues(
   source: ContextSource,
   credential: ContextCredential,
   tls: DbTlsOptions,
   caps: ReadCaps,
   table: TableDef,
-): Promise<Record<string, string[]>> {
+): Promise<TableValueSample> {
   if (source.type === "mongodb") {
-    const docs = await withMongo(source, credential, tls, caps, (client, dbName) =>
+    const docs = (await withMongo(source, credential, tls, caps, (client, dbName) =>
       client
         .db(dbName)
         .collection(table.name)
         .find({}, { limit: CONTENT_SAMPLE_ROWS, maxTimeMS: caps.timeoutMs })
         .toArray(),
-    );
-    return distinctValues(docs as Array<Record<string, unknown>>);
+    )) as Array<Record<string, unknown>>;
+    return { values: distinctValues(docs), profile: profileColumns(docs) };
   }
   const rows = await SQL_RUNNERS[source.type as SqlEngine](
     source,
@@ -679,7 +683,12 @@ export async function sampleTableValues(
     { ...caps, maxResults: CONTENT_SAMPLE_ROWS },
     buildSampleQuery(source.type, table),
   );
-  return distinctValues(rows);
+  // Seed with the columns actually QUERIED, so a column that is null in every
+  // sampled row is still profiled (as 100% null) instead of vanishing.
+  return {
+    values: distinctValues(rows),
+    profile: profileColumns(rows, sampledColumnNames(table)),
+  };
 }
 
 /** One join-rate probe, one direction (ADR-0030): sample distinct values of
