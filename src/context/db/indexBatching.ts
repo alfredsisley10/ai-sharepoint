@@ -4,9 +4,11 @@
  * The original scheme cut batches by TABLE COUNT (40 per request), which is the
  * wrong unit: indexing latency is dominated by how much JSON the model has to
  * WRITE, and the model emits a line per column. Forty narrow lookup tables is a
- * trivial request; forty wide fact tables at the 80-column cap is ~3,200 columns
+ * trivial request; forty wide fact tables at 80 columns each is ~3,200 columns
  * of output in one call — the reported 460s+ batch, and close enough to the
  * output ceiling that a truncated, unparseable response loses the whole batch.
+ * (The per-table column cap has since been raised, which makes sizing by
+ * columns rather than by table count matter more, not less.)
  *
  * So batches are sized by a COLUMN BUDGET, and the budget adapts: start small
  * (fast first result, quick feedback), measure each batch's observed
@@ -242,8 +244,30 @@ export interface IndexWorkPlan<T> {
 export function planIndexWork<T extends { schema?: string; name: string; columns: ReadonlyArray<{ name: string; dataType?: string }> }>(
   catalogTables: readonly T[],
   indexed: readonly IndexedEntry[],
-  opts: { requireContent?: boolean } = {},
+  opts: { requireContent?: boolean; force?: boolean } = {},
 ): IndexWorkPlan<T> {
+  // FORCE: index everything again, ignoring what the store says is done. The
+  // resume path is right almost always, but it can only skip what it can
+  // detect — a run interrupted mid-write, a model that produced nonsense, or
+  // an index built by an older prompt all LOOK complete. "Start over" has to
+  // be a thing a person can choose, not something they have to fake by
+  // deleting state.
+  if (opts.force) {
+    return {
+      todo: [...catalogTables],
+      skipped: 0,
+      changed: 0,
+      changedNames: [],
+      orphaned: indexed
+        .map((e) => e.table)
+        .filter(
+          (n) =>
+            !catalogTables.some(
+              (t) => (t.schema ? `${t.schema}.${t.name}` : t.name).toLowerCase() === n.trim().toLowerCase(),
+            ),
+        ),
+    };
+  }
   const byName = new Map(indexed.map((e) => [e.table.trim().toLowerCase(), e]));
   const seen = new Set<string>();
   const todo: T[] = [];
@@ -282,4 +306,89 @@ export function planIndexWork<T extends { schema?: string; name: string; columns
 export function describeBudgetChange(before: number, after: number): string {
   if (after === before) return "";
   return after > before ? ` — speeding up (batch size ↑)` : ` — easing off (batch size ↓)`;
+}
+
+/** What a re-run would do, in the terms the choice is actually made in. */
+export interface IndexStateSummary {
+  /** Tables in the live catalog. */
+  total: number;
+  /** Already indexed and unchanged. */
+  done: number;
+  /** Never indexed. */
+  missing: number;
+  /** Indexed, but the table's schema has since changed. */
+  changed: number;
+  /** missing + changed — what a RESUME would process. */
+  todo: number;
+  /** Indexed entries whose table is gone from the catalog. */
+  orphaned: number;
+  /** True when a previous run stopped before finishing. */
+  interrupted: boolean;
+  /** True when there is an index at all — with none, there is no choice to
+   *  make and the run is simply a first run. */
+  hasIndex: boolean;
+}
+
+export function summarizeIndexState<T extends { schema?: string; name: string; columns: ReadonlyArray<{ name: string; dataType?: string }> }>(
+  catalogTables: readonly T[],
+  indexed: readonly IndexedEntry[],
+  opts: { requireContent?: boolean; partial?: boolean } = {},
+): IndexStateSummary {
+  const plan = planIndexWork(catalogTables, indexed, { requireContent: opts.requireContent });
+  return {
+    total: catalogTables.length,
+    done: plan.skipped,
+    missing: plan.todo.length - plan.changed,
+    changed: plan.changed,
+    todo: plan.todo.length,
+    orphaned: plan.orphaned.length,
+    interrupted: opts.partial === true,
+    hasIndex: indexed.length > 0,
+  };
+}
+
+/**
+ * The two ways to run an index, as a sentence each.
+ *
+ * These exist as a pure function because the distinction is the whole point:
+ * RESUME finishes an interrupted or outdated run and pays only for what is
+ * left; RESTART re-indexes everything and pays for all of it. Conflating them
+ * is how people either give up on a half-finished index (thinking a re-run
+ * would cost full price) or re-bill an entire catalog by accident.
+ */
+export function describeIndexChoices(s: IndexStateSummary): {
+  resume: { label: string; detail: string; enabled: boolean };
+  restart: { label: string; detail: string };
+  headline: string;
+} {
+  const reasons: string[] = [];
+  if (s.missing > 0) reasons.push(`${s.missing} never indexed`);
+  if (s.changed > 0) reasons.push(`${s.changed} changed since indexing`);
+  const headline = !s.hasIndex
+    ? `No index yet — all ${s.total} table(s) will be indexed.`
+    : s.todo === 0
+      ? `All ${s.total} table(s) are indexed and unchanged${s.interrupted ? ", though the last run was interrupted" : ""}.`
+      : `${s.done} of ${s.total} table(s) done · ${reasons.join(", ")}${
+          s.interrupted ? " · the last run was interrupted" : ""
+        }.`;
+  return {
+    headline,
+    resume: {
+      label:
+        s.todo === 0
+          ? "Nothing left to index"
+          : `Continue — index the ${s.todo} remaining table(s)`,
+      detail:
+        s.todo === 0
+          ? "Everything in the catalog is already indexed and unchanged."
+          : `Keeps existing descriptions. ${reasons.join(", ")}.`,
+      enabled: s.todo > 0,
+    },
+    restart: {
+      label: `Start over — re-index all ${s.total} table(s)`,
+      detail: `DISCARDS every existing description and pays for the whole catalog again. Use when the index is wrong or was built by an older version${
+        s.orphaned > 0 ? `; also drops ${s.orphaned} entr(y/ies) for tables no longer in the database` : ""
+      }.`,
+    },
+  };
 }

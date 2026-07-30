@@ -1,4 +1,7 @@
 import { ContextSourceType } from "../types";
+// Type-only: tableStats imports runtime helpers from here, so a value import
+// back would close a require cycle. `import type` erases entirely.
+import type { TableStatsIndex } from "./tableStats";
 
 /**
  * Database schema catalog + AI semantic index (ADR-0024).
@@ -34,6 +37,21 @@ export interface SchemaCatalog {
   tables: TableDef[];
   /** True when caps were hit — the catalog is a prefix, not the whole DB. */
   truncated?: boolean;
+  /** WHICH cap was hit and what it cost. `truncated` alone told the reader
+   *  only that something was missing, never what. */
+  truncation?: CatalogTruncation;
+}
+
+/** What a capped catalog actually lost. The two caps differ in kind: a table
+ *  cap removes whole tables, a column cap leaves the table present but
+ *  under-described. */
+export interface CatalogTruncation {
+  /** Reading stopped after this many tables. */
+  tableCap?: number;
+  /** The per-table column cap that applied. */
+  columnCap?: number;
+  /** Tables whose column list was cut short. */
+  columnCapped?: string[];
 }
 
 /** Measured facts about a column's VALUES, computed locally from the sampled
@@ -195,13 +213,68 @@ export interface SourceSchema {
   contentState?: "none" | "indexed" | "declined";
   /** Probed entity-relationship model ("Build ER Diagram", ADR-0030). */
   er?: ErModel;
+  /** Measured size/row/recency facts per table ("Refresh Table Statistics"). */
+  stats?: TableStatsIndex;
 }
 
-// Caps keep catalogs, prompts, and tool output bounded on huge databases.
-export const SCHEMA_MAX_TABLES = 300;
-export const SCHEMA_MAX_COLUMNS_PER_TABLE = 80;
+/**
+ * Caps keep catalogs bounded on huge databases — but they are DEFAULTS, not
+ * limits of the design, and both are user-configurable.
+ *
+ * The two caps are not equally dangerous. Hitting the table cap leaves whole
+ * tables out, which is visible: the table simply isn't there. Hitting the
+ * COLUMN cap is worse, because the table still appears and looks complete
+ * while silently missing columns — a 200-column fact table described on its
+ * first 80 columns produces confident, wrong answers. So the column default is
+ * set high enough that real tables don't reach it.
+ *
+ * The old defaults (300 / 80) were chosen when indexing was neither resumable
+ * nor change-aware, so a large catalog risked a large unrecoverable bill.
+ * Indexing now resumes, re-indexes only what changed, and quotes a request
+ * estimate before spending anything, which is what makes a bigger catalog safe
+ * to allow by default.
+ */
+export const SCHEMA_MAX_TABLES = 1_000;
+export const SCHEMA_MAX_COLUMNS_PER_TABLE = 300;
 export const MONGO_SAMPLE_DOCS = 5;
-export const MONGO_MAX_COLLECTIONS = 100;
+/** Lower than the SQL cap on purpose: MongoDB has no metadata catalog, so each
+ *  collection costs its own sampling query rather than one shared read. */
+export const MONGO_MAX_COLLECTIONS = 250;
+
+/** Hard ceilings. The setting is the user's to choose; unbounded is nobody's,
+ *  since the catalog is held in memory and in extension storage. */
+export const CATALOG_TABLE_CEILING = 10_000;
+export const CATALOG_COLUMN_CEILING = 1_000;
+
+/** How much of a database a catalog read may take in. */
+export interface CatalogLimits {
+  maxTables: number;
+  maxColumnsPerTable: number;
+  maxCollections: number;
+}
+
+export const DEFAULT_CATALOG_LIMITS: CatalogLimits = {
+  maxTables: SCHEMA_MAX_TABLES,
+  maxColumnsPerTable: SCHEMA_MAX_COLUMNS_PER_TABLE,
+  maxCollections: MONGO_MAX_COLLECTIONS,
+};
+
+/** Clamp user-supplied limits into the supported range. A zero or negative
+ *  value means "unset", not "read nothing" — reading nothing is never what
+ *  someone typing a number into a settings box intended. */
+export function resolveCatalogLimits(partial?: Partial<CatalogLimits>): CatalogLimits {
+  const pick = (v: number | undefined, fallback: number, ceiling: number) =>
+    v === undefined || !Number.isFinite(v) || v <= 0 ? fallback : Math.min(Math.floor(v), ceiling);
+  return {
+    maxTables: pick(partial?.maxTables, SCHEMA_MAX_TABLES, CATALOG_TABLE_CEILING),
+    maxColumnsPerTable: pick(
+      partial?.maxColumnsPerTable,
+      SCHEMA_MAX_COLUMNS_PER_TABLE,
+      CATALOG_COLUMN_CEILING,
+    ),
+    maxCollections: pick(partial?.maxCollections, MONGO_MAX_COLLECTIONS, CATALOG_TABLE_CEILING),
+  };
+}
 export const INDEX_TABLES_PER_BATCH = 40;
 // Content indexing: one sample query per table; distincts computed locally.
 export const CONTENT_SAMPLE_ROWS = 100;
@@ -229,18 +302,20 @@ export function catalogFromRows(
   database: string,
   rows: CatalogRow[],
   fetchedAt: string,
+  limits: CatalogLimits = DEFAULT_CATALOG_LIMITS,
 ): SchemaCatalog {
   const tables: TableDef[] = [];
   let current: TableDef | undefined;
-  let truncated = false;
+  const truncation: CatalogTruncation = {};
+  const columnCapped: string[] = [];
   for (const r of rows) {
     const schema = rowVal(r, "table_schema");
     const name = rowVal(r, "table_name");
     const column = rowVal(r, "column_name");
     if (!name || !column) continue;
     if (!current || current.name !== name || current.schema !== schema) {
-      if (tables.length >= SCHEMA_MAX_TABLES) {
-        truncated = true;
+      if (tables.length >= limits.maxTables) {
+        truncation.tableCap = limits.maxTables;
         break;
       }
       current = {
@@ -251,8 +326,10 @@ export function catalogFromRows(
       };
       tables.push(current);
     }
-    if (current.columns.length >= SCHEMA_MAX_COLUMNS_PER_TABLE) {
-      truncated = true;
+    if (current.columns.length >= limits.maxColumnsPerTable) {
+      truncation.columnCap = limits.maxColumnsPerTable;
+      const q = qualifiedName(current);
+      if (columnCapped[columnCapped.length - 1] !== q) columnCapped.push(q);
       continue;
     }
     current.columns.push({
@@ -263,7 +340,47 @@ export function catalogFromRows(
         : {}),
     });
   }
-  return { fetchedAt, engine, database, tables, ...(truncated ? { truncated: true } : {}) };
+  if (columnCapped.length > 0) truncation.columnCapped = columnCapped;
+  return withTruncation({ fetchedAt, engine, database, tables }, truncation);
+}
+
+/** Attach truncation facts, keeping the legacy `truncated` boolean in step so
+ *  stored catalogs and export/import round-trips don't change shape. */
+function withTruncation(catalog: SchemaCatalog, t: CatalogTruncation): SchemaCatalog {
+  const any = t.tableCap !== undefined || t.columnCap !== undefined;
+  return any ? { ...catalog, truncated: true, truncation: t } : catalog;
+}
+
+/**
+ * Human explanation of a truncated catalog.
+ *
+ * "Truncated by caps" on its own is unreadable: it names neither the cap that
+ * was hit nor what was lost, and the two caps have very different
+ * consequences — a table cap means whole tables are MISSING, while a column
+ * cap means a table is present but incompletely described. Those need
+ * different responses from the reader, so they are stated separately.
+ */
+export function describeTruncation(
+  t: CatalogTruncation | undefined,
+  unit: "tables" | "collections" = "tables",
+): string {
+  if (!t) return "";
+  const parts: string[] = [];
+  if (t.tableCap !== undefined) {
+    parts.push(
+      `stopped at the ${t.tableCap}-${unit === "tables" ? "table" : "collection"} cap — any beyond that are MISSING from this catalog`,
+    );
+  }
+  if (t.columnCap !== undefined) {
+    const names = t.columnCapped ?? [];
+    const shown = names.slice(0, 5).join(", ");
+    parts.push(
+      `${names.length || "some"} ${names.length === 1 ? "table has" : "tables have"} columns past the ${t.columnCap}-column cap dropped${
+        shown ? ` (${shown}${names.length > 5 ? `, +${names.length - 5} more` : ""})` : ""
+      } — those tables are listed but not fully described`,
+    );
+  }
+  return parts.join("; ");
 }
 
 /** Field-name/type inference over locally sampled MongoDB documents.
@@ -272,6 +389,7 @@ export function catalogFromMongoSamples(
   database: string,
   samples: Record<string, Array<Record<string, unknown>>>,
   fetchedAt: string,
+  limits: CatalogLimits = DEFAULT_CATALOG_LIMITS,
 ): SchemaCatalog {
   const bsonType = (v: unknown): string => {
     if (v === null || v === undefined) return "null";
@@ -284,10 +402,11 @@ export function catalogFromMongoSamples(
     return typeof v;
   };
   const tables: TableDef[] = [];
-  let truncated = false;
+  const truncation: CatalogTruncation = {};
+  const columnCapped: string[] = [];
   for (const [collection, docs] of Object.entries(samples)) {
-    if (tables.length >= MONGO_MAX_COLLECTIONS) {
-      truncated = true;
+    if (tables.length >= limits.maxCollections) {
+      truncation.tableCap = limits.maxCollections;
       break;
     }
     const fields = new Map<string, Set<string>>();
@@ -307,15 +426,19 @@ export function catalogFromMongoSamples(
       }
     }
     const columns = [...fields.entries()]
-      .slice(0, SCHEMA_MAX_COLUMNS_PER_TABLE)
+      .slice(0, limits.maxColumnsPerTable)
       .map(([name, types]) => ({
         name,
         dataType: [...types].filter((t) => t !== "null").join("|") || "null",
       }));
-    if (fields.size > SCHEMA_MAX_COLUMNS_PER_TABLE) truncated = true;
+    if (fields.size > limits.maxColumnsPerTable) {
+      truncation.columnCap = limits.maxColumnsPerTable;
+      columnCapped.push(collection);
+    }
     tables.push({ name: collection, kind: "collection", columns });
   }
-  return { fetchedAt, engine: "mongodb", database, tables, ...(truncated ? { truncated: true } : {}) };
+  if (columnCapped.length > 0) truncation.columnCapped = columnCapped;
+  return withTruncation({ fetchedAt, engine: "mongodb", database, tables }, truncation);
 }
 
 // --- AI indexing: prompt + response handling --------------------------------
@@ -580,7 +703,17 @@ export function renderSchemaForModel(
     // The content pass's synopsis (informed by actual values) is the better
     // description when present; `purpose` is name-only inference.
     const headline = e.semantic?.synopsis || e.semantic?.purpose;
-    lines.push(`\n${q}${headline ? ` — ${headline}` : ""} (${e.table.kind})`);
+    // Size and recency change how a model should query a table: a billion-row
+    // table needs a bounded WHERE rather than an exploratory scan, and a table
+    // whose newest row is years old shouldn't be used to answer "current".
+    const st = schema.stats?.tables[q.toLowerCase()];
+    const facts = [
+      st?.rows !== undefined ? `~${st.rows.toLocaleString("en-US")} rows` : "",
+      st?.lastUpdated ? `newest ${st.lastUpdatedBasis ?? "date"}: ${st.lastUpdated.slice(0, 10)}` : "",
+    ].filter(Boolean);
+    lines.push(
+      `\n${q}${headline ? ` — ${headline}` : ""} (${e.table.kind}${facts.length ? `, ${facts.join(", ")}` : ""})`,
+    );
     const cols =
       e.matchedColumns.size > 0
         ? e.table.columns.filter((c) => e.matchedColumns.has(c.name))

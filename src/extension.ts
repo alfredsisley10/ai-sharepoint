@@ -115,7 +115,24 @@ import { ensureGitignored } from "./context/files/gitignore";
 import { deriveSplunkObsEndpoints } from "./context/adapters/splunkObservability";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
-import { SourceSchema, ErModel, ProbedRelationship, TestedPair, qualifiedName } from "./context/db/schemaIndex";
+import {
+  SourceSchema,
+  ErModel,
+  ProbedRelationship,
+  TestedPair,
+  qualifiedName,
+  describeTruncation,
+} from "./context/db/schemaIndex";
+import {
+  TableStats,
+  summarizeStats,
+  formatRows,
+  formatBytes,
+  formatDay,
+  pickRecencyColumn,
+  recencyNoteFor,
+} from "./context/db/tableStats";
+import { summarizeIndexState } from "./context/db/indexBatching";
 import {
   proposeJoinCandidates,
   proposeExhaustivePairs,
@@ -4864,15 +4881,50 @@ export function activate(context: vscode.ExtensionContext): void {
     const sem = new Map(
       (schema.semantic?.tables ?? []).map((t) => [t.table.toLowerCase(), t]),
     );
+    const totals = summarizeStats(schema.catalog, schema.stats);
+    const state = summarizeIndexState(schema.catalog.tables, schema.semantic?.tables ?? [], {
+      partial: schema.semantic?.partial,
+    });
+    const unit = schema.catalog.engine === "mongodb" ? "collections" : "tables";
     const lines = [
       `# ${source.displayName} — schema catalog`,
       "",
       `- Engine: **${schema.catalog.engine}** · database **${schema.catalog.database}**`,
-      `- Fetched: ${schema.catalog.fetchedAt} · ${schema.catalog.tables.length} tables/collections${schema.catalog.truncated ? " · **truncated by caps**" : ""}`,
-      `- Semantic index: **${schema.semanticState}**${schema.semantic ? ` (${schema.semantic.tables.length} tables, model ${schema.semantic.modelId}${schema.semantic.partial ? ", partial" : ""})` : ""}`,
+      `- Fetched: ${schema.catalog.fetchedAt}`,
+      `- Size: **${totals.tables} ${unit}** · **${totals.columns.toLocaleString("en-US")} columns**${
+        totals.columnsExact ? "" : " (catalog count — run *Refresh Table Statistics* for the true figure)"
+      }${totals.rows !== undefined ? ` · ≈ **${formatRows(totals.rows)} rows**` : ""}${
+        totals.bytes !== undefined ? ` · **${formatBytes(totals.bytes)}**` : ""
+      }${schema.stats ? ` _(measured ${schema.stats.measuredAt.slice(0, 10)}${totals.partial ? ", partial" : ""})_` : " — run **Refresh Table Statistics** for rows and size"}`,
+      // The old line said only "truncated by caps", which named neither the cap
+      // nor the loss. Both matter, and they differ in kind.
+      ...(schema.catalog.truncated
+        ? [
+            `- ⚠️ **Incomplete catalog:** ${
+              describeTruncation(schema.catalog.truncation, unit) ||
+              "a read cap was hit, so this is a prefix of the database"
+            }. Raise \`aiSharePoint.context.maxTables\` / \`maxColumnsPerTable\` and reload the schema.`,
+          ]
+        : []),
+      `- Semantic index: **${schema.semanticState}**${schema.semantic ? ` (${schema.semantic.tables.length} ${unit}, model ${schema.semantic.modelId}${schema.semantic.partial ? ", partial" : ""})` : ""}`,
+      // Say what a re-run would actually do, so "is this finished?" has an
+      // answer that isn't "run it and see".
+      ...(state.hasIndex
+        ? [
+            `- Index coverage: **${state.done}/${state.total} up to date**${
+              state.missing ? ` · ${state.missing} never indexed` : ""
+            }${state.changed ? ` · ${state.changed} changed since indexing` : ""}${
+              state.orphaned ? ` · ${state.orphaned} stale entr(ies) to prune` : ""
+            }${
+              state.todo > 0
+                ? ` — run *Index Database Schema* and choose **Continue** to finish (${state.todo} to go)`
+                : " — nothing outstanding"
+            }`,
+          ]
+        : []),
       `- ER model: **${schema.er ? `${schema.er.relationships.length} relationship(s)` : "not built"}**${schema.er ? ` (probed ${schema.er.builtAt}${schema.er.partial ? ", partial" : ""})` : " — run “Build Database ER Diagram”"}`,
       "",
-      "_Catalog = names and types read from the database. Semantic tags/synonyms (when indexed) are Copilot's generalization so free-form questions find the right columns._",
+      "_Catalog = names and types read from the database. Semantic tags/synonyms (when indexed) are Copilot's generalization so free-form questions find the right columns. Row counts are engine ESTIMATES from catalog statistics (never `COUNT(*)`), and “last updated” is the maximum of the table's most plausible audit-date column — the column used is always named._",
     ];
     if (schema.er) {
       lines.push(
@@ -4897,7 +4949,26 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     for (const t of schema.catalog.tables) {
       const s = sem.get(qualifiedName(t).toLowerCase());
+      const st = schema.stats?.tables[qualifiedName(t).toLowerCase()];
       lines.push("", `## ${qualifiedName(t)} _(${t.kind})_${s?.purpose ? ` — ${s.purpose}` : ""}`, "");
+      if (s?.synopsis) lines.push(s.synopsis, "");
+      // Facts first: size and recency decide whether this table is worth
+      // reading at all, and they are what nobody can get from names and types.
+      lines.push(
+        `**${st?.columns ?? t.columns.length} columns**` +
+          (st?.rows !== undefined ? ` · ≈ **${formatRows(st.rows)} rows**` : "") +
+          (st?.bytes !== undefined ? ` · **${formatBytes(st.bytes)}**` : "") +
+          (st?.lastUpdated
+            ? ` · last updated **${formatDay(st.lastUpdated)}** _(${st.lastUpdatedBasis ?? "measured"})_`
+            : st?.recencyNote
+              ? ` · last updated unknown _(${st.recencyNote})_`
+              : "") +
+          (st?.schemaModified ? ` · definition changed ${formatDay(st.schemaModified)}` : "") +
+          (st?.columns !== undefined && st.columns > t.columns.length
+            ? ` · ⚠️ only ${t.columns.length} of ${st.columns} columns are in this catalog (column cap)`
+            : ""),
+        "",
+      );
       lines.push("| Column | Type | Meaning (tags) | Also known as |", "|---|---|---|---|");
       for (const c of t.columns) {
         const sc = s?.columns.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
@@ -4911,6 +4982,205 @@ export function activate(context: vscode.ExtensionContext): void {
       content: lines.join("\n"),
     });
     await vscode.window.showTextDocument(doc, { preview: true });
+  });
+
+  register("aiSharePoint.refreshTableStats", async (arg) => {
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    const schema = schemas.getSync(source.id) ?? (await loadSchemaWithProgress(source));
+    // Two passes with very different costs, so they are two separate decisions.
+    // Sizing is one statistics query for the whole database and is never worth
+    // asking about; recency is a query PER TABLE and can be a scan on each, so
+    // it is opt-in with the count shown.
+    const sized = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Reading "${source.displayName}" table statistics…`,
+      },
+      () => contextService.tableStats(source),
+    );
+    const tables: Record<string, TableStats> = {};
+    for (const t of schema.catalog.tables) {
+      const key = qualifiedName(t).toLowerCase();
+      tables[key] = { columns: t.columns.length, ...(sized[key] ?? {}) };
+    }
+    let recencyProbed = false;
+    const recencyFailed: string[] = [];
+    // Tables the engine already answered for (MySQL) need no probe.
+    const probeable = schema.catalog.tables.filter(
+      (t) => !tables[qualifiedName(t).toLowerCase()]?.lastUpdated && pickRecencyColumn(t),
+    );
+    if (probeable.length > 0) {
+      const pick = await vscode.window.showInformationMessage(
+        `Statistics read for ${schema.catalog.tables.length} table(s). Also determine when each table was last UPDATED? That runs one \`SELECT MAX(<date column>)\` per table for ${probeable.length} table(s) — instant where the column is indexed, a full scan where it isn't. Each result names the column it came from.`,
+        "Probe Last Updated",
+        "Skip",
+      );
+      if (pick === "Probe Last Updated") {
+        recencyProbed = true;
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Checking when "${source.displayName}" tables were last updated…`,
+            cancellable: true,
+          },
+          async (progress, token) => {
+            let done = 0;
+            for (const t of probeable) {
+              if (token.isCancellationRequested) break;
+              const key = qualifiedName(t).toLowerCase();
+              progress.report({
+                message: `${qualifiedName(t)} (${++done}/${probeable.length})`,
+                increment: 100 / probeable.length,
+              });
+              try {
+                const r = await contextService.lastUpdatedFor(source, t);
+                if (r) {
+                  tables[key] = {
+                    ...tables[key],
+                    ...(r.lastUpdated ? { lastUpdated: r.lastUpdated } : {}),
+                    lastUpdatedBasis: r.basis,
+                  };
+                }
+              } catch (err) {
+                // One table's scan timing out must not cost the whole pass —
+                // and a blank cell would read as "no date column", which is a
+                // different and wrong answer.
+                recencyFailed.push(qualifiedName(t));
+                log.warn(`Last-updated probe failed for ${qualifiedName(t)}: ${String(err)}`);
+              }
+            }
+          },
+        );
+      }
+    }
+    // Tables with no usable audit column: say why, rather than leaving a blank.
+    for (const t of schema.catalog.tables) {
+      const key = qualifiedName(t).toLowerCase();
+      if (!tables[key].lastUpdated && !pickRecencyColumn(t)) {
+        tables[key] = { ...tables[key], recencyNote: recencyNoteFor(t) };
+      }
+    }
+    const next: SourceSchema = {
+      ...schema,
+      stats: {
+        measuredAt: nowIso(),
+        tables,
+        ...(recencyProbed ? { recencyProbed: true } : {}),
+        ...(recencyFailed.length ? { recencyFailed } : {}),
+      },
+    };
+    await schemas.set(source.id, next);
+    telemetry.record("schema.stats", {
+      type: source.type,
+      tables: String(schema.catalog.tables.length),
+      recency: String(recencyProbed),
+    });
+    const totals = summarizeStats(next.catalog, next.stats);
+    void vscode.window.showInformationMessage(
+      `"${source.displayName}": ${totals.tables} tables · ${totals.columns.toLocaleString("en-US")} columns${
+        totals.rows !== undefined ? ` · ≈ ${formatRows(totals.rows)} rows` : ""
+      }${totals.bytes !== undefined ? ` · ${formatBytes(totals.bytes)}` : ""}${
+        recencyFailed.length ? ` (${recencyFailed.length} recency probe(s) failed)` : ""
+      }.`,
+      "View Schema",
+    ).then((p) => {
+      if (p === "View Schema") {
+        void vscode.commands.executeCommand("aiSharePoint.viewSourceSchema", contextSources.get(source.id));
+      }
+    });
+  });
+
+  register("aiSharePoint.resetSourceIndex", async (arg) => {
+    // "Start over" as a first-class action. Without it the only way to discard
+    // a bad index was to know that re-running silently resumes and to go
+    // looking for a way to defeat that.
+    const source = await resolveSourceArg(arg, contextSources);
+    if (!source || !requireDbSource(source)) return;
+    const schema = schemas.getSync(source.id);
+    if (!schema) {
+      void vscode.window.showInformationMessage(`No stored schema for "${source.displayName}" — nothing to reset.`);
+      return;
+    }
+    const parts: Array<{ label: string; description: string; key: "semantic" | "content" | "er" | "stats" }> = [];
+    if (schema.semantic) {
+      parts.push({
+        label: "Semantic index (tags, synonyms, purposes)",
+        description: `${schema.semantic.tables.length} table(s)${schema.semantic.partial ? " — partial" : ""}`,
+        key: "semantic",
+      });
+    }
+    if (schema.contentState === "indexed" || schema.semantic?.contentIndexedAt) {
+      parts.push({
+        label: "Content-type descriptions (sampled-value summaries)",
+        description: "cleared together with the columns they describe",
+        key: "content",
+      });
+    }
+    if (schema.er) {
+      parts.push({
+        label: "ER model (probed relationships)",
+        description: `${schema.er.relationships.length} relationship(s)`,
+        key: "er",
+      });
+    }
+    if (schema.stats) {
+      parts.push({ label: "Table statistics", description: "rows, size, last-updated", key: "stats" });
+    }
+    if (parts.length === 0) {
+      void vscode.window.showInformationMessage(
+        `"${source.displayName}" has no index to reset — only the catalog, which is re-read from the database each time.`,
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(parts, {
+      title: `Reset which parts of the "${source.displayName}" index?`,
+      placeHolder: "The catalog itself is always kept — it is re-read from the database, not generated",
+      canPickMany: true,
+      ignoreFocusOut: true,
+    });
+    if (!picked || picked.length === 0) return;
+    const keys = new Set(picked.map((p) => p.key));
+    const confirm = await vscode.window.showWarningMessage(
+      `Delete ${picked.map((p) => p.label.toLowerCase()).join(", ")} for "${source.displayName}"? Rebuilding ${
+        keys.has("semantic") || keys.has("content") ? "the Copilot-generated parts costs metered requests again" : "is a re-read, not a re-spend"
+      }.`,
+      { modal: true },
+      "Delete",
+    );
+    if (confirm !== "Delete") return;
+    const next: SourceSchema = { ...schema };
+    if (keys.has("semantic")) {
+      delete next.semantic;
+      next.semanticState = "none";
+      next.contentState = "none";
+    } else if (keys.has("content")) {
+      // Content lives INSIDE the semantic entries, so clearing it means
+      // stripping those fields rather than deleting the index.
+      next.semantic = next.semantic && {
+        ...next.semantic,
+        contentIndexedAt: undefined,
+        tables: next.semantic.tables.map((t) => ({
+          ...t,
+          synopsis: undefined,
+          contentIndexedAt: undefined,
+          columns: t.columns.map((c) => ({
+            ...c,
+            contentSummary: undefined,
+            effectiveType: undefined,
+            profile: undefined,
+          })),
+        })),
+      };
+      next.contentState = "none";
+    }
+    if (keys.has("er")) delete next.er;
+    if (keys.has("stats")) delete next.stats;
+    await schemas.set(source.id, next);
+    log.info(`Reset ${[...keys].join(", ")} for "${source.displayName}".`);
+    void vscode.window.showInformationMessage(
+      `Reset ${picked.length} part(s) of the "${source.displayName}" index. Re-run the matching command to rebuild.`,
+    );
   });
 
   register("aiSharePoint.browseSource", async (arg) => {

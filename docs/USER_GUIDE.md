@@ -441,6 +441,15 @@ reasons — ADR-0022):
   name/query later (inline pencil or right-click → *Edit Bookmark*; database queries stay
   validated read-only). The agent can propose query bookmarks after exploring
   (`#spSuggestBookmark`, approval required).
+- **How much of the database gets read, and what “incomplete catalog” means.** A catalog read
+  is bounded by two caps, and they fail in different ways. The **table** cap (default 1,000)
+  stops the read — tables beyond it are simply *missing*. The **column** cap (default 300) is
+  the more damaging one: the table still appears and looks complete while missing columns, so
+  a wide fact table cut short produces confident, wrong SQL. When either is hit the schema
+  view names which cap it was, lists the affected tables, and points at the setting to raise
+  (`aiSharePoint.context.maxTables` / `maxColumnsPerTable`, up to 10,000 / 1,000). Raising them
+  is cheap for the catalog itself — it's metadata — and indexing it is separately consent-gated,
+  resumable, and re-indexes only what changed.
 - **Two indexing options (ADR-0024)**, both Copilot-powered, named for what they look at:
   - **Index Database Schema** — reads every table/view your account can access, then Copilot
     writes descriptive summaries (tags/synonyms/purposes). Sends **names and types only** —
@@ -457,6 +466,37 @@ reasons — ADR-0022):
     one exception is `aiSharePoint.logging.verboseWire`: if you turn it on, the first 4,000
     characters of each prompt — sampled values included — are written to the extension's
     local VS Code log, which is why it is off by default.
+- **Refresh Database Table Statistics** — the facts names and types can't give you: how many
+  columns each table *really* has (read from the database, not from the possibly-capped
+  catalog), an approximate row count, size on disk including indexes, and a best-effort
+  **last updated**. Row counts and sizes come from the engine's own catalog statistics in a
+  single query — never `COUNT(*)` — so this costs the same on a billion-row warehouse as on a
+  lookup table. Totals for the whole database appear at the top of the schema view, and each
+  table gets its own line.
+- **“Last updated” is derived, and always shows its basis.** Databases record when a table's
+  *definition* changed, not when its *data* did — a different fact, and one this extension
+  never presents as the other. So recency is measured from the data: the extension picks the
+  column most likely to mean “when this row was last touched” (a modification stamp beats a
+  creation stamp; `lst_upd_dt`, `sys_updated_on` and `LastModifiedDate` are all recognized),
+  takes its maximum, and reports the column it used — *last updated 2026-07-01
+  (MAX(lst_upd_dt))*. Business dates like `due_date` or `expiry_date` are **rejected**: their
+  maximum says nothing about whether anyone still writes to the table, and a confident wrong
+  answer is worse than none, so those tables read *“last updated unknown (no audit-date
+  column)”* instead. Because a `MAX()` over an unindexed column is a scan, this second pass is
+  a separate opt-in that tells you how many tables it would query; MySQL, which records a
+  modification time itself, needs no probe at all.
+- **Continue, or start over?** Whenever an index already exists, running *Index Database
+  Schema* or *Index Database Content Types* asks which run you want, and states the cost of
+  each: **Continue** indexes only what's missing or changed and keeps everything else;
+  **Start over** discards every description and re-indexes the catalog (confirmed by a second
+  modal, since it both spends and destroys). Continue is the recovery path for an interrupted
+  run; start over is for an index that is *present but wrong* — built by an older version, or
+  filled with nonsense by a bad model run — which resuming can't detect and would keep forever.
+  The consent dialog quotes the cost of the run you actually chose, not of the whole catalog.
+- **Reset Database Index (Start Over)…** clears any combination of the semantic index, the
+  content-type descriptions, the ER model and the statistics, with a checklist and a
+  confirmation. The catalog itself is never deleted — it's re-read from the database, not
+  generated.
   Both honor `aiSharePoint.context.allowSchemaIndexing`; *View Database Schema & Semantic
   Index* shows exactly what's stored; `#spDbSchema` gives the model the right columns before
   it writes a SELECT. **Indexes are shared via Export/Import Reference Config**, so one
@@ -964,6 +1004,9 @@ Full details: [Privacy & Data Notice](PRIVACY.md).
 | `aiSharePoint.context.catalogTtlHours` | `24` | Pre-cached catalog freshness window |
 | `aiSharePoint.context.catalogCheckpointSeconds` | `15` | "Keep loading?" interval during catalog pre-cache |
 | `aiSharePoint.context.allowSchemaIndexing` | `true` | **Machine-scoped** — allow Copilot schema indexing (names only) |
+| `aiSharePoint.context.maxTables` | `1000` | Max tables/views read into a catalog. Beyond it, tables are **missing** — the schema view says so |
+| `aiSharePoint.context.maxColumnsPerTable` | `300` | Max columns captured per table. Beyond it a table looks complete but isn't — raise this first |
+| `aiSharePoint.context.maxCollections` | `250` | Max MongoDB collections per catalog (lower: each costs its own sampling query) |
 | `aiSharePoint.context.autoProbeOnFirstUse` | `false` | **Machine-scoped** — on first use of a model, send one short calibration request to learn its real context limit (uses a little Copilot quota) |
 | `aiSharePoint.ldap.dnsServers` | `[]` | **Machine-scoped** — internal DNS IPs for AD SRV lookups (fixes VPN split-DNS) |
 | `aiSharePoint.logging.verboseWire` | `false` | Full redacted request/response detail from every integration in the log |

@@ -36,7 +36,7 @@ import {
 } from "./adapters/jira";
 import { CatalogEntry, LoadCheckpoint } from "./catalogCache";
 import { ContextBookmark } from "./types";
-import { verifyDb, searchDb, searchDbRaw, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, DbTlsOptions } from "./db/dbAdapters";
+import { verifyDb, searchDb, searchDbRaw, browseDb, describeDb, sampleTableValues, probeJoinRate, estimateRowCounts, fetchTableStats, probeLastUpdated, DbTlsOptions } from "./db/dbAdapters";
 import { JoinProbeEnd, JoinProbeCounts, RowEstimates } from "./db/erDiagram";
 import { planProbeBudget } from "./db/queryBudget";
 import {
@@ -159,7 +159,14 @@ import {
   buildSnowSessionSecret,
   fetchSnowUserToken,
 } from "./adapters/servicenowAuth";
-import { SchemaCatalog, TableDef, TableValueSample } from "./db/schemaIndex";
+import {
+  SchemaCatalog,
+  TableDef,
+  TableValueSample,
+  CatalogLimits,
+  resolveCatalogLimits,
+} from "./db/schemaIndex";
+import { TableStats } from "./db/tableStats";
 import { MSSQL_AAD_SCOPES } from "./db/mssqlAuth";
 import { AppError, classifyError } from "../core/errors";
 
@@ -1827,7 +1834,49 @@ export class ContextService {
     }
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
-      describeDb(source, credential, this.dbTls(credential), this.caps(), nowIso),
+      describeDb(source, credential, this.dbTls(credential), this.caps(), nowIso, this.catalogLimits()),
+    );
+  }
+
+  /** How much of a database a catalog read may take in. Configurable because
+   *  the right answer depends on the database: the defaults suit a large
+   *  enterprise schema, but a 4,000-table ERP needs a higher table cap and a
+   *  wide-column warehouse a higher column cap. Clamped to hard ceilings —
+   *  the catalog lives in memory and in extension storage. */
+  catalogLimits(): CatalogLimits {
+    const cfg = vscode.workspace.getConfiguration("aiSharePoint");
+    return resolveCatalogLimits({
+      maxTables: cfg.get<number>("context.maxTables"),
+      maxColumnsPerTable: cfg.get<number>("context.maxColumnsPerTable"),
+      maxCollections: cfg.get<number>("context.maxCollections"),
+    });
+  }
+
+  /** Row counts, byte sizes and true column counts for every table — one
+   *  statistics query, never COUNT(*). */
+  async tableStats(source: ContextSource): Promise<Record<string, TableStats>> {
+    if (!ContextService.DB_TYPES.has(source.type)) {
+      throw new AppError("Table statistics apply to database sources only.", "config");
+    }
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      fetchTableStats(source, credential, this.dbTls(credential), this.caps(), this.catalogLimits()),
+    );
+  }
+
+  /** Best-effort "data last changed" for ONE table, from the maximum of its
+   *  most plausible audit-date column. Throws if the query fails, so the
+   *  caller can report a failed probe rather than an empty one. */
+  async lastUpdatedFor(
+    source: ContextSource,
+    table: TableDef,
+  ): Promise<{ lastUpdated?: string; basis: string } | undefined> {
+    if (!ContextService.DB_TYPES.has(source.type)) {
+      throw new AppError("Recency probes apply to database sources only.", "config");
+    }
+    const credential = await this.storedCredential(source);
+    return this.tracked(source, false, () =>
+      probeLastUpdated(source, credential, this.dbTls(credential), this.caps(), table),
     );
   }
 
@@ -1925,7 +1974,7 @@ export class ContextService {
     }
     const credential = await this.storedCredential(source);
     return this.tracked(source, false, () =>
-      estimateRowCounts(source, credential, this.dbTls(credential), this.caps()),
+      estimateRowCounts(source, credential, this.dbTls(credential), this.caps(), this.catalogLimits()),
     );
   }
 

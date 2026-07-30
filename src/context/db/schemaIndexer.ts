@@ -40,8 +40,20 @@ import {
   describeBudgetChange,
   planIndexWork,
   tableFingerprint,
+  summarizeIndexState,
+  describeIndexChoices,
   START_COLUMN_BUDGET,
 } from "./indexBatching";
+
+/**
+ * How a run treats what is already indexed.
+ *
+ * "resume" finishes what is missing or changed and keeps everything else —
+ * the right default, and the recovery path for an interrupted run.
+ * "restart" throws the index away and rebuilds it, which is the only way to
+ * fix an index that is present but wrong.
+ */
+export type IndexRunMode = "resume" | "restart";
 
 export type TableSampler = (table: TableDef) => Promise<TableValueSample>;
 
@@ -91,16 +103,84 @@ export class SchemaIndexer {
       .get<boolean>("context.allowSchemaIndexing", true);
   }
 
+  /**
+   * Resume, or start over?
+   *
+   * Only asked when there IS an index to resume — a first run has no choice to
+   * make and shouldn't be interrupted by a dialog pretending otherwise.
+   *
+   * The distinction is the whole point of asking. Re-running has always
+   * resumed, which is right when a proxy cut a run short, but resume can only
+   * skip what it can DETECT as done: an index built by an older prompt, or one
+   * a model filled with nonsense, looks complete and is silently kept forever.
+   * Returns undefined when the user backs out.
+   */
+  async chooseRunMode(
+    source: ContextSource,
+    schema: SourceSchema,
+    opts: { requireContent?: boolean } = {},
+  ): Promise<IndexRunMode | undefined> {
+    const state = summarizeIndexState(schema.catalog.tables, schema.semantic?.tables ?? [], {
+      requireContent: opts.requireContent,
+      partial: schema.semantic?.partial,
+    });
+    if (!state.hasIndex) return "resume"; // nothing to resume; nothing to ask
+    const choices = describeIndexChoices(state);
+    const items: Array<vscode.QuickPickItem & { mode: IndexRunMode }> = [];
+    if (choices.resume.enabled) {
+      items.push({
+        label: `$(debug-continue) ${choices.resume.label}`,
+        detail: choices.resume.detail,
+        mode: "resume",
+      });
+    }
+    items.push({
+      label: `$(debug-restart) ${choices.restart.label}`,
+      detail: choices.restart.detail,
+      mode: "restart",
+    });
+    const pick = await vscode.window.showQuickPick(items, {
+      title: `Index "${source.displayName}" — ${choices.headline}`,
+      placeHolder: choices.resume.enabled
+        ? "Continue where the last run stopped, or discard it and start over"
+        : "Everything is indexed — the only thing left to do is start over",
+      ignoreFocusOut: true,
+    });
+    if (!pick) return undefined;
+    if (pick.mode === "restart") {
+      // Modal, because it spends money and destroys work: the resume path is
+      // recoverable by re-running, this one is not.
+      const confirm = await vscode.window.showWarningMessage(
+        `Discard the existing index for "${source.displayName}" and re-index all ${state.total} table(s)? The ${state.done + state.changed} description(s) already generated will be lost, and the whole catalog will be sent to Copilot again.`,
+        { modal: true },
+        "Re-index Everything",
+      );
+      if (confirm !== "Re-index Everything") return undefined;
+    }
+    return pick.mode;
+  }
+
   /** The first-use question. Returns "index" | "later" | "declined". */
   async askConsent(
     source: ContextSource,
     schema: SourceSchema,
+    mode: IndexRunMode = "resume",
   ): Promise<"index" | "later" | "declined"> {
-    const tables = schema.catalog.tables.length;
-    const columns = schema.catalog.tables.reduce((n, t) => n + t.columns.length, 0);
-    const batches = estimateBatchCount(schema.catalog.tables);
+    // Quote the cost of THIS run, not of the catalog: after a resume the
+    // difference is most of the bill, and a number that ignores it is the kind
+    // of accurate-but-useless figure people learn to stop reading.
+    const work = planIndexWork(schema.catalog.tables, schema.semantic?.tables ?? [], {
+      force: mode === "restart",
+    }).todo;
+    const tables = work.length;
+    const columns = work.reduce((n, t) => n + t.columns.length, 0);
+    const batches = estimateBatchCount(work);
+    const scope =
+      mode === "restart"
+        ? `ALL ${tables} table(s) — existing descriptions are discarded`
+        : `${tables} table(s) still to index`;
     const pick = await vscode.window.showInformationMessage(
-      `Index the "${source.displayName}" schema with Copilot? Table and column NAMES and TYPES only — no data rows — are sent (${tables} tables, ${columns} columns ≈ ${batches} Copilot request${batches === 1 ? "" : "s"}). The semantic index lets free-form questions find the right columns (e.g. group_cio → "owned by …").`,
+      `Index the "${source.displayName}" schema with Copilot? Table and column NAMES and TYPES only — no data rows — are sent (${scope}, ${columns} columns ≈ ${batches} Copilot request${batches === 1 ? "" : "s"}). The semantic index lets free-form questions find the right columns (e.g. group_cio → "owned by …").`,
       { modal: true },
       "Index with Copilot",
       "Not Now",
@@ -137,15 +217,26 @@ export class SchemaIndexer {
     schema: SourceSchema,
     progress?: vscode.Progress<{ message?: string; increment?: number }>,
     token?: vscode.CancellationToken,
+    mode: IndexRunMode = "resume",
   ): Promise<SourceSchema> {
     // RESUME: a previous run that a proxy reset (or the user) cut short leaves a
     // PARTIAL index. Re-running must not redo tables already paid for, so those
     // are carried forward and skipped — re-running is the documented recovery.
     // Carry the WHOLE stored index, not just a partial one: a table can need
     // reprocessing even when the last run finished, because its SCHEMA changed.
-    const carriedAll: SemanticTable[] = schema.semantic?.tables ?? [];
-    const plan = planIndexWork(schema.catalog.tables, carriedAll);
+    //
+    // RESTART discards all of that and re-indexes the catalog. Both are
+    // legitimate; which one is running is the user's explicit choice, never
+    // inferred.
+    const stored: SemanticTable[] = schema.semantic?.tables ?? [];
+    const carriedAll: SemanticTable[] = mode === "restart" ? [] : stored;
+    const plan = planIndexWork(schema.catalog.tables, stored, { force: mode === "restart" });
     const { todo, skipped } = plan;
+    if (mode === "restart") {
+      this.log.info(
+        `Schema indexing for "${source.displayName}": RESTART — discarding ${stored.length} existing description(s) and re-indexing all ${todo.length} table(s).`,
+      );
+    }
     // Entries whose table no longer exists are dropped rather than described
     // forever; without this the index accumulates ghosts across every resume.
     const carried = plan.orphaned.length
@@ -355,11 +446,17 @@ export class SchemaIndexer {
       );
       return schema;
     }
+    // Same resume-or-restart question as the schema pass, with the content
+    // pass's own notion of "done" (a table can be schema-indexed but never
+    // content-described).
+    const mode = await this.chooseRunMode(source, schema, { requireContent: true });
+    if (!mode) return schema;
     // RESUME, mirroring the schema pass: only tables not yet described, plus
     // any whose SCHEMA CHANGED. Previously every re-run re-sampled (real DB
     // queries) and re-described (metered requests) all 50 tables.
     const contentPlan = planIndexWork(schema.catalog.tables, schema.semantic?.tables ?? [], {
       requireContent: true,
+      force: mode === "restart",
     });
     const tables = contentPlan.todo.slice(0, CONTENT_MAX_TABLES);
     if (contentPlan.skipped > 0 || contentPlan.changed > 0) {
@@ -605,7 +702,12 @@ export class SchemaIndexer {
       );
       return schema;
     }
-    const consent = await this.askConsent(source, schema);
+    // Which RUN is this? Asked before consent, because the answer changes what
+    // consent is being given to: finishing an interrupted run costs a fraction
+    // of re-indexing the catalog, and the two must never be confused.
+    const mode = await this.chooseRunMode(source, schema);
+    if (!mode) return schema;
+    const consent = await this.askConsent(source, schema, mode);
     if (consent === "declined") {
       const declined: SourceSchema = { ...schema, semanticState: "declined" };
       await this.schemas.set(source.id, declined);
@@ -615,10 +717,10 @@ export class SchemaIndexer {
     const indexed = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: `Indexing "${source.displayName}" schema…`,
+        title: `${mode === "restart" ? "Re-indexing" : "Indexing"} "${source.displayName}" schema…`,
         cancellable: true,
       },
-      (progress, token) => this.runIndexing(source, schema, progress, token),
+      (progress, token) => this.runIndexing(source, schema, progress, token, mode),
     );
     const n = indexed.semantic?.tables.length ?? 0;
     void vscode.window.showInformationMessage(

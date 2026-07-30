@@ -2,7 +2,7 @@
   "name": "ai-sharepoint",
   "displayName": "AI SharePoint",
   "description": "Govern and explore SharePoint Online with GitHub Copilot — metered usage, enterprise auth, read-only reference sources, and privacy-first diagnostics.",
-  "version": "0.142.0",
+  "version": "0.143.0",
   "release": {
     "channel": "standard"
   },
@@ -263,6 +263,18 @@
         "title": "%aiSharePoint.buildErDiagram.title%",
         "category": "%category%",
         "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "aiSharePoint.refreshTableStats",
+        "title": "%aiSharePoint.refreshTableStats.title%",
+        "category": "%category%",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "aiSharePoint.resetSourceIndex",
+        "title": "%aiSharePoint.resetSourceIndex.title%",
+        "category": "%category%",
+        "icon": "$(trash)"
       },
       {
         "command": "aiSharePoint.viewSourceSchema",
@@ -3370,9 +3382,19 @@
           "group": "1_schema@4"
         },
         {
-          "command": "aiSharePoint.viewSourceSchema",
+          "command": "aiSharePoint.refreshTableStats",
           "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
           "group": "1_schema@5"
+        },
+        {
+          "command": "aiSharePoint.viewSourceSchema",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
+          "group": "1_schema@6"
+        },
+        {
+          "command": "aiSharePoint.resetSourceIndex",
+          "when": "view == aiSharePoint.sourcesView && viewItem == context-source-db",
+          "group": "1_schema@7"
         },
         {
           "command": "aiSharePoint.clearErrorReports",
@@ -3516,6 +3538,14 @@
         },
         {
           "command": "aiSharePoint.viewSourceSchema",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.refreshTableStats",
+          "when": "aiSharePoint.hasSources"
+        },
+        {
+          "command": "aiSharePoint.resetSourceIndex",
           "when": "aiSharePoint.hasSources"
         },
         {
@@ -3870,6 +3900,30 @@
           "scope": "machine",
           "order": 13,
           "markdownDescription": "%config.aiSharePoint.context.allowSchemaIndexing.markdownDescription%"
+        },
+        "aiSharePoint.context.maxTables": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 1,
+          "maximum": 10000,
+          "order": 13,
+          "markdownDescription": "%config.aiSharePoint.context.maxTables.markdownDescription%"
+        },
+        "aiSharePoint.context.maxColumnsPerTable": {
+          "type": "number",
+          "default": 300,
+          "minimum": 1,
+          "maximum": 1000,
+          "order": 13,
+          "markdownDescription": "%config.aiSharePoint.context.maxColumnsPerTable.markdownDescription%"
+        },
+        "aiSharePoint.context.maxCollections": {
+          "type": "number",
+          "default": 250,
+          "minimum": 1,
+          "maximum": 10000,
+          "order": 13,
+          "markdownDescription": "%config.aiSharePoint.context.maxCollections.markdownDescription%"
         },
         "aiSharePoint.ldap.tlsRejectUnauthorized": {
           "type": "boolean",

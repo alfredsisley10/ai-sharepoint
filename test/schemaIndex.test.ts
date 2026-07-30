@@ -497,3 +497,93 @@ test("the content prompt gives the model the declared type and the measured prof
   assert.match(prompt, /effectiveType/);
   assert.match(prompt, /synopsis/);
 });
+
+test("truncation says WHICH cap was hit and what it cost", async () => {
+  const { catalogFromRows, describeTruncation, resolveCatalogLimits } = await import(
+    "../src/context/db/schemaIndex"
+  );
+  const limits = resolveCatalogLimits({ maxTables: 2, maxColumnsPerTable: 2 });
+  const rows: Array<Record<string, unknown>> = [];
+  for (const t of ["A", "B", "C"]) {
+    for (let c = 0; c < 4; c++) {
+      rows.push({ table_schema: "dbo", table_name: t, column_name: `c${c}`, data_type: "int" });
+    }
+  }
+  const cat = catalogFromRows("mssql", "DB", rows, T0, limits);
+  assert.equal(cat.tables.length, 2, "table cap");
+  assert.equal(cat.tables[0].columns.length, 2, "column cap");
+  assert.equal(cat.truncated, true, "the legacy flag still travels for stored catalogs");
+  assert.equal(cat.truncation?.tableCap, 2);
+  assert.equal(cat.truncation?.columnCap, 2);
+  assert.deepEqual(cat.truncation?.columnCapped, ["dbo.A", "dbo.B"], "named once each, not once per dropped column");
+
+  const text = describeTruncation(cat.truncation);
+  // The two caps have different consequences and must not read the same: one
+  // means tables are MISSING, the other that a listed table is incomplete.
+  assert.match(text, /MISSING/);
+  assert.match(text, /not fully described/);
+  assert.match(text, /dbo\.A/);
+  assert.equal(describeTruncation(undefined), "", "an untruncated catalog says nothing");
+});
+
+test("an untruncated catalog carries no truncation record", async () => {
+  const { catalogFromRows } = await import("../src/context/db/schemaIndex");
+  const cat = catalogFromRows(
+    "mssql",
+    "DB",
+    [{ table_schema: "dbo", table_name: "A", column_name: "id", data_type: "int" }],
+    T0,
+  );
+  assert.equal(cat.truncated, undefined);
+  assert.equal(cat.truncation, undefined);
+});
+
+test("catalog limits are configurable but never unbounded", async () => {
+  const {
+    resolveCatalogLimits,
+    SCHEMA_MAX_TABLES,
+    SCHEMA_MAX_COLUMNS_PER_TABLE,
+    CATALOG_TABLE_CEILING,
+    CATALOG_COLUMN_CEILING,
+  } = await import("../src/context/db/schemaIndex");
+  // Unset falls back to the defaults.
+  assert.deepEqual(resolveCatalogLimits(), {
+    maxTables: SCHEMA_MAX_TABLES,
+    maxColumnsPerTable: SCHEMA_MAX_COLUMNS_PER_TABLE,
+    maxCollections: 250,
+  });
+  assert.equal(resolveCatalogLimits({ maxTables: 4000 }).maxTables, 4000);
+  // A number typed into a settings box can be nonsense; none of it may produce
+  // a catalog read that returns nothing or never ends.
+  assert.equal(resolveCatalogLimits({ maxTables: 0 }).maxTables, SCHEMA_MAX_TABLES);
+  assert.equal(resolveCatalogLimits({ maxTables: -5 }).maxTables, SCHEMA_MAX_TABLES);
+  assert.equal(resolveCatalogLimits({ maxColumnsPerTable: NaN }).maxColumnsPerTable, SCHEMA_MAX_COLUMNS_PER_TABLE);
+  assert.equal(resolveCatalogLimits({ maxTables: 1e9 }).maxTables, CATALOG_TABLE_CEILING);
+  assert.equal(resolveCatalogLimits({ maxColumnsPerTable: 1e9 }).maxColumnsPerTable, CATALOG_COLUMN_CEILING);
+  assert.equal(resolveCatalogLimits({ maxTables: 12.7 }).maxTables, 12, "no fractional caps");
+});
+
+test("the model is told how big a table is and how fresh", async () => {
+  const { renderSchemaForModel } = await import("../src/context/db/schemaIndex");
+  const schema = indexedSchema();
+  const rendered = renderSchemaForModel(
+    {
+      ...schema,
+      stats: {
+        measuredAt: T0,
+        tables: {
+          "dbo.applications": {
+            rows: 2_400_000,
+            lastUpdated: "2026-07-01T00:00:00Z",
+            lastUpdatedBasis: "MAX(lst_upd_dt)",
+          },
+        },
+      },
+    },
+    undefined,
+  );
+  // A billion-row table needs a bounded WHERE, not an exploratory scan, and a
+  // table whose newest row is old shouldn't be used to answer "current".
+  assert.match(rendered, /~2,400,000 rows/);
+  assert.match(rendered, /newest MAX\(lst_upd_dt\): 2026-07-01/);
+});

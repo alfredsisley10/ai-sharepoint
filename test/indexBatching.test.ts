@@ -11,6 +11,8 @@ import {
   planResume,
   tableFingerprint,
   planIndexWork,
+  summarizeIndexState,
+  describeIndexChoices,
   START_COLUMN_BUDGET,
   MIN_COLUMN_BUDGET,
   MAX_COLUMN_BUDGET,
@@ -251,4 +253,89 @@ test("a changed table is reprocessed by the CONTENT pass too", () => {
   const plan = planIndexWork([v2], indexed, { requireContent: true });
   assert.deepEqual(plan.todo.map((t) => t.name), ["Orders"]);
   assert.equal(plan.changed, 1, "counted as changed, not merely undescribed");
+});
+
+test("force re-indexes everything, ignoring what the store calls done", () => {
+  // Resume can only skip what it can DETECT as done. An index built by an
+  // older prompt, or one a model filled with nonsense, looks complete — so
+  // "start over" has to be a real option, not something faked by deleting
+  // state.
+  const orders = tbl("Orders", [["id", "int"]]);
+  const customers = tbl("Customers", [["id", "int"]]);
+  const indexed = [
+    { table: "dbo.Orders", fingerprint: tableFingerprint(orders), contentIndexedAt: "2026-07-01T00:00:00Z" },
+    { table: "dbo.Customers", fingerprint: tableFingerprint(customers) },
+    { table: "dbo.Dropped", fingerprint: "deadbeef" },
+  ];
+  const plan = planIndexWork([orders, customers], indexed, { force: true });
+  assert.deepEqual(plan.todo.map((t) => t.name), ["Orders", "Customers"]);
+  assert.equal(plan.skipped, 0);
+  // A forced run isn't a "changed" run — nothing changed, the user chose this.
+  assert.equal(plan.changed, 0);
+  // Orphans are still reported, so starting over also cleans up.
+  assert.deepEqual(plan.orphaned, ["dbo.Dropped"]);
+});
+
+test("summarizeIndexState separates never-indexed from changed", () => {
+  const a = tbl("A", [["id", "int"]]);
+  const b = tbl("B", [["id", "int"]]);
+  const c = tbl("C", [["id", "int"]]);
+  const bChanged = tbl("B", [["id", "varchar"]]);
+  const state = summarizeIndexState([a, bChanged, c], [
+    { table: "dbo.A", fingerprint: tableFingerprint(a) },
+    { table: "dbo.B", fingerprint: tableFingerprint(b) },
+    { table: "dbo.Gone", fingerprint: "x" },
+  ], { partial: true });
+  assert.equal(state.total, 3);
+  assert.equal(state.done, 1, "A");
+  assert.equal(state.changed, 1, "B");
+  assert.equal(state.missing, 1, "C");
+  assert.equal(state.todo, 2);
+  assert.equal(state.orphaned, 1);
+  assert.equal(state.interrupted, true);
+  assert.equal(state.hasIndex, true);
+});
+
+test("a first run has no choice to present", () => {
+  const state = summarizeIndexState([tbl("A", [["id", "int"]])], []);
+  assert.equal(state.hasIndex, false);
+  assert.equal(state.todo, 1);
+  assert.match(describeIndexChoices(state).headline, /No index yet/);
+});
+
+test("describeIndexChoices states the cost difference plainly", () => {
+  const state = {
+    total: 100,
+    done: 60,
+    missing: 30,
+    changed: 10,
+    todo: 40,
+    orphaned: 2,
+    interrupted: true,
+    hasIndex: true,
+  };
+  const c = describeIndexChoices(state);
+  assert.match(c.headline, /60 of 100/);
+  assert.match(c.headline, /30 never indexed/);
+  assert.match(c.headline, /10 changed since indexing/);
+  assert.match(c.headline, /interrupted/);
+  // Resume names the SMALLER number — the whole point of offering it.
+  assert.match(c.resume.label, /40 remaining/);
+  assert.equal(c.resume.enabled, true);
+  assert.match(c.resume.detail, /Keeps existing descriptions/);
+  // Restart names the FULL number and says what it destroys, because it is
+  // the irreversible, more expensive option.
+  assert.match(c.restart.label, /all 100/);
+  assert.match(c.restart.detail, /DISCARDS/);
+  assert.match(c.restart.detail, /2 entr/, "mentions the stale entries it clears");
+});
+
+test("with nothing outstanding, only starting over remains", () => {
+  const done = { total: 10, done: 10, missing: 0, changed: 0, todo: 0, orphaned: 0, interrupted: false, hasIndex: true };
+  const c = describeIndexChoices(done);
+  assert.match(c.headline, /All 10 table\(s\) are indexed and unchanged/);
+  assert.equal(c.resume.enabled, false, "offering 'continue' with nothing to continue is a dead end");
+  assert.match(c.restart.label, /Start over/);
+  // An interrupted run that nonetheless has nothing left still says so.
+  assert.match(describeIndexChoices({ ...done, interrupted: true }).headline, /last run was interrupted/);
 });

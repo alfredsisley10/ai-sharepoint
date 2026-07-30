@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.143.0 — 2026-07-30
+
+### Table statistics in the schema view
+- **New command: Refresh Database Table Statistics.** The schema view now answers the questions
+  names and types can't: how many columns each table *really* has, roughly how many rows, how much
+  disk it takes including indexes, and when its data was last updated. Totals for the whole
+  database sit at the top; each table gets its own line.
+- **Never `COUNT(*)`.** Rows and sizes come from the engine's own catalog statistics in a single
+  query, so sizing a billion-row warehouse costs the same as sizing a lookup table.
+- **Column counts come from the database, not the catalog.** The catalog caps columns per table, so
+  counting its entries would have silently under-reported every wide table.
+- **"Last updated" is derived, and always shows its basis.** Engines record when a table's
+  *definition* changed, not its data — a different fact, now kept separate and never shown as the
+  other. Recency instead comes from the data: the best audit-date column is chosen (a modification
+  stamp beats a creation stamp; `lst_upd_dt`, `sys_updated_on`, `LastModifiedDate` are recognized),
+  its maximum taken, and the column named in the output. Business dates like `due_date` are
+  **rejected** — their maximum says nothing about whether the table is still written to — so those
+  tables read "last updated unknown (no audit-date column)" rather than showing a confident wrong
+  answer. The probe is a separate opt-in because `MAX()` on an unindexed column is a scan.
+- Row counts and recency also travel to the model, so it stops writing exploratory scans against
+  huge tables and stops treating a dormant table as current.
+
+### Continue vs. start over — now an explicit choice
+- **Re-running an index asks which run you mean.** Continue indexes only what's missing or changed;
+  start over discards everything and re-indexes the catalog behind a second confirmation. Re-running
+  has always silently resumed, which is right after an interruption but wrong for an index that is
+  *present but incorrect* — built by an older version, or filled with nonsense — since resume can't
+  detect that and would keep it forever.
+- **The consent dialog now quotes the cost of the run you chose**, not of the whole catalog. After a
+  resume that difference is most of the bill.
+- **New command: Reset Database Index (Start Over)…** clears any combination of the semantic index,
+  content-type descriptions, ER model and statistics. The catalog is never deleted — it is re-read
+  from the database, not generated.
+- The schema view now states index coverage directly — how many tables are up to date, never
+  indexed, changed since indexing, or stale — so "is this finished?" no longer means "run it and see".
+
+### Catalog caps raised, and finally explained
+- **`truncated by caps` is gone.** It named neither the cap nor the loss. The view now says which
+  limit was hit and what it cost, and the two are stated separately because they differ in kind: a
+  table cap means tables are **missing**, a column cap means a listed table is **incompletely
+  described**.
+- **Defaults raised: 1,000 tables (was 300) and 300 columns per table (was 80)**; MongoDB 250
+  collections (was 100). All three are now settings — `aiSharePoint.context.maxTables`,
+  `maxColumnsPerTable`, `maxCollections` — clamped to 10,000 / 1,000 / 10,000. The old defaults date
+  from when indexing was neither resumable nor change-aware, so a large catalog risked a large
+  unrecoverable bill; it now resumes, re-indexes only what changed, and quotes an estimate first.
+
 ## 0.142.0 — 2026-07-30
 
 ### Database indexing: only index what actually needs indexing

@@ -24,9 +24,8 @@ import {
   sampledColumnNames,
   distinctValues,
   profileColumns,
-  SCHEMA_MAX_TABLES,
-  SCHEMA_MAX_COLUMNS_PER_TABLE,
-  MONGO_MAX_COLLECTIONS,
+  CatalogLimits,
+  DEFAULT_CATALOG_LIMITS,
   MONGO_SAMPLE_DOCS,
   CONTENT_SAMPLE_ROWS,
   TableValueSample,
@@ -42,6 +41,16 @@ import {
   JoinProbeCounts,
   ER_SAMPLE_SIZE,
 } from "./erDiagram";
+import {
+  buildCatalogStatsSql,
+  parseCatalogStats,
+  buildMaxDateSql,
+  parseMaxDate,
+  pickRecencyColumn,
+  isoDate,
+  TableStats,
+  SqlStatsEngine,
+} from "./tableStats";
 import {
   extractMssqlTables,
   buildStatsProbeSql,
@@ -618,6 +627,7 @@ export async function describeDb(
   tls: DbTlsOptions,
   caps: ReadCaps,
   fetchedAt: string,
+  limits: CatalogLimits = DEFAULT_CATALOG_LIMITS,
 ): Promise<SchemaCatalog> {
   const { database } = parseDbUrl(source);
   if (source.type === "mongodb") {
@@ -627,7 +637,7 @@ export async function describeDb(
       )
         .map((c) => c.name)
         .filter((n) => !n.startsWith("system."))
-        .slice(0, MONGO_MAX_COLLECTIONS);
+        .slice(0, limits.maxCollections);
       const out: Record<string, Array<Record<string, unknown>>> = {};
       for (const name of names) {
         out[name] = (await client
@@ -638,12 +648,13 @@ export async function describeDb(
       }
       return out;
     });
-    return catalogFromMongoSamples(database, samples, fetchedAt);
+    return catalogFromMongoSamples(database, samples, fetchedAt, limits);
   }
-  // Metadata queries need a row cap sized for catalogs, not result sets.
+  // Metadata queries need a row cap sized for catalogs, not result sets: one
+  // row per COLUMN, so the ceiling is tables x columns.
   const schemaCaps: ReadCaps = {
     ...caps,
-    maxResults: SCHEMA_MAX_TABLES * SCHEMA_MAX_COLUMNS_PER_TABLE,
+    maxResults: limits.maxTables * limits.maxColumnsPerTable,
   };
   const rows = await SQL_RUNNERS[source.type as SqlEngine](
     source,
@@ -652,7 +663,7 @@ export async function describeDb(
     schemaCaps,
     DESCRIBE_SQL[source.type as SqlEngine],
   );
-  return catalogFromRows(source.type, database, rows, fetchedAt);
+  return catalogFromRows(source.type, database, rows, fetchedAt, limits);
 }
 
 /** Content-type indexing sample: one bounded row sample per table, reduced
@@ -725,6 +736,108 @@ export async function probeJoinRate(
   return parseProbeCounts(rows);
 }
 
+/**
+ * Row counts, byte sizes and true column counts for every table — one
+ * statistics query, no `COUNT(*)`, so this costs the same on a billion-row
+ * warehouse as on a lookup table.
+ *
+ * MongoDB has no such catalog, so each collection is asked separately via
+ * `$collStats`; if that is denied (it needs read access to the stats command)
+ * it degrades to an estimated document count rather than failing the pass.
+ */
+export async function fetchTableStats(
+  source: ContextSource,
+  credential: ContextCredential,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+  limits: CatalogLimits = DEFAULT_CATALOG_LIMITS,
+): Promise<Record<string, TableStats>> {
+  if (source.type === "mongodb") {
+    return withMongo(source, credential, tls, caps, async (client, dbName) => {
+      const names = (
+        await client.db(dbName).listCollections(undefined, { nameOnly: true }).toArray()
+      )
+        .map((c) => c.name)
+        .filter((n) => !n.startsWith("system."))
+        .slice(0, limits.maxCollections);
+      const out: Record<string, TableStats> = {};
+      for (const name of names) {
+        const coll = client.db(dbName).collection(name);
+        try {
+          const [s] = (await coll
+            .aggregate([{ $collStats: { storageStats: {} } }], { maxTimeMS: caps.timeoutMs })
+            .toArray()) as Array<{ storageStats?: { count?: number; storageSize?: number; totalIndexSize?: number } }>;
+          const st = s?.storageStats;
+          out[name.toLowerCase()] = {
+            ...(st?.count !== undefined ? { rows: st.count } : {}),
+            ...(st?.storageSize !== undefined
+              ? { bytes: st.storageSize + (st.totalIndexSize ?? 0) }
+              : {}),
+          };
+        } catch {
+          // $collStats denied or unsupported — a count is still worth having.
+          out[name.toLowerCase()] = {
+            rows: await coll.estimatedDocumentCount({ maxTimeMS: caps.timeoutMs }),
+          };
+        }
+      }
+      return out;
+    });
+  }
+  const rows = await SQL_RUNNERS[source.type as SqlEngine](
+    source,
+    credential,
+    tls,
+    { ...caps, maxResults: limits.maxTables },
+    buildCatalogStatsSql(source.type as SqlStatsEngine),
+  );
+  return parseCatalogStats(rows);
+}
+
+/**
+ * "When did this table's DATA last change" for ONE table, by taking the
+ * maximum of its best audit-date column.
+ *
+ * Returns `undefined` when no column can honestly answer — and THROWS on a
+ * query failure, so the caller can distinguish "nothing to measure" from
+ * "the measurement failed" and report the second rather than showing a blank
+ * cell that looks like the first.
+ */
+export async function probeLastUpdated(
+  source: ContextSource,
+  credential: ContextCredential,
+  tls: DbTlsOptions,
+  caps: ReadCaps,
+  table: TableDef,
+): Promise<{ lastUpdated?: string; basis: string } | undefined> {
+  const pick = pickRecencyColumn(table);
+  if (!pick) return undefined;
+  if (source.type === "mongodb") {
+    const docs = (await withMongo(source, credential, tls, caps, (client, dbName) =>
+      client
+        .db(dbName)
+        .collection(table.name)
+        .find({ [pick.column]: { $ne: null } }, { maxTimeMS: caps.timeoutMs })
+        .sort({ [pick.column]: -1 })
+        .limit(1)
+        .toArray(),
+    )) as Array<Record<string, unknown>>;
+    return {
+      ...(isoDate(docs[0]?.[pick.column]) ? { lastUpdated: isoDate(docs[0][pick.column])! } : {}),
+      basis: `max ${pick.column}`,
+    };
+  }
+  const rows = await SQL_RUNNERS[source.type as SqlEngine](
+    source,
+    credential,
+    tls,
+    { ...caps, maxResults: 2 },
+    buildMaxDateSql(source.type as SqlStatsEngine, table, pick.column),
+  );
+  const value = parseMaxDate(rows);
+  return { ...(value ? { lastUpdated: value } : {}), basis: `MAX(${pick.column})` };
+}
+
 /** Approximate per-table row counts from catalog STATISTICS — one query for
  *  SQL engines, estimatedDocumentCount per collection for MongoDB. Sizing
  *  information for the adaptive ER probe plan (ADR-0030 amendment). */
@@ -733,6 +846,7 @@ export async function estimateRowCounts(
   credential: ContextCredential,
   tls: DbTlsOptions,
   caps: ReadCaps,
+  limits: CatalogLimits = DEFAULT_CATALOG_LIMITS,
 ): Promise<RowEstimates> {
   if (source.type === "mongodb") {
     return withMongo(source, credential, tls, caps, async (client, dbName) => {
@@ -741,7 +855,7 @@ export async function estimateRowCounts(
       )
         .map((c) => c.name)
         .filter((n) => !n.startsWith("system."))
-        .slice(0, MONGO_MAX_COLLECTIONS);
+        .slice(0, limits.maxCollections);
       const out: RowEstimates = {};
       for (const name of names) {
         out[name.toLowerCase()] = await client
@@ -756,7 +870,7 @@ export async function estimateRowCounts(
     source,
     credential,
     tls,
-    { ...caps, maxResults: SCHEMA_MAX_TABLES },
+    { ...caps, maxResults: limits.maxTables },
     buildRowEstimateSql(source.type as SqlEngine),
   );
   return parseRowEstimates(rows);
