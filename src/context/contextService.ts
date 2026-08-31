@@ -151,6 +151,12 @@ import {
   browseGrafanaCandidates,
 } from "./adapters/grafana";
 import {
+  verifyAternity,
+  searchAternity,
+  aternityNoItemFetch,
+  browseAternityCandidates,
+} from "./adapters/aternity";
+import {
   snowTokensFromSecret,
   snowTokenExpired,
   refreshSnowTokens,
@@ -609,6 +615,8 @@ export class ContextService {
           return verifySplunkObs(source, credential, caps);
         case "grafana":
           return verifyGrafana(source, credential, caps);
+        case "aternity":
+          return verifyAternity(source, credential, caps);
         default:
           return verifyConfluence(source, credential, caps);
       }
@@ -691,6 +699,8 @@ export class ContextService {
         return searchSplunkObs(source, credential, query, caps);
       case "grafana":
         return searchGrafana(source, credential, query, caps);
+      case "aternity":
+        return searchAternity(source, credential, query, caps);
       default:
         return searchConfluence(source, credential, query, caps);
     }
@@ -752,6 +762,9 @@ export class ContextService {
               "Microsoft 365 Copilot returns ranked grounding passages, not addressable items — use search with a natural-language query.",
               "config",
             );
+          }
+          if (source.type === "aternity") {
+            aternityNoItemFetch();
           }
           switch (source.type) {
             case "servicenow":
@@ -2017,6 +2030,9 @@ export class ContextService {
           }
           if (source.type === "grafana") {
             return browseGrafanaCandidates(source, credential, caps);
+          }
+          if (source.type === "aternity") {
+            return browseAternityCandidates(source, credential, caps);
           }
           return []; // LDAP: search-then-bookmark is the guided path
         });

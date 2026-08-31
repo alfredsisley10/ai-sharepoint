@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.135.0 — 2026-08-31
+
+### Riverbed Aternity connector (read-only reference source)
+- **New reference source: Riverbed Aternity** (ADR-0049) — end-user experience, application
+  performance, and device health via the Aternity REST API (OData). Add it with the dashboard
+  URL you already know (`https://us3.aternity.com`); the OData endpoint
+  (`us3-odata.aternity.com`) is derived automatically (on-prem hosts pass through).
+- **Sign in** with an Aternity account holding the "OData REST API" role (Basic) or a pasted
+  OAuth bearer token — stored only in the OS keychain, verified with a single lockout-safe
+  read, and covered by the standard rails (caps, caching, wire logging, secret-free
+  export/import).
+- **Query from chat**: a bare table name (`HEALTH_EVENTS`) reads recent rows; JSON
+  `{"table", "filter", "select", "top", "timeframe"}` targets precisely — native OData
+  `$filter` plus Aternity's `relative_time` timeframes (`last_24_hours`, `last_7_days`, …),
+  with the result cap always applied as `$top`. **Browse & Bookmark** enumerates the tables
+  your account can actually read from the live OData catalog.
+
 ## 0.130.0 — 2026-07-08
 
 ### Copilot cost & model transparency

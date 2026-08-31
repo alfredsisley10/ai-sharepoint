@@ -18,6 +18,7 @@ export type ContextSourceType =
   | "splunk"
   | "splunkobs"
   | "grafana"
+  | "aternity"
   | "m365copilot";
 export type ContextDeployment = "cloud" | "datacenter";
 

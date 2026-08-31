@@ -321,7 +321,7 @@ export interface ParsedImport {
   pricing?: ExportedPricing;
 }
 
-const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "powerbi", "servicenow", "splunk", "splunkobs", "grafana", "m365copilot"]);
+const SOURCE_TYPES = new Set(["confluence", "jira", "ldap", "mssql", "postgres", "mysql", "mongodb", "powerbi", "servicenow", "splunk", "splunkobs", "grafana", "aternity", "m365copilot"]);
 const AUTH_METHODS = new Set(["basic", "pat", "ldap-simple", "ntlm", "az-sso", "aad-sso", "snow-oauth", "splunk-session", "snow-session", "sfx-token"]);
 const BOOKMARK_KINDS = new Set(["query", "item", "container"]);
 

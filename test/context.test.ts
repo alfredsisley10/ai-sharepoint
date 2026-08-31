@@ -501,6 +501,7 @@ test("contextCredentialUi sends every non-Entra source type to the generic promp
     "splunk",
     "splunkobs",
     "grafana",
+    "aternity",
   ];
   for (const type of GENERIC) {
     assert.equal(contextCredentialUi(type), "generic", `${type} should use the generic credential prompt`);

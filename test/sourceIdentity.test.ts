@@ -129,6 +129,18 @@ test("splunkobs: the realm is parsed from the API host", () => {
   assert.equal(seed.description, "Splunk Observability Cloud realm us1");
 });
 
+test("aternity: the account name is parsed from the OData host; default table lands in the description", () => {
+  const seed = buildSourceIdentitySeed(
+    "aternity",
+    "https://us3-odata.aternity.com?web=https%3A%2F%2Fus3.aternity.com&table=HEALTH_EVENTS",
+  );
+  assert.equal(seed.displayName, "us3 · Riverbed Aternity");
+  assert.equal(
+    seed.description,
+    "Riverbed Aternity end-user experience monitoring at us3-odata.aternity.com · default table: HEALTH_EVENTS",
+  );
+});
+
 test("m365copilot: fixed name; surfaces land in the description", () => {
   const seed = buildSourceIdentitySeed(
     "m365copilot",

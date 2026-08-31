@@ -79,6 +79,7 @@ accordingly.
 | Splunk (optional) | Your Splunk management endpoint (typically `:8089`) — read-only SPL search jobs (queued at the concurrency cap like Splunk Web, always cleaned up), write/exfil commands blocked client-side, default 24 h window (ADR-0029) |
 | Splunk Observability Cloud (optional) | `api.<realm>.signalfx.com` (e.g. `api.us1.signalfx.com`) — read-only metadata/state GETs, access token via `X-SF-TOKEN` (ADR-0032) |
 | Grafana (optional) | Your Grafana host (`*.grafana.net` or self-hosted) — read-only `/api/*` with a Viewer service-account token: GETs for dashboards/alerts/annotations (ADR-0033), plus `POST /api/ds/query` to read **live panel data** (executes a panel's own read query; needs `datasources:query`) (ADR-0036) |
+| Riverbed Aternity (optional) | Your OData host (`<account>-odata.aternity.com`, or the on-prem address) — read-only OData GETs under `/aternity.odata/latest/`; Basic auth with an account holding the "OData REST API" role, or an OAuth bearer token (ADR-0049) |
 | Usage telemetry (opt-in, off by default) | The **Splunk HEC** and/or **OTEL (OTLP/HTTP) metrics** endpoint *you* configure (ADR-0018). Fire-and-forget POSTs of anonymized, categorical metrics + environment only — never content/PII. Connection details and tokens are stored write-only in the OS keychain. Configure via *Support & Diagnostics → Usage Telemetry*; a whitelabel build can pre-seed the endpoints (tokens obfuscated). |
 
 ### Proxies and TLS inspection (MITM)

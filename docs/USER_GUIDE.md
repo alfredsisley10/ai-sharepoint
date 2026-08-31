@@ -669,6 +669,29 @@ Dashboards, alert-rule state, annotations, and **live panel data** (ADR-0033/003
   *Alert rules — current state* and *Recent annotations* candidates. Datasource listings may
   need admin permission — the error says so; everything else reads with Viewer.
 
+### Riverbed Aternity (end-user experience monitoring)
+
+Application health, device health, and business-activity performance via the Aternity REST
+API — an OData service, read-only by construction (ADR-0049):
+
+- **Add** (Reference Sources → `+` → *Riverbed Aternity*): paste the URL you open in the
+  browser (`https://us3.aternity.com`) — the OData endpoint
+  (`us3-odata.aternity.com`) is derived; pasting the OData address or an on-prem host also
+  works. Optionally pick a **default table** (e.g. `HEALTH_EVENTS`) for bare chat questions.
+- **Sign in** with an **Aternity account** (email + password) that holds the **"OData REST
+  API"** role — ask your Aternity admin; your data-access ACLs apply — or paste an **OAuth
+  access token** from a Riverbed/Aternity OAuth client. Stored only in your OS keychain,
+  verified with a single lockout-safe read.
+- **Ask in chat**: *"read HEALTH_EVENTS from Aternity"* (a bare table name reads recent
+  rows), or target precisely —
+  `{"table": "HEALTH_EVENTS", "filter": "SEVERITY eq 'CRITICAL'", "timeframe": "last_24_hours", "top": 25}`
+  (`filter` is native OData; `timeframe` is Aternity's `relative_time` argument such as
+  `last_24_hours` / `last_7_days`). The OData API has **no free-text search**, so plain
+  sentences are answered with guidance rather than guessed-at queries.
+- **Browse & Bookmark** lists every table (data source) your account can read from the live
+  OData catalog — health events, applications/devices daily, business activities, resource
+  hourlies, … — each as a ready "recent rows" bookmark candidate.
+
 ### Files (Excel, CSV, Word, PDF, text) — local or OneDrive/SharePoint
 
 Register individual files as read-only context — no server or connector needed:

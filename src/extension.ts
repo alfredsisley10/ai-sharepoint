@@ -110,6 +110,7 @@ import {
 } from "./context/exportData";
 import { ensureGitignored } from "./context/files/gitignore";
 import { deriveSplunkObsEndpoints } from "./context/adapters/splunkObservability";
+import { deriveAternityEndpoints } from "./context/adapters/aternity";
 import { SchemaStore } from "./context/schemaStore";
 import { SchemaIndexer } from "./context/db/schemaIndexer";
 import { SourceSchema, ErModel, ProbedRelationship, TestedPair, qualifiedName } from "./context/db/schemaIndex";
@@ -2398,6 +2399,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { label: "$(pulse) Splunk", description: "read-only SPL searches (oneshot, time-bounded)", value: "splunk" as ContextSourceType },
         { label: "$(dashboard) Splunk Observability Cloud", description: "metrics/detectors/dashboards/active incidents (the former SignalFx)", value: "splunkobs" as ContextSourceType },
         { label: "$(graph-line) Grafana", description: "dashboards, alert state, annotations, and LIVE panel data — Cloud or self-hosted", value: "grafana" as ContextSourceType },
+        { label: "$(device-desktop) Riverbed Aternity", description: "end-user experience, app performance & device health — read-only OData REST API", value: "aternity" as ContextSourceType },
       ],
       { ignoreFocusOut: true, title: "Add Context Source — type (read-only reference data)" },
     );
@@ -2778,6 +2780,37 @@ export function activate(context: vscode.ExtensionContext): void {
       const u = new URL(entry.trim());
       baseUrl = `${u.protocol}//${u.host}`;
       deployment = /\.grafana\.net$/i.test(u.hostname) ? "cloud" : "datacenter";
+    } else if (typePick.value === "aternity") {
+      // Users know the dashboard URL — the SaaS OData endpoint
+      // (<account>-odata.aternity.com) derives from it; pasting the OData
+      // address directly (or an on-prem host) also works.
+      const entry = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Riverbed Aternity — the URL you open in your browser (or the OData API URL)",
+        placeHolder: "https://us3.aternity.com   or   https://us3-odata.aternity.com",
+        validateInput: (v) =>
+          deriveAternityEndpoints(v)
+            ? undefined
+            : "Paste your Aternity dashboard or OData URL (HTTPS)",
+      });
+      if (!entry) return;
+      const ep = deriveAternityEndpoints(entry)!;
+      deployment = /\.aternity\.com$/i.test(new URL(ep.apiBase).hostname) ? "cloud" : "datacenter";
+      const table = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Aternity — default table (optional)",
+        placeHolder: "HEALTH_EVENTS — bare chat questions read this table (Enter to skip)",
+        prompt:
+          "An OData data source such as HEALTH_EVENTS, APPLICATIONS_DAILY, DEVICES_DAILY, BUSINESS_ACTIVITIES_HOURLY. Browse & Bookmark lists the catalog after connecting.",
+        validateInput: (v) =>
+          !v.trim() || /^[A-Za-z0-9_]+$/.test(v.trim()) ? undefined : "Table names: letters/digits/_",
+      });
+      if (table === undefined) return;
+      const atParams = new URLSearchParams();
+      atParams.set("web", ep.appBase);
+      if (table.trim()) atParams.set("table", table.trim());
+      baseUrl = `${ep.apiBase}?${atParams.toString()}`;
+      identityExtras = { defaultTable: table.trim() || undefined };
     } else if (typePick.value === "github") {
       const entry = await vscode.window.showInputBox({
         ignoreFocusOut: true,
@@ -8370,6 +8403,49 @@ async function promptContextCredential(
     const secret = await vscode.window.showInputBox({
       ignoreFocusOut: true,
       title: "ServiceNow password",
+      password: true,
+      prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
+    });
+    if (!secret) return undefined;
+    return { method: "basic", username: username.trim(), secret };
+  }
+  if (type === "aternity") {
+    const mode = await vscode.window.showQuickPick(
+      [
+        {
+          label: "$(key) Aternity account (Basic)",
+          description: "account email + password — needs the \"OData REST API\" role (recommended)",
+          value: "basic" as const,
+        },
+        {
+          label: "$(shield) OAuth access token",
+          description: "a bearer token from your Riverbed/Aternity OAuth client",
+          value: "pat" as const,
+        },
+      ],
+      { ignoreFocusOut: true, title: "Riverbed Aternity sign-in" },
+    );
+    if (!mode) return undefined;
+    if (mode.value === "pat") {
+      const secret = await vscode.window.showInputBox({
+        ignoreFocusOut: true,
+        title: "Aternity OAuth access token",
+        password: true,
+        prompt: "Sent as a Bearer token. Stored only in your OS keychain; verified with a single read (lockout-safe).",
+      });
+      if (!secret) return undefined;
+      return { method: "pat", secret: secret.trim() };
+    }
+    const username = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Aternity account email",
+      placeHolder: "monitor.readonly@example.com",
+      prompt: "The account must hold the \"OData REST API\" role permission — use a least-privilege account where available.",
+    });
+    if (!username) return undefined;
+    const secret = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: "Aternity password",
       password: true,
       prompt: "Stored only in your OS keychain; verified with a single read (lockout-safe).",
     });

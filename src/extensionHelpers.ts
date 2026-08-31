@@ -158,6 +158,7 @@ const SOURCE_TYPE_LABELS: Record<ContextSourceType, string> = {
   splunk: "Splunk",
   splunkobs: "Splunk Observability Cloud",
   grafana: "Grafana",
+  aternity: "Riverbed Aternity",
   m365copilot: "Microsoft 365 Copilot",
 };
 
@@ -304,6 +305,19 @@ export function buildSourceIdentitySeed(
         typeLabel,
         displayName: named(realm),
         description: composeDescription(realm ? `Splunk Observability Cloud realm ${realm}` : undefined),
+      };
+    }
+    case "aternity": {
+      // The account name reads better than the API host (us3-odata.… → us3).
+      const account = host.split(".")[0]?.replace(/-odata$/i, "") || undefined;
+      const table = extras.defaultTable?.trim() || paramOf(baseUrl, "table");
+      return {
+        typeLabel,
+        displayName: named(account),
+        description: composeDescription(
+          `Riverbed Aternity end-user experience monitoring${at}`,
+          table ? `default table: ${table}` : undefined,
+        ),
       };
     }
     case "m365copilot": {

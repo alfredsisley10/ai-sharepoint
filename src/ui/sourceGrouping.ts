@@ -23,6 +23,7 @@ export const ICON_BY_TYPE: Record<string, string> = {
   splunk: "pulse",
   splunkobs: "dashboard",
   grafana: "graph-line",
+  aternity: "device-desktop",
   m365copilot: "sparkle",
   mssql: "database",
   postgres: "database",
@@ -45,6 +46,7 @@ export const TYPE_LABEL: Record<string, string> = {
   splunk: "Splunk",
   splunkobs: "Splunk Observability",
   grafana: "Grafana",
+  aternity: "Riverbed Aternity",
   m365copilot: "Microsoft 365 Copilot",
 };
 
