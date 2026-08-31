@@ -7,6 +7,21 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
+    ignore:
+      # typescript-eslint's peer range caps the TypeScript major; a grouped
+      # bump that pairs a new TS major with typescript-eslint makes `npm ci`
+      # unresolvable (PR #56). Take TS majors deliberately, in step with
+      # typescript-eslint's support.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # @types/vscode is deliberately pinned to engines.vscode (1.95.0) — a
+      # newer types package than the declared engine breaks packaging and the
+      # extension's compatibility claim. Bump it only with an engine-floor bump.
+      - dependency-name: "@types/vscode"
+      # The extension host floor is VS Code 1.95 = Node 20 (Electron 32); keep
+      # the Node types matched to the oldest supported runtime.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
